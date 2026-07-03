@@ -542,6 +542,16 @@ func coreMain() {
 }
 
 func coreRun(cfg config, cmdArgs []string) int {
+	// Default data path is the zero-root SOCKS5 proxy. The TUN ("go") and
+	// sshuttle paths are opt-in for full transparency (they need root).
+	mode := os.Getenv("PLUG_TUNNEL")
+	if mode == "" {
+		mode = "socks"
+	}
+	if mode == "socks" {
+		return coreRunSOCKS(cfg, cmdArgs)
+	}
+
 	keyPath, cleanupKey := writeKey()
 	defer cleanupKey()
 	sshOpts := []string{
@@ -565,9 +575,9 @@ func coreRun(cfg config, cmdArgs []string) int {
 		return 1
 	}
 
-	// Experimental native Go tunnel (no sshuttle). Default stays sshuttle
-	// until the datapath is validated on real clusters.
-	if os.Getenv("PLUG_TUNNEL") == "go" {
+	// Fully-transparent TUN path (needs root) — captures all TCP incl. raw
+	// drivers like AMQP that don't speak SOCKS.
+	if mode == "go" {
 		return coreRunGo(cfg, subnets, cmdArgs)
 	}
 
@@ -716,10 +726,19 @@ func stopTunnel(tun *exec.Cmd) {
 }
 
 func runChild(cmdArgs []string) int {
+	return runChildEnv(cmdArgs, nil)
+}
+
+// runChildEnv runs the command, optionally with an explicit environment
+// (nil = inherit the current one).
+func runChildEnv(cmdArgs []string, env []string) int {
 	child := exec.Command(cmdArgs[0], cmdArgs[1:]...)
 	child.Stdin = os.Stdin
 	child.Stdout = os.Stdout
 	child.Stderr = os.Stderr
+	if env != nil {
+		child.Env = env
+	}
 
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
