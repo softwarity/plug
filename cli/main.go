@@ -103,6 +103,11 @@ func main() {
 	case "self-update":
 		selfUpdate(args[1:])
 		return
+	case "setup":
+		setup(args[1:])
+		return
+	case "daemon":
+		os.Exit(runDaemon())
 	}
 	launcherRun(args)
 }
@@ -575,8 +580,11 @@ func coreRun(cfg config, cmdArgs []string) int {
 		return 1
 	}
 
-	// Fully-transparent TUN path (needs root) — captures all TCP incl. raw
-	// drivers like AMQP that don't speak SOCKS.
+	// Fully-transparent TUN path via the root daemon (no sudo at runtime).
+	if mode == "tun" {
+		return runViaDaemon(cfg, subnets, cmdArgs)
+	}
+	// Same TUN path but in-process — needs root now (for debugging).
 	if mode == "go" {
 		return coreRunGo(cfg, subnets, cmdArgs)
 	}

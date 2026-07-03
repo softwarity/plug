@@ -11,6 +11,7 @@ package tunnel
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"time"
 
@@ -20,6 +21,23 @@ import (
 // clusterResolver is the Docker/Swarm embedded DNS, reachable in TCP from
 // inside the agent. DNS queries captured on the TUN are forwarded here.
 const clusterResolver = "127.0.0.11:53"
+
+// Logf is where the data paths report progress; set by the caller.
+type Logf func(format string, a ...any)
+
+// relay copies bidirectionally and closes both ends when either side finishes.
+func relay(a, b net.Conn) {
+	done := make(chan struct{}, 2)
+	cp := func(dst, src net.Conn) {
+		io.Copy(dst, src)
+		done <- struct{}{}
+	}
+	go cp(a, b)
+	go cp(b, a)
+	<-done
+	a.Close()
+	b.Close()
+}
 
 // Transport is an SSH connection to the agent used as a demux for outbound
 // cluster traffic. It is safe for concurrent use: ssh.Client multiplexes

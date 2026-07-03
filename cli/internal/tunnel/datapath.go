@@ -22,9 +22,6 @@ import (
 // to be non-colliding (TEST-NET / benchmark range).
 const tunAddr = "198.18.0.1"
 
-// Logf is where the datapath reports progress; set by the caller.
-type Logf func(format string, a ...any)
-
 // Run brings up a userspace TUN, routes the given cluster subnets to it, and
 // relays every captured flow through the SSH transport until ctx is cancelled.
 // Requires root (TUN device + routes). ready is closed once traffic can flow.
@@ -79,20 +76,6 @@ func (h *handler) HandleTCP(conn adapter.TCPConn) {
 		return
 	}
 	go relay(conn, remote)
-}
-
-// relay copies bidirectionally and closes both ends when either side finishes.
-func relay(a, b net.Conn) {
-	done := make(chan struct{}, 2)
-	cp := func(dst, src net.Conn) {
-		io.Copy(dst, src)
-		done <- struct{}{}
-	}
-	go cp(a, b)
-	go cp(b, a)
-	<-done
-	a.Close()
-	b.Close()
 }
 
 // HandleUDP only serves DNS (:53): each query is forwarded to the cluster
