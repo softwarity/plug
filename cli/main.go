@@ -23,10 +23,10 @@ import (
 var embeddedKey []byte
 
 // version is stamped at build time via -ldflags "-X main.version=x.y.z".
-// Non-semver values ("dev") disable auto-upgrade.
 var version = "dev"
 
-const sshUser = "plug"
+const sshUser = "plug"   // tunnel user (public-key)
+const getUser = "get"    // download user (passwordless, ForceCommand)
 const defaultPort = "2222"
 const agentHome = "/opt/plug"
 
@@ -35,8 +35,9 @@ const usageText = `plug — run a local process as if it were inside your cluste
 Usage:
   plug [options] <command> [args...]   run <command> with cluster DNS/network
   plug init                            create a profile interactively
-  plug upgrade [-f] [options]          update this binary from the agent (-f: allow downgrade)
-  plug version                         print the CLI version
+  plug versions                        list locally cached versions
+  plug version                         print the launcher version
+  plug self-update                     update the launcher itself from a cluster
 
 Options:
   -p, --profile <name>   use profile ~/.plug/<name>.conf
@@ -44,36 +45,28 @@ Options:
       --port <port>      agent SSH port (default 2222; also $PLUG_PORT)
   -h, --help             show this help
 
+How versions work:
+  plug is a small launcher. On run it asks the agent which version it
+  speaks, then executes that exact version from ~/.plug/versions/,
+  downloading it once from the cluster if missing. Each cluster runs its
+  own matching version — nothing is replaced in place, so several
+  clusters on different versions coexist safely.
+
 Profiles (~/.plug/*.conf):
-  Without -p, plug picks the profile automatically: a single profile is
-  used as is, several offer an interactive choice, none starts a short
-  wizard. Profile format:
+  host = swarm-node.example.com
+  port = 2222
+  # subnets = 10.0.9.0/24,10.0.10.0/24   (optional, skips auto-discovery)
 
-    host = swarm-node.example.com
-    port = 2222
-    # subnets = 10.0.9.0/24,10.0.10.0/24   (optional, skips auto-discovery)
-    # auto-upgrade = false                 (optional, default true)
+Install from a cluster (no GitHub needed):
+  ssh -p 2222 get@<host> install | sh
 
-Upgrade:
-  On connect, plug compares itself to the agent and silently upgrades if
-  the agent ships a NEWER version (never downgrades — with several
-  clusters the CLI converges to the newest and stays compatible with
-  older agents of the same major). Disable with auto-upgrade = false or
-  PLUG_AUTO_UPGRADE=0.
-
-Agent deployment (once, on the cluster):
-  https://softwarity.github.io/plug/
-
-Examples:
-  plug npm run start:dev
-  plug -p staging ./mvnw spring-boot:run
+Docs: https://softwarity.github.io/plug/
 `
 
 type config struct {
-	host        string
-	port        string
-	subnets     []string
-	autoUpgrade bool
+	host    string
+	port    string
+	subnets []string
 }
 
 type options struct {
@@ -83,23 +76,42 @@ type options struct {
 }
 
 func main() {
+	// Core mode: this binary was exec'd by the launcher to do the real work.
+	if os.Getenv("PLUG_CORE") == "1" {
+		coreMain()
+		return
+	}
+
 	args := os.Args[1:]
 	if len(args) == 0 {
 		fmt.Print(usageText)
 		os.Exit(2)
 	}
 	switch args[0] {
-	case "init":
-		initProfile()
+	case "-h", "--help":
+		fmt.Print(usageText)
 		return
 	case "version":
 		fmt.Println(version)
 		return
-	case "upgrade":
-		upgradeCommand(args[1:])
+	case "versions":
+		listVersions()
+		return
+	case "init":
+		initProfile()
+		return
+	case "self-update":
+		selfUpdate(args[1:])
 		return
 	}
+	launcherRun(args)
+}
 
+// ---- launcher ----
+
+// launcherRun resolves the cluster, learns its version, and executes the
+// matching core binary (downloading it once if needed).
+func launcherRun(args []string) {
 	opts, cmdArgs := parseArgs(args)
 	if len(cmdArgs) == 0 {
 		fatal("no command given\n\n" + usageText)
@@ -108,43 +120,203 @@ func main() {
 	if cfg.host == "" {
 		fatal("no agent host: use --host, $PLUG_HOST or a profile in ~/.plug/")
 	}
-	if _, err := exec.LookPath("sshuttle"); err != nil {
-		fatal("sshuttle not found — install it first:  brew install sshuttle")
-	}
 
-	keyPath, cleanupKey := writeKey()
-	defer cleanupKey()
-	sshOpts := []string{
-		"-i", keyPath,
-		"-o", "StrictHostKeyChecking=no",
-		"-o", "UserKnownHostsFile=/dev/null",
-		"-o", "LogLevel=ERROR",
-	}
-
-	remoteVersion, discovered, err := discover(cfg, sshOpts)
+	remote, err := agentVersion(cfg)
 	if err != nil {
 		fatal("cannot reach the agent at %s:%s: %v", cfg.host, cfg.port, err)
 	}
 
-	maybeAutoUpgrade(cfg, sshOpts, remoteVersion, cleanupKey)
+	env := coreEnv(cfg)
 
-	subnets := cfg.subnets
-	if len(subnets) == 0 {
-		subnets = discovered
+	// Same version as this launcher (or the agent is unversioned): run in-process.
+	if remote == version || remote == "" {
+		runCore(cfg, cmdArgs)
+		return
 	}
-	if len(subnets) == 0 {
-		fatal("no routable subnets found on the agent — is it attached to your overlay networks?")
-	}
-	info("routing %s via %s:%s", strings.Join(subnets, " "), cfg.host, cfg.port)
 
-	tun, err := startTunnel(cfg, sshOpts, subnets)
+	bin, err := ensureVersion(remote, cfg)
+	if err != nil {
+		info("cannot fetch v%s (%v) — falling back to this launcher (v%s)", remote, err, version)
+		runCore(cfg, cmdArgs)
+		return
+	}
+	info("using cluster version v%s", remote)
+	child := exec.Command(bin, cmdArgs...)
+	child.Stdin, child.Stdout, child.Stderr = os.Stdin, os.Stdout, os.Stderr
+	child.Env = env
+	if err := child.Run(); err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			os.Exit(ee.ExitCode())
+		}
+		fatal("running v%s: %v", remote, err)
+	}
+}
+
+func coreEnv(cfg config) []string {
+	env := append(os.Environ(), "PLUG_CORE=1", "PLUG_HOST="+cfg.host, "PLUG_PORT="+cfg.port)
+	if len(cfg.subnets) > 0 {
+		env = append(env, "PLUG_SUBNETS="+strings.Join(cfg.subnets, ","))
+	}
+	return env
+}
+
+// runCore executes the tunnel logic in this very process (version match / fallback).
+func runCore(cfg config, cmdArgs []string) {
+	os.Exit(coreRun(cfg, cmdArgs))
+}
+
+func versionsDir() string {
+	return filepath.Join(plugDir(), "versions")
+}
+
+func ensureVersion(v string, cfg config) (string, error) {
+	dir := filepath.Join(versionsDir(), v)
+	bin := filepath.Join(dir, "plug")
+	if fi, err := os.Stat(bin); err == nil && fi.Size() > 1<<20 {
+		return bin, nil
+	}
+	info("fetching plug v%s from the cluster...", v)
+	data, err := getDownload(cfg, fmt.Sprintf("%s-%s", runtime.GOOS, runtime.GOARCH))
+	if err != nil {
+		return "", err
+	}
+	if len(data) < 1<<20 || !looksLikeBinary(data) {
+		return "", fmt.Errorf("downloaded binary looks invalid (%d bytes)", len(data))
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	tmp, err := os.CreateTemp(dir, ".plug-*")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return "", err
+	}
+	tmp.Chmod(0o755)
+	if err := tmp.Close(); err != nil {
+		return "", err
+	}
+	if err := os.Rename(tmp.Name(), bin); err != nil {
+		return "", err
+	}
+	return bin, nil
+}
+
+func listVersions() {
+	fmt.Printf("launcher: v%s\n", version)
+	entries, err := os.ReadDir(versionsDir())
+	if err != nil || len(entries) == 0 {
+		fmt.Println("cached: (none yet)")
+		return
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Strings(names)
+	fmt.Printf("cached: %s\n", strings.Join(names, ", "))
+}
+
+// selfUpdate replaces the launcher binary itself from a cluster (rare — only
+// needed when the bootstrap protocol changes).
+func selfUpdate(args []string) {
+	opts, _ := parseArgs(args)
+	cfg := resolveConfig(opts)
+	if cfg.host == "" {
+		fatal("no agent host: use --host, $PLUG_HOST or a profile in ~/.plug/")
+	}
+	remote, err := agentVersion(cfg)
+	if err != nil {
+		fatal("cannot reach the agent: %v", err)
+	}
+	if remote == version {
+		info("launcher already at v%s", version)
+		return
+	}
+	self, err := os.Executable()
 	if err != nil {
 		fatal("%v", err)
 	}
-	defer stopTunnel(tun)
-
-	os.Exit(runChild(cmdArgs))
+	if self, err = filepath.EvalSymlinks(self); err != nil {
+		fatal("%v", err)
+	}
+	data, err := getDownload(cfg, fmt.Sprintf("%s-%s", runtime.GOOS, runtime.GOARCH))
+	if err != nil {
+		fatal("%v", err)
+	}
+	if len(data) < 1<<20 || !looksLikeBinary(data) {
+		fatal("downloaded binary looks invalid (%d bytes)", len(data))
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(self), ".plug-self-*")
+	if err != nil {
+		fatal("%v", err)
+	}
+	defer os.Remove(tmp.Name())
+	tmp.Write(data)
+	tmp.Chmod(0o755)
+	tmp.Close()
+	if err := os.Rename(tmp.Name(), self); err != nil {
+		fatal("cannot replace %s: %v", self, err)
+	}
+	info("launcher updated %s → v%s", version, remote)
 }
+
+// ---- get-user helpers (no key: passwordless ForceCommand download) ----
+
+func getSSHArgs(cfg config, remoteCmd string) []string {
+	return []string{
+		"-p", cfg.port,
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "LogLevel=ERROR",
+		"-o", "BatchMode=yes",
+		getUser + "@" + cfg.host, remoteCmd,
+	}
+}
+
+func agentVersion(cfg config) (string, error) {
+	out, err := exec.Command("ssh", getSSHArgs(cfg, "version")...).Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+			return "", fmt.Errorf("%s", strings.TrimSpace(string(ee.Stderr)))
+		}
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func getDownload(cfg config, osArch string) ([]byte, error) {
+	out, err := exec.Command("ssh", getSSHArgs(cfg, osArch)...).Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+			return nil, fmt.Errorf("%s", strings.TrimSpace(string(ee.Stderr)))
+		}
+		return nil, err
+	}
+	return out, nil
+}
+
+func looksLikeBinary(data []byte) bool {
+	magics := [][]byte{
+		{0x7f, 'E', 'L', 'F'},    // linux
+		{0xcf, 0xfa, 0xed, 0xfe}, // macOS 64-bit mach-o
+		{0xca, 0xfe, 0xba, 0xbe}, // macOS universal
+		{'M', 'Z'},               // windows
+	}
+	for _, m := range magics {
+		if bytes.HasPrefix(data, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// ---- profiles ----
 
 func parseArgs(args []string) (options, []string) {
 	var o options
@@ -176,21 +348,17 @@ func flagValue(args []string, i *int) string {
 	return args[*i]
 }
 
-// resolveConfig picks the connection settings: explicit host first, then the
-// requested profile, then automatic profile selection (single → use it,
-// several → ask, none → wizard).
 func resolveConfig(o options) config {
-	cfg := config{autoUpgrade: true}
+	var cfg config
 	switch {
 	case o.host != "" || os.Getenv("PLUG_HOST") != "":
-		// explicit host, profiles are bypassed entirely
 	case o.profile != "":
 		cfg = loadProfile(o.profile)
 	default:
 		names := listProfiles()
 		switch len(names) {
 		case 0:
-			info("no profile in %s — let's create one", profilesDir())
+			info("no profile in %s — let's create one", plugDir())
 			cfg = loadProfile(wizard("default", false))
 		case 1:
 			info("using profile %q", names[0])
@@ -214,13 +382,10 @@ func resolveConfig(o options) config {
 	if cfg.port == "" {
 		cfg.port = defaultPort
 	}
-	if v := os.Getenv("PLUG_AUTO_UPGRADE"); v == "0" || strings.EqualFold(v, "false") {
-		cfg.autoUpgrade = false
-	}
 	return cfg
 }
 
-func profilesDir() string {
+func plugDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		fatal("%v", err)
@@ -229,7 +394,7 @@ func profilesDir() string {
 }
 
 func listProfiles() []string {
-	entries, err := os.ReadDir(profilesDir())
+	entries, err := os.ReadDir(plugDir())
 	if err != nil {
 		return nil
 	}
@@ -244,10 +409,10 @@ func listProfiles() []string {
 }
 
 func loadProfile(name string) config {
-	cfg := config{autoUpgrade: true}
-	data, err := os.ReadFile(filepath.Join(profilesDir(), name+".conf"))
+	var cfg config
+	data, err := os.ReadFile(filepath.Join(plugDir(), name+".conf"))
 	if err != nil {
-		fatal("profile %q not found in %s", name, profilesDir())
+		fatal("profile %q not found in %s", name, plugDir())
 	}
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
@@ -264,8 +429,6 @@ func loadProfile(name string) config {
 			cfg.host = val
 		case "port":
 			cfg.port = val
-		case "auto-upgrade":
-			cfg.autoUpgrade = !(val == "0" || strings.EqualFold(val, "false"))
 		case "subnets":
 			for _, s := range strings.Split(val, ",") {
 				if s = strings.TrimSpace(s); s != "" {
@@ -298,14 +461,13 @@ func chooseProfile(names []string) string {
 	}
 }
 
-// wizard interactively creates a profile and returns its name.
 func wizard(defaultName string, confirmOverwrite bool) string {
 	tty := openTTY("cannot run the profile wizard; use --host instead")
 	defer tty.Close()
 	in := bufio.NewReader(tty)
 
 	name := prompt(in, "profile name", defaultName)
-	path := filepath.Join(profilesDir(), name+".conf")
+	path := filepath.Join(plugDir(), name+".conf")
 	if confirmOverwrite {
 		if _, err := os.Stat(path); err == nil {
 			if !strings.EqualFold(prompt(in, name+" already exists, overwrite? (y/N)", "n"), "y") {
@@ -319,10 +481,10 @@ func wizard(defaultName string, confirmOverwrite bool) string {
 	}
 	port := prompt(in, "agent port", defaultPort)
 
-	if err := os.MkdirAll(profilesDir(), 0o700); err != nil {
+	if err := os.MkdirAll(plugDir(), 0o700); err != nil {
 		fatal("%v", err)
 	}
-	content := fmt.Sprintf("host = %s\nport = %s\n# subnets = 10.0.9.0/24,10.0.10.0/24   (optional, skips auto-discovery)\n# auto-upgrade = false\n", host, port)
+	content := fmt.Sprintf("host = %s\nport = %s\n# subnets = 10.0.9.0/24,10.0.10.0/24   (optional, skips auto-discovery)\n", host, port)
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		fatal("%v", err)
 	}
@@ -351,14 +513,71 @@ func prompt(in *bufio.Reader, label, def string) string {
 	return def
 }
 
-// openTTY opens the controlling terminal for interactive prompts; reading
-// there (not stdin) keeps stdin free for the child process (pipes work).
 func openTTY(hint string) *os.File {
 	tty, err := os.Open("/dev/tty")
 	if err != nil {
 		fatal("no terminal available — %s", hint)
 	}
 	return tty
+}
+
+// ---- core (the real tunnel work; runs when PLUG_CORE=1 or in-process) ----
+
+func coreMain() {
+	cfg := config{
+		host:    os.Getenv("PLUG_HOST"),
+		port:    os.Getenv("PLUG_PORT"),
+	}
+	if cfg.port == "" {
+		cfg.port = defaultPort
+	}
+	if s := os.Getenv("PLUG_SUBNETS"); s != "" {
+		cfg.subnets = strings.Split(s, ",")
+	}
+	cmdArgs := os.Args[1:]
+	if len(cmdArgs) == 0 {
+		fatal("core: no command")
+	}
+	os.Exit(coreRun(cfg, cmdArgs))
+}
+
+func coreRun(cfg config, cmdArgs []string) int {
+	if _, err := exec.LookPath("sshuttle"); err != nil {
+		info("sshuttle not found — install it first:  brew install sshuttle")
+		return 1
+	}
+	keyPath, cleanupKey := writeKey()
+	defer cleanupKey()
+	sshOpts := []string{
+		"-i", keyPath,
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "LogLevel=ERROR",
+	}
+
+	subnets := cfg.subnets
+	if len(subnets) == 0 {
+		var err error
+		subnets, err = discoverSubnets(cfg, sshOpts)
+		if err != nil {
+			info("cannot discover cluster subnets via %s:%s: %v", cfg.host, cfg.port, err)
+			return 1
+		}
+	}
+	if len(subnets) == 0 {
+		info("no routable subnets found on the agent — is it attached to your overlay networks?")
+		return 1
+	}
+	info("routing %s via %s:%s", strings.Join(subnets, " "), cfg.host, cfg.port)
+
+	tun, err := startTunnel(cfg, sshOpts, subnets)
+	if err != nil {
+		info("%v", err)
+		return 1
+	}
+	defer stopTunnel(tun)
+
+	return runChild(cmdArgs)
 }
 
 func writeKey() (string, func()) {
@@ -373,9 +592,10 @@ func writeKey() (string, func()) {
 	return keyPath, func() { os.RemoveAll(dir) }
 }
 
-func sshCombined(cfg config, sshOpts []string, remoteCmd string) ([]byte, error) {
+func discoverSubnets(cfg config, sshOpts []string) ([]string, error) {
 	args := append(append([]string{}, sshOpts...),
-		"-p", cfg.port, sshUser+"@"+cfg.host, remoteCmd)
+		"-p", cfg.port, sshUser+"@"+cfg.host,
+		"ip -o -4 addr show; echo ---; ip route show default")
 	out, err := exec.Command("ssh", args...).Output()
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
@@ -383,22 +603,8 @@ func sshCombined(cfg config, sshOpts []string, remoteCmd string) ([]byte, error)
 		}
 		return nil, err
 	}
-	return out, nil
-}
 
-// discover fetches, in one SSH round-trip, the agent version and the routable
-// subnets: every non-loopback subnet except the one carrying the default
-// route (the docker gateway bridge — services never live there).
-func discover(cfg config, sshOpts []string) (string, []string, error) {
-	out, err := sshCombined(cfg, sshOpts,
-		"cat "+agentHome+"/VERSION 2>/dev/null; echo ---; ip -o -4 addr show; echo ---; ip route show default")
-	if err != nil {
-		return "", nil, err
-	}
-
-	versionPart, rest, _ := strings.Cut(string(out), "---")
-	addrPart, routePart, _ := strings.Cut(rest, "---")
-
+	addrPart, routePart, _ := strings.Cut(string(out), "---")
 	excluded := map[string]bool{"lo": true}
 	for _, line := range strings.Split(routePart, "\n") {
 		f := strings.Fields(line)
@@ -430,180 +636,8 @@ func discover(cfg config, sshOpts []string) (string, []string, error) {
 			subnets = append(subnets, cidr)
 		}
 	}
-	return strings.TrimSpace(versionPart), subnets, nil
+	return subnets, nil
 }
-
-// ---- upgrade ----
-
-// maybeAutoUpgrade replaces this binary and re-execs when the agent ships a
-// strictly newer semver. It never downgrades: with several clusters on
-// different versions the CLI converges to the newest agent and stays
-// compatible with older agents of the same major.
-func maybeAutoUpgrade(cfg config, sshOpts []string, remote string, beforeExec func()) {
-	if !cfg.autoUpgrade || os.Getenv("PLUG_REEXEC") == "1" || runtime.GOOS == "windows" {
-		return
-	}
-	local, lok := parseSemver(version)
-	rem, rok := parseSemver(remote)
-	switch {
-	case !rok || !lok:
-		return // dev builds and unversioned agents never auto-upgrade
-	case rem == local:
-		return
-	case semverLess(rem, local):
-		info("agent is older (v%s) than this CLI (v%s) — keeping the newer CLI", remote, version)
-		return
-	}
-	if rem[0] != local[0] {
-		fatal("agent v%s and CLI v%s differ in MAJOR version — upgrade manually: plug upgrade", remote, version)
-	}
-	info("agent ships v%s (CLI is v%s) — upgrading...", remote, version)
-	if err := selfReplace(cfg, sshOpts); err != nil {
-		info("auto-upgrade failed (%v) — continuing with v%s", err, version)
-		return
-	}
-	info("upgraded to v%s, restarting", remote)
-	self, err := os.Executable()
-	if err != nil {
-		fatal("%v", err)
-	}
-	beforeExec()
-	env := append(os.Environ(), "PLUG_REEXEC=1")
-	if err := syscall.Exec(self, os.Args, env); err != nil {
-		fatal("restart failed: %v", err)
-	}
-}
-
-func upgradeCommand(args []string) {
-	var force bool
-	var rest []string
-	for _, a := range args {
-		if a == "-f" || a == "--force" {
-			force = true
-		} else {
-			rest = append(rest, a)
-		}
-	}
-	opts, _ := parseArgs(rest)
-	cfg := resolveConfig(opts)
-	if cfg.host == "" {
-		fatal("no agent host: use --host, $PLUG_HOST or a profile in ~/.plug/")
-	}
-	keyPath, cleanup := writeKey()
-	defer cleanup()
-	sshOpts := []string{
-		"-i", keyPath,
-		"-o", "StrictHostKeyChecking=no",
-		"-o", "UserKnownHostsFile=/dev/null",
-		"-o", "LogLevel=ERROR",
-	}
-	out, err := sshCombined(cfg, sshOpts, "cat "+agentHome+"/VERSION")
-	if err != nil {
-		fatal("cannot read the agent version (old agent image?): %v", err)
-	}
-	remote := strings.TrimSpace(string(out))
-	if remote == version {
-		info("already up to date (v%s)", version)
-		return
-	}
-	// Same no-downgrade policy as auto-upgrade, unless -f/--force is given.
-	if !force {
-		if rem, rok := parseSemver(remote); rok {
-			if loc, lok := parseSemver(version); lok && !semverLess(loc, rem) {
-				info("this CLI (v%s) is already newer than the agent (v%s) — nothing to do (use -f to force)", version, remote)
-				return
-			}
-		}
-	}
-	info("agent ships v%s (CLI is %s) — updating...", remote, version)
-	if err := selfReplace(cfg, sshOpts); err != nil {
-		fatal("%v", err)
-	}
-	info("updated %s → v%s", version, remote)
-}
-
-// selfReplace downloads this platform's binary from the agent over the
-// existing SSH channel and atomically swaps it in place.
-func selfReplace(cfg config, sshOpts []string) error {
-	if runtime.GOOS == "windows" {
-		return fmt.Errorf("self-upgrade is not supported on native windows — run plug inside WSL2")
-	}
-	self, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	if self, err = filepath.EvalSymlinks(self); err != nil {
-		return err
-	}
-	name := fmt.Sprintf("plug-%s-%s", runtime.GOOS, runtime.GOARCH)
-	data, err := sshCombined(cfg, sshOpts, "cat "+agentHome+"/bin/"+name)
-	if err != nil {
-		return fmt.Errorf("downloading %s: %w", name, err)
-	}
-	if len(data) < 1<<20 || !looksLikeBinary(data) {
-		return fmt.Errorf("downloaded %s looks invalid (%d bytes)", name, len(data))
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(self), ".plug-upgrade-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(0o755); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), self)
-}
-
-func looksLikeBinary(data []byte) bool {
-	magics := [][]byte{
-		{0x7f, 'E', 'L', 'F'},          // linux
-		{0xcf, 0xfa, 0xed, 0xfe},       // macOS arm64/amd64 (64-bit mach-o)
-		{0xca, 0xfe, 0xba, 0xbe},       // macOS universal
-		{'M', 'Z'},                     // windows
-	}
-	for _, m := range magics {
-		if bytes.HasPrefix(data, m) {
-			return true
-		}
-	}
-	return false
-}
-
-func parseSemver(s string) ([3]int, bool) {
-	s = strings.TrimPrefix(strings.TrimSpace(s), "v")
-	parts := strings.SplitN(s, ".", 3)
-	if len(parts) != 3 {
-		return [3]int{}, false
-	}
-	var v [3]int
-	for i, p := range parts {
-		n, err := strconv.Atoi(p)
-		if err != nil || n < 0 {
-			return [3]int{}, false
-		}
-		v[i] = n
-	}
-	return v, true
-}
-
-func semverLess(a, b [3]int) bool {
-	for i := 0; i < 3; i++ {
-		if a[i] != b[i] {
-			return a[i] < b[i]
-		}
-	}
-	return false
-}
-
-// ---- tunnel ----
 
 func startTunnel(cfg config, sshOpts []string, subnets []string) (*exec.Cmd, error) {
 	args := []string{
@@ -618,7 +652,7 @@ func startTunnel(cfg config, sshOpts []string, subnets []string) (*exec.Cmd, err
 	if err != nil {
 		return nil, err
 	}
-	tun.Stderr = tun.Stdout // sshuttle logs on both; merge them
+	tun.Stderr = tun.Stdout
 	if err := tun.Start(); err != nil {
 		return nil, fmt.Errorf("starting sshuttle: %w", err)
 	}
@@ -635,7 +669,6 @@ func startTunnel(cfg config, sshOpts []string, subnets []string) (*exec.Cmd, err
 			}
 			if strings.Contains(line, "Connected") {
 				close(ready)
-				// keep draining so sshuttle never blocks on a full pipe
 				io.Copy(io.Discard, stdout)
 				return
 			}

@@ -54,39 +54,38 @@ Alternative — one standalone agent covering several stacks:
 [deploy/plug-stack.yml](deploy/plug-stack.yml) lists their overlay networks
 explicitly (`docker stack deploy -c plug-stack.yml plug`).
 
-**On each dev machine:**
+**On each dev machine** — install straight from the cluster, one line (the
+agent's installer downloads the right binary, puts it on your `PATH` and writes
+a default profile; no GitHub access needed):
 
 ```bash
-brew install sshuttle          # macOS; linux: apt/dnf install sshuttle
-```
-
-Then get the `plug` binary **from the cluster itself** — the agent serves it on
-the same port `2222`, and `uname` picks your platform, so there is nothing to
-choose and no GitHub access needed:
-
-```bash
-ssh -p 2222 get@<cluster-host> $(uname -s)-$(uname -m) > plug && chmod +x plug
-sudo mv plug /usr/local/bin/
+ssh -p 2222 get@<cluster-host> install | sh -s -- <cluster-host> 2222
 ```
 
 The `get` user is passwordless and locked (via `ForceCommand`) to a single
-"hand me a binary" command — see [Security model](https://softwarity.github.io/plug/#/security).
-Prefer GitHub? The same binaries are attached to every
+"hand me a binary / installer" command — see
+[Security model](https://softwarity.github.io/plug/#/security). Prefer GitHub?
+The same binaries are attached to every
 [release](https://github.com/softwarity/plug/releases). Build from source with
 `make cli && make install`.
+
+plug currently drives sshuttle for the tunnel, so install it too for now
+(`brew install sshuttle` / `apt install sshuttle`) — a
+[native Go tunnel](https://softwarity.github.io/plug/#/roadmap) will remove this
+last dependency.
 
 > **Windows**: a `windows-amd64` binary is published, but sshuttle has no
 > native Windows support — run plug inside WSL2 (with the linux binary)
 > instead.
 
-### Staying in sync
+### Versions — the launcher model
 
-On connect, plug compares itself to the agent and **upgrades itself when the
-cluster ships a newer version** (over the same SSH channel — no extra port).
-With several clusters on different versions it never downgrades: the CLI
-converges to the newest and stays compatible with older agents of the same
-major. `plug upgrade` syncs on demand; `auto-upgrade = false` (profile) or
-`PLUG_AUTO_UPGRADE=0` opts out.
+plug is a small **launcher** (like `nvm`/`rustup`). On each run it asks the
+agent which version it speaks and executes *that exact version* from
+`~/.plug/versions/`, downloading it once if missing. Each cluster runs its own
+matching version, so several clusters on different versions never conflict —
+nothing is replaced in place. `plug versions` lists what's cached;
+`plug self-update` refreshes the launcher itself (rarely needed).
 
 ## Usage
 
@@ -128,8 +127,11 @@ clusters). Never publish port 2222 on an untrusted network.
 
 ## Roadmap
 
-- [x] CLI served from the cluster (`get` user) + self-upgrade with a skew policy
+- [x] Install from the cluster (`get` user) + launcher with per-cluster versions
+- [ ] **Native Go tunnel** — drop sshuttle & Python; one self-contained binary
+      (TUN + netstack + SSH `direct-tcpip`), which also shrinks the agent to
+      just `sshd` + served binaries
 - [ ] Kubernetes transport (agent pod + `kubectl exec`)
 - [ ] Embed the agent into an API gateway (dynamic enable/disable), exposing the
-      same download/upgrade surface it already speaks
+      same install/version surface it already speaks
 - [ ] Homebrew tap

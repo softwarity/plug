@@ -1,12 +1,59 @@
 #!/bin/sh
-# ForceCommand for the anonymous "get" user: serves a CLI binary (or the
-# version) on stdout, nothing else. Normalizes uname-style names, so
-#   ssh -p 2222 get@<host> $(uname -s)-$(uname -m) > plug
-# works from any machine without knowing the canonical os-arch pair.
+# ForceCommand for the anonymous "get" user. It can only:
+#   version                     print the agent version
+#   <os>-<arch> (uname style)   stream that CLI binary on stdout
+#   install                     emit a shell installer (adds plug to PATH + profile)
+# Nothing else — no shell, ever.
 req=$(printf '%s' "$SSH_ORIGINAL_COMMAND" | tr 'A-Z' 'a-z')
 
 if [ "$req" = "version" ]; then
   exec cat /opt/plug/VERSION
+fi
+
+if [ "$req" = "install" ]; then
+  # host:port must be the address the CLIENT uses to reach us — behind a Swarm
+  # routing mesh / NAT that is NOT what the server sees. So the installer takes
+  # them as positional args ($1 $2), falling back to SSH_CONNECTION only as a
+  # best-effort hint:
+  #   ssh -p 2222 get@<host> install | sh -s -- <host> 2222
+  set -- $SSH_CONNECTION
+  fallback_host=$3
+  fallback_port=$4
+  ver=$(cat /opt/plug/VERSION)
+  cat <<EOF
+#!/bin/sh
+# plug installer (agent v$ver) — from https://softwarity.github.io/plug/
+set -e
+HOST="\${1:-$fallback_host}"; PORT="\${2:-$fallback_port}"
+os=\$(uname -s | tr 'A-Z' 'a-z')
+arch=\$(uname -m)
+case "\$arch" in x86_64|amd64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; esac
+[ "\$os" = "linux" ] || [ "\$os" = "darwin" ] || { echo "plug: unsupported OS '\$os' (use WSL2 on Windows)" >&2; exit 1; }
+
+for d in "\$HOME/.local/bin" /usr/local/bin; do
+  mkdir -p "\$d" 2>/dev/null && [ -w "\$d" ] && dest="\$d" && break
+done
+: "\${dest:?cannot find a writable bin dir; run as a user owning ~/.local/bin}"
+
+echo "plug: downloading \$os-\$arch from \$HOST:\$PORT ..."
+# -n: read stdin from /dev/null so we don't eat the rest of this script when
+# the installer itself is piped from stdin (ssh ... install | sh).
+ssh -n -p "\$PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    -o BatchMode=yes get@"\$HOST" "\$os-\$arch" > "\$dest/plug"
+chmod +x "\$dest/plug"
+
+mkdir -p "\$HOME/.plug"
+if [ ! -f "\$HOME/.plug/default.conf" ]; then
+  printf 'host = %s\nport = %s\n' "\$HOST" "\$PORT" > "\$HOME/.plug/default.conf"
+  echo "plug: wrote profile 'default' -> \$HOST:\$PORT"
+fi
+
+echo "plug: installed to \$dest/plug"
+case ":\$PATH:" in *":\$dest:"*) : ;; *) echo "plug: add \$dest to your PATH" ;; esac
+command -v sshuttle >/dev/null 2>&1 || echo "plug: also install sshuttle (brew install sshuttle / apt install sshuttle)"
+echo "plug: try  plug npm run start:dev"
+EOF
+  exit 0
 fi
 
 os=${req%%-*}
@@ -23,8 +70,9 @@ if [ -n "$os" ] && [ -f "$f" ]; then
   exec cat "$f"
 fi
 
-echo "plug $(cat /opt/plug/VERSION) — download the CLI:" >&2
-echo '  ssh -p <port> get@<host> $(uname -s)-$(uname -m) > plug && chmod +x plug' >&2
+echo "plug $(cat /opt/plug/VERSION) — usage over ssh:" >&2
+echo '  ssh -p <port> get@<host> install | sh                    # install (recommended)' >&2
+echo '  ssh -p <port> get@<host> $(uname -s)-$(uname -m) > plug  # just the binary' >&2
+echo '  ssh -p <port> get@<host> version' >&2
 echo "  available: $(ls /opt/plug/bin | sed 's/^plug-//' | tr '\n' ' ')" >&2
-echo "  (or 'version' to print the agent version)" >&2
 exit 1

@@ -60,25 +60,26 @@ PLUG_HOST=swarm-node.example.com plug ./mvnw spring-boot:run</app-code>
       <code>$PLUG_HOST</code>/<code>$PLUG_PORT</code> → the selected profile.
     </div>
 
-    <h3>Self-upgrade &amp; the multi-cluster policy</h3>
+    <h3>Versions — the launcher model</h3>
     <p>
-      Each agent image ships the matching CLI binaries. On connect, plug compares itself to the
-      agent and applies a <strong>skew policy</strong> — the same idea as <code>kubectl</code>:
+      plug is a small <strong>launcher</strong>, like <code>nvm</code> or <code>rustup</code>. The
+      binary on your <code>PATH</code> does almost nothing itself: on each run it asks the agent
+      which version it speaks, then executes <em>that exact version</em> from
+      <code>~/.plug/versions/</code> — downloading it once from the cluster if missing.
     </p>
     <ul>
-      <li><strong>Agent newer</strong> → plug upgrades itself over the existing SSH channel and restarts your command transparently.</li>
-      <li><strong>Agent older</strong> → nothing happens; the newer CLI stays (it is backward-compatible within a major).</li>
-      <li><strong>Different major</strong> → plug refuses and asks you to <code>plug upgrade</code> deliberately, instead of breaking silently.</li>
+      <li><strong>Each cluster runs its own version.</strong> A cluster on 0.2 and one on 0.5 both work — no in-place replacement, no downgrade/upgrade churn on the binary you installed.</li>
+      <li><strong>Correct by construction.</strong> The CLI can never drift from the agent it talks to, because it literally runs the agent's version.</li>
+      <li><strong>Cheap.</strong> Cached binaries are a couple of MB each; the first connect to a new version pays one small download.</li>
     </ul>
+    <app-code lang="bash">plug version         # the launcher's own version
+plug versions        # launcher + every cached cluster version
+plug self-update     # update the launcher itself (rare — only if bootstrap changes)</app-code>
     <p>
-      This is what makes several clusters on different versions safe: your binary <em>converges to
-      the newest</em> agent you connect to and keeps working against the older ones — no version
-      ping-pong. Turn it off per profile with <code>auto-upgrade = false</code>, or globally with
-      <code>PLUG_AUTO_UPGRADE=0</code>. Dev builds never auto-upgrade.
+      The launcher itself almost never needs updating: the download protocol it speaks to the agent
+      (<code>version</code> + <code>&lt;os-arch&gt;</code>) is frozen. If it ever must change,
+      <code>plug self-update</code> replaces the launcher from any cluster.
     </p>
-    <app-code lang="bash">plug version                   # what you run now
-plug upgrade                   # sync to a cluster on demand (-f to force a downgrade)
-plug upgrade -p staging</app-code>
   `,
 })
 export class ProfilesComponent {}

@@ -119,22 +119,22 @@ services:
 
     <h3>2. Install the CLI (each dev machine)</h3>
     <p>
-      plug drives <a href="https://github.com/sshuttle/sshuttle" target="_blank" rel="noopener">sshuttle</a>
-      under the hood — install that first:
+      One line, straight from the cluster — the agent serves an installer that downloads the right
+      binary (<code>uname</code>-detected), puts it on your <code>PATH</code> and writes a default
+      profile. No GitHub access needed:
     </p>
-    <app-code lang="bash">brew install sshuttle        # macOS — linux: apt/dnf install sshuttle</app-code>
-    <p>
-      Then get the <code>plug</code> binary. The agent serves it <strong>from the cluster itself</strong>
-      over the same port <code>2222</code> — no GitHub access needed, and the platform is detected for
-      you by <code>uname</code>:
-    </p>
-    <app-code lang="bash">ssh -p 2222 get@&lt;cluster-host&gt; $(uname -s)-$(uname -m) > plug &amp;&amp; chmod +x plug
-sudo mv plug /usr/local/bin/</app-code>
+    <app-code lang="bash">ssh -p 2222 get@&lt;cluster-host&gt; install | sh -s -- &lt;cluster-host&gt; 2222</app-code>
     <p>
       No key, no password — a passwordless <code>get</code> user locked to a single "hand me a
       binary" command (see <a routerLink="/security">Security model</a>). Prefer GitHub? The same
       binaries are attached to every
       <a href="https://github.com/softwarity/plug/releases" target="_blank" rel="noopener">release</a>.
+    </p>
+    <p>
+      plug currently drives <a href="https://github.com/sshuttle/sshuttle" target="_blank"
+      rel="noopener">sshuttle</a> for the tunnel, so install that too for now
+      (<code>brew install sshuttle</code> / <code>apt install sshuttle</code>) — a
+      <a routerLink="/roadmap">native Go tunnel</a> will remove this last dependency.
     </p>
 
     <h3>3. Run your process in the cluster</h3>
@@ -146,9 +146,10 @@ sudo mv plug /usr/local/bin/</app-code>
       starts your command. <kbd>Ctrl-C</kbd> stops your process <em>and</em> tears the tunnel down.
     </p>
     <p>
-      On connect, plug also checks the agent's version and <strong>upgrades itself</strong> if the
-      cluster ships a newer one — so the CLI never drifts from the agent. See
-      <a routerLink="/profiles">Profiles &amp; wizard</a> for the multi-cluster policy.
+      plug is a small <strong>launcher</strong>: on connect it asks the agent which version it
+      speaks and runs <em>exactly that version</em> (cached under <code>~/.plug/versions/</code>,
+      downloaded once). Each cluster runs its own matching version, so several clusters on different
+      versions never conflict. See <a routerLink="/profiles">Profiles &amp; versions</a>.
     </p>
 
     <h3>Compatibility</h3>

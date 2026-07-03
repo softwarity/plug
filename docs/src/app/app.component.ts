@@ -24,7 +24,7 @@ export class AppComponent {
   protected readonly links: DocLink[] = [
     { path: '/', label: 'Getting started', icon: 'rocket_launch' },
     { path: '/how-it-works', label: 'How it works', icon: 'account_tree' },
-    { path: '/profiles', label: 'Profiles & wizard', icon: 'settings' },
+    { path: '/profiles', label: 'Profiles & versions', icon: 'settings' },
     { path: '/agent', label: 'Agent & deployment', icon: 'dns' },
     { path: '/security', label: 'Security model', icon: 'shield' },
     { path: '/roadmap', label: 'Roadmap', icon: 'map' },

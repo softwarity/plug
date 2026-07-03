@@ -72,17 +72,17 @@ docker stack deploy -c plug-stack.yml plug</app-code>
 
     <h3>It also serves the CLI</h3>
     <p>
-      The image is multi-stage: it compiles the five CLI binaries and ships them in
-      <code>/opt/plug/bin/</code>, plus a <code>/opt/plug/VERSION</code> file. Two things flow from
-      this — a GitHub-free install and automatic version matching:
+      The image is multi-stage: it compiles the five CLI binaries into <code>/opt/plug/bin/</code>
+      and writes <code>/opt/plug/VERSION</code>. The <code>get</code> user serves three things and
+      nothing else — <code>version</code>, a named binary, and an <code>install</code> script:
     </p>
-    <app-code lang="bash">ssh -p 2222 get@&lt;host&gt; $(uname -s)-$(uname -m) > plug   # first install, from the cluster
-plug upgrade                                            # or let it happen on connect</app-code>
+    <app-code lang="bash">ssh -p 2222 get@&lt;host&gt; install | sh -s -- &lt;host&gt; 2222   # install (PATH + profile)
+ssh -p 2222 get@&lt;host&gt; $(uname -s)-$(uname -m) > plug   # just the binary
+ssh -p 2222 get@&lt;host&gt; version                          # the agent version</app-code>
     <p>
-      The version baked into the image (and stamped into every binary) is what the CLI compares
-      itself against — see the <a routerLink="/profiles">skew policy</a>. Released images carry a
-      real <code>x.y.z</code>; <code>latest</code> carries <code>dev</code>, which disables
-      auto-upgrade.
+      The version baked into the image (and stamped into every binary) is what the
+      <a routerLink="/profiles">launcher</a> asks for to run the matching version. Released images
+      carry a real <code>x.y.z</code>; <code>latest</code> carries <code>dev</code>.
     </p>
 
     <h3>Under the hood</h3>

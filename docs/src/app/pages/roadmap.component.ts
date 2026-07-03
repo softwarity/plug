@@ -9,6 +9,25 @@ import { CodeComponent } from '../code/code.component';
   template: `
     <h2>Roadmap</h2>
 
+    <h3>Native Go tunnel — zero dependency (next)</h3>
+    <p>
+      Today plug shells out to <a href="https://github.com/sshuttle/sshuttle" target="_blank"
+      rel="noopener">sshuttle</a>, so a dev has to install it (and a Python) first. The goal: a
+      <strong>single self-contained binary</strong> that does the tunnel itself — nothing else to
+      install.
+    </p>
+    <p>The design, and why it also <em>simplifies</em> the agent:</p>
+    <ul>
+      <li><strong>Datapath in Go.</strong> A userspace TUN interface + a netstack (the tailscale / wireguard-go approach) captures traffic to the cluster subnets and terminates the flows in-process.</li>
+      <li><strong>Transport = plain SSH.</strong> Each captured flow becomes an SSH <code>direct-tcpip</code> channel to <code>service:port</code> — a stock <code>sshd</code> feature. DNS is forwarded the same way, over TCP, to the cluster resolver (<code>127.0.0.11:53</code>) which <code>sshd</code> can reach from inside the agent.</li>
+      <li><strong>The agent loses Python.</strong> No more sshuttle server half: the image becomes just <code>sshd</code> (with TCP forwarding for the <code>plug</code> user) plus the served binaries. Smaller, simpler, one less moving part.</li>
+    </ul>
+    <p>
+      The hard, platform-specific part is the client datapath (utun/pf on macOS, tun/nftables on
+      Linux, IPv6) — it needs the real cluster to validate, so it lands as its own focused pass.
+      Root is still required locally (as with sshuttle), for the TUN device and routes.
+    </p>
+
     <h3>Kubernetes transport</h3>
     <p>
       The tunnel mechanics work on Kubernetes today — what's missing is the turnkey part. Two gaps,
@@ -39,17 +58,16 @@ subnets = 10.96.0.0/12,10.244.0.0/16   # service CIDR + pod CIDR</app-code>
       The end game: no dedicated agent at all. The (Java) API gateway already deployed in the
       cluster hosts the tunnel endpoint and turns it on and off dynamically — dev tooling that
       piggybacks on infrastructure you already trust, with the gateway's own authentication in
-      front. The download and self-upgrade contract already exists (see below); the gateway will
+      front. The install and versioning contract already exists (see below); the gateway will
       simply expose the same surface, so the CLI will not need to relearn anything.
     </p>
 
     <div class="callout">
-      <strong>Shipped already:</strong> serving the CLI from the cluster and matching versions were
-      on this roadmap — they now work over the agent's SSH port. The passwordless
-      <code>get</code> user hands out the right binary
-      (<code>ssh get&#64;host $(uname -s)-$(uname -m)</code>), and plug
-      <a routerLink="/profiles">upgrades itself on connect</a> when the agent is newer. No GitHub
-      access required, no extra port, no HTTP server.
+      <strong>Shipped already:</strong> installing the CLI from the cluster and per-cluster version
+      matching were on this roadmap — they now work over the agent's SSH port. The passwordless
+      <code>get</code> user serves an installer (<code>ssh get&#64;host install | sh</code>), and the
+      <a routerLink="/profiles">launcher</a> runs each cluster's exact version. No GitHub access
+      required, no extra port, no HTTP server.
     </div>
 
     <h3>Homebrew tap</h3>
@@ -67,10 +85,11 @@ brew install plug</app-code>
       </thead>
       <tbody>
         <tr><td>Docker Swarm, auto-discovery, profiles &amp; wizard</td><td>✅ shipped</td></tr>
-        <tr><td>CLI served from the cluster + self-upgrade / skew policy</td><td>✅ shipped</td></tr>
+        <tr><td>Install from cluster + launcher (per-cluster versions)</td><td>✅ shipped</td></tr>
         <tr><td>Kubernetes with manual <code>subnets =</code></td><td>✅ works today</td></tr>
+        <tr><td>Native Go tunnel (drop sshuttle &amp; Python)</td><td>🔜 next</td></tr>
         <tr><td>Kubernetes turnkey (CIDR discovery, <code>kubectl exec</code>)</td><td>🔜 planned</td></tr>
-        <tr><td>Gateway hosting the tunnel + download surface</td><td>🔜 planned</td></tr>
+        <tr><td>Gateway hosting the tunnel + install surface</td><td>🔜 planned</td></tr>
         <tr><td>Homebrew tap</td><td>🔜 planned</td></tr>
       </tbody>
     </table>
