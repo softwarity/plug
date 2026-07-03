@@ -92,5 +92,7 @@ clusters). Never publish port 2222 on an untrusted network.
 ## Roadmap
 
 - [ ] Kubernetes transport (agent pod + `kubectl exec`)
-- [ ] Embed the agent into an API gateway (dynamic enable/disable)
+- [ ] Embed the agent into an API gateway (dynamic enable/disable), serving
+      the CLI binaries over HTTP (`/plug/<os>-<arch>`, `/version`) so clients
+      always match the deployed agent
 - [ ] Homebrew tap
