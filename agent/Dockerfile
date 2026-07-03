@@ -4,7 +4,7 @@
 # the CLI compares against it to decide whether to self-upgrade.
 ARG VERSION=dev
 
-FROM golang:1.24-alpine AS build
+FROM golang:1.26-alpine AS build
 ARG VERSION
 WORKDIR /src
 COPY cli/ ./cli/
@@ -32,6 +32,8 @@ RUN apk add --no-cache openssh-server python3 iproute2 \
          echo 'AllowUsers plug get'; \
          echo 'Match User plug'; \
          echo '  PasswordAuthentication no'; \
+         echo '  AllowTcpForwarding yes'; \
+         echo '  PermitOpen any'; \
          echo 'Match User get'; \
          echo '  PermitEmptyPasswords yes'; \
          echo '  PasswordAuthentication yes'; \
