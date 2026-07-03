@@ -1,0 +1,55 @@
+name: Docker release
+
+# Triggered by version tags created by the Release workflow: build the CLI
+# binaries and attach them to the GitHub Release, then build and publish the
+# released image (semver tags) via the shared multi-arch workflow.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  binaries:
+    name: Build & attach binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+      - name: Vet
+        working-directory: cli
+        run: go vet ./...
+      - name: Cross-compile
+        working-directory: cli
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p ../dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            goos=${target%/*} goarch=${target#*/}
+            ext=""; [ "$goos" = windows ] && ext=".exe"
+            GOOS=$goos GOARCH=$goarch go build -trimpath -ldflags '-s -w' \
+              -o "../dist/plug-$goos-$goarch$ext" .
+          done
+      - name: Attach binaries to the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # The Release is created by release-flow right after the tag push;
+        # retry briefly in case this workflow wins the race.
+        run: |
+          for i in $(seq 1 12); do
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber && exit 0
+            echo "release not ready yet, retrying ($i)..."
+            sleep 5
+          done
+          exit 1
+
+  image:
+    name: Build & publish image
+    needs: binaries
+    uses: ./.github/workflows/_docker.yml
+    secrets: inherit

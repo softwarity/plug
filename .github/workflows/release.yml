@@ -1,75 +1,29 @@
 name: Release
-
 on:
   workflow_dispatch:
     inputs:
       bump:
-        description: 'Version bump type'
+        description: Version part to bump
+        type: choice
         required: true
         default: patch
-        type: choice
-        options:
-          - patch
-          - minor
-          - major
-
-permissions:
-  contents: write
-  packages: write
-
-env:
-  IMAGE: ghcr.io/softwarity/plug-agent
+        options: [patch, minor, major]
 
 jobs:
   release:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
-          cache: false
-      - name: Vet
-        working-directory: cli
-        run: go vet ./...
+          # Persist the PAT so release-flow's tag push carries it (→ triggers docker-release.yml).
+          token: ${{ secrets.PAT_TOKEN }}
 
-      - uses: softwarity/release-flow@v1
-        id: rf
+      - name: Release
+        uses: softwarity/release-flow@v1
         with:
           bump: ${{ inputs.bump }}
-
-      - name: Cross-compile
-        working-directory: cli
-        env:
-          CGO_ENABLED: '0'
-        run: |
-          mkdir -p ../dist
-          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
-            goos=${target%/*} goarch=${target#*/}
-            ext=""; [ "$goos" = windows ] && ext=".exe"
-            GOOS=$goos GOARCH=$goarch go build -trimpath -ldflags '-s -w' \
-              -o "../dist/plug-$goos-$goarch$ext" .
-          done
-      - name: Attach binaries to the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload '${{ steps.rf.outputs.tag }}' dist/*
-
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-      - name: Build and push the agent image
-        uses: docker/build-push-action@v6
-        with:
-          context: agent
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ${{ env.IMAGE }}:${{ steps.rf.outputs.version }}
-            ${{ env.IMAGE }}:latest
+          # language auto-detected: no manifest → tag (version lives in the git tags)

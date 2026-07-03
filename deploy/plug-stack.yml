@@ -2,7 +2,7 @@
 # Attach it to every overlay network holding services you want to reach.
 services:
   agent:
-    image: ghcr.io/softwarity/plug-agent:latest
+    image: docker.io/softwarity/plug-agent:latest
     ports:
       - "2222:22"
     networks:

@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  build:
+    name: Build CLI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+      - name: Vet
+        working-directory: cli
+        run: go vet ./...
+      - name: Cross-compile
+        working-directory: cli
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p ../dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            goos=${target%/*} goarch=${target#*/}
+            ext=""; [ "$goos" = windows ] && ext=".exe"
+            echo "building $goos/$goarch"
+            GOOS=$goos GOARCH=$goarch go build -trimpath -ldflags '-s -w' \
+              -o "../dist/plug-$goos-$goarch$ext" .
+          done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: plug-binaries
+          path: dist/*
+          if-no-files-found: error
+
+  image:
+    name: Build & publish image
+    needs: build
+    if: github.event_name == 'push'
+    uses: ./.github/workflows/_docker.yml
+    secrets: inherit

@@ -1,4 +1,4 @@
-IMAGE ?= ghcr.io/softwarity/plug-agent:latest
+IMAGE ?= docker.io/softwarity/plug-agent:latest
 
 .PHONY: cli agent push install clean
 
