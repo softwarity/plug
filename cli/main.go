@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -25,46 +27,41 @@ const usageText = `plug — run a local process as if it were inside your cluste
 
 Usage:
   plug [options] <command> [args...]   run <command> with cluster DNS/network
-  plug init                            write an example plug-stack.yml here
+  plug init                            create a profile interactively
 
 Options:
-  -p, --profile <name>   profile from ~/.plug/<name>.conf (default: "default")
-  -H, --host <host>      agent host (overrides profile / $PLUG_HOST)
-      --port <port>      agent SSH port (default 2222, overrides profile / $PLUG_PORT)
+  -p, --profile <name>   use profile ~/.plug/<name>.conf
+  -H, --host <host>      agent host (bypasses profiles; also $PLUG_HOST)
+      --port <port>      agent SSH port (default 2222; also $PLUG_PORT)
   -h, --help             show this help
 
-Profile file (~/.plug/<name>.conf):
-  host = swarm-node.example.com
-  port = 2222
-  # optional, skips auto-discovery:
-  # subnets = 10.0.9.0/24,10.0.10.0/24
+Profiles (~/.plug/*.conf):
+  Without -p, plug picks the profile automatically: a single profile is
+  used as is, several offer an interactive choice, none starts a short
+  wizard. Profile format:
+
+    host = swarm-node.example.com
+    port = 2222
+    # subnets = 10.0.9.0/24,10.0.10.0/24   (optional, skips auto-discovery)
+
+Agent deployment (once, on the cluster):
+  https://github.com/softwarity/plug/blob/main/deploy/plug-stack.yml
 
 Examples:
   plug npm run start:dev
   plug -p staging ./mvnw spring-boot:run
 `
 
-const stackTemplate = `# plug agent — deploy with:  docker stack deploy -c plug-stack.yml plug
-# Attach it to every overlay network holding services you want to reach.
-services:
-  agent:
-    image: ghcr.io/softwarity/plug-agent:latest
-    ports:
-      - "2222:22"
-    networks:
-      - app_net
-    deploy:
-      replicas: 1
-
-networks:
-  app_net:
-    external: true
-`
-
 type config struct {
 	host    string
 	port    string
 	subnets []string
+}
+
+type options struct {
+	profile string
+	host    string
+	port    string
 }
 
 func main() {
@@ -74,14 +71,15 @@ func main() {
 		os.Exit(2)
 	}
 	if args[0] == "init" {
-		initStack()
+		initProfile()
 		return
 	}
 
-	cfg, cmdArgs := parseArgs(args)
+	opts, cmdArgs := parseArgs(args)
 	if len(cmdArgs) == 0 {
 		fatal("no command given\n\n" + usageText)
 	}
+	cfg := resolveConfig(opts)
 	if cfg.host == "" {
 		fatal("no agent host: use --host, $PLUG_HOST or a profile in ~/.plug/")
 	}
@@ -120,9 +118,8 @@ func main() {
 	os.Exit(runChild(cmdArgs))
 }
 
-func parseArgs(args []string) (config, []string) {
-	profile := "default"
-	var host, port string
+func parseArgs(args []string) (options, []string) {
+	var o options
 	i := 0
 	for i < len(args) {
 		switch args[i] {
@@ -130,34 +127,17 @@ func parseArgs(args []string) (config, []string) {
 			fmt.Print(usageText)
 			os.Exit(0)
 		case "-p", "--profile":
-			profile = flagValue(args, &i)
+			o.profile = flagValue(args, &i)
 		case "-H", "--host":
-			host = flagValue(args, &i)
+			o.host = flagValue(args, &i)
 		case "--port":
-			port = flagValue(args, &i)
+			o.port = flagValue(args, &i)
 		default:
-			goto done
+			return o, args[i:]
 		}
 		i++
 	}
-done:
-	cfg := loadProfile(profile)
-	if v := os.Getenv("PLUG_HOST"); v != "" {
-		cfg.host = v
-	}
-	if v := os.Getenv("PLUG_PORT"); v != "" {
-		cfg.port = v
-	}
-	if host != "" {
-		cfg.host = host
-	}
-	if port != "" {
-		cfg.port = port
-	}
-	if cfg.port == "" {
-		cfg.port = defaultPort
-	}
-	return cfg, args[i:]
+	return o, nil
 }
 
 func flagValue(args []string, i *int) string {
@@ -168,18 +148,75 @@ func flagValue(args []string, i *int) string {
 	return args[*i]
 }
 
-func loadProfile(name string) config {
+// resolveConfig picks the connection settings: explicit host first, then the
+// requested profile, then automatic profile selection (single → use it,
+// several → ask, none → wizard).
+func resolveConfig(o options) config {
 	var cfg config
+	switch {
+	case o.host != "" || os.Getenv("PLUG_HOST") != "":
+		// explicit host, profiles are bypassed entirely
+	case o.profile != "":
+		cfg = loadProfile(o.profile)
+	default:
+		names := listProfiles()
+		switch len(names) {
+		case 0:
+			info("no profile in %s — let's create one", profilesDir())
+			cfg = loadProfile(wizard("default", false))
+		case 1:
+			info("using profile %q", names[0])
+			cfg = loadProfile(names[0])
+		default:
+			cfg = loadProfile(chooseProfile(names))
+		}
+	}
+	if v := os.Getenv("PLUG_HOST"); v != "" {
+		cfg.host = v
+	}
+	if v := os.Getenv("PLUG_PORT"); v != "" {
+		cfg.port = v
+	}
+	if o.host != "" {
+		cfg.host = o.host
+	}
+	if o.port != "" {
+		cfg.port = o.port
+	}
+	if cfg.port == "" {
+		cfg.port = defaultPort
+	}
+	return cfg
+}
+
+func profilesDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return cfg
+		fatal("%v", err)
 	}
-	data, err := os.ReadFile(filepath.Join(home, ".plug", name+".conf"))
+	return filepath.Join(home, ".plug")
+}
+
+func listProfiles() []string {
+	entries, err := os.ReadDir(profilesDir())
 	if err != nil {
-		if name != "default" {
-			fatal("profile %q not found in ~/.plug/", name)
+		return nil
+	}
+	var names []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".conf") {
+			names = append(names, strings.TrimSuffix(e.Name(), ".conf"))
 		}
-		return cfg
+	}
+	sort.Strings(names)
+	return names
+}
+
+func loadProfile(name string) config {
+	var cfg config
+	data, err := os.ReadFile(filepath.Join(profilesDir(), name+".conf"))
+	if err != nil {
+		fatal("profile %q not found in %s", name, profilesDir())
 	}
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
@@ -205,6 +242,90 @@ func loadProfile(name string) config {
 		}
 	}
 	return cfg
+}
+
+func chooseProfile(names []string) string {
+	tty := openTTY("several profiles found, pick one with -p <name>")
+	defer tty.Close()
+	info("several profiles found:")
+	for i, n := range names {
+		fmt.Fprintf(os.Stderr, "  %d) %s\n", i+1, n)
+	}
+	in := bufio.NewReader(tty)
+	for {
+		fmt.Fprintf(os.Stderr, "choose [1-%d]: ", len(names))
+		line, err := in.ReadString('\n')
+		if err != nil {
+			fatal("aborted")
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(line))
+		if err == nil && n >= 1 && n <= len(names) {
+			return names[n-1]
+		}
+	}
+}
+
+// wizard interactively creates a profile and returns its name.
+func wizard(defaultName string, confirmOverwrite bool) string {
+	tty := openTTY("cannot run the profile wizard; use --host instead")
+	defer tty.Close()
+	in := bufio.NewReader(tty)
+
+	name := prompt(in, "profile name", defaultName)
+	path := filepath.Join(profilesDir(), name+".conf")
+	if confirmOverwrite {
+		if _, err := os.Stat(path); err == nil {
+			if !strings.EqualFold(prompt(in, name+" already exists, overwrite? (y/N)", "n"), "y") {
+				fatal("aborted")
+			}
+		}
+	}
+	var host string
+	for host == "" {
+		host = prompt(in, "cluster host", "")
+	}
+	port := prompt(in, "agent port", defaultPort)
+
+	if err := os.MkdirAll(profilesDir(), 0o700); err != nil {
+		fatal("%v", err)
+	}
+	content := fmt.Sprintf("host = %s\nport = %s\n# subnets = 10.0.9.0/24,10.0.10.0/24   (optional, skips auto-discovery)\n", host, port)
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		fatal("%v", err)
+	}
+	info("profile %q saved to %s", name, path)
+	return name
+}
+
+func initProfile() {
+	name := wizard("default", true)
+	info("try it:  plug -p %s <your command>", name)
+}
+
+func prompt(in *bufio.Reader, label, def string) string {
+	if def != "" {
+		fmt.Fprintf(os.Stderr, "%s [%s]: ", label, def)
+	} else {
+		fmt.Fprintf(os.Stderr, "%s: ", label)
+	}
+	line, err := in.ReadString('\n')
+	if err != nil {
+		fatal("aborted")
+	}
+	if line = strings.TrimSpace(line); line != "" {
+		return line
+	}
+	return def
+}
+
+// openTTY opens the controlling terminal for interactive prompts; reading
+// there (not stdin) keeps stdin free for the child process (pipes work).
+func openTTY(hint string) *os.File {
+	tty, err := os.Open("/dev/tty")
+	if err != nil {
+		fatal("no terminal available — %s", hint)
+	}
+	return tty
 }
 
 func writeKey() (string, func()) {
@@ -367,23 +488,6 @@ func runChild(cmdArgs []string) int {
 		return ee.ExitCode()
 	}
 	return 1
-}
-
-func initStack() {
-	const name = "plug-stack.yml"
-	if _, err := os.Stat(name); err == nil {
-		fatal("%s already exists here, not overwriting", name)
-	}
-	if err := os.WriteFile(name, []byte(stackTemplate), 0o644); err != nil {
-		fatal("%v", err)
-	}
-	fmt.Printf(`wrote %s
-
-next steps:
-  1. edit the networks section to list your overlay networks
-  2. docker stack deploy -c %s plug
-  3. plug --host <any-swarm-node> <your command>
-`, name, name)
 }
 
 func info(format string, a ...any) {

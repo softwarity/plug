@@ -28,10 +28,11 @@ your command, and tears everything down when it exits.
 
 ## Setup
 
-**Once, on the cluster:**
+**Once, on the cluster** — the descriptor lives in this repo,
+[deploy/plug-stack.yml](deploy/plug-stack.yml):
 
 ```bash
-plug init                                  # writes plug-stack.yml
+curl -fsSLO https://raw.githubusercontent.com/softwarity/plug/main/deploy/plug-stack.yml
 # edit the networks: section to list your overlay networks
 docker stack deploy -c plug-stack.yml plug
 ```
@@ -53,10 +54,19 @@ yourself with `make cli && make install`.
 ## Usage
 
 ```bash
-plug --host swarm-node.example.com npm run start:dev
+plug npm run start:dev
+plug ./mvnw spring-boot:run
 ```
 
-Or save profiles in `~/.plug/`:
+Profiles live in `~/.plug/*.conf` and are picked automatically:
+
+- **no profile** → a short wizard asks for a name, the cluster host and the
+  agent port (default 2222), then saves and uses it
+- **one profile** → used as is
+- **several profiles** → interactive selection, or pick one with `-p staging`
+
+`plug init` runs the same wizard on demand (e.g. to add a second cluster).
+A profile is a plain file you can also edit by hand:
 
 ```ini
 # ~/.plug/staging.conf
@@ -65,13 +75,9 @@ port = 2222
 # subnets = 10.0.9.0/24        # optional, skips auto-discovery
 ```
 
-```bash
-plug -p staging ./mvnw spring-boot:run
-plug -p staging npm run start:dev
-```
-
-`$PLUG_HOST` / `$PLUG_PORT` work too. sudo will prompt once per session
-(sshuttle needs it for local packet redirection).
+`--host`/`--port` (or `$PLUG_HOST`/`$PLUG_PORT`) bypass profiles entirely.
+sudo will prompt once per session (sshuttle needs it for local packet
+redirection).
 
 ## Security model — read this
 
