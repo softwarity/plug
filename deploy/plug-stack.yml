@@ -1,0 +1,15 @@
+# plug agent — deploy with:  docker stack deploy -c plug-stack.yml plug
+# Attach it to every overlay network holding services you want to reach.
+services:
+  agent:
+    image: ghcr.io/hhfrancois/plug-agent:latest
+    ports:
+      - "2222:22"
+    networks:
+      - app_net
+    deploy:
+      replicas: 1
+
+networks:
+  app_net:
+    external: true
