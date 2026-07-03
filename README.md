@@ -39,9 +39,16 @@ docker stack deploy -c plug-stack.yml plug
 **On each dev machine:**
 
 ```bash
-brew install sshuttle
-make cli && make install                   # or grab a release binary
+brew install sshuttle          # macOS; linux: apt/dnf install sshuttle
 ```
+
+Then grab the `plug` binary for your platform from the
+[releases page](https://github.com/softwarity/plug/releases), or build it
+yourself with `make cli && make install`.
+
+> **Windows**: a `windows-amd64` binary is published, but sshuttle has no
+> native Windows support — run plug inside WSL2 (with the linux binary)
+> instead.
 
 ## Usage
 

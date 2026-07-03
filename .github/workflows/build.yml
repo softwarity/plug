@@ -1,0 +1,65 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/softwarity/plug-agent
+
+jobs:
+  cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: false
+      - name: Vet
+        working-directory: cli
+        run: go vet ./...
+      - name: Cross-compile
+        working-directory: cli
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p ../dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            goos=${target%/*} goarch=${target#*/}
+            ext=""; [ "$goos" = windows ] && ext=".exe"
+            echo "building $goos/$goarch"
+            GOOS=$goos GOARCH=$goarch go build -trimpath -ldflags '-s -w' \
+              -o "../dist/plug-$goos-$goarch$ext" .
+          done
+          ls -l ../dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plug-binaries
+          path: dist/
+
+  agent:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Login to ghcr
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Build (and push on main)
+        uses: docker/build-push-action@v6
+        with:
+          context: agent
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ env.IMAGE }}:latest

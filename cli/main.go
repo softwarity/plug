@@ -48,7 +48,7 @@ const stackTemplate = `# plug agent — deploy with:  docker stack deploy -c plu
 # Attach it to every overlay network holding services you want to reach.
 services:
   agent:
-    image: ghcr.io/hhfrancois/plug-agent:latest
+    image: ghcr.io/softwarity/plug-agent:latest
     ports:
       - "2222:22"
     networks:

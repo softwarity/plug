@@ -1,4 +1,4 @@
-IMAGE ?= ghcr.io/hhfrancois/plug-agent:latest
+IMAGE ?= ghcr.io/softwarity/plug-agent:latest
 
 .PHONY: cli agent push install clean
 
