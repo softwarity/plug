@@ -1,0 +1,74 @@
+import { Component } from '@angular/core';
+import { RouterLink } from '@angular/router';
+import { CodeComponent } from '../code/code.component';
+
+@Component({
+  selector: 'app-roadmap',
+  imports: [CodeComponent, RouterLink],
+  preserveWhitespaces: true,
+  template: `
+    <h2>Roadmap</h2>
+
+    <h3>Kubernetes transport</h3>
+    <p>
+      The tunnel mechanics work on Kubernetes today — what's missing is the turnkey part. Two gaps,
+      two answers:
+    </p>
+    <ul>
+      <li>
+        <strong>Service CIDR discovery.</strong> A pod only sees its own IP; the ClusterIP range is
+        virtual (iptables/IPVS), so <a routerLink="/how-it-works">interface-based discovery</a>
+        can't find it. Planned: ask the apiserver. Meanwhile, pin it in the profile:
+      </li>
+    </ul>
+    <app-code lang="text"># ~/.plug/kube-dev.conf — works today
+host = a-node.example.com
+port = 2222
+subnets = 10.96.0.0/12,10.244.0.0/16   # service CIDR + pod CIDR</app-code>
+    <ul>
+      <li>
+        <strong><code>kubectl exec</code> transport.</strong> Instead of a published port, tunnel
+        through <code>kubectl exec</code> towards a plain pod: zero exposed surface, and access is
+        governed by each developer's kubeconfig RBAC — a natural fit that also softens the
+        <a routerLink="/security">no-auth trade-off</a>.
+      </li>
+    </ul>
+
+    <h3>API-gateway integration</h3>
+    <p>
+      The end game: no dedicated agent at all. The (Java) API gateway already deployed in the
+      cluster hosts the tunnel endpoint and turns it on and off dynamically — dev tooling that
+      piggybacks on infrastructure you already trust, with the gateway's own authentication in
+      front.
+    </p>
+    <p>
+      Same milestone, one more piece: the gateway serves the CLI binaries over HTTP
+      (<code>/plug/&lt;os&gt;-&lt;arch&gt;</code>, plus <code>/version</code>) so a new teammate
+      downloads plug <em>from the cluster itself</em> — no GitHub access needed, and the client
+      always matches the deployed endpoint.
+    </p>
+
+    <h3>Homebrew tap</h3>
+    <p>One-liner install and upgrades on macOS/Linux:</p>
+    <app-code lang="bash">brew tap softwarity/tap
+brew install plug</app-code>
+    <p>
+      A release-workflow step will regenerate the formula (URL + checksums) on every version.
+    </p>
+
+    <h3>Status</h3>
+    <table>
+      <thead>
+        <tr><th>Item</th><th>State</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Docker Swarm, auto-discovery, profiles &amp; wizard</td><td>✅ shipped</td></tr>
+        <tr><td>Kubernetes with manual <code>subnets =</code></td><td>✅ works today</td></tr>
+        <tr><td>Kubernetes turnkey (CIDR discovery, <code>kubectl exec</code>)</td><td>🔜 planned</td></tr>
+        <tr><td>Gateway integration + CLI download endpoint</td><td>🔜 planned</td></tr>
+        <tr><td>Homebrew tap</td><td>🔜 planned</td></tr>
+      </tbody>
+    </table>
+  `,
+})
+export class RoadmapComponent {}

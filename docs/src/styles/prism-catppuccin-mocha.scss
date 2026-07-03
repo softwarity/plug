@@ -1,0 +1,154 @@
+/*
+ * Catppuccin Mocha — Prism.js theme
+ * Hand-rolled from the official Catppuccin style guide:
+ * https://github.com/catppuccin/catppuccin/blob/main/docs/style-guide.md
+ *
+ * Palette (Mocha):
+ *   base     #1e1e2e   text         #cdd6f4   overlay2 #9399b2
+ *   mantle   #181825   subtext0     #a6adc8   surface0 #313244
+ *   crust    #11111b   subtext1     #bac2de   surface1 #45475a
+ *   rosewater #f5e0dc  peach   #fab387  blue     #89b4fa
+ *   flamingo  #f2cdcd  yellow  #f9e2af  lavender #b4befe
+ *   pink      #f5c2e7  green   #a6e3a1  sky      #89dceb
+ *   mauve     #cba6f7  teal    #94e2d5  sapphire #74c7ec
+ *   red       #f38ba8  maroon  #eba0ac
+ */
+
+code[class*='language-'],
+pre[class*='language-'] {
+  color: #cdd6f4;
+  background: none;
+  font-family: 'Fira Code', 'JetBrains Mono', 'Courier New', Consolas, monospace;
+  font-size: 0.85em;
+  line-height: 1.6;
+  text-align: left;
+  white-space: pre;
+  word-spacing: normal;
+  word-break: normal;
+  word-wrap: normal;
+  tab-size: 2;
+  hyphens: none;
+}
+
+pre[class*='language-'] {
+  padding: 16px;
+  margin: 0 0 16px 0;
+  overflow: auto;
+  border-radius: 6px;
+  background: #1e1e2e;
+  border: 1px solid #313244;
+}
+
+:not(pre) > code[class*='language-'] {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #313244;
+  color: #cdd6f4;
+}
+
+/* Tokens — Catppuccin official syntax mapping */
+.token.comment,
+.token.prolog,
+.token.cdata {
+  color: #9399b2; /* overlay2 */
+  font-style: italic;
+}
+
+.token.doctype,
+.token.punctuation {
+  color: #9399b2; /* overlay2 */
+}
+
+.token.namespace {
+  opacity: 0.7;
+}
+
+.token.tag,
+.token.operator,
+.token.keyword {
+  color: #cba6f7; /* mauve */
+}
+
+.token.boolean,
+.token.number,
+.token.constant {
+  color: #fab387; /* peach */
+}
+
+.token.string,
+.token.char,
+.token.attr-value,
+.token.regex,
+.token.variable {
+  color: #a6e3a1; /* green */
+}
+
+.token.property,
+.token.symbol {
+  color: #89b4fa; /* blue */
+}
+
+.token.atrule,
+.token.builtin,
+.token.attr-name {
+  color: #f9e2af; /* yellow */
+}
+
+.token.function,
+.token.class-name {
+  color: #89b4fa; /* blue */
+}
+
+.token.selector,
+.token.important {
+  color: #f38ba8; /* red */
+  font-weight: bold;
+}
+
+.token.entity,
+.token.url {
+  color: #94e2d5; /* teal */
+}
+
+.token.deleted {
+  color: #f38ba8; /* red */
+}
+
+.token.inserted {
+  color: #a6e3a1; /* green */
+}
+
+.token.italic {
+  font-style: italic;
+}
+
+.token.bold {
+  font-weight: bold;
+}
+
+/* TypeScript / JavaScript specific extras */
+.token.parameter {
+  color: #cdd6f4; /* text */
+}
+
+.token.template-string .token.string {
+  color: #a6e3a1; /* green */
+}
+
+.token.template-string .token.interpolation-punctuation {
+  color: #f5c2e7; /* pink */
+}
+
+.token.decorator,
+.token.annotation {
+  color: #fab387; /* peach */
+}
+
+/* Bash / shell */
+.language-bash .token.function {
+  color: #89b4fa; /* blue */
+}
+
+.language-bash .token.operator {
+  color: #f5c2e7; /* pink */
+}
