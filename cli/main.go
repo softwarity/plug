@@ -542,10 +542,6 @@ func coreMain() {
 }
 
 func coreRun(cfg config, cmdArgs []string) int {
-	if _, err := exec.LookPath("sshuttle"); err != nil {
-		info("sshuttle not found — install it first:  brew install sshuttle")
-		return 1
-	}
 	keyPath, cleanupKey := writeKey()
 	defer cleanupKey()
 	sshOpts := []string{
@@ -566,6 +562,17 @@ func coreRun(cfg config, cmdArgs []string) int {
 	}
 	if len(subnets) == 0 {
 		info("no routable subnets found on the agent — is it attached to your overlay networks?")
+		return 1
+	}
+
+	// Experimental native Go tunnel (no sshuttle). Default stays sshuttle
+	// until the datapath is validated on real clusters.
+	if os.Getenv("PLUG_TUNNEL") == "go" {
+		return coreRunGo(cfg, subnets, cmdArgs)
+	}
+
+	if _, err := exec.LookPath("sshuttle"); err != nil {
+		info("sshuttle not found — install it first:  brew install sshuttle")
 		return 1
 	}
 	info("routing %s via %s:%s", strings.Join(subnets, " "), cfg.host, cfg.port)
