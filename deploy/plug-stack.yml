@@ -1,7 +1,19 @@
-# plug agent — deploy with:  docker stack deploy -c plug-stack.yml plug
-# Attach it to every overlay network holding services you want to reach.
+# plug agent — two ways to deploy.
+#
+# RECOMMENDED: add the service below to YOUR application stack. It joins the
+# stack's network automatically — nothing else to declare:
+#
+#   services:
+#     plug-agent:
+#       image: docker.io/softwarity/plug-agent:latest
+#       ports:
+#         - "2222:22"
+#
+# STANDALONE (this file): one agent covering several stacks at once — list
+# their overlay networks explicitly, then:
+#   docker stack deploy -c plug-stack.yml plug
 services:
-  agent:
+  plug-agent:
     image: docker.io/softwarity/plug-agent:latest
     ports:
       - "2222:22"

@@ -39,14 +39,20 @@ your command, and tears everything down when it exits.
 
 ## Setup
 
-**Once, on the cluster** — the descriptor lives in this repo,
-[deploy/plug-stack.yml](deploy/plug-stack.yml):
+**Once, on the cluster** — add the agent to your application stack; it joins
+the stack's network automatically:
 
-```bash
-curl -fsSLO https://raw.githubusercontent.com/softwarity/plug/main/deploy/plug-stack.yml
-# edit the networks: section to list your overlay networks
-docker stack deploy -c plug-stack.yml plug
+```yaml
+services:
+  plug-agent:
+    image: docker.io/softwarity/plug-agent:latest
+    ports:
+      - "2222:22"
 ```
+
+Alternative — one standalone agent covering several stacks:
+[deploy/plug-stack.yml](deploy/plug-stack.yml) lists their overlay networks
+explicitly (`docker stack deploy -c plug-stack.yml plug`).
 
 **On each dev machine:**
 

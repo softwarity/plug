@@ -103,13 +103,19 @@ import { CodeComponent } from '../code/code.component';
 
     <h3>1. Deploy the agent (once, on the cluster)</h3>
     <p>
-      The stack descriptor lives in the repo. Download it, list your overlay networks in the
-      <code>networks:</code> section, deploy:
+      Add the service to the stack you want to plug into — it joins the stack's network
+      automatically:
     </p>
-    <app-code lang="bash">curl -fsSLO https://raw.githubusercontent.com/softwarity/plug/main/deploy/plug-stack.yml
-# edit the networks: section to list your overlay networks
-docker stack deploy -c plug-stack.yml plug</app-code>
-    <p>See <a routerLink="/agent">Agent &amp; deployment</a> for networks, port and image details.</p>
+    <app-code lang="yaml"># your existing stack file
+services:
+  plug-agent:
+    image: docker.io/softwarity/plug-agent:latest
+    ports:
+      - "2222:22"</app-code>
+    <p>
+      See <a routerLink="/agent">Agent &amp; deployment</a> for the standalone variant (one agent
+      covering several stacks), port and image details.
+    </p>
 
     <h3>2. Install the CLI (each dev machine)</h3>
     <p>

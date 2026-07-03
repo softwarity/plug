@@ -16,30 +16,34 @@ import { CodeComponent } from '../code/code.component';
       overlay networks and relay.
     </p>
 
-    <h3>Deploy on Docker Swarm</h3>
-    <p>The descriptor is versioned in the repo — download, adapt, deploy:</p>
-    <app-code lang="bash">curl -fsSLO https://raw.githubusercontent.com/softwarity/plug/main/deploy/plug-stack.yml
-docker stack deploy -c plug-stack.yml plug</app-code>
-
-    <app-code lang="yaml"># plug-stack.yml
+    <h3>Deploy on Docker Swarm — in your stack (recommended)</h3>
+    <p>
+      The simplest deployment is no deployment at all: add the service to the stack you want to
+      plug into. It joins that stack's network automatically — nothing else to declare:
+    </p>
+    <app-code lang="yaml"># your existing docker-compose / stack file
 services:
-  agent:
+  plug-agent:
     image: docker.io/softwarity/plug-agent:latest
     ports:
       - "2222:22"
-    networks:
-      - app_net          # ← list EVERY overlay network holding services
-    deploy:              #   you want to reach from your laptop
-      replicas: 1
 
-networks:
-  app_net:
-    external: true</app-code>
+  # ... your services ...</app-code>
+
+    <h3>Standalone — one agent for several stacks</h3>
+    <p>
+      To cover multiple stacks with a single agent, deploy
+      <a href="https://github.com/softwarity/plug/blob/main/deploy/plug-stack.yml" target="_blank"
+      rel="noopener">deploy/plug-stack.yml</a> and list their overlay networks explicitly:
+    </p>
+    <app-code lang="bash">curl -fsSLO https://raw.githubusercontent.com/softwarity/plug/main/deploy/plug-stack.yml
+# edit the networks: section, then:
+docker stack deploy -c plug-stack.yml plug</app-code>
 
     <div class="callout">
-      <strong>The networks list is the contract.</strong> plug can only reach services on networks
-      the agent is attached to — that is also your scoping tool: attach the agent to the dev
-      networks only, and production stays out of reach by construction. See
+      <strong>The networks are the contract.</strong> plug can only reach services on networks the
+      agent is attached to — that is also your scoping tool: put the agent in the dev stacks only,
+      and production stays out of reach by construction. See
       <a routerLink="/security">Security model</a>.
     </div>
 
@@ -71,7 +75,7 @@ networks:
       <li><code>sshd</code> accepts a single unprivileged user (<code>plug</code>), public-key only.</li>
       <li>Host keys are generated at container start — connections use <code>StrictHostKeyChecking=no</code>, consistent with the <a routerLink="/security">no-auth model</a>.</li>
       <li>No TCP forwarding tricks: sshuttle multiplexes everything over the SSH session itself.</li>
-      <li>The container logs its attached networks at startup — <code>docker service logs plug_agent</code> is your first debugging stop.</li>
+      <li>The container logs its attached networks at startup — <code>docker service logs &lt;stack&gt;_plug-agent</code> is your first debugging stop.</li>
     </ul>
   `,
 })
