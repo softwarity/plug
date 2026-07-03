@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	_ "embed"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,14 +22,21 @@ import (
 //go:embed keys/id_ed25519
 var embeddedKey []byte
 
+// version is stamped at build time via -ldflags "-X main.version=x.y.z".
+// Non-semver values ("dev") disable auto-upgrade.
+var version = "dev"
+
 const sshUser = "plug"
 const defaultPort = "2222"
+const agentHome = "/opt/plug"
 
 const usageText = `plug — run a local process as if it were inside your cluster network.
 
 Usage:
   plug [options] <command> [args...]   run <command> with cluster DNS/network
   plug init                            create a profile interactively
+  plug upgrade [-f] [options]          update this binary from the agent (-f: allow downgrade)
+  plug version                         print the CLI version
 
 Options:
   -p, --profile <name>   use profile ~/.plug/<name>.conf
@@ -43,9 +52,17 @@ Profiles (~/.plug/*.conf):
     host = swarm-node.example.com
     port = 2222
     # subnets = 10.0.9.0/24,10.0.10.0/24   (optional, skips auto-discovery)
+    # auto-upgrade = false                 (optional, default true)
+
+Upgrade:
+  On connect, plug compares itself to the agent and silently upgrades if
+  the agent ships a NEWER version (never downgrades — with several
+  clusters the CLI converges to the newest and stays compatible with
+  older agents of the same major). Disable with auto-upgrade = false or
+  PLUG_AUTO_UPGRADE=0.
 
 Agent deployment (once, on the cluster):
-  https://github.com/softwarity/plug/blob/main/deploy/plug-stack.yml
+  https://softwarity.github.io/plug/
 
 Examples:
   plug npm run start:dev
@@ -53,9 +70,10 @@ Examples:
 `
 
 type config struct {
-	host    string
-	port    string
-	subnets []string
+	host        string
+	port        string
+	subnets     []string
+	autoUpgrade bool
 }
 
 type options struct {
@@ -70,8 +88,15 @@ func main() {
 		fmt.Print(usageText)
 		os.Exit(2)
 	}
-	if args[0] == "init" {
+	switch args[0] {
+	case "init":
 		initProfile()
+		return
+	case "version":
+		fmt.Println(version)
+		return
+	case "upgrade":
+		upgradeCommand(args[1:])
 		return
 	}
 
@@ -96,13 +121,16 @@ func main() {
 		"-o", "LogLevel=ERROR",
 	}
 
+	remoteVersion, discovered, err := discover(cfg, sshOpts)
+	if err != nil {
+		fatal("cannot reach the agent at %s:%s: %v", cfg.host, cfg.port, err)
+	}
+
+	maybeAutoUpgrade(cfg, sshOpts, remoteVersion, cleanupKey)
+
 	subnets := cfg.subnets
 	if len(subnets) == 0 {
-		var err error
-		subnets, err = discoverSubnets(cfg, sshOpts)
-		if err != nil {
-			fatal("cannot discover cluster subnets via %s:%s: %v", cfg.host, cfg.port, err)
-		}
+		subnets = discovered
 	}
 	if len(subnets) == 0 {
 		fatal("no routable subnets found on the agent — is it attached to your overlay networks?")
@@ -152,7 +180,7 @@ func flagValue(args []string, i *int) string {
 // requested profile, then automatic profile selection (single → use it,
 // several → ask, none → wizard).
 func resolveConfig(o options) config {
-	var cfg config
+	cfg := config{autoUpgrade: true}
 	switch {
 	case o.host != "" || os.Getenv("PLUG_HOST") != "":
 		// explicit host, profiles are bypassed entirely
@@ -186,6 +214,9 @@ func resolveConfig(o options) config {
 	if cfg.port == "" {
 		cfg.port = defaultPort
 	}
+	if v := os.Getenv("PLUG_AUTO_UPGRADE"); v == "0" || strings.EqualFold(v, "false") {
+		cfg.autoUpgrade = false
+	}
 	return cfg
 }
 
@@ -213,7 +244,7 @@ func listProfiles() []string {
 }
 
 func loadProfile(name string) config {
-	var cfg config
+	cfg := config{autoUpgrade: true}
 	data, err := os.ReadFile(filepath.Join(profilesDir(), name+".conf"))
 	if err != nil {
 		fatal("profile %q not found in %s", name, profilesDir())
@@ -233,6 +264,8 @@ func loadProfile(name string) config {
 			cfg.host = val
 		case "port":
 			cfg.port = val
+		case "auto-upgrade":
+			cfg.autoUpgrade = !(val == "0" || strings.EqualFold(val, "false"))
 		case "subnets":
 			for _, s := range strings.Split(val, ",") {
 				if s = strings.TrimSpace(s); s != "" {
@@ -289,7 +322,7 @@ func wizard(defaultName string, confirmOverwrite bool) string {
 	if err := os.MkdirAll(profilesDir(), 0o700); err != nil {
 		fatal("%v", err)
 	}
-	content := fmt.Sprintf("host = %s\nport = %s\n# subnets = 10.0.9.0/24,10.0.10.0/24   (optional, skips auto-discovery)\n", host, port)
+	content := fmt.Sprintf("host = %s\nport = %s\n# subnets = 10.0.9.0/24,10.0.10.0/24   (optional, skips auto-discovery)\n# auto-upgrade = false\n", host, port)
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		fatal("%v", err)
 	}
@@ -340,13 +373,9 @@ func writeKey() (string, func()) {
 	return keyPath, func() { os.RemoveAll(dir) }
 }
 
-// discoverSubnets asks the agent for its interfaces and default route, then
-// keeps every non-loopback subnet except the one carrying the default route
-// (the docker gateway bridge — services never live there).
-func discoverSubnets(cfg config, sshOpts []string) ([]string, error) {
+func sshCombined(cfg config, sshOpts []string, remoteCmd string) ([]byte, error) {
 	args := append(append([]string{}, sshOpts...),
-		"-p", cfg.port, sshUser+"@"+cfg.host,
-		"ip -o -4 addr show; echo ---; ip route show default")
+		"-p", cfg.port, sshUser+"@"+cfg.host, remoteCmd)
 	out, err := exec.Command("ssh", args...).Output()
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
@@ -354,8 +383,22 @@ func discoverSubnets(cfg config, sshOpts []string) ([]string, error) {
 		}
 		return nil, err
 	}
+	return out, nil
+}
 
-	addrPart, routePart, _ := strings.Cut(string(out), "---")
+// discover fetches, in one SSH round-trip, the agent version and the routable
+// subnets: every non-loopback subnet except the one carrying the default
+// route (the docker gateway bridge — services never live there).
+func discover(cfg config, sshOpts []string) (string, []string, error) {
+	out, err := sshCombined(cfg, sshOpts,
+		"cat "+agentHome+"/VERSION 2>/dev/null; echo ---; ip -o -4 addr show; echo ---; ip route show default")
+	if err != nil {
+		return "", nil, err
+	}
+
+	versionPart, rest, _ := strings.Cut(string(out), "---")
+	addrPart, routePart, _ := strings.Cut(rest, "---")
+
 	excluded := map[string]bool{"lo": true}
 	for _, line := range strings.Split(routePart, "\n") {
 		f := strings.Fields(line)
@@ -387,8 +430,180 @@ func discoverSubnets(cfg config, sshOpts []string) ([]string, error) {
 			subnets = append(subnets, cidr)
 		}
 	}
-	return subnets, nil
+	return strings.TrimSpace(versionPart), subnets, nil
 }
+
+// ---- upgrade ----
+
+// maybeAutoUpgrade replaces this binary and re-execs when the agent ships a
+// strictly newer semver. It never downgrades: with several clusters on
+// different versions the CLI converges to the newest agent and stays
+// compatible with older agents of the same major.
+func maybeAutoUpgrade(cfg config, sshOpts []string, remote string, beforeExec func()) {
+	if !cfg.autoUpgrade || os.Getenv("PLUG_REEXEC") == "1" || runtime.GOOS == "windows" {
+		return
+	}
+	local, lok := parseSemver(version)
+	rem, rok := parseSemver(remote)
+	switch {
+	case !rok || !lok:
+		return // dev builds and unversioned agents never auto-upgrade
+	case rem == local:
+		return
+	case semverLess(rem, local):
+		info("agent is older (v%s) than this CLI (v%s) — keeping the newer CLI", remote, version)
+		return
+	}
+	if rem[0] != local[0] {
+		fatal("agent v%s and CLI v%s differ in MAJOR version — upgrade manually: plug upgrade", remote, version)
+	}
+	info("agent ships v%s (CLI is v%s) — upgrading...", remote, version)
+	if err := selfReplace(cfg, sshOpts); err != nil {
+		info("auto-upgrade failed (%v) — continuing with v%s", err, version)
+		return
+	}
+	info("upgraded to v%s, restarting", remote)
+	self, err := os.Executable()
+	if err != nil {
+		fatal("%v", err)
+	}
+	beforeExec()
+	env := append(os.Environ(), "PLUG_REEXEC=1")
+	if err := syscall.Exec(self, os.Args, env); err != nil {
+		fatal("restart failed: %v", err)
+	}
+}
+
+func upgradeCommand(args []string) {
+	var force bool
+	var rest []string
+	for _, a := range args {
+		if a == "-f" || a == "--force" {
+			force = true
+		} else {
+			rest = append(rest, a)
+		}
+	}
+	opts, _ := parseArgs(rest)
+	cfg := resolveConfig(opts)
+	if cfg.host == "" {
+		fatal("no agent host: use --host, $PLUG_HOST or a profile in ~/.plug/")
+	}
+	keyPath, cleanup := writeKey()
+	defer cleanup()
+	sshOpts := []string{
+		"-i", keyPath,
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "LogLevel=ERROR",
+	}
+	out, err := sshCombined(cfg, sshOpts, "cat "+agentHome+"/VERSION")
+	if err != nil {
+		fatal("cannot read the agent version (old agent image?): %v", err)
+	}
+	remote := strings.TrimSpace(string(out))
+	if remote == version {
+		info("already up to date (v%s)", version)
+		return
+	}
+	// Same no-downgrade policy as auto-upgrade, unless -f/--force is given.
+	if !force {
+		if rem, rok := parseSemver(remote); rok {
+			if loc, lok := parseSemver(version); lok && !semverLess(loc, rem) {
+				info("this CLI (v%s) is already newer than the agent (v%s) — nothing to do (use -f to force)", version, remote)
+				return
+			}
+		}
+	}
+	info("agent ships v%s (CLI is %s) — updating...", remote, version)
+	if err := selfReplace(cfg, sshOpts); err != nil {
+		fatal("%v", err)
+	}
+	info("updated %s → v%s", version, remote)
+}
+
+// selfReplace downloads this platform's binary from the agent over the
+// existing SSH channel and atomically swaps it in place.
+func selfReplace(cfg config, sshOpts []string) error {
+	if runtime.GOOS == "windows" {
+		return fmt.Errorf("self-upgrade is not supported on native windows — run plug inside WSL2")
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if self, err = filepath.EvalSymlinks(self); err != nil {
+		return err
+	}
+	name := fmt.Sprintf("plug-%s-%s", runtime.GOOS, runtime.GOARCH)
+	data, err := sshCombined(cfg, sshOpts, "cat "+agentHome+"/bin/"+name)
+	if err != nil {
+		return fmt.Errorf("downloading %s: %w", name, err)
+	}
+	if len(data) < 1<<20 || !looksLikeBinary(data) {
+		return fmt.Errorf("downloaded %s looks invalid (%d bytes)", name, len(data))
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(self), ".plug-upgrade-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o755); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), self)
+}
+
+func looksLikeBinary(data []byte) bool {
+	magics := [][]byte{
+		{0x7f, 'E', 'L', 'F'},          // linux
+		{0xcf, 0xfa, 0xed, 0xfe},       // macOS arm64/amd64 (64-bit mach-o)
+		{0xca, 0xfe, 0xba, 0xbe},       // macOS universal
+		{'M', 'Z'},                     // windows
+	}
+	for _, m := range magics {
+		if bytes.HasPrefix(data, m) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseSemver(s string) ([3]int, bool) {
+	s = strings.TrimPrefix(strings.TrimSpace(s), "v")
+	parts := strings.SplitN(s, ".", 3)
+	if len(parts) != 3 {
+		return [3]int{}, false
+	}
+	var v [3]int
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			return [3]int{}, false
+		}
+		v[i] = n
+	}
+	return v, true
+}
+
+func semverLess(a, b [3]int) bool {
+	for i := 0; i < 3; i++ {
+		if a[i] != b[i] {
+			return a[i] < b[i]
+		}
+	}
+	return false
+}
+
+// ---- tunnel ----
 
 func startTunnel(cfg config, sshOpts []string, subnets []string) (*exec.Cmd, error) {
 	args := []string{

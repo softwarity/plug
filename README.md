@@ -60,13 +60,33 @@ explicitly (`docker stack deploy -c plug-stack.yml plug`).
 brew install sshuttle          # macOS; linux: apt/dnf install sshuttle
 ```
 
-Then grab the `plug` binary for your platform from the
-[releases page](https://github.com/softwarity/plug/releases), or build it
-yourself with `make cli && make install`.
+Then get the `plug` binary **from the cluster itself** — the agent serves it on
+the same port `2222`, and `uname` picks your platform, so there is nothing to
+choose and no GitHub access needed:
+
+```bash
+ssh -p 2222 get@<cluster-host> $(uname -s)-$(uname -m) > plug && chmod +x plug
+sudo mv plug /usr/local/bin/
+```
+
+The `get` user is passwordless and locked (via `ForceCommand`) to a single
+"hand me a binary" command — see [Security model](https://softwarity.github.io/plug/#/security).
+Prefer GitHub? The same binaries are attached to every
+[release](https://github.com/softwarity/plug/releases). Build from source with
+`make cli && make install`.
 
 > **Windows**: a `windows-amd64` binary is published, but sshuttle has no
 > native Windows support — run plug inside WSL2 (with the linux binary)
 > instead.
+
+### Staying in sync
+
+On connect, plug compares itself to the agent and **upgrades itself when the
+cluster ships a newer version** (over the same SSH channel — no extra port).
+With several clusters on different versions it never downgrades: the CLI
+converges to the newest and stays compatible with older agents of the same
+major. `plug upgrade` syncs on demand; `auto-upgrade = false` (profile) or
+`PLUG_AUTO_UPGRADE=0` opts out.
 
 ## Usage
 
@@ -108,8 +128,8 @@ clusters). Never publish port 2222 on an untrusted network.
 
 ## Roadmap
 
+- [x] CLI served from the cluster (`get` user) + self-upgrade with a skew policy
 - [ ] Kubernetes transport (agent pod + `kubectl exec`)
-- [ ] Embed the agent into an API gateway (dynamic enable/disable), serving
-      the CLI binaries over HTTP (`/plug/<os>-<arch>`, `/version`) so clients
-      always match the deployed agent
+- [ ] Embed the agent into an API gateway (dynamic enable/disable), exposing the
+      same download/upgrade surface it already speaks
 - [ ] Homebrew tap

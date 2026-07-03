@@ -70,9 +70,24 @@ docker stack deploy -c plug-stack.yml plug</app-code>
       <a href="https://hub.docker.com/r/softwarity/plug-agent" target="_blank" rel="noopener">Docker Hub</a>.
     </p>
 
+    <h3>It also serves the CLI</h3>
+    <p>
+      The image is multi-stage: it compiles the five CLI binaries and ships them in
+      <code>/opt/plug/bin/</code>, plus a <code>/opt/plug/VERSION</code> file. Two things flow from
+      this — a GitHub-free install and automatic version matching:
+    </p>
+    <app-code lang="bash">ssh -p 2222 get@&lt;host&gt; $(uname -s)-$(uname -m) > plug   # first install, from the cluster
+plug upgrade                                            # or let it happen on connect</app-code>
+    <p>
+      The version baked into the image (and stamped into every binary) is what the CLI compares
+      itself against — see the <a routerLink="/profiles">skew policy</a>. Released images carry a
+      real <code>x.y.z</code>; <code>latest</code> carries <code>dev</code>, which disables
+      auto-upgrade.
+    </p>
+
     <h3>Under the hood</h3>
     <ul>
-      <li><code>sshd</code> accepts a single unprivileged user (<code>plug</code>), public-key only.</li>
+      <li>Two SSH users: <code>plug</code> (public-key, runs the tunnel) and <code>get</code> (passwordless, <code>ForceCommand</code>-locked to serving a binary) — see <a routerLink="/security">Security model</a>.</li>
       <li>Host keys are generated at container start — connections use <code>StrictHostKeyChecking=no</code>, consistent with the <a routerLink="/security">no-auth model</a>.</li>
       <li>No TCP forwarding tricks: sshuttle multiplexes everything over the SSH session itself.</li>
       <li>The container logs its attached networks at startup — <code>docker service logs &lt;stack&gt;_plug-agent</code> is your first debugging stop.</li>

@@ -35,11 +35,23 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_RW }}
+      - name: Resolve version
+        id: ver
+        # A v-tag → its semver; any branch → "dev" (disables CLI auto-upgrade).
+        run: |
+          ref="${GITHUB_REF#refs/tags/v}"
+          case "$GITHUB_REF" in
+            refs/tags/v*) echo "value=$ref" >> "$GITHUB_OUTPUT" ;;
+            *)            echo "value=dev"   >> "$GITHUB_OUTPUT" ;;
+          esac
       - name: Build and push by digest
         id: build
         uses: docker/build-push-action@v6
         with:
-          context: agent
+          context: .
+          file: agent/Dockerfile
+          build-args: |
+            VERSION=${{ steps.ver.outputs.value }}
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true

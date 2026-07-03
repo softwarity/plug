@@ -27,12 +27,15 @@ jobs:
         working-directory: cli
         env:
           CGO_ENABLED: "0"
+          VERSION: ${{ github.ref_name }}
         run: |
           mkdir -p ../dist
+          v="${VERSION#v}"
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
             goos=${target%/*} goarch=${target#*/}
             ext=""; [ "$goos" = windows ] && ext=".exe"
-            GOOS=$goos GOARCH=$goarch go build -trimpath -ldflags '-s -w' \
+            GOOS=$goos GOARCH=$goarch go build -trimpath \
+              -ldflags "-s -w -X main.version=$v" \
               -o "../dist/plug-$goos-$goarch$ext" .
           done
       - name: Attach binaries to the GitHub Release

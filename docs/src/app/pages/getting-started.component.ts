@@ -120,13 +120,22 @@ services:
     <h3>2. Install the CLI (each dev machine)</h3>
     <p>
       plug drives <a href="https://github.com/sshuttle/sshuttle" target="_blank" rel="noopener">sshuttle</a>
-      under the hood — install it first, then grab the binary for your platform from the
-      <a href="https://github.com/softwarity/plug/releases" target="_blank" rel="noopener">releases page</a>:
+      under the hood — install that first:
     </p>
-    <app-code lang="bash">brew install sshuttle        # macOS — linux: apt/dnf install sshuttle
-curl -fsSL -o /usr/local/bin/plug \\
-  https://github.com/softwarity/plug/releases/latest/download/plug-darwin-arm64
-chmod +x /usr/local/bin/plug</app-code>
+    <app-code lang="bash">brew install sshuttle        # macOS — linux: apt/dnf install sshuttle</app-code>
+    <p>
+      Then get the <code>plug</code> binary. The agent serves it <strong>from the cluster itself</strong>
+      over the same port <code>2222</code> — no GitHub access needed, and the platform is detected for
+      you by <code>uname</code>:
+    </p>
+    <app-code lang="bash">ssh -p 2222 get@&lt;cluster-host&gt; $(uname -s)-$(uname -m) > plug &amp;&amp; chmod +x plug
+sudo mv plug /usr/local/bin/</app-code>
+    <p>
+      No key, no password — a passwordless <code>get</code> user locked to a single "hand me a
+      binary" command (see <a routerLink="/security">Security model</a>). Prefer GitHub? The same
+      binaries are attached to every
+      <a href="https://github.com/softwarity/plug/releases" target="_blank" rel="noopener">release</a>.
+    </p>
 
     <h3>3. Run your process in the cluster</h3>
     <app-code lang="bash">plug npm run start:dev</app-code>
@@ -135,6 +144,11 @@ chmod +x /usr/local/bin/plug</app-code>
       (default <code>2222</code>) and saves a profile. Then plug discovers the overlay subnets,
       brings the tunnel up (sudo prompts once — sshuttle needs it for local packet redirection) and
       starts your command. <kbd>Ctrl-C</kbd> stops your process <em>and</em> tears the tunnel down.
+    </p>
+    <p>
+      On connect, plug also checks the agent's version and <strong>upgrades itself</strong> if the
+      cluster ships a newer one — so the CLI never drifts from the agent. See
+      <a routerLink="/profiles">Profiles &amp; wizard</a> for the multi-cluster policy.
     </p>
 
     <h3>Compatibility</h3>

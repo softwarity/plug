@@ -1,0 +1,30 @@
+#!/bin/sh
+# ForceCommand for the anonymous "get" user: serves a CLI binary (or the
+# version) on stdout, nothing else. Normalizes uname-style names, so
+#   ssh -p 2222 get@<host> $(uname -s)-$(uname -m) > plug
+# works from any machine without knowing the canonical os-arch pair.
+req=$(printf '%s' "$SSH_ORIGINAL_COMMAND" | tr 'A-Z' 'a-z')
+
+if [ "$req" = "version" ]; then
+  exec cat /opt/plug/VERSION
+fi
+
+os=${req%%-*}
+arch=${req#*-}
+case "$arch" in
+  x86_64|amd64) arch=amd64 ;;
+  aarch64|arm64) arch=arm64 ;;
+esac
+ext=""
+[ "$os" = "windows" ] && ext=".exe"
+
+f="/opt/plug/bin/plug-$os-$arch$ext"
+if [ -n "$os" ] && [ -f "$f" ]; then
+  exec cat "$f"
+fi
+
+echo "plug $(cat /opt/plug/VERSION) — download the CLI:" >&2
+echo '  ssh -p <port> get@<host> $(uname -s)-$(uname -m) > plug && chmod +x plug' >&2
+echo "  available: $(ls /opt/plug/bin | sed 's/^plug-//' | tr '\n' ' ')" >&2
+echo "  (or 'version' to print the agent version)" >&2
+exit 1

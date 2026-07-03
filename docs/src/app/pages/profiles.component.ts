@@ -59,6 +59,26 @@ PLUG_HOST=swarm-node.example.com plug ./mvnw spring-boot:run</app-code>
       Precedence, highest first: <code>--host</code>/<code>--port</code> flags →
       <code>$PLUG_HOST</code>/<code>$PLUG_PORT</code> → the selected profile.
     </div>
+
+    <h3>Self-upgrade &amp; the multi-cluster policy</h3>
+    <p>
+      Each agent image ships the matching CLI binaries. On connect, plug compares itself to the
+      agent and applies a <strong>skew policy</strong> — the same idea as <code>kubectl</code>:
+    </p>
+    <ul>
+      <li><strong>Agent newer</strong> → plug upgrades itself over the existing SSH channel and restarts your command transparently.</li>
+      <li><strong>Agent older</strong> → nothing happens; the newer CLI stays (it is backward-compatible within a major).</li>
+      <li><strong>Different major</strong> → plug refuses and asks you to <code>plug upgrade</code> deliberately, instead of breaking silently.</li>
+    </ul>
+    <p>
+      This is what makes several clusters on different versions safe: your binary <em>converges to
+      the newest</em> agent you connect to and keeps working against the older ones — no version
+      ping-pong. Turn it off per profile with <code>auto-upgrade = false</code>, or globally with
+      <code>PLUG_AUTO_UPGRADE=0</code>. Dev builds never auto-upgrade.
+    </p>
+    <app-code lang="bash">plug version                   # what you run now
+plug upgrade                   # sync to a cluster on demand (-f to force a downgrade)
+plug upgrade -p staging</app-code>
   `,
 })
 export class ProfilesComponent {}

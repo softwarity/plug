@@ -39,14 +39,18 @@ subnets = 10.96.0.0/12,10.244.0.0/16   # service CIDR + pod CIDR</app-code>
       The end game: no dedicated agent at all. The (Java) API gateway already deployed in the
       cluster hosts the tunnel endpoint and turns it on and off dynamically — dev tooling that
       piggybacks on infrastructure you already trust, with the gateway's own authentication in
-      front.
+      front. The download and self-upgrade contract already exists (see below); the gateway will
+      simply expose the same surface, so the CLI will not need to relearn anything.
     </p>
-    <p>
-      Same milestone, one more piece: the gateway serves the CLI binaries over HTTP
-      (<code>/plug/&lt;os&gt;-&lt;arch&gt;</code>, plus <code>/version</code>) so a new teammate
-      downloads plug <em>from the cluster itself</em> — no GitHub access needed, and the client
-      always matches the deployed endpoint.
-    </p>
+
+    <div class="callout">
+      <strong>Shipped already:</strong> serving the CLI from the cluster and matching versions were
+      on this roadmap — they now work over the agent's SSH port. The passwordless
+      <code>get</code> user hands out the right binary
+      (<code>ssh get&#64;host $(uname -s)-$(uname -m)</code>), and plug
+      <a routerLink="/profiles">upgrades itself on connect</a> when the agent is newer. No GitHub
+      access required, no extra port, no HTTP server.
+    </div>
 
     <h3>Homebrew tap</h3>
     <p>One-liner install and upgrades on macOS/Linux:</p>
@@ -63,9 +67,10 @@ brew install plug</app-code>
       </thead>
       <tbody>
         <tr><td>Docker Swarm, auto-discovery, profiles &amp; wizard</td><td>✅ shipped</td></tr>
+        <tr><td>CLI served from the cluster + self-upgrade / skew policy</td><td>✅ shipped</td></tr>
         <tr><td>Kubernetes with manual <code>subnets =</code></td><td>✅ works today</td></tr>
         <tr><td>Kubernetes turnkey (CIDR discovery, <code>kubectl exec</code>)</td><td>🔜 planned</td></tr>
-        <tr><td>Gateway integration + CLI download endpoint</td><td>🔜 planned</td></tr>
+        <tr><td>Gateway hosting the tunnel + download surface</td><td>🔜 planned</td></tr>
         <tr><td>Homebrew tap</td><td>🔜 planned</td></tr>
       </tbody>
     </table>

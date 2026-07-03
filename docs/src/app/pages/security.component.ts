@@ -22,6 +22,19 @@ import { CodeComponent } from '../code/code.component';
       <li>SSH host keys are not verified (<code>StrictHostKeyChecking=no</code>): with no client secret to protect, MITM adds nothing an attacker could not already do by reaching the port.</li>
     </ul>
 
+    <h3>The download user (<code>get</code>)</h3>
+    <p>
+      The agent also serves the CLI binaries on the same port through a second, passwordless SSH
+      user named <code>get</code>. It is <em>more</em> locked down than the tunnel user, not less:
+    </p>
+    <ul>
+      <li>An OpenSSH <code>ForceCommand</code> replaces whatever the client asks with a single script that can only <code>cat</code> a binary (or print the version) to stdout — no shell, ever.</li>
+      <li>TCP/X11 forwarding is disabled for <code>get</code>: it cannot open the network tunnel, only the <code>plug</code> user (public-key) can.</li>
+      <li>Empty password is intentional and harmless here: there is nothing to protect behind it — the whole surface is "download a public binary".</li>
+    </ul>
+    <app-code lang="bash">ssh -p 2222 get@&lt;host&gt; $(uname -s)-$(uname -m) > plug   # only ever returns a binary
+ssh -p 2222 get@&lt;host&gt; cat /etc/shadow                 # ForceCommand ignores this</app-code>
+
     <h3>Where it is a fine trade-off</h3>
     <p>
       Internal <strong>development clusters</strong> on trusted networks (office LAN, VPN). The
