@@ -1,8 +1,19 @@
 # plug
 
+[![release](https://img.shields.io/github/v/release/softwarity/plug?label=release)](https://github.com/softwarity/plug/releases)
+[![docker](https://img.shields.io/docker/v/softwarity/plug-agent?sort=semver&label=docker)](https://hub.docker.com/r/softwarity/plug-agent)
+[![docker pulls](https://img.shields.io/docker/pulls/softwarity/plug-agent)](https://hub.docker.com/r/softwarity/plug-agent)
+[![license](https://img.shields.io/github/license/softwarity/plug)](LICENSE)
+[![arch](https://img.shields.io/badge/arch-amd64%20·%20arm64-brightgreen)](https://hub.docker.com/r/softwarity/plug-agent/tags)
+[![CLI](https://img.shields.io/badge/CLI-linux%20·%20macOS%20·%20windows-blue)](https://github.com/softwarity/plug/releases)
+[![CI](https://github.com/softwarity/plug/actions/workflows/ci.yml/badge.svg)](https://github.com/softwarity/plug/actions/workflows/ci.yml)
+[![docs](https://img.shields.io/badge/docs-softwarity.github.io%2Fplug-8A2BE2)](https://softwarity.github.io/plug/)
+
 Run a local process **as if it were inside your Docker Swarm cluster**: cluster
 DNS names resolve, cluster services are reachable — no code change, no proxy
 config in your app.
+
+📖 **Full documentation: [softwarity.github.io/plug](https://softwarity.github.io/plug/)**
 
 ```bash
 plug npm run start:dev
