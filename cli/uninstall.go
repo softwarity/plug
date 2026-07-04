@@ -1,25 +1,39 @@
-//go:build darwin || linux
-
 package main
 
 import (
 	"bufio"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
-const daemonLog = "/var/log/plugd.log"
+// Legacy paths from the retired root-daemon design. `plug uninstall` removes
+// them so anyone who tried the daemon can get back to a clean, rootless setup.
+const (
+	launchdLabel = "io.softwarity.plugd"
+	launchdPlist = "/Library/LaunchDaemons/io.softwarity.plugd.plist"
+	systemdUnit  = "/etc/systemd/system/plugd.service"
+)
 
-// uninstall removes everything plug installed: the root daemon, the socket and
-// log, every plug binary it knows about, and the cached versions. Profiles in
-// ~/.plug are kept unless the user opts to purge them. Must run as root (to
-// remove the daemon) — sudo plug uninstall.
+var leftoverFiles = []string{
+	"/var/run/plug.sock",
+	"/var/log/plugd.log",
+	"/var/run/plugd-dns.json",
+	"/var/run/plugd-resolv.backup",
+}
+
+// uninstall removes everything plug ever installed: the (now retired) root
+// daemon, its files, every plug binary it can locate, and the cached versions.
+// Profiles in ~/.plug are kept unless the user opts to purge them. Needs root
+// to remove the daemon — sudo plug uninstall.
 func uninstall(args []string) {
-	requireRoot()
+	if os.Geteuid() != 0 {
+		fatal("this needs root — run:  sudo plug uninstall")
+	}
 
-	// --purge / --keep-config skip the prompt (for scripts).
 	purge, asked := false, false
 	for _, a := range args {
 		switch a {
@@ -32,18 +46,26 @@ func uninstall(args []string) {
 
 	home := realUserHome()
 	plugDir := filepath.Join(home, ".plug")
-
 	if !asked && hasProfiles(plugDir) {
 		purge = promptPurge()
 	}
 
-	// 1. daemon + its runtime files
-	uninstallDaemon()
-	os.Remove(socketPath)
-	os.Remove(daemonLog)
-	info("removed daemon, socket and log")
+	// 1. retired root daemon + its files
+	switch runtime.GOOS {
+	case "darwin":
+		exec.Command("launchctl", "bootout", "system/"+launchdLabel).Run()
+		os.Remove(launchdPlist)
+	case "linux":
+		exec.Command("systemctl", "disable", "--now", "plugd").Run()
+		os.Remove(systemdUnit)
+		exec.Command("systemctl", "daemon-reload").Run()
+	}
+	for _, f := range leftoverFiles {
+		os.Remove(f)
+	}
+	info("removed the root daemon and its files")
 
-	// 2. every plug binary we can locate (self + standard install spots + cache)
+	// 2. every plug binary we can locate
 	removeBinaries(home, plugDir)
 
 	// 3. profiles / config
@@ -51,7 +73,7 @@ func uninstall(args []string) {
 		os.RemoveAll(plugDir)
 		info("removed all config in %s", plugDir)
 	} else {
-		os.RemoveAll(filepath.Join(plugDir, "versions")) // cache is not config
+		os.RemoveAll(filepath.Join(plugDir, "versions"))
 		info("kept your profiles in %s (cache cleared)", plugDir)
 	}
 
@@ -70,7 +92,6 @@ func removeBinaries(home, plugDir string) {
 			candidates = append(candidates, r)
 		}
 	}
-	// cached launcher versions (~/.plug/versions/<v>/plug)
 	if entries, err := os.ReadDir(filepath.Join(plugDir, "versions")); err == nil {
 		for _, e := range entries {
 			candidates = append(candidates, filepath.Join(plugDir, "versions", e.Name(), "plug"))
@@ -113,8 +134,7 @@ func promptPurge() bool {
 	return strings.EqualFold(ans, "y")
 }
 
-// realUserHome resolves the invoking user's home even under sudo (SUDO_USER),
-// so we clean ~/.plug of the actual user, not root.
+// realUserHome resolves the invoking user's home even under sudo (SUDO_USER).
 func realUserHome() string {
 	if su := os.Getenv("SUDO_USER"); su != "" {
 		if u, err := user.Lookup(su); err == nil && u.HomeDir != "" {

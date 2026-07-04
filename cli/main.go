@@ -5,7 +5,6 @@ import (
 	"bytes"
 	_ "embed"
 	"fmt"
-	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -32,13 +31,11 @@ const agentHome = "/opt/plug"
 const usageText = `plug — run a local process as if it were inside your cluster network.
 
 Usage:
-  plug [options] <command> [args...]   run <command> with cluster DNS/network
+  plug [options] <command> [args...]   run <command> wired to the cluster
   plug init                            create a profile interactively
   plug versions                        list locally cached versions
   plug version                         print the launcher version
   plug self-update                     update the launcher itself from a cluster
-  sudo plug setup                      install the root tunnel daemon (once)
-  sudo plug uninstall                  remove the daemon, binaries and cache
 
 Options:
   -p, --profile <name>   use profile ~/.plug/<name>.conf
@@ -46,17 +43,21 @@ Options:
       --port <port>      agent SSH port (default 2222; also $PLUG_PORT)
   -h, --help             show this help
 
-How versions work:
-  plug is a small launcher. On run it asks the agent which version it
-  speaks, then executes that exact version from ~/.plug/versions/,
-  downloading it once from the cluster if missing. Each cluster runs its
-  own matching version — nothing is replaced in place, so several
-  clusters on different versions coexist safely.
+How it works:
+  plug starts a local SOCKS5 proxy backed by an SSH tunnel to the agent
+  and points the child's environment at it (ALL_PROXY, JAVA_TOOL_OPTIONS).
+  Cluster names resolve because the proxy hands hostnames to the agent,
+  which resolves them inside the cluster. No root, no daemon — so several
+  sessions to different clusters run side by side.
+
+  For raw-TCP services whose driver ignores the proxy (AMQP, Kafka…),
+  declare a port-forward; plug opens a per-session local port and injects
+  its address into the child's environment.
 
 Profiles (~/.plug/*.conf):
   host = swarm-node.example.com
   port = 2222
-  # subnets = 10.0.9.0/24,10.0.10.0/24   (optional, skips auto-discovery)
+  forward = AMQP_URL=amqp://rabbitmq:5672, MONGO_URL=mongodb://mongodb:27017
 
 Install from a cluster (no GitHub needed):
   ssh -p 2222 get@<host> install | sh
@@ -67,7 +68,6 @@ Docs: https://softwarity.github.io/plug/
 type config struct {
 	host     string
 	port     string
-	subnets  []string
 	forwards []forwardSpec
 }
 
@@ -157,14 +157,9 @@ func main() {
 	case "self-update":
 		selfUpdate(args[1:])
 		return
-	case "setup":
-		setup(args[1:])
-		return
 	case "uninstall":
 		uninstall(args[1:])
 		return
-	case "daemon":
-		os.Exit(runDaemon())
 	}
 	launcherRun(args)
 }
@@ -495,12 +490,6 @@ func loadProfile(name string) config {
 			cfg.host = val
 		case "port":
 			cfg.port = val
-		case "subnets":
-			for _, s := range strings.Split(val, ",") {
-				if s = strings.TrimSpace(s); s != "" {
-					cfg.subnets = append(cfg.subnets, s)
-				}
-			}
 		case "forward":
 			for _, s := range strings.Split(val, ",") {
 				if f, ok := parseForward(strings.TrimSpace(s)); ok {
@@ -615,65 +604,6 @@ func coreMain() {
 		fatal("core: no command")
 	}
 	os.Exit(coreRunSOCKS(cfg, cmdArgs))
-}
-
-func writeKey() (string, func()) {
-	dir, err := os.MkdirTemp("", "plug-")
-	if err != nil {
-		fatal("%v", err)
-	}
-	keyPath := filepath.Join(dir, "key")
-	if err := os.WriteFile(keyPath, embeddedKey, 0o600); err != nil {
-		fatal("%v", err)
-	}
-	return keyPath, func() { os.RemoveAll(dir) }
-}
-
-func discoverSubnets(cfg config, sshOpts []string) ([]string, error) {
-	args := append(append([]string{}, sshOpts...),
-		"-p", cfg.port, sshUser+"@"+cfg.host,
-		"ip -o -4 addr show; echo ---; ip route show default")
-	out, err := exec.Command("ssh", args...).Output()
-	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
-			return nil, fmt.Errorf("%s", strings.TrimSpace(string(ee.Stderr)))
-		}
-		return nil, err
-	}
-
-	addrPart, routePart, _ := strings.Cut(string(out), "---")
-	excluded := map[string]bool{"lo": true}
-	for _, line := range strings.Split(routePart, "\n") {
-		f := strings.Fields(line)
-		for j := 0; j < len(f)-1; j++ {
-			if f[j] == "dev" {
-				excluded[f[j+1]] = true
-			}
-		}
-	}
-
-	var subnets []string
-	seen := map[string]bool{}
-	for _, line := range strings.Split(addrPart, "\n") {
-		f := strings.Fields(line)
-		if len(f) < 4 || f[2] != "inet" {
-			continue
-		}
-		iface := strings.SplitN(f[1], "@", 2)[0]
-		if excluded[iface] {
-			continue
-		}
-		_, ipnet, err := net.ParseCIDR(f[3])
-		if err != nil || ipnet.IP.IsLoopback() {
-			continue
-		}
-		cidr := ipnet.String()
-		if !seen[cidr] {
-			seen[cidr] = true
-			subnets = append(subnets, cidr)
-		}
-	}
-	return subnets, nil
 }
 
 func runChild(cmdArgs []string) int {

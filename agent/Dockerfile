@@ -20,8 +20,9 @@ RUN mkdir -p /out && \
 FROM alpine:3.21
 ARG VERSION
 
-# openssh: transport for sshuttle | python3: sshuttle server side | iproute2: subnet discovery
-RUN apk add --no-cache openssh-server python3 iproute2 \
+# openssh only: the CLI tunnels via SSH direct-tcpip, sshd resolves cluster
+# names and forwards connections itself — no other server-side tooling needed.
+RUN apk add --no-cache openssh-server \
     && adduser -D -s /bin/sh plug \
     && sed -i 's/^plug:!/plug:*/' /etc/shadow \
     # anonymous download user: empty password, locked to the serve-binary ForceCommand
