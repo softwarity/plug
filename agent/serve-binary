@@ -1,66 +1,75 @@
 #!/bin/sh
 # ForceCommand for the anonymous "get" user. It can only:
-#   version                          print the agent version
-#   install <os>-<arch> (uname)      emit a self-contained installer (binary embedded)
-#   <os>-<arch> (uname)              stream that raw CLI binary on stdout
+#   version                    print the agent version
+#   install                    emit a self-contained installer (all binaries embedded;
+#                              the script picks yours with uname)
+#   <os>-<arch> (uname)        stream that raw CLI binary on stdout
 # Nothing else — no shell, ever.
 cmd=$(printf '%s' "$SSH_ORIGINAL_COMMAND" | tr 'A-Z' 'a-z')
 set -- $cmd
 verb=$1
-arg=$2
-
-# binary_path <os-arch> -> /opt/plug/bin/plug-<os>-<arch>[.exe], normalizing arches.
-binary_path() {
-  o=${1%%-*}
-  a=${1#*-}
-  case "$a" in x86_64|amd64) a=amd64 ;; aarch64|arm64) a=arm64 ;; esac
-  ext=""
-  [ "$o" = windows ] && ext=".exe"
-  printf '/opt/plug/bin/plug-%s-%s%s' "$o" "$a" "$ext"
-}
 
 if [ "$verb" = "version" ]; then
   exec cat /opt/plug/VERSION
 fi
 
-# install: the client passes its uname os-arch; we embed THAT binary in the
-# installer, so the script needs neither the host nor a re-download. The cluster
-# is set up on the CLI's first run (its wizard) — the agent can't know the
-# address you reached it on (a Swarm routing mesh hides it).
+# install: emit an installer with every unix binary embedded. The script runs
+# uname CLIENT-side to pick the right one — so the command stays a bare
+# `ssh get@host install | sh`, with no host and no arch to supply. (The agent
+# genuinely can't know the address you reached it on — a routing mesh hides it —
+# so the cluster is set on the CLI's first run.)
 if [ "$verb" = "install" ]; then
-  f=$(binary_path "$arg")
-  if [ -z "$arg" ] || [ ! -f "$f" ]; then
-    echo "plug: unknown platform '$arg' — use: install \$(uname -s)-\$(uname -m)" >&2
-    exit 1
-  fi
-  cat <<INSTALLER
+  cat <<'HEAD'
 #!/bin/sh
-# plug installer (v$(cat /opt/plug/VERSION)) — https://softwarity.github.io/plug/
 set -e
-for d in "\$HOME/.local/bin" /usr/local/bin; do
-  mkdir -p "\$d" 2>/dev/null && [ -w "\$d" ] && dest="\$d" && break
+os=$(uname -s | tr 'A-Z' 'a-z')
+arch=$(uname -m)
+case "$arch" in x86_64|amd64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; esac
+for d in "$HOME/.local/bin" /usr/local/bin; do
+  mkdir -p "$d" 2>/dev/null && [ -w "$d" ] && dest="$d" && break
 done
-: "\${dest:?plug: no writable bin dir found (need ~/.local/bin or /usr/local/bin)}"
-{ base64 -d 2>/dev/null || base64 -D; } > "\$dest/plug" <<'PLUG_B64'
-$(base64 < "$f")
-PLUG_B64
-chmod +x "\$dest/plug"
-echo "plug: installed to \$dest/plug"
-case ":\$PATH:" in *":\$dest:"*) : ;; *) echo "plug: add \$dest to your PATH" ;; esac
+: "${dest:?plug: no writable bin dir found (need ~/.local/bin or /usr/local/bin)}"
+decode() { base64 -d 2>/dev/null || base64 -D; }
+HEAD
+
+  for f in /opt/plug/bin/plug-linux-amd64 /opt/plug/bin/plug-linux-arm64 \
+           /opt/plug/bin/plug-darwin-amd64 /opt/plug/bin/plug-darwin-arm64; do
+    [ -f "$f" ] || continue
+    fn=$(basename "$f" | sed 's/^plug-//; s/-/_/')
+    printf 'emit_%s() { decode <<'\''B64'\''\n' "$fn"
+    base64 < "$f"
+    printf 'B64\n}\n'
+  done
+
+  cat <<'TAIL'
+case "$os-$arch" in
+  linux-amd64)  emit_linux_amd64  > "$dest/plug" ;;
+  linux-arm64)  emit_linux_arm64  > "$dest/plug" ;;
+  darwin-amd64) emit_darwin_amd64 > "$dest/plug" ;;
+  darwin-arm64) emit_darwin_arm64 > "$dest/plug" ;;
+  *) echo "plug: unsupported platform $os-$arch (on Windows, run in WSL2)" >&2; exit 1 ;;
+esac
+chmod +x "$dest/plug"
+echo "plug: installed to $dest/plug"
+case ":$PATH:" in *":$dest:"*) : ;; *) echo "plug: add $dest to your PATH" ;; esac
 echo "plug: run 'plug <your command>' — the first run asks for your cluster"
-INSTALLER
+TAIL
   exit 0
 fi
 
 # raw binary (used by the launcher's version fetch and manual downloads)
-f=$(binary_path "$verb")
+o=${verb%%-*}
+a=${verb#*-}
+case "$a" in x86_64|amd64) a=amd64 ;; aarch64|arm64) a=arm64 ;; esac
+ext=""
+[ "$o" = windows ] && ext=".exe"
+f="/opt/plug/bin/plug-$o-$a$ext"
 if [ -n "$verb" ] && [ -f "$f" ]; then
   exec cat "$f"
 fi
 
 echo "plug $(cat /opt/plug/VERSION) — usage over ssh:" >&2
-echo '  ssh -p <port> get@<host> install "$(uname -s)-$(uname -m)" | sh   # install (recommended)' >&2
-echo '  ssh -p <port> get@<host> "$(uname -s)-$(uname -m)" > plug          # just the binary' >&2
+echo '  ssh -p <port> get@<host> install | sh                    # install (recommended)' >&2
+echo '  ssh -p <port> get@<host> $(uname -s)-$(uname -m) > plug  # just the binary' >&2
 echo '  ssh -p <port> get@<host> version' >&2
-echo "  platforms: $(ls /opt/plug/bin | sed 's/^plug-//' | tr '\n' ' ')" >&2
 exit 1

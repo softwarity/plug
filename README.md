@@ -64,10 +64,11 @@ Alternative — one standalone agent covering several stacks:
 subnet/CIDR needed — the agent resolves service names from inside the cluster).
 
 **On each dev machine** — install straight from the cluster, one line. The
-agent embeds your binary in the installer (no re-download, no GitHub, no root):
+agent embeds the binaries in the installer, which picks yours with `uname` (no
+re-download, no GitHub, no root):
 
 ```bash
-ssh -p 2222 get@<cluster-host> install "$(uname -s)-$(uname -m)" | sh
+ssh -p 2222 get@<cluster-host> install | sh
 ```
 
 The cluster address isn't baked in — the agent genuinely can't see the address

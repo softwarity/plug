@@ -119,10 +119,10 @@ services:
 
     <h3>2. Install the CLI (each dev machine)</h3>
     <p>
-      One line, straight from the cluster — the agent embeds your platform's binary in the installer
-      (<code>uname</code> tells it which), so there is no re-download, no GitHub, no root:
+      One line, straight from the cluster — the agent embeds the binaries in the installer, which
+      picks yours with <code>uname</code>. No re-download, no GitHub, no root:
     </p>
-    <app-code lang="bash">ssh -p 2222 get@&lt;cluster-host&gt; install "$(uname -s)-$(uname -m)" | sh</app-code>
+    <app-code lang="bash">ssh -p 2222 get@&lt;cluster-host&gt; install | sh</app-code>
     <p>
       The cluster address isn't baked in — the agent can't see the address you reached it on (a
       Swarm routing mesh hides it). So the <a routerLink="/profiles">first run asks for it once</a>
