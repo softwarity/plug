@@ -10,8 +10,18 @@ ARG GIT_REV=
 FROM golang:1.26-alpine AS build
 ARG VERSION
 ARG GIT_REV
+# zig cross-compiles the Linux hook lib (C) for both arches, targeting glibc —
+# the developer's runtime is almost always glibc, and a musl .so would not
+# LD_PRELOAD into their process. Built into libassets/ next to the committed
+# macOS .dylib (which can't be built on Linux) so go:embed carries every hook.
+RUN apk add --no-cache zig
 WORKDIR /src
 COPY cli/ ./cli/
+RUN cd cli/internal/inject && \
+    zig cc -target x86_64-linux-gnu.2.28  -O2 -fPIC -shared -fvisibility=hidden \
+        -o libassets/plug-hook-linux-amd64.so csrc/plug_hook.c -ldl && \
+    zig cc -target aarch64-linux-gnu.2.28 -O2 -fPIC -shared -fvisibility=hidden \
+        -o libassets/plug-hook-linux-arm64.so csrc/plug_hook.c -ldl
 WORKDIR /src/cli
 RUN mkdir -p /out/bin && \
     if [ -n "${GIT_REV}" ]; then V="${VERSION}+${GIT_REV}"; else V="${VERSION}"; fi && \

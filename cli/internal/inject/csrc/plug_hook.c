@@ -684,13 +684,17 @@ __attribute__((used)) static const interpose_t interposers[]
 
 #else  // Linux and other ELF platforms
 
-int connect(int fd, const struct sockaddr *addr, socklen_t len) {
+// The file is built with -fvisibility=hidden; LD_PRELOAD interposition only
+// works if these three symbols are exported, so force default visibility.
+#define PLUG_EXPORT __attribute__((visibility("default")))
+
+PLUG_EXPORT int connect(int fd, const struct sockaddr *addr, socklen_t len) {
     return plug_connect(fd, addr, len);
 }
-int getaddrinfo(const char *node, const char *service,
-                const struct addrinfo *hints, struct addrinfo **res) {
+PLUG_EXPORT int getaddrinfo(const char *node, const char *service,
+                            const struct addrinfo *hints, struct addrinfo **res) {
     return plug_getaddrinfo(node, service, hints, res);
 }
-void freeaddrinfo(struct addrinfo *ai) { plug_freeaddrinfo(ai); }
+PLUG_EXPORT void freeaddrinfo(struct addrinfo *ai) { plug_freeaddrinfo(ai); }
 
 #endif
