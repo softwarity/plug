@@ -1,0 +1,2 @@
+# Compiled hook libraries (built locally / in CI, not committed)
+build/
