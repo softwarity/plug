@@ -13,7 +13,7 @@
         </div>
         <nav class="nav-links">
         <a href="https://github.com/softwarity/plug#readme" target="_blank" rel="noopener" class="nav-button">
-          <app-icon name="menu_book" />
+          <mat-icon>menu_book</mat-icon>
           README
         </a>
         <a href="https://github.com/softwarity/plug" target="_blank" rel="noopener" class="nav-button">
@@ -23,11 +23,11 @@
           GitHub
         </a>
         <a href="https://hub.docker.com/r/softwarity/plug-agent" target="_blank" rel="noopener" class="nav-button">
-          <app-icon name="inventory_2" />
+          <mat-icon>inventory_2</mat-icon>
           Docker Hub
         </a>
         <a href="https://www.softwarity.io/" target="_blank" rel="noopener" class="nav-button">
-          <app-icon name="public" />
+          <mat-icon>public</mat-icon>
           Softwarity
         </a>
         <softwarity-projects></softwarity-projects>
@@ -79,7 +79,7 @@
               [routerLinkActiveOptions]="{ exact: link.path === '/' }"
               class="side-link"
             >
-              <app-icon [name]="link.icon" />
+              <mat-icon>{{ link.icon }}</mat-icon>
               <span>{{ link.label }}</span>
             </a>
           }

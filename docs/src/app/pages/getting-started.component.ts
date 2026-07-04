@@ -1,10 +1,11 @@
 import { Component } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { CodeComponent } from '../code/code.component';
+import { MatIconModule } from '@angular/material/icon';
 
 @Component({
   selector: 'app-getting-started',
-  imports: [CodeComponent, RouterLink],
+  imports: [CodeComponent, RouterLink, MatIconModule],
   styles: [
     `
       .features {
@@ -31,8 +32,10 @@ import { CodeComponent } from '../code/code.component';
         transform: translateY(-1px);
       }
       .feature-icon {
-        font-size: 1.3rem;
-        line-height: 1;
+        font-size: 26px;
+        width: 26px;
+        height: 26px;
+        color: var(--accent-purple);
       }
       .feature-title {
         font-weight: 600;
@@ -70,32 +73,32 @@ import { CodeComponent } from '../code/code.component';
     <h3>What you get</h3>
     <section class="features">
       <a routerLink="/how-it-works" class="feature-card">
-        <span class="feature-icon">🔌</span>
+        <mat-icon class="feature-icon">dns</mat-icon>
         <span class="feature-title">Names, resolved cluster-side</span>
         <span class="feature-desc">Address <code>my-service:8080</code> by name (via <code>socks5h</code>) — no <code>localhost:PORT</code> mappings.</span>
       </a>
       <a routerLink="/how-it-works" class="feature-card">
-        <span class="feature-icon">🪶</span>
+        <mat-icon class="feature-icon">air</mat-icon>
         <span class="feature-title">No root, no daemon</span>
         <span class="feature-desc">A userspace SOCKS proxy + env vars. Nothing global is touched on your machine.</span>
       </a>
       <a routerLink="/profiles" class="feature-card">
-        <span class="feature-icon">🧬</span>
+        <mat-icon class="feature-icon">hub</mat-icon>
         <span class="feature-title">Multi-cluster at once</span>
         <span class="feature-desc">Run the same process against two clusters in parallel — each session is isolated.</span>
       </a>
       <a routerLink="/profiles" class="feature-card">
-        <span class="feature-icon">🔀</span>
+        <mat-icon class="feature-icon">swap_horiz</mat-icon>
         <span class="feature-title">Port-forwards</span>
         <span class="feature-desc">Raw-TCP drivers that ignore the proxy (AMQP…) get a per-session local port + injected env.</span>
       </a>
       <a routerLink="/agent" class="feature-card">
-        <span class="feature-icon">🧩</span>
+        <mat-icon class="feature-icon">memory</mat-icon>
         <span class="feature-title">amd64 · arm64</span>
         <span class="feature-desc">Native multi-arch agent image; CLI binaries for linux, macOS and windows.</span>
       </a>
       <a routerLink="/security" class="feature-card">
-        <span class="feature-icon">🛡️</span>
+        <mat-icon class="feature-icon">shield</mat-icon>
         <span class="feature-title">Honest security model</span>
         <span class="feature-desc">Deliberately auth-less, for trusted dev clusters — read the model before deploying.</span>
       </a>

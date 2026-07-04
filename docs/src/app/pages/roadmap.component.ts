@@ -1,11 +1,28 @@
 import { Component } from '@angular/core';
 import { RouterLink } from '@angular/router';
-import { CodeComponent } from '../code/code.component';
+import { MatIconModule } from '@angular/material/icon';
 
 @Component({
   selector: 'app-roadmap',
-  imports: [CodeComponent, RouterLink],
+  imports: [RouterLink, MatIconModule],
   preserveWhitespaces: true,
+  styles: [
+    `
+      .status-icon {
+        font-size: 18px;
+        width: 18px;
+        height: 18px;
+        vertical-align: middle;
+        margin-right: 3px;
+      }
+      .status-icon.ok {
+        color: #3fb950;
+      }
+      .status-icon.soon {
+        color: var(--accent-yellow);
+      }
+    `,
+  ],
   template: `
     <h2>Roadmap</h2>
 
@@ -58,13 +75,13 @@ import { CodeComponent } from '../code/code.component';
         <tr><th>Item</th><th>State</th></tr>
       </thead>
       <tbody>
-        <tr><td>Rootless SOCKS5 proxy + per-session port-forwards</td><td>✅ shipped</td></tr>
-        <tr><td>Multi-cluster in parallel (compare environments)</td><td>✅ shipped</td></tr>
-        <tr><td>Install from cluster + launcher (per-cluster versions)</td><td>✅ shipped</td></tr>
-        <tr><td>Profiles: wizard, <code>ls</code> / <code>rm</code> / <code>rn</code> / <code>test</code></td><td>✅ shipped</td></tr>
-        <tr><td>Kubernetes manifest (NodePort / <code>kubectl port-forward</code>)</td><td>✅ shipped</td></tr>
-        <tr><td><code>kubectl exec</code> transport (no exposed port)</td><td>🔜 planned</td></tr>
-        <tr><td>Gateway hosting the tunnel + install surface</td><td>🔜 planned</td></tr>
+        <tr><td>Rootless SOCKS5 proxy + per-session port-forwards</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
+        <tr><td>Multi-cluster in parallel (compare environments)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
+        <tr><td>Install from cluster + launcher (per-cluster versions)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
+        <tr><td>Profiles: wizard, <code>ls</code> / <code>rm</code> / <code>rn</code> / <code>test</code></td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
+        <tr><td>Kubernetes manifest (NodePort / <code>kubectl port-forward</code>)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
+        <tr><td><code>kubectl exec</code> transport (no exposed port)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
+        <tr><td>Gateway hosting the tunnel + install surface</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
       </tbody>
     </table>
   `,

@@ -23,9 +23,9 @@
   margin-bottom: 24px;
   // The shared <softwarity-projects> menu keeps its (hidden) fly-out submenus in
   // layout — position:absolute, cascading rightward well past the viewport — which
-  // was forcing a page-wide horizontal scrollbar. Clip the header's horizontal
-  // overflow: `clip` (not `hidden`) leaves overflow-y visible so the dropdown still
-  // opens downward, and unlike `hidden` it never breaks the sticky sidebar below.
+  // forced a page-wide horizontal scrollbar. Clip the header's horizontal overflow:
+  // `clip` (not `hidden`) leaves overflow-y visible so the dropdown still opens
+  // downward, and unlike `hidden` it never breaks the sticky sidebar below.
   overflow-x: clip;
 }
 
@@ -116,8 +116,10 @@
     text-decoration: none;
   }
 
-  app-icon {
-    --icon-size: 18px;
+  mat-icon {
+    font-size: 18px;
+    width: 18px;
+    height: 18px;
   }
 
   .github-icon {
@@ -180,8 +182,10 @@
     color: var(--text-primary);
   }
 
-  app-icon {
-    --icon-size: 18px;
+  mat-icon {
+    font-size: 18px;
+    width: 18px;
+    height: 18px;
     color: var(--accent-purple);
   }
 }
