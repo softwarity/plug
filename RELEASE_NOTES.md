@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 0.1.0
+
 ### Features
 
 - `plug <command>`: run a local process with cluster DNS and subnets, tunnelled
