@@ -36,6 +36,8 @@ Usage:
   plug versions                        list locally cached versions
   plug version                         print the launcher version
   plug self-update                     update the launcher itself from a cluster
+  sudo plug setup                      install the root tunnel daemon (once)
+  sudo plug uninstall                  remove the daemon, binaries and cache
 
 Options:
   -p, --profile <name>   use profile ~/.plug/<name>.conf
@@ -103,6 +105,9 @@ func main() {
 		return
 	case "setup":
 		setup(args[1:])
+		return
+	case "uninstall":
+		uninstall(args[1:])
 		return
 	case "daemon":
 		os.Exit(runDaemon())

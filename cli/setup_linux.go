@@ -11,17 +11,16 @@ import (
 
 const systemdUnit = "/etc/systemd/system/plugd.service"
 
-// setup installs (or removes) the root daemon as a systemd service. Must run as
-// root — the single sudo the whole tool ever needs.
+// uninstallDaemon stops and removes the systemd service.
+func uninstallDaemon() {
+	exec.Command("systemctl", "disable", "--now", "plugd").Run()
+	os.Remove(systemdUnit)
+	exec.Command("systemctl", "daemon-reload").Run()
+}
+
+// setup installs the root daemon as a systemd service. Must run as root — the
+// single sudo the whole tool ever needs.
 func setup(args []string) {
-	if len(args) > 0 && args[0] == "uninstall" {
-		exec.Command("systemctl", "disable", "--now", "plugd").Run()
-		os.Remove(systemdUnit)
-		exec.Command("systemctl", "daemon-reload").Run()
-		os.Remove(socketPath)
-		info("plug daemon uninstalled")
-		return
-	}
 	requireRoot()
 
 	self, err := os.Executable()
@@ -50,11 +49,11 @@ WantedBy=multi-user.target
 		fatal("systemctl enable: %v (%s)", err, out)
 	}
 	info("plug daemon installed and started — no more sudo needed")
-	info("logs: journalctl -u plugd   ·   remove with: sudo plug setup uninstall")
+	info("logs: journalctl -u plugd   ·   remove everything with: sudo plug uninstall")
 }
 
 func requireRoot() {
 	if os.Geteuid() != 0 {
-		fatal("this needs root — run:  sudo plug setup")
+		fatal("this needs root — re-run with sudo")
 	}
 }
