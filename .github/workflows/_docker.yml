@@ -37,13 +37,16 @@ jobs:
           password: ${{ secrets.DOCKERHUB_RW }}
       - name: Resolve version
         id: ver
-        # A v-tag → its semver; any branch → "dev" (disables CLI auto-upgrade).
+        # A v-tag → its semver; any branch → "dev". The short commit is appended
+        # as build metadata (Dockerfile) so every rebuild — even the same
+        # `latest` tag — is distinct and the CLI picks up the new core.
         run: |
           ref="${GITHUB_REF#refs/tags/v}"
           case "$GITHUB_REF" in
             refs/tags/v*) echo "value=$ref" >> "$GITHUB_OUTPUT" ;;
             *)            echo "value=dev"   >> "$GITHUB_OUTPUT" ;;
           esac
+          echo "rev=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
       - name: Build and push by digest
         id: build
         uses: docker/build-push-action@v6
@@ -52,6 +55,7 @@ jobs:
           file: agent/Dockerfile
           build-args: |
             VERSION=${{ steps.ver.outputs.value }}
+            GIT_REV=${{ steps.ver.outputs.rev }}
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true

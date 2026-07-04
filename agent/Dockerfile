@@ -1,24 +1,29 @@
 # Build context is the REPO ROOT (so the CLI sources are available):
 #   docker build -f agent/Dockerfile -t softwarity/plug-agent .
-# VERSION is stamped into every binary and written to /opt/plug/VERSION;
-# the CLI compares against it to decide whether to self-upgrade.
+# The version — VERSION plus the GIT_REV build metadata — is stamped into every
+# binary and written to /opt/plug/VERSION; the CLI compares against it to decide
+# whether to fetch a newer core, so even rebuilds of `latest` (same VERSION, new
+# commit) differ. Pass the revision: --build-arg GIT_REV=$(git rev-parse --short HEAD)
 ARG VERSION=dev
+ARG GIT_REV=
 
 FROM golang:1.26-alpine AS build
 ARG VERSION
+ARG GIT_REV
 WORKDIR /src
 COPY cli/ ./cli/
 WORKDIR /src/cli
-RUN mkdir -p /out && \
+RUN mkdir -p /out/bin && \
+    if [ -n "${GIT_REV}" ]; then V="${VERSION}+${GIT_REV}"; else V="${VERSION}"; fi && \
     for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do \
       os=${t%/*}; arch=${t#*/}; ext=""; [ "$os" = windows ] && ext=".exe"; \
       CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
-        -ldflags "-s -w -X main.version=${VERSION}" \
-        -o "/out/plug-$os-$arch$ext" .; \
-    done
+        -ldflags "-s -w -X main.version=$V" \
+        -o "/out/bin/plug-$os-$arch$ext" .; \
+    done && \
+    printf '%s' "$V" > /out/VERSION
 
 FROM alpine:3.21
-ARG VERSION
 
 # openssh only: the CLI tunnels via SSH direct-tcpip, sshd resolves cluster
 # names and forwards connections itself — no other server-side tooling needed.
@@ -49,8 +54,8 @@ RUN chmod 700 /home/plug/.ssh
 COPY --chmod=755 agent/serve-binary /usr/local/bin/serve-binary
 COPY --chmod=755 agent/entrypoint.sh /entrypoint.sh
 
-COPY --from=build /out/ /opt/plug/bin/
-RUN printf '%s' "${VERSION}" > /opt/plug/VERSION
+COPY --from=build /out/bin/ /opt/plug/bin/
+COPY --from=build /out/VERSION /opt/plug/VERSION
 
 EXPOSE 22
 ENTRYPOINT ["/entrypoint.sh"]
