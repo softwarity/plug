@@ -11,20 +11,25 @@ if [ "$req" = "version" ]; then
 fi
 
 if [ "$req" = "install" ]; then
-  # host:port must be the address the CLIENT uses to reach us — behind a Swarm
-  # routing mesh / NAT that is NOT what the server sees. So the installer takes
-  # them as positional args ($1 $2), falling back to SSH_CONNECTION only as a
-  # best-effort hint:
-  #   ssh -p 2222 get@<host> install | sh -s -- <host> 2222
+  # The installer needs the address the CLIENT uses to reach us. Priority:
+  #   1. positional args ($1 $2)               explicit override
+  #   2. /opt/plug/public (PLUG_PUBLIC_HOST)    what the admin set on the stack
+  #   3. SSH_CONNECTION server address          best-effort (wrong behind a mesh)
+  # With (2) set, the one-liner needs no repetition: ssh get@<host> install | sh
   set -- $SSH_CONNECTION
-  fallback_host=$3
-  fallback_port=$4
+  def_host=$3
+  def_port=$4
+  if [ -f /opt/plug/public ]; then
+    read -r ph pp < /opt/plug/public
+    [ -n "$ph" ] && def_host=$ph
+    [ -n "$pp" ] && def_port=$pp
+  fi
   ver=$(cat /opt/plug/VERSION)
   cat <<EOF
 #!/bin/sh
 # plug installer (agent v$ver) — from https://softwarity.github.io/plug/
 set -e
-HOST="\${1:-$fallback_host}"; PORT="\${2:-$fallback_port}"
+HOST="\${1:-$def_host}"; PORT="\${2:-$def_port}"
 os=\$(uname -s | tr 'A-Z' 'a-z')
 arch=\$(uname -m)
 case "\$arch" in x86_64|amd64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; esac
@@ -50,7 +55,6 @@ fi
 
 echo "plug: installed to \$dest/plug"
 case ":\$PATH:" in *":\$dest:"*) : ;; *) echo "plug: add \$dest to your PATH" ;; esac
-command -v sshuttle >/dev/null 2>&1 || echo "plug: also install sshuttle (brew install sshuttle / apt install sshuttle)"
 echo "plug: try  plug npm run start:dev"
 EOF
   exit 0

@@ -33,6 +33,10 @@ const usageText = `plug — run a local process as if it were inside your cluste
 Usage:
   plug [options] <command> [args...]   run <command> wired to the cluster
   plug init                            create a profile interactively
+  plug ls                              list profiles (name host:port)
+  plug test [profile]                  check an agent is reachable
+  plug rn <old> <new>                  rename a profile (alias: mv)
+  plug rm <profile>                    remove a profile
   plug versions                        list locally cached versions
   plug version                         print the launcher version
   plug self-update                     update the launcher itself from a cluster
@@ -153,6 +157,18 @@ func main() {
 		return
 	case "init":
 		initProfile()
+		return
+	case "ls":
+		cmdListProfiles()
+		return
+	case "rm":
+		cmdRemoveProfile(args[1:])
+		return
+	case "rn", "mv":
+		cmdRenameProfile(args[1:])
+		return
+	case "test":
+		cmdTestProfile(args[1:])
 		return
 	case "self-update":
 		selfUpdate(args[1:])

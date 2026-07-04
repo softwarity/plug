@@ -48,7 +48,8 @@ address into the child's environment.
 ## Setup
 
 **Once, on the cluster** — add the agent to your application stack; it joins
-the stack's network automatically:
+the stack's network automatically. Set `PLUG_PUBLIC_HOST` to the address devs
+reach it on, so their install needs no repetition:
 
 ```yaml
 services:
@@ -56,18 +57,21 @@ services:
     image: docker.io/softwarity/plug-agent:latest
     ports:
       - "2222:22"
+    environment:
+      - PLUG_PUBLIC_HOST=swarm.example.com   # the address devs connect to
 ```
 
 Alternative — one standalone agent covering several stacks:
-[deploy/plug-stack.yml](deploy/plug-stack.yml) lists their overlay networks
-explicitly (`docker stack deploy -c plug-stack.yml plug`).
+[deploy/plug-stack.yml](deploy/plug-stack.yml). On **Kubernetes**, deploy
+[deploy/plug-k8s.yaml](deploy/plug-k8s.yaml) in the target namespace (no
+subnet/CIDR needed — the agent resolves service names from inside the cluster).
 
-**On each dev machine** — install straight from the cluster, one line (the
+**On each dev machine** — install straight from the cluster, one line. The
 agent's installer downloads the right binary, puts it on your `PATH` and writes
-a default profile; no GitHub access needed):
+a default profile pointing at `PLUG_PUBLIC_HOST`. No GitHub access, no root:
 
 ```bash
-ssh -p 2222 get@<cluster-host> install | sh -s -- <cluster-host> 2222
+ssh -p 2222 get@<cluster-host> install | sh
 ```
 
 The `get` user is passwordless and locked (via `ForceCommand`) to a single
@@ -151,7 +155,11 @@ clusters). Never publish port 2222 on an untrusted network.
 
 - [x] Rootless SOCKS5 data path + per-session port-forwards (multi-cluster)
 - [x] Install from the cluster (`get` user) + launcher with per-cluster versions
-- [ ] Kubernetes transport (agent pod + `kubectl exec`)
+- [x] Kubernetes manifest ([deploy/plug-k8s.yaml](deploy/plug-k8s.yaml)) — works
+      today via NodePort or `kubectl port-forward`
+- [ ] `kubectl exec` transport (no exposed port, RBAC-gated)
 - [ ] Embed the agent into an API gateway (dynamic enable/disable), exposing the
       same install/version surface it already speaks
-- [ ] Homebrew tap
+
+Distribution is **from the cluster only** (one source: the agent image), so
+there is deliberately no Homebrew tap or separate package channel.
