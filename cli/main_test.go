@@ -30,7 +30,8 @@ func (s *slowReader) Read(p []byte) (int, error) {
 }
 
 func TestDownloadProgressBar(t *testing.T) {
-	updateHold = 0 // don't sleep in the test
+	updateHold = 0     // don't sleep in the test
+	minBarDuration = 0 // don't pad the bar to its 2s minimum in the test
 
 	old := os.Stderr
 	r, w, err := os.Pipe()

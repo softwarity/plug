@@ -372,6 +372,11 @@ func agentVersion(cfg config) (string, error) {
 // (the child often clears the screen right away). Overridable in tests.
 var updateHold = 400 * time.Millisecond
 
+// minBarDuration keeps the bar animating for at least this long even when the
+// transfer is near-instant (the usual case on a LAN) — the whole point is that
+// the user actually sees the update happen. Overridable in tests.
+var minBarDuration = 2 * time.Second
+
 // getDownload streams a binary from the get-user over SSH. When stderr is a
 // terminal it animates a progress bar so a version update is actually visible —
 // the transfer is quick and the child usually wipes the screen right after.
@@ -409,6 +414,7 @@ func readWithProgress(r io.Reader, label string, animate bool) ([]byte, error) {
 	chunk := make([]byte, 32*1024)
 	var frame int
 	var last time.Time
+	start := time.Now()
 	for {
 		n, err := r.Read(chunk)
 		if n > 0 {
@@ -427,6 +433,13 @@ func readWithProgress(r io.Reader, label string, animate bool) ([]byte, error) {
 		}
 	}
 	if animate {
+		// Keep the bar visible for a minimum duration even when the transfer was
+		// near-instant — otherwise the update just flashes by unseen.
+		for time.Since(start) < minBarDuration {
+			drawBar(label, int64(buf.Len()), frame)
+			frame++
+			time.Sleep(70 * time.Millisecond)
+		}
 		fmt.Fprintf(os.Stderr, "\r[plug] ✓ updated to %s  (%s)%s\n",
 			label, humanBytes(int64(buf.Len())), strings.Repeat(" ", 14))
 		time.Sleep(updateHold)
