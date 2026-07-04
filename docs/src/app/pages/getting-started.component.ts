@@ -111,19 +111,22 @@ services:
   plug-agent:
     image: docker.io/softwarity/plug-agent:latest
     ports:
-      - "2222:22"</app-code>
+      - "2222:22"
+    environment:
+      - PLUG_PUBLIC_HOST=swarm.example.com   # the address devs connect to</app-code>
     <p>
-      See <a routerLink="/agent">Agent &amp; deployment</a> for the standalone variant (one agent
-      covering several stacks), port and image details.
+      <code>PLUG_PUBLIC_HOST</code> is the address devs reach the agent on; it is baked into their
+      profile at install time, so the install needs no repetition. See
+      <a routerLink="/agent">Agent &amp; deployment</a> for the standalone and Kubernetes variants.
     </p>
 
     <h3>2. Install the CLI (each dev machine)</h3>
     <p>
       One line, straight from the cluster — the agent serves an installer that downloads the right
       binary (<code>uname</code>-detected), puts it on your <code>PATH</code> and writes a default
-      profile. No GitHub access needed:
+      profile pointing at <code>PLUG_PUBLIC_HOST</code>. No GitHub access, no root:
     </p>
-    <app-code lang="bash">ssh -p 2222 get@&lt;cluster-host&gt; install | sh -s -- &lt;cluster-host&gt; 2222</app-code>
+    <app-code lang="bash">ssh -p 2222 get@&lt;cluster-host&gt; install | sh</app-code>
     <p>
       No key, no password — a passwordless <code>get</code> user locked to a single "hand me a
       binary" command (see <a routerLink="/security">Security model</a>). Prefer GitHub? The same

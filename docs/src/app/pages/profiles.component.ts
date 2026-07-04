@@ -62,6 +62,16 @@ forward = AMQP_URL=amqp://rabbitmq:5672, MONGO_URL=mongodb://mongodb:27017</app-
     <app-code lang="bash">plug -p prod    npm run start   # → cluster prod
 plug -p staging npm run start   # → cluster staging, side by side</app-code>
 
+    <h3>Managing profiles</h3>
+    <app-code lang="bash">plug ls                  # list profiles: name  host:port
+plug test [profile]      # check an agent is reachable (prints its version)
+plug rn default prod     # rename a profile (alias: plug mv)
+plug rm staging          # remove a profile</app-code>
+    <p>
+      <code>plug test</code> connects to the agent and reports its version — handy to confirm a
+      cluster is reachable before running your app.
+    </p>
+
     <h3>plug init</h3>
     <p>
       Runs the same wizard on demand — typically to add a second cluster. It asks before

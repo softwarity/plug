@@ -46,6 +46,24 @@ docker stack deploy -c plug-stack.yml plug</app-code>
       <a routerLink="/security">Security model</a>.
     </div>
 
+    <h3>Kubernetes</h3>
+    <p>
+      Deploy <a href="https://github.com/softwarity/plug/blob/main/deploy/plug-k8s.yaml"
+      target="_blank" rel="noopener">deploy/plug-k8s.yaml</a> in the target namespace. No subnet or
+      CIDR is needed — the agent's <code>sshd</code> resolves service names via CoreDNS from inside
+      the cluster, exactly like on Swarm. Reach it via the NodePort, or
+      <code>kubectl port-forward svc/plug-agent 2222:2222</code> for an RBAC-gated tunnel with no
+      exposed port.
+    </p>
+    <app-code lang="bash">kubectl -n my-namespace apply -f plug-k8s.yaml</app-code>
+
+    <h3>Knowing its own address</h3>
+    <p>
+      Set <code>PLUG_PUBLIC_HOST</code> (and optionally <code>PLUG_PUBLIC_PORT</code>) on the agent to
+      the address developers reach it on. The installer bakes it into each dev's default profile, so
+      the one-liner needs no repetition — <code>ssh get&#64;host install | sh</code>.
+    </p>
+
     <h3>Port</h3>
     <p>
       <code>2222</code> is a convention, not a requirement. Publish any port you like and put it in
@@ -75,7 +93,7 @@ docker stack deploy -c plug-stack.yml plug</app-code>
       and writes <code>/opt/plug/VERSION</code>. The <code>get</code> user serves three things and
       nothing else — <code>version</code>, a named binary, and an <code>install</code> script:
     </p>
-    <app-code lang="bash">ssh -p 2222 get@&lt;host&gt; install | sh -s -- &lt;host&gt; 2222   # install (PATH + profile)
+    <app-code lang="bash">ssh -p 2222 get@&lt;host&gt; install | sh                      # install (PATH + profile)
 ssh -p 2222 get@&lt;host&gt; $(uname -s)-$(uname -m) > plug   # just the binary
 ssh -p 2222 get@&lt;host&gt; version                          # the agent version</app-code>
     <p>

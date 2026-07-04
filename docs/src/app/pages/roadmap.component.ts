@@ -45,13 +45,12 @@ import { CodeComponent } from '../code/code.component';
       required, no extra port, no HTTP server.
     </div>
 
-    <h3>Homebrew tap</h3>
-    <p>One-liner install and upgrades on macOS/Linux:</p>
-    <app-code lang="bash">brew tap softwarity/tap
-brew install plug</app-code>
-    <p>
-      A release-workflow step will regenerate the formula (URL + checksums) on every version.
-    </p>
+    <div class="callout">
+      <strong>No Homebrew tap, by design.</strong> plug is distributed <em>from the cluster</em> —
+      the agent image is the single source of the CLI (<code>ssh get&#64;host install | sh</code>).
+      A separate package channel (brew, apt…) would be a second source to keep in sync, so it is a
+      deliberate non-goal. GitHub Releases remain as a fallback download.
+    </div>
 
     <h3>Status</h3>
     <table>
@@ -62,10 +61,10 @@ brew install plug</app-code>
         <tr><td>Rootless SOCKS5 proxy + per-session port-forwards</td><td>✅ shipped</td></tr>
         <tr><td>Multi-cluster in parallel (compare environments)</td><td>✅ shipped</td></tr>
         <tr><td>Install from cluster + launcher (per-cluster versions)</td><td>✅ shipped</td></tr>
-        <tr><td>Profiles &amp; wizard</td><td>✅ shipped</td></tr>
-        <tr><td>Kubernetes (agent Deployment + <code>kubectl exec</code>)</td><td>🔜 planned</td></tr>
+        <tr><td>Profiles: wizard, <code>ls</code> / <code>rm</code> / <code>rn</code> / <code>test</code></td><td>✅ shipped</td></tr>
+        <tr><td>Kubernetes manifest (NodePort / <code>kubectl port-forward</code>)</td><td>✅ shipped</td></tr>
+        <tr><td><code>kubectl exec</code> transport (no exposed port)</td><td>🔜 planned</td></tr>
         <tr><td>Gateway hosting the tunnel + install surface</td><td>🔜 planned</td></tr>
-        <tr><td>Homebrew tap</td><td>🔜 planned</td></tr>
       </tbody>
     </table>
   `,
