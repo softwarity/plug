@@ -5,6 +5,7 @@ import (
 	"bytes"
 	_ "embed"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -15,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 //go:embed keys/id_ed25519
@@ -252,8 +254,7 @@ func ensureVersion(v string, cfg config) (string, error) {
 	if fi, err := os.Stat(bin); err == nil && fi.Size() > 1<<20 {
 		return bin, nil
 	}
-	info("new version v%s — updating from the cluster...", v)
-	data, err := getDownload(cfg, fmt.Sprintf("%s-%s", runtime.GOOS, runtime.GOARCH))
+	data, err := getDownload(cfg, fmt.Sprintf("%s-%s", runtime.GOOS, runtime.GOARCH), "v"+v)
 	if err != nil {
 		return "", err
 	}
@@ -322,7 +323,7 @@ func selfUpdate(args []string) {
 	if self, err = filepath.EvalSymlinks(self); err != nil {
 		fatal("%v", err)
 	}
-	data, err := getDownload(cfg, fmt.Sprintf("%s-%s", runtime.GOOS, runtime.GOARCH))
+	data, err := getDownload(cfg, fmt.Sprintf("%s-%s", runtime.GOOS, runtime.GOARCH), "v"+remote)
 	if err != nil {
 		fatal("%v", err)
 	}
@@ -367,15 +368,107 @@ func agentVersion(cfg config) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-func getDownload(cfg config, osArch string) ([]byte, error) {
-	out, err := exec.Command("ssh", getSSHArgs(cfg, osArch)...).Output()
+// updateHold keeps the "updated" line on screen briefly before the child runs
+// (the child often clears the screen right away). Overridable in tests.
+var updateHold = 400 * time.Millisecond
+
+// getDownload streams a binary from the get-user over SSH. When stderr is a
+// terminal it animates a progress bar so a version update is actually visible —
+// the transfer is quick and the child usually wipes the screen right after.
+// label is the version being fetched, for the display.
+func getDownload(cfg config, osArch, label string) ([]byte, error) {
+	cmd := exec.Command("ssh", getSSHArgs(cfg, osArch)...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
-			return nil, fmt.Errorf("%s", strings.TrimSpace(string(ee.Stderr)))
-		}
 		return nil, err
 	}
-	return out, nil
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	data, rerr := readWithProgress(stdout, label, isTTY(os.Stderr))
+	if werr := cmd.Wait(); werr != nil {
+		if s := strings.TrimSpace(stderr.String()); s != "" {
+			return nil, fmt.Errorf("%s", s)
+		}
+		return nil, werr
+	}
+	return data, rerr
+}
+
+// readWithProgress reads r to EOF. When animate is set it draws an indeterminate
+// progress bar + byte count on stderr and holds the final line briefly;
+// otherwise it prints one plain line. The total size is unknown (the agent just
+// streams the binary), hence an indeterminate bar rather than a percentage.
+func readWithProgress(r io.Reader, label string, animate bool) ([]byte, error) {
+	if !animate {
+		fmt.Fprintf(os.Stderr, "[plug] downloading %s from the cluster...\n", label)
+	}
+	var buf bytes.Buffer
+	chunk := make([]byte, 32*1024)
+	var frame int
+	var last time.Time
+	for {
+		n, err := r.Read(chunk)
+		if n > 0 {
+			buf.Write(chunk[:n])
+			if animate && time.Since(last) > 60*time.Millisecond {
+				drawBar(label, int64(buf.Len()), frame)
+				frame++
+				last = time.Now()
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return buf.Bytes(), err
+		}
+	}
+	if animate {
+		fmt.Fprintf(os.Stderr, "\r[plug] ✓ updated to %s  (%s)%s\n",
+			label, humanBytes(int64(buf.Len())), strings.Repeat(" ", 14))
+		time.Sleep(updateHold)
+	} else {
+		fmt.Fprintf(os.Stderr, "[plug] updated to %s (%s)\n", label, humanBytes(int64(buf.Len())))
+	}
+	return buf.Bytes(), nil
+}
+
+// drawBar renders one frame of an indeterminate progress bar (a block bouncing
+// left↔right), followed by the bytes read so far.
+func drawBar(label string, n int64, frame int) {
+	const w = 16
+	pos := frame % (2 * (w - 1))
+	if pos >= w {
+		pos = 2*(w-1) - pos
+	}
+	var b strings.Builder
+	for i := 0; i < w; i++ {
+		if i >= pos-1 && i <= pos+1 {
+			b.WriteRune('█')
+		} else {
+			b.WriteRune('░')
+		}
+	}
+	fmt.Fprintf(os.Stderr, "\r[plug] updating %s  [%s]  %s ", label, b.String(), humanBytes(n))
+}
+
+func isTTY(f *os.File) bool {
+	fi, err := f.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+func humanBytes(n int64) string {
+	switch {
+	case n < 1024:
+		return fmt.Sprintf("%d B", n)
+	case n < 1024*1024:
+		return fmt.Sprintf("%.0f KB", float64(n)/1024)
+	default:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1024*1024))
+	}
 }
 
 func looksLikeBinary(data []byte) bool {
