@@ -49,9 +49,13 @@ const EnvVarSocks = "PLUG_SOCKS"
 func assetName() string {
 	switch runtime.GOOS {
 	case "darwin":
-		return fmt.Sprintf("libassets/plug-hook-%s-%s.dylib", runtime.GOOS, runtime.GOARCH)
+		// One universal (arm64+amd64) fat dylib covers both Macs — and the Linux
+		// agent image can't build a .dylib, so it ships committed to the repo.
+		return "libassets/plug-hook-darwin.dylib"
 	case "linux":
-		return fmt.Sprintf("libassets/plug-hook-%s-%s.so", runtime.GOOS, runtime.GOARCH)
+		// Per-arch ELF shared objects, built into libassets by the agent
+		// Dockerfile (ELF has no fat format).
+		return fmt.Sprintf("libassets/plug-hook-linux-%s.so", runtime.GOARCH)
 	default:
 		return "" // Windows etc. — no libc injection
 	}
