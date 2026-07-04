@@ -110,6 +110,38 @@ func (t *Transport) Resolver() *net.Resolver {
 	}
 }
 
+// Forward opens a local TCP listener that relays every connection to target
+// (a cluster host:port) through the tunnel. Used for raw-TCP services whose
+// drivers ignore the SOCKS proxy (e.g. AMQP). Returns the bound local address.
+func (t *Transport) Forward(ctx context.Context, listenAddr, target string, logf Logf) (string, error) {
+	ln, err := net.Listen("tcp", listenAddr)
+	if err != nil {
+		return "", err
+	}
+	go func() {
+		<-ctx.Done()
+		ln.Close()
+	}()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				remote, err := t.DialCluster(target)
+				if err != nil {
+					logf("forward %s: %v", target, err)
+					c.Close()
+					return
+				}
+				relay(c, remote)
+			}()
+		}
+	}()
+	return ln.Addr().String(), nil
+}
+
 // Close tears down the SSH connection (and every channel on it).
 func (t *Transport) Close() error {
 	if t.client == nil {

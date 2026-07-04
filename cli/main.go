@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -64,9 +65,62 @@ Docs: https://softwarity.github.io/plug/
 `
 
 type config struct {
-	host    string
-	port    string
-	subnets []string
+	host     string
+	port     string
+	subnets  []string
+	forwards []forwardSpec
+}
+
+// forwardSpec declares a local port-forward for a raw-TCP service whose driver
+// ignores the SOCKS proxy. Declared in a profile as:
+//
+//	forward = AMQP_URL=amqp://rabbitmq:5672, MONGO_URL=mongodb://mongodb:27017
+//
+// plug opens a per-session local port to target and injects env=<local URL>.
+type forwardSpec struct {
+	env    string // env var to set for the child
+	target string // cluster host:port to dial through the tunnel
+	rawURL string // original URL (with scheme) if the value was one, else ""
+}
+
+func parseForward(s string) (forwardSpec, bool) {
+	name, val, ok := strings.Cut(s, "=")
+	if !ok {
+		return forwardSpec{}, false
+	}
+	name, val = strings.TrimSpace(name), strings.TrimSpace(val)
+	if name == "" || val == "" {
+		return forwardSpec{}, false
+	}
+	if strings.Contains(val, "://") {
+		u, err := url.Parse(val)
+		if err != nil || u.Host == "" {
+			return forwardSpec{}, false
+		}
+		return forwardSpec{env: name, target: u.Host, rawURL: val}, true
+	}
+	return forwardSpec{env: name, target: val}, true
+}
+
+// decl reconstructs the "NAME=VALUE" declaration, for passing across the
+// launcher→core exec boundary.
+func (f forwardSpec) decl() string {
+	if f.rawURL != "" {
+		return f.env + "=" + f.rawURL
+	}
+	return f.env + "=" + f.target
+}
+
+// localValue is the env value pointing the child at the local forward: the
+// original URL with its host rewritten to localAddr, or just localAddr.
+func (f forwardSpec) localValue(localAddr string) string {
+	if f.rawURL != "" {
+		if u, err := url.Parse(f.rawURL); err == nil {
+			u.Host = localAddr
+			return u.String()
+		}
+	}
+	return localAddr
 }
 
 type options struct {
@@ -162,15 +216,19 @@ func launcherRun(args []string) {
 
 func coreEnv(cfg config) []string {
 	env := append(os.Environ(), "PLUG_CORE=1", "PLUG_HOST="+cfg.host, "PLUG_PORT="+cfg.port)
-	if len(cfg.subnets) > 0 {
-		env = append(env, "PLUG_SUBNETS="+strings.Join(cfg.subnets, ","))
+	if len(cfg.forwards) > 0 {
+		var decls []string
+		for _, f := range cfg.forwards {
+			decls = append(decls, f.decl())
+		}
+		env = append(env, "PLUG_FORWARDS="+strings.Join(decls, "\n"))
 	}
 	return env
 }
 
 // runCore executes the tunnel logic in this very process (version match / fallback).
 func runCore(cfg config, cmdArgs []string) {
-	os.Exit(coreRun(cfg, cmdArgs))
+	os.Exit(coreRunSOCKS(cfg, cmdArgs))
 }
 
 func versionsDir() string {
@@ -443,6 +501,12 @@ func loadProfile(name string) config {
 					cfg.subnets = append(cfg.subnets, s)
 				}
 			}
+		case "forward":
+			for _, s := range strings.Split(val, ",") {
+				if f, ok := parseForward(strings.TrimSpace(s)); ok {
+					cfg.forwards = append(cfg.forwards, f)
+				}
+			}
 		}
 	}
 	return cfg
@@ -533,68 +597,24 @@ func openTTY(hint string) *os.File {
 
 func coreMain() {
 	cfg := config{
-		host:    os.Getenv("PLUG_HOST"),
-		port:    os.Getenv("PLUG_PORT"),
+		host: os.Getenv("PLUG_HOST"),
+		port: os.Getenv("PLUG_PORT"),
 	}
 	if cfg.port == "" {
 		cfg.port = defaultPort
 	}
-	if s := os.Getenv("PLUG_SUBNETS"); s != "" {
-		cfg.subnets = strings.Split(s, ",")
+	if s := os.Getenv("PLUG_FORWARDS"); s != "" {
+		for _, line := range strings.Split(s, "\n") {
+			if f, ok := parseForward(line); ok {
+				cfg.forwards = append(cfg.forwards, f)
+			}
+		}
 	}
 	cmdArgs := os.Args[1:]
 	if len(cmdArgs) == 0 {
 		fatal("core: no command")
 	}
-	os.Exit(coreRun(cfg, cmdArgs))
-}
-
-func coreRun(cfg config, cmdArgs []string) int {
-	// Default is the zero-root SOCKS5 proxy. The TUN paths (via the root
-	// daemon, or in-process "go" for debugging) give full transparency.
-	mode := os.Getenv("PLUG_TUNNEL")
-	if mode == "" {
-		mode = "socks"
-	}
-	switch mode {
-	case "socks":
-		return coreRunSOCKS(cfg, cmdArgs)
-	case "tun", "go":
-		// handled below (they need the cluster subnets)
-	default:
-		info("unknown PLUG_TUNNEL=%q (use socks, tun or go)", mode)
-		return 1
-	}
-
-	keyPath, cleanupKey := writeKey()
-	defer cleanupKey()
-	sshOpts := []string{
-		"-i", keyPath,
-		"-o", "StrictHostKeyChecking=no",
-		"-o", "UserKnownHostsFile=/dev/null",
-		"-o", "LogLevel=ERROR",
-	}
-
-	subnets := cfg.subnets
-	if len(subnets) == 0 {
-		var err error
-		subnets, err = discoverSubnets(cfg, sshOpts)
-		if err != nil {
-			info("cannot discover cluster subnets via %s:%s: %v", cfg.host, cfg.port, err)
-			return 1
-		}
-	}
-	if len(subnets) == 0 {
-		info("no routable subnets found on the agent — is it attached to your overlay networks?")
-		return 1
-	}
-
-	// TUN via the root daemon (no sudo at runtime).
-	if mode == "tun" {
-		return runViaDaemon(cfg, subnets, cmdArgs)
-	}
-	// Same TUN path in-process — needs root now (for debugging).
-	return coreRunGo(cfg, subnets, cmdArgs)
+	os.Exit(coreRunSOCKS(cfg, cmdArgs))
 }
 
 func writeKey() (string, func()) {
