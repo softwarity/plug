@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/softwarity/plug/cli/internal/inject"
 	"github.com/softwarity/plug/cli/internal/tunnel"
 )
 
@@ -50,6 +51,17 @@ func coreRunSOCKS(cfg config, cmdArgs []string) int {
 	}
 
 	env := proxyEnv(socksAddr, httpAddr)
+
+	// N1: transparent connect()/DNS interception. On top of the proxy env, inject
+	// a native hook into the child so libc-based runtimes (Node, JVM, Python,
+	// curl…) route EVERY outbound TCP connection and DNS lookup through the SOCKS
+	// proxy above — cluster-side resolution, no per-service forward. This is
+	// additive; the proxy env AND the forwards below still apply, and anything the
+	// hook can't reach (Go/static binaries, non-TCP, SIP'd system binaries) falls
+	// back to them. Disable with PLUG_NO_INJECT=1; a no-op where unavailable.
+	if extra := inject.Env(socksAddr, info); extra != nil {
+		env = append(env, extra...)
+	}
 
 	// Per-session port-forwards for raw-TCP drivers that ignore both proxies.
 	for _, f := range cfg.forwards {
