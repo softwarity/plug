@@ -30,10 +30,11 @@ import { MatIconModule } from '@angular/material/icon';
       <strong>How we got here.</strong> plug started on sshuttle, then a native Go TUN + a
       split-horizon DNS resolver. On a corporate VPN, transparent DNS fights the VPN's own resolver;
       and full multi-cluster (same service names, at once) can't work with <em>any</em> global
-      interception. So plug settled on a <strong>rootless SOCKS5 proxy + per-session port-forwards</strong>:
-      no global state, native multi-cluster, and the SSH transport we'd already built. Full
-      syscall-level transparency for non-cooperating drivers is mirrord's domain (library injection),
-      a deliberate non-goal here.
+      interception. So plug settled on a <strong>rootless, per-process</strong> data path — a SOCKS5
+      and HTTP proxy, plus an injected <code>connect()</code>/DNS hook (mirrord-style library
+      injection, reusing our own SOCKS transport) that makes any libc runtime transparent with no
+      per-service config — no global state, native multi-cluster. Go/statically-linked binaries and
+      non-TCP fall back to a per-session port-forward.
     </div>
 
     <h3>Kubernetes transport</h3>
@@ -75,13 +76,16 @@ import { MatIconModule } from '@angular/material/icon';
         <tr><th>Item</th><th>State</th></tr>
       </thead>
       <tbody>
-        <tr><td>Rootless SOCKS5 proxy + per-session port-forwards</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
+        <tr><td>SOCKS5 + HTTP proxy + per-session port-forwards</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
+        <tr><td>Transparent <code>connect()</code>/DNS injection (macOS/Linux libc apps)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
         <tr><td>Multi-cluster in parallel (compare environments)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
         <tr><td>Install from cluster + launcher (per-cluster versions)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
         <tr><td>Profiles: wizard, <code>ls</code> / <code>rm</code> / <code>rn</code> / <code>test</code></td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
         <tr><td>Kubernetes manifest (NodePort / <code>kubectl port-forward</code>)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
         <tr><td><code>kubectl exec</code> transport (no exposed port)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
         <tr><td>Gateway hosting the tunnel + install surface</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
+        <tr><td>Native-Windows interceptor (WinDivert/WFP) — WSL2 works today</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
+        <tr><td>Cover Go / statically-linked binaries (syscall-level hook)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
       </tbody>
     </table>
   `,

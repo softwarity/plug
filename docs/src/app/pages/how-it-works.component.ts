@@ -11,16 +11,18 @@ import { CodeComponent } from '../code/code.component';
 
     <p>
       plug is a thin, opinionated orchestration of proven pieces: an SSH tunnel to a tiny agent in
-      the cluster, a local <strong>SOCKS5 proxy</strong> on top of it, and the child command's
-      environment pointed at that proxy. No root, no TUN, no daemon.
+      the cluster, three interception layers on top of it (an injected
+      <strong>connect()/DNS hook</strong>, an <strong>HTTP proxy</strong>, and a
+      <strong>SOCKS5 proxy</strong>), and the child command wired to all three. No root, no TUN,
+      no daemon.
     </p>
 
     <app-code lang="text">┌─ your laptop ──────────────────┐        ┌─ swarm cluster ────────────┐
 │  plug &lt;cmd&gt;                    │        │  plug-agent (alpine+sshd)  │
-│   ├─ local SOCKS5 proxy ───────┼──ssh───┼─→ direct-tcpip: sshd dials │
-│   │   ALL_PROXY → child        │  :2222 │   service:port & resolves  │
-│   ├─ per-session port-forwards │        │   names inside the cluster │
-│   └─ runs &lt;cmd&gt;                │        │                            │
+│   ├─ connect()/DNS hook (inj.) │        │                            │
+│   ├─ HTTP proxy   ─────────────┼──ssh───┼─→ direct-tcpip: sshd dials │
+│   ├─ SOCKS5 proxy              │  :2222 │   service:port & resolves  │
+│   └─ runs &lt;cmd&gt; → all three    │        │   names inside the cluster │
 └────────────────────────────────┘        └────────────────────────────┘</app-code>
 
     <h3>The stages</h3>
@@ -33,16 +35,27 @@ import { CodeComponent } from '../code/code.component';
         cluster's own resolver. No server code of ours — stock <code>sshd</code>.
       </li>
       <li>
-        <strong>Local SOCKS5 proxy.</strong> plug runs a SOCKS5 proxy bound to
-        <code>127.0.0.1</code> and exports <code>ALL_PROXY=socks5h://…</code> (plus
-        <code>JAVA_TOOL_OPTIONS=-DsocksProxyHost…</code>) into the child. The <code>h</code> in
-        <code>socks5h</code> means the <em>hostname</em> is sent to the proxy — so cluster names are
-        resolved cluster-side, with nothing touched on your machine.
+        <strong>Transparent connect()/DNS hook.</strong> A tiny native library is injected into the
+        child (<code>DYLD_INSERT_LIBRARIES</code> on macOS, <code>LD_PRELOAD</code> on Linux); it
+        interposes <code>connect()</code> and <code>getaddrinfo()</code>. So <em>every</em> outbound
+        TCP connection and name lookup of a <strong>libc-based</strong> process (Node, the JVM,
+        Python, curl…) is routed through the tunnel, resolved cluster-side — which is what makes
+        raw-TCP drivers (<code>amqplib</code>, <code>pg</code>, <code>mongodb</code>,
+        <code>redis</code>, gRPC…) work with no per-service config.
       </li>
       <li>
-        <strong>Port-forwards (optional).</strong> Raw-TCP drivers that ignore the proxy get a
-        per-session local port to their cluster service, and plug injects its address into the
-        child's environment — see <a routerLink="/profiles">Profiles</a>.
+        <strong>HTTP proxy + SOCKS5 proxy.</strong> Alongside the hook, plug exports
+        <code>HTTP_PROXY</code>/<code>HTTPS_PROXY</code> (a local HTTP proxy) and
+        <code>ALL_PROXY=socks5h://…</code> + <code>JAVA_TOOL_OPTIONS=-DsocksProxyHost…</code> (a
+        local SOCKS5 proxy). These catch proxy-aware clients even where injection doesn't apply —
+        and the JVM routes <em>all</em> its sockets through <code>-DsocksProxyHost</code>. The
+        <code>h</code> in <code>socks5h</code> means the hostname is resolved cluster-side.
+      </li>
+      <li>
+        <strong>Port-forwards (fallback).</strong> For what the hook can't reach —
+        <strong>Go</strong>/statically-linked binaries (they bypass libc), non-TCP — declare a
+        per-session local port to the cluster service; plug injects its address into the child's
+        environment. See <a routerLink="/profiles">Profiles</a>.
       </li>
       <li>
         <strong>Your command runs, then teardown.</strong> stdio is passed through (pipes, colors,
@@ -53,9 +66,9 @@ import { CodeComponent } from '../code/code.component';
 
     <h3>Why this design</h3>
     <ul>
-      <li><strong>No root, no daemon, no TUN.</strong> Everything is a userspace proxy + env vars. Install is a single static binary.</li>
-      <li><strong>Multi-cluster by nature.</strong> Nothing global is touched (no system DNS, no <code>/etc/hosts</code>, no firewall), so the same process can run against several clusters at once — each session has its own proxy and forward ports.</li>
-      <li><strong>The trade-off.</strong> A SOCKS proxy is not transparent: a library must honor the proxy env. HTTP clients and the whole JVM do; some raw-TCP drivers (Node's <code>amqplib</code>) don't — those use a <a routerLink="/profiles">port-forward</a>.</li>
+      <li><strong>No root, no daemon, no TUN.</strong> Userspace proxies + an injected userspace library + env vars. Install is a single static binary.</li>
+      <li><strong>Multi-cluster by nature.</strong> Nothing global is touched (no system DNS, no <code>/etc/hosts</code>, no firewall), so the same process can run against several clusters at once — each session has its own proxies, hook and forward ports.</li>
+      <li><strong>Honest limits.</strong> The hook is libc-only: <strong>Go</strong>/statically-linked binaries issue the <code>connect</code> syscall directly and bypass it; non-TCP (UDP, QUIC) is untouched; on macOS, SIP-protected system binaries (<code>/usr/bin/*</code>) strip the injection. A <a routerLink="/profiles">port-forward</a> is the fallback for those. Native Windows isn't covered yet — use WSL2.</li>
     </ul>
 
     <h3>Built with open source</h3>

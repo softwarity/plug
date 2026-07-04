@@ -80,17 +80,17 @@ import { MatIconModule } from '@angular/material/icon';
       <a routerLink="/how-it-works" class="feature-card">
         <mat-icon class="feature-icon">air</mat-icon>
         <span class="feature-title">No root, no daemon</span>
-        <span class="feature-desc">A userspace SOCKS proxy + env vars. Nothing global is touched on your machine.</span>
+        <span class="feature-desc">Userspace proxies + an injected hook + env vars. Nothing global is touched on your machine.</span>
       </a>
       <a routerLink="/profiles" class="feature-card">
         <mat-icon class="feature-icon">hub</mat-icon>
         <span class="feature-title">Multi-cluster at once</span>
         <span class="feature-desc">Run the same process against two clusters in parallel — each session is isolated.</span>
       </a>
-      <a routerLink="/profiles" class="feature-card">
-        <mat-icon class="feature-icon">swap_horiz</mat-icon>
-        <span class="feature-title">Port-forwards</span>
-        <span class="feature-desc">Raw-TCP drivers that ignore the proxy (AMQP…) get a per-session local port + injected env.</span>
+      <a routerLink="/how-it-works" class="feature-card">
+        <mat-icon class="feature-icon">all_inclusive</mat-icon>
+        <span class="feature-title">Any protocol, transparent</span>
+        <span class="feature-desc">An injected connect()/DNS hook routes any libc app's TCP by name — AMQP, DB, Redis, gRPC — no per-service config.</span>
       </a>
       <a routerLink="/agent" class="feature-card">
         <mat-icon class="feature-icon">memory</mat-icon>
@@ -160,9 +160,9 @@ services:
 
     <h3>Compatibility</h3>
     <ul>
-      <li>CLI: <strong>macOS</strong>, <strong>Linux</strong> and <strong>Windows</strong> natively — a single static binary, nothing else to install.</li>
+      <li>CLI: <strong>macOS</strong> and <strong>Linux</strong> natively (Windows via <strong>WSL2</strong>) — a single static binary, nothing else to install.</li>
       <li>Cluster: <strong>Docker Swarm</strong> today — <a routerLink="/roadmap">Kubernetes is on the roadmap</a>.</li>
-      <li>Runtime-agnostic: NestJS, Spring, Quarkus, curl… anything that honors the proxy env (and <a routerLink="/profiles">port-forwards</a> cover the rest).</li>
+      <li>Runtime-agnostic: NestJS, Spring, Quarkus, Python, curl… any <strong>libc</strong> runtime works transparently via the injected hook (Go and non-TCP use a <a routerLink="/profiles">port-forward</a>).</li>
     </ul>
 
     <h3>Where to next</h3>

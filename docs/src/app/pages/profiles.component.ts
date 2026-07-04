@@ -41,16 +41,18 @@ agent port [2222]:
     <app-code lang="text"># ~/.plug/staging.conf
 host = swarm-node.example.com
 port = 2222
-# raw-TCP services whose driver ignores the proxy (see Port-forwards below):
+# fallback for what the injected hook can't reach (Go/static binaries, non-TCP):
 forward = AMQP_URL=amqp://rabbitmq:5672, MONGO_URL=mongodb://mongodb:27017</app-code>
 
-    <h3>Port-forwards — for drivers that ignore the proxy</h3>
+    <h3>Port-forwards — the escape hatch</h3>
     <p>
-      HTTP clients and the whole JVM honor the SOCKS proxy, so most things just work. Some raw-TCP
-      drivers (Node's <code>amqplib</code>, some Kafka/Redis clients) open sockets directly and
-      ignore it. Declare them as <code>forward = ENV=url</code>: plug opens a per-session local port
-      to the cluster service and sets <code>ENV</code> to the local address, preserving the scheme
-      and any credentials.
+      On macOS and Linux the injected <a routerLink="/how-it-works">connect()/DNS hook</a> already
+      routes any <strong>libc</strong> process's TCP by name (Node, the JVM, Python…), so
+      <code>amqplib</code>/<code>pg</code>/<code>redis</code> need nothing. Port-forwards are the
+      fallback for what the hook can't reach — <strong>Go</strong>/statically-linked binaries (they
+      bypass libc), non-TCP, or when injection is disabled. Declare one as
+      <code>forward = ENV=url</code>: plug opens a per-session local port to the cluster service and
+      sets <code>ENV</code> to the local address, preserving the scheme and any credentials.
     </p>
     <app-code lang="text">forward = AMQP_URL=amqp://user:pass@rabbitmq:5672/vhost
 # child sees:  AMQP_URL=amqp://user:pass@127.0.0.1:54210/vhost</app-code>

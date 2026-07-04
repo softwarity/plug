@@ -26,24 +26,32 @@ plug npm run start:dev
 ```
 ┌─ your laptop ──────────────────┐        ┌─ swarm cluster ────────────┐
 │  plug <cmd>                    │        │  plug-agent (alpine+sshd)  │
-│   ├─ local SOCKS5 proxy ───────┼──ssh───┼─→ direct-tcpip: sshd dials │
-│   │   ALL_PROXY → child        │  :2222 │   service:port & resolves  │
-│   ├─ per-session port-forwards │        │   names inside the cluster │
-│   └─ runs <cmd>                │        │                            │
+│   ├─ connect()/DNS hook (inj.) │        │                            │
+│   ├─ HTTP proxy   ─────────────┼──ssh───┼─→ direct-tcpip: sshd dials │
+│   ├─ SOCKS5 proxy              │  :2222 │   service:port & resolves  │
+│   └─ runs <cmd> → all three    │        │   names inside the cluster │
 └────────────────────────────────┘        └────────────────────────────┘
 ```
 
-`plug` opens a local **SOCKS5 proxy** backed by an SSH tunnel to a tiny agent in
-the cluster, and points the child's environment at it (`ALL_PROXY`,
-`JAVA_TOOL_OPTIONS`). Cluster names resolve because the proxy hands hostnames to
-the agent, which resolves them **inside** the cluster (`socks5h`) — so
-`http://my-service:8080` just works, with **no root, no TUN, no daemon**.
-Because nothing global is touched, **several sessions to different clusters run
-side by side** (compare the same process against two environments at once).
+`plug` runs the child behind **three interception layers**, all riding one SSH
+tunnel to a tiny agent in the cluster — so cluster names resolve and services are
+reachable, with **no root, no TUN, no daemon**, and nothing global touched (so
+several sessions to different clusters run side by side):
 
-For raw-TCP services whose driver ignores the proxy (AMQP, Kafka…), declare a
-**port-forward** (below): plug opens a per-session local port and injects its
-address into the child's environment.
+1. a **connect()/DNS hook** injected into the child (`DYLD_INSERT_LIBRARIES` on
+   macOS, `LD_PRELOAD` on Linux) — transparently routes *every* TCP connection
+   and name lookup of any **libc-based** process (Node, the JVM, Python, curl…)
+   through the tunnel. This is what makes raw-TCP drivers — `amqplib`, `pg`,
+   `mongodb`, `redis`, gRPC — just work with no config;
+2. an **HTTP proxy** (`HTTP_PROXY`/`HTTPS_PROXY`) for HTTP clients that read proxy env;
+3. a **SOCKS5 proxy** (`ALL_PROXY`) and `JAVA_TOOL_OPTIONS=-DsocksProxyHost` for
+   SOCKS-native tools and the whole JVM.
+
+Each layer hands the *hostname* to the agent, which resolves it **inside** the
+cluster (`socks5h` / remote DNS) — so `http://my-service:8080` and
+`amqp://rabbitmq:5672` both work. For the few things the hook can't reach —
+**Go**/statically-linked binaries (they bypass libc), non-TCP — declare a
+**port-forward** (below).
 
 ## Setup
 
@@ -117,21 +125,23 @@ A profile is a plain file you can also edit by hand:
 # ~/.plug/staging.conf
 host = swarm-node.example.com
 port = 2222
-# raw-TCP services whose driver ignores the proxy — plug forwards a local
-# port and injects the rewritten address into the child's env:
+# fallback for what the injected hook can't reach (Go/static binaries, non-TCP):
+# plug forwards a local port and rewrites the address into the child's env:
 forward = AMQP_URL=amqp://rabbitmq:5672, MONGO_URL=mongodb://mongodb:27017
 ```
 
 `--host`/`--port` (or `$PLUG_HOST`/`$PLUG_PORT`) bypass profiles entirely.
 
-### Port-forwards — for drivers that ignore the proxy
+### Port-forwards — the escape hatch
 
-HTTP clients and the whole JVM honor the SOCKS proxy, so most things just work.
-Some raw-TCP drivers (Node's `amqplib`, some Kafka/Redis clients) don't. Declare
-them with `forward = ENV=url`: plug opens a per-session local port to the cluster
-service and sets `ENV` to the local address (scheme and credentials preserved).
-Your 12-factor app reads its connection string from the env, so no code changes —
-and each session gets its own ports, so multiple clusters never collide.
+On macOS and Linux the injected hook already routes any **libc** process's TCP by
+name (Node, the JVM, Python…), so `amqplib`/`pg`/`redis` need nothing. Port-forwards
+are the fallback for what the hook can't reach — **Go**/statically-linked binaries
+(they bypass libc), non-TCP, or when injection is disabled. Declare one with
+`forward = ENV=url`: plug opens a per-session local port to the cluster service and
+sets `ENV` to the local address (scheme and credentials preserved). Your 12-factor
+app reads its connection string from the env, so no code changes — and each session
+gets its own ports, so multiple clusters never collide.
 
 ### Multiple clusters at once
 
@@ -156,13 +166,16 @@ clusters). Never publish port 2222 on an untrusted network.
 
 ## Roadmap
 
-- [x] Rootless SOCKS5 data path + per-session port-forwards (multi-cluster)
+- [x] Rootless data path — SOCKS5 + HTTP proxy + transparent connect()/DNS
+      injection (macOS/Linux libc) + per-session port-forwards, multi-cluster
 - [x] Install from the cluster (`get` user) + launcher with per-cluster versions
 - [x] Kubernetes manifest ([deploy/plug-k8s.yaml](deploy/plug-k8s.yaml)) — works
       today via NodePort or `kubectl port-forward`
+- [ ] Native-Windows interceptor (WinDivert/WFP) — WSL2 works today
+- [ ] Cover Go / statically-linked binaries (syscall-level hook, à la mirrord) —
+      a port-forward covers them today
 - [ ] `kubectl exec` transport (no exposed port, RBAC-gated)
-- [ ] Embed the agent into an API gateway (dynamic enable/disable), exposing the
-      same install/version surface it already speaks
+- [ ] Embed the agent into an API gateway (dynamic enable/disable)
 
 Distribution is **from the cluster only** (one source: the agent image), so
 there is deliberately no Homebrew tap or separate package channel.
