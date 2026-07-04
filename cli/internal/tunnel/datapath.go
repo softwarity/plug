@@ -4,12 +4,9 @@ package tunnel
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
-	"io"
 	"net"
 	"strconv"
-	"time"
 
 	"github.com/xjasonlyu/tun2socks/v2/core"
 	"github.com/xjasonlyu/tun2socks/v2/core/adapter"
@@ -22,16 +19,10 @@ import (
 // to be non-colliding (TEST-NET / benchmark range).
 const tunAddr = "198.18.0.1"
 
-// dnsResolverIP is a sentinel address routed into the TUN and set as the
-// system resolver: DNS queries land in gvisor (any dst, port 53) and are
-// forwarded to the cluster resolver. The cluster resolver answers cluster
-// names and forwards public names upstream, so browsing keeps working.
-const dnsResolverIP = "198.18.0.53"
-
-// Run brings up a userspace TUN, routes the given cluster subnets to it, and
-// relays every captured flow through the SSH transport until ctx is cancelled.
-// Requires root (TUN device + routes). ready is closed once traffic can flow.
-// Returns after teardown.
+// Run brings up a userspace TUN, routes the given cluster subnets to it, sets
+// up split-horizon DNS, and relays every captured flow through the SSH
+// transport until ctx is cancelled. Requires root (TUN device + routes + DNS
+// redirect). ready is closed once traffic can flow. Returns after teardown.
 func Run(ctx context.Context, tr *Transport, subnets []string, logf Logf, ready chan<- struct{}) error {
 	dev, err := tun.Open(tunDevName, 0)
 	if err != nil {
@@ -51,15 +42,13 @@ func Run(ctx context.Context, tr *Transport, subnets []string, logf Logf, ready 
 	}
 	defer st.Close()
 
-	// Route the cluster subnets plus the sentinel resolver address.
-	routes := append(append([]string{}, subnets...), dnsResolverIP+"/32")
-	if err := configureInterface(name, tunAddr, routes); err != nil {
+	if err := configureInterface(name, tunAddr, subnets); err != nil {
 		return fmt.Errorf("configuring routes: %w", err)
 	}
 
-	// Point the system resolver at the tunnel so cluster names resolve.
-	// Restored on teardown (defer runs before the TUN closes).
-	restoreDNS, err := configureDNS(dnsResolverIP, logf)
+	// Split-horizon DNS: a local resolver + a redirect of the system's :53 to
+	// it. Restored on teardown (defer runs before the TUN closes).
+	restoreDNS, err := setupDNS(ctx, tr, logf)
 	if err != nil {
 		logf("DNS not redirected (%v) — names may not resolve, IPs still work", err)
 	} else {
@@ -74,7 +63,8 @@ func Run(ctx context.Context, tr *Transport, subnets []string, logf Logf, ready 
 	return nil
 }
 
-// handler bridges gvisor's accepted flows to the SSH transport.
+// handler bridges gvisor's accepted TCP flows to the SSH transport. DNS is
+// handled out of band by the split resolver, so UDP is dropped here.
 type handler struct {
 	tr   *Transport
 	logf Logf
@@ -96,58 +86,6 @@ func (h *handler) HandleTCP(conn adapter.TCPConn) {
 	go relay(conn, remote)
 }
 
-// HandleUDP only serves DNS (:53): each query is forwarded to the cluster
-// resolver over TCP through the tunnel. Other UDP is dropped (rare for the
-// HTTP/gRPC services plug targets; can be added later).
 func (h *handler) HandleUDP(conn adapter.UDPConn) {
-	id := conn.ID()
-	if id.LocalPort != 53 {
-		conn.Close()
-		return
-	}
-	go h.serveDNS(conn)
-}
-
-func (h *handler) serveDNS(conn adapter.UDPConn) {
-	defer conn.Close()
-	buf := make([]byte, 65535)
-	for {
-		conn.SetDeadline(time.Now().Add(30 * time.Second))
-		n, addr, err := conn.ReadFrom(buf)
-		if err != nil {
-			return
-		}
-		resp, err := h.resolveOverTCP(buf[:n])
-		if err != nil {
-			h.logf("dns: %v", err)
-			continue
-		}
-		conn.WriteTo(resp, addr)
-	}
-}
-
-// resolveOverTCP sends one DNS message to the cluster resolver over a
-// direct-tcpip channel (DNS-over-TCP framing) and returns the answer.
-func (h *handler) resolveOverTCP(query []byte) ([]byte, error) {
-	c, err := h.tr.DialCluster(clusterResolver)
-	if err != nil {
-		return nil, err
-	}
-	defer c.Close()
-	c.SetDeadline(time.Now().Add(5 * time.Second))
-
-	var framed [2]byte
-	binary.BigEndian.PutUint16(framed[:], uint16(len(query)))
-	if _, err := c.Write(append(framed[:], query...)); err != nil {
-		return nil, err
-	}
-	var ln [2]byte
-	if _, err := io.ReadFull(c, ln[:]); err != nil {
-		return nil, err
-	}
-	resp := make([]byte, binary.BigEndian.Uint16(ln[:]))
-	if _, err := io.ReadFull(c, resp); err != nil {
-		return nil, err
-	}
-	return resp, nil
+	conn.Close() // DNS goes through the split resolver, not the TUN
 }
