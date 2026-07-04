@@ -252,7 +252,7 @@ func ensureVersion(v string, cfg config) (string, error) {
 	if fi, err := os.Stat(bin); err == nil && fi.Size() > 1<<20 {
 		return bin, nil
 	}
-	info("fetching plug v%s from the cluster...", v)
+	info("new version v%s — updating from the cluster...", v)
 	data, err := getDownload(cfg, fmt.Sprintf("%s-%s", runtime.GOOS, runtime.GOARCH))
 	if err != nil {
 		return "", err
