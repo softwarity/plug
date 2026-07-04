@@ -10,53 +10,52 @@ import { CodeComponent } from '../code/code.component';
     <h2>How it works</h2>
 
     <p>
-      plug is a thin, opinionated orchestration of proven pieces: an SSH transport to a tiny agent
-      in the cluster, and an <a href="https://github.com/sshuttle/sshuttle" target="_blank"
-      rel="noopener">sshuttle</a> tunnel that routes the cluster subnets — and DNS — through it.
+      plug is a thin, opinionated orchestration of proven pieces: an SSH tunnel to a tiny agent in
+      the cluster, a local <strong>SOCKS5 proxy</strong> on top of it, and the child command's
+      environment pointed at that proxy. No root, no TUN, no daemon.
     </p>
 
-    <app-code lang="text">┌─ your laptop ──────────────┐         ┌─ swarm cluster ───────────────┐
-│  plug &lt;cmd&gt;                │         │  plug-agent (alpine + sshd)   │
-│   ├─ discovers subnets ────┼──ssh────┼─→ attached to overlay nets    │
-│   ├─ sshuttle tunnel ──────┼──:2222──┼─→ relays traffic + DNS        │
-│   └─ runs &lt;cmd&gt;            │         │   (resolver 127.0.0.11)       │
-└────────────────────────────┘         └───────────────────────────────┘</app-code>
+    <app-code lang="text">┌─ your laptop ──────────────────┐        ┌─ swarm cluster ────────────┐
+│  plug &lt;cmd&gt;                    │        │  plug-agent (alpine+sshd)  │
+│   ├─ local SOCKS5 proxy ───────┼──ssh───┼─→ direct-tcpip: sshd dials │
+│   │   ALL_PROXY → child        │  :2222 │   service:port & resolves  │
+│   ├─ per-session port-forwards │        │   names inside the cluster │
+│   └─ runs &lt;cmd&gt;                │        │                            │
+└────────────────────────────────┘        └────────────────────────────┘</app-code>
 
     <h3>The stages</h3>
     <ul>
       <li>
-        <strong>Subnet discovery.</strong> plug opens an SSH session to the agent and asks for its
-        interfaces and default route (<code>ip -o -4 addr show</code>). Every subnet the agent sits
-        on is a candidate — <em>except</em> the one carrying the default route: that is the docker
-        gateway bridge, services never live there. Result: exactly the overlay networks, with nobody
-        ever typing a CIDR. A profile can still pin <code>subnets =</code> explicitly (that is also
-        the Kubernetes escape hatch — see <a routerLink="/roadmap">Roadmap</a>).
+        <strong>SSH transport.</strong> plug connects to the agent's <code>sshd</code> (embedded
+        key, in-process — no <code>ssh</code> binary needed). Every outbound flow becomes an SSH
+        <code>direct-tcpip</code> channel: <code>sshd</code> opens the real connection to
+        <code>service:port</code> from <em>inside</em> the cluster, so it resolves the name with the
+        cluster's own resolver. No server code of ours — stock <code>sshd</code>.
       </li>
       <li>
-        <strong>Tunnel + DNS.</strong> plug starts sshuttle towards the agent with the discovered
-        subnets and <code>--dns</code>. From that moment, packets to overlay IPs are relayed by the
-        agent, and DNS queries are resolved <em>on the agent side</em> — by the Swarm embedded
-        resolver (<code>127.0.0.11</code>), the same one every container uses. That is why service
-        names simply work.
+        <strong>Local SOCKS5 proxy.</strong> plug runs a SOCKS5 proxy bound to
+        <code>127.0.0.1</code> and exports <code>ALL_PROXY=socks5h://…</code> (plus
+        <code>JAVA_TOOL_OPTIONS=-DsocksProxyHost…</code>) into the child. The <code>h</code> in
+        <code>socks5h</code> means the <em>hostname</em> is sent to the proxy — so cluster names are
+        resolved cluster-side, with nothing touched on your machine.
       </li>
       <li>
-        <strong>Your command runs.</strong> plug waits for the tunnel to be up, then starts your
-        command as a child process with stdio passed through — pipes, colors and
-        <kbd>Ctrl-C</kbd> behave exactly as without plug.
+        <strong>Port-forwards (optional).</strong> Raw-TCP drivers that ignore the proxy get a
+        per-session local port to their cluster service, and plug injects its address into the
+        child's environment — see <a routerLink="/profiles">Profiles</a>.
       </li>
       <li>
-        <strong>Teardown.</strong> When your command exits (or you interrupt it), plug stops
-        sshuttle and exits with your command's status code. Nothing stays behind — the tunnel's
-        lifetime <em>is</em> the command's lifetime.
+        <strong>Your command runs, then teardown.</strong> stdio is passed through (pipes, colors,
+        <kbd>Ctrl-C</kbd> behave normally). When it exits, the proxy and forwards close with it.
+        Nothing global was ever changed, so nothing can leak.
       </li>
     </ul>
 
-    <h3>Design choices</h3>
+    <h3>Why this design</h3>
     <ul>
-      <li><strong>Session-scoped, machine-visible.</strong> While the tunnel is up, routing applies to the whole machine (that is how transparent redirection works) — but only for the cluster subnets, and only until your command exits.</li>
-      <li><strong>stdin belongs to your process.</strong> Interactive prompts (wizard, profile choice) read <code>/dev/tty</code>, so <code>cat data.json | plug my-script</code> pipes cleanly into the child.</li>
-      <li><strong>No daemon, no state.</strong> Each invocation is self-contained; two terminals can plug into two different clusters.</li>
-      <li><strong>sudo once per session.</strong> sshuttle installs local packet-redirection rules (pf/iptables); that is the only privilege involved, on your side only.</li>
+      <li><strong>No root, no daemon, no TUN.</strong> Everything is a userspace proxy + env vars. Install is a single static binary.</li>
+      <li><strong>Multi-cluster by nature.</strong> Nothing global is touched (no system DNS, no <code>/etc/hosts</code>, no firewall), so the same process can run against several clusters at once — each session has its own proxy and forward ports.</li>
+      <li><strong>The trade-off.</strong> A SOCKS proxy is not transparent: a library must honor the proxy env. HTTP clients and the whole JVM do; some raw-TCP drivers (Node's <code>amqplib</code>) don't — those use a <a routerLink="/profiles">port-forward</a>.</li>
     </ul>
 
     <h3>Built with open source</h3>
@@ -66,19 +65,19 @@ import { CodeComponent } from '../code/code.component';
         <tr><th>Dependency</th><th>Role</th><th>License</th></tr>
       </thead>
       <tbody>
-        <tr><td><a href="https://github.com/sshuttle/sshuttle" target="_blank" rel="noopener">sshuttle</a></td><td>Transparent proxy — subnet routing and DNS forwarding over SSH ("poor man's VPN")</td><td>LGPL-2.1</td></tr>
-        <tr><td><a href="https://www.openssh.com/" target="_blank" rel="noopener">OpenSSH</a></td><td>Transport between the CLI and the agent (client on your machine, <code>sshd</code> in the agent)</td><td>BSD</td></tr>
-        <tr><td><a href="https://www.python.org/" target="_blank" rel="noopener">Python 3</a></td><td>Runs sshuttle's server half inside the agent</td><td>PSF</td></tr>
-        <tr><td><a href="https://go.dev/" target="_blank" rel="noopener">Go</a></td><td>The CLI — one static binary per platform, no runtime dependencies</td><td>BSD</td></tr>
-        <tr><td><a href="https://www.alpinelinux.org/" target="_blank" rel="noopener">Alpine Linux</a></td><td>Base of the ~15&nbsp;MB agent image</td><td>MIT</td></tr>
+        <tr><td><a href="https://www.openssh.com/" target="_blank" rel="noopener">OpenSSH</a></td><td>The transport: client (<code>golang.org/x/crypto/ssh</code>, in-process) and <code>sshd</code> in the agent doing the <code>direct-tcpip</code> dials</td><td>BSD</td></tr>
+        <tr><td><a href="https://go.dev/" target="_blank" rel="noopener">Go</a></td><td>The CLI — one static binary per platform, no runtime dependencies (~6&nbsp;MB)</td><td>BSD</td></tr>
+        <tr><td><a href="https://www.alpinelinux.org/" target="_blank" rel="noopener">Alpine Linux</a></td><td>Base of the agent image — just <code>sshd</code> + the served binaries</td><td>MIT</td></tr>
       </tbody>
     </table>
 
     <div class="callout">
       <strong>Why not mirrord / Telepresence?</strong> Both are excellent — for Kubernetes. plug
-      exists because nothing equivalent existed for <strong>Docker Swarm</strong>, and because its
-      transport (a dumb sshd + python container) is simple enough to embed later into other hosts —
-      like an API gateway (see <a routerLink="/roadmap">Roadmap</a>).
+      exists because nothing equivalent existed for <strong>Docker Swarm</strong>, and its agent is
+      simple enough (a stock <code>sshd</code>) to embed later into another host — like an API
+      gateway (see <a routerLink="/roadmap">Roadmap</a>). Full syscall-level transparency across any
+      driver, with zero config, is exactly mirrord's domain (library injection) — plug trades that
+      for zero root and native multi-cluster.
     </div>
   `,
 })

@@ -9,49 +9,24 @@ import { CodeComponent } from '../code/code.component';
   template: `
     <h2>Roadmap</h2>
 
-    <h3>Native Go tunnel — zero dependency (next)</h3>
-    <p>
-      Today plug shells out to <a href="https://github.com/sshuttle/sshuttle" target="_blank"
-      rel="noopener">sshuttle</a>, so a dev has to install it (and a Python) first. The goal: a
-      <strong>single self-contained binary</strong> that does the tunnel itself — nothing else to
-      install.
-    </p>
-    <p>The design, and why it also <em>simplifies</em> the agent:</p>
-    <ul>
-      <li><strong>Datapath in Go.</strong> A userspace TUN interface + a netstack (the tailscale / wireguard-go approach) captures traffic to the cluster subnets and terminates the flows in-process.</li>
-      <li><strong>Transport = plain SSH.</strong> Each captured flow becomes an SSH <code>direct-tcpip</code> channel to <code>service:port</code> — a stock <code>sshd</code> feature. DNS is forwarded the same way, over TCP, to the cluster resolver (<code>127.0.0.11:53</code>) which <code>sshd</code> can reach from inside the agent.</li>
-      <li><strong>The agent loses Python.</strong> No more sshuttle server half: the image becomes just <code>sshd</code> (with TCP forwarding for the <code>plug</code> user) plus the served binaries. Smaller, simpler, one less moving part.</li>
-    </ul>
-    <p>
-      The hard, platform-specific part is the client datapath (utun/pf on macOS, tun/nftables on
-      Linux, IPv6) — it needs the real cluster to validate, so it lands as its own focused pass.
-      Root is still required locally (as with sshuttle), for the TUN device and routes.
-    </p>
+    <div class="callout">
+      <strong>How we got here.</strong> plug started on sshuttle, then a native Go TUN + a
+      split-horizon DNS resolver. On a corporate VPN, transparent DNS fights the VPN's own resolver;
+      and full multi-cluster (same service names, at once) can't work with <em>any</em> global
+      interception. So plug settled on a <strong>rootless SOCKS5 proxy + per-session port-forwards</strong>:
+      no global state, native multi-cluster, and the SSH transport we'd already built. Full
+      syscall-level transparency for non-cooperating drivers is mirrord's domain (library injection),
+      a deliberate non-goal here.
+    </div>
 
     <h3>Kubernetes transport</h3>
     <p>
-      The tunnel mechanics work on Kubernetes today — what's missing is the turnkey part. Two gaps,
-      two answers:
+      The SOCKS transport is agnostic to the orchestrator — it only needs an SSH agent reachable in
+      the cluster. Planned: a Kubernetes deployment for the agent, and a
+      <code>kubectl exec</code> transport (tunnel through <code>kubectl exec</code> to a plain pod:
+      zero exposed port, access governed by each developer's kubeconfig RBAC — which also softens
+      the <a routerLink="/security">no-auth trade-off</a>).
     </p>
-    <ul>
-      <li>
-        <strong>Service CIDR discovery.</strong> A pod only sees its own IP; the ClusterIP range is
-        virtual (iptables/IPVS), so <a routerLink="/how-it-works">interface-based discovery</a>
-        can't find it. Planned: ask the apiserver. Meanwhile, pin it in the profile:
-      </li>
-    </ul>
-    <app-code lang="text"># ~/.plug/kube-dev.conf — works today
-host = a-node.example.com
-port = 2222
-subnets = 10.96.0.0/12,10.244.0.0/16   # service CIDR + pod CIDR</app-code>
-    <ul>
-      <li>
-        <strong><code>kubectl exec</code> transport.</strong> Instead of a published port, tunnel
-        through <code>kubectl exec</code> towards a plain pod: zero exposed surface, and access is
-        governed by each developer's kubeconfig RBAC — a natural fit that also softens the
-        <a routerLink="/security">no-auth trade-off</a>.
-      </li>
-    </ul>
 
     <h3>API-gateway integration</h3>
     <p>
@@ -84,11 +59,11 @@ brew install plug</app-code>
         <tr><th>Item</th><th>State</th></tr>
       </thead>
       <tbody>
-        <tr><td>Docker Swarm, auto-discovery, profiles &amp; wizard</td><td>✅ shipped</td></tr>
+        <tr><td>Rootless SOCKS5 proxy + per-session port-forwards</td><td>✅ shipped</td></tr>
+        <tr><td>Multi-cluster in parallel (compare environments)</td><td>✅ shipped</td></tr>
         <tr><td>Install from cluster + launcher (per-cluster versions)</td><td>✅ shipped</td></tr>
-        <tr><td>Kubernetes with manual <code>subnets =</code></td><td>✅ works today</td></tr>
-        <tr><td>Native Go tunnel (drop sshuttle &amp; Python)</td><td>🔜 next</td></tr>
-        <tr><td>Kubernetes turnkey (CIDR discovery, <code>kubectl exec</code>)</td><td>🔜 planned</td></tr>
+        <tr><td>Profiles &amp; wizard</td><td>✅ shipped</td></tr>
+        <tr><td>Kubernetes (agent Deployment + <code>kubectl exec</code>)</td><td>🔜 planned</td></tr>
         <tr><td>Gateway hosting the tunnel + install surface</td><td>🔜 planned</td></tr>
         <tr><td>Homebrew tap</td><td>🔜 planned</td></tr>
       </tbody>

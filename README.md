@@ -24,18 +24,26 @@ plug npm run start:dev
 ## How it works
 
 ```
-┌─ your laptop ──────────────┐         ┌─ swarm cluster ───────────────┐
-│  plug <cmd>                │         │  plug-agent (alpine + sshd)   │
-│   ├─ discovers subnets ────┼──ssh────┼─→ attached to overlay nets    │
-│   ├─ sshuttle tunnel ──────┼──:2222──┼─→ relays traffic + DNS        │
-│   └─ runs <cmd>            │         │   (resolver 127.0.0.11)       │
-└────────────────────────────┘         └───────────────────────────────┘
+┌─ your laptop ──────────────────┐        ┌─ swarm cluster ────────────┐
+│  plug <cmd>                    │        │  plug-agent (alpine+sshd)  │
+│   ├─ local SOCKS5 proxy ───────┼──ssh───┼─→ direct-tcpip: sshd dials │
+│   │   ALL_PROXY → child        │  :2222 │   service:port & resolves  │
+│   ├─ per-session port-forwards │        │   names inside the cluster │
+│   └─ runs <cmd>                │        │                            │
+└────────────────────────────────┘        └────────────────────────────┘
 ```
 
-`plug` starts an [sshuttle](https://github.com/sshuttle/sshuttle) tunnel to a
-tiny agent container deployed in the cluster, auto-discovers the overlay
-subnets from the agent itself, routes them (plus DNS) through the tunnel, runs
-your command, and tears everything down when it exits.
+`plug` opens a local **SOCKS5 proxy** backed by an SSH tunnel to a tiny agent in
+the cluster, and points the child's environment at it (`ALL_PROXY`,
+`JAVA_TOOL_OPTIONS`). Cluster names resolve because the proxy hands hostnames to
+the agent, which resolves them **inside** the cluster (`socks5h`) — so
+`http://my-service:8080` just works, with **no root, no TUN, no daemon**.
+Because nothing global is touched, **several sessions to different clusters run
+side by side** (compare the same process against two environments at once).
+
+For raw-TCP services whose driver ignores the proxy (AMQP, Kafka…), declare a
+**port-forward** (below): plug opens a per-session local port and injects its
+address into the child's environment.
 
 ## Setup
 
@@ -69,14 +77,8 @@ The same binaries are attached to every
 [release](https://github.com/softwarity/plug/releases). Build from source with
 `make cli && make install`.
 
-plug currently drives sshuttle for the tunnel, so install it too for now
-(`brew install sshuttle` / `apt install sshuttle`) — a
-[native Go tunnel](https://softwarity.github.io/plug/#/roadmap) will remove this
-last dependency.
-
-> **Windows**: a `windows-amd64` binary is published, but sshuttle has no
-> native Windows support — run plug inside WSL2 (with the linux binary)
-> instead.
+That's the whole install — **no other dependency, no root**. The binary is a
+single static Go executable (~6&nbsp;MB).
 
 ### Versions — the launcher model
 
@@ -108,12 +110,32 @@ A profile is a plain file you can also edit by hand:
 # ~/.plug/staging.conf
 host = swarm-node.example.com
 port = 2222
-# subnets = 10.0.9.0/24        # optional, skips auto-discovery
+# raw-TCP services whose driver ignores the proxy — plug forwards a local
+# port and injects the rewritten address into the child's env:
+forward = AMQP_URL=amqp://rabbitmq:5672, MONGO_URL=mongodb://mongodb:27017
 ```
 
 `--host`/`--port` (or `$PLUG_HOST`/`$PLUG_PORT`) bypass profiles entirely.
-sudo will prompt once per session (sshuttle needs it for local packet
-redirection).
+
+### Port-forwards — for drivers that ignore the proxy
+
+HTTP clients and the whole JVM honor the SOCKS proxy, so most things just work.
+Some raw-TCP drivers (Node's `amqplib`, some Kafka/Redis clients) don't. Declare
+them with `forward = ENV=url`: plug opens a per-session local port to the cluster
+service and sets `ENV` to the local address (scheme and credentials preserved).
+Your 12-factor app reads its connection string from the env, so no code changes —
+and each session gets its own ports, so multiple clusters never collide.
+
+### Multiple clusters at once
+
+Because there is no global state (no system DNS, no `/etc/hosts`, no firewall,
+no TUN), you can run the same process against several clusters simultaneously —
+each `plug -p <profile> <cmd>` has its own proxy and forward ports:
+
+```bash
+plug -p prod    npm run start   # → cluster prod
+plug -p staging npm run start   # → cluster staging, in parallel
+```
 
 ## Security model — read this
 
@@ -127,10 +149,8 @@ clusters). Never publish port 2222 on an untrusted network.
 
 ## Roadmap
 
+- [x] Rootless SOCKS5 data path + per-session port-forwards (multi-cluster)
 - [x] Install from the cluster (`get` user) + launcher with per-cluster versions
-- [ ] **Native Go tunnel** — drop sshuttle & Python; one self-contained binary
-      (TUN + netstack + SSH `direct-tcpip`), which also shrinks the agent to
-      just `sshd` + served binaries
 - [ ] Kubernetes transport (agent pod + `kubectl exec`)
 - [ ] Embed the agent into an API gateway (dynamic enable/disable), exposing the
       same install/version surface it already speaks

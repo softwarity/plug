@@ -10,10 +10,9 @@ import { CodeComponent } from '../code/code.component';
     <h2>Agent &amp; deployment</h2>
 
     <p>
-      The agent is deliberately boring: an Alpine image (~15&nbsp;MB) running <code>sshd</code>,
-      with <code>python3</code> (sshuttle's server half) and <code>iproute2</code> (subnet
-      discovery). No state, no volume, no configuration. Its only job is to <em>be inside</em> the
-      overlay networks and relay.
+      The agent is deliberately boring: a small Alpine image running just <code>sshd</code>. No
+      state, no volume, no configuration. Its only job is to <em>be inside</em> the overlay networks
+      and let <code>sshd</code> dial services on the CLI's behalf (<code>direct-tcpip</code>).
     </p>
 
     <h3>Deploy on Docker Swarm — in your stack (recommended)</h3>
@@ -89,7 +88,7 @@ ssh -p 2222 get@&lt;host&gt; version                          # the agent versio
     <ul>
       <li>Two SSH users: <code>plug</code> (public-key, runs the tunnel) and <code>get</code> (passwordless, <code>ForceCommand</code>-locked to serving a binary) — see <a routerLink="/security">Security model</a>.</li>
       <li>Host keys are generated at container start — connections use <code>StrictHostKeyChecking=no</code>, consistent with the <a routerLink="/security">no-auth model</a>.</li>
-      <li>No TCP forwarding tricks: sshuttle multiplexes everything over the SSH session itself.</li>
+      <li>The <code>plug</code> user has <code>AllowTcpForwarding</code> on: the CLI's SOCKS proxy and port-forwards ride SSH <code>direct-tcpip</code> channels, so <code>sshd</code> does the real dials from inside the cluster.</li>
       <li>The container logs its attached networks at startup — <code>docker service logs &lt;stack&gt;_plug-agent</code> is your first debugging stop.</li>
     </ul>
   `,

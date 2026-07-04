@@ -62,32 +62,32 @@ import { CodeComponent } from '../code/code.component';
     <app-code lang="text">plug npm run start:dev   ──►   http://my-service:8080 answers, like from any container</app-code>
 
     <div class="callout">
-      <strong>Two pieces.</strong> A tiny <a routerLink="/agent">agent container</a> (Alpine + sshd,
-      ~15&nbsp;MB) deployed once on the cluster, attached to your overlay networks — and a static
-      <code>plug</code> CLI on each dev machine. The tunnel lives exactly as long as your command.
+      <strong>Two pieces.</strong> A tiny <a routerLink="/agent">agent container</a> (Alpine + sshd)
+      deployed once on the cluster — and a single static <code>plug</code> binary on each dev
+      machine. No root, no daemon; the proxy lives exactly as long as your command.
     </div>
 
     <h3>What you get</h3>
     <section class="features">
       <a routerLink="/how-it-works" class="feature-card">
         <span class="feature-icon">🔌</span>
-        <span class="feature-title">Transparent DNS</span>
-        <span class="feature-desc">Service names resolve through the cluster resolver — <code>my-service</code>, not <code>localhost:PORT</code> mappings.</span>
+        <span class="feature-title">Names, resolved cluster-side</span>
+        <span class="feature-desc">Address <code>my-service:8080</code> by name (via <code>socks5h</code>) — no <code>localhost:PORT</code> mappings.</span>
       </a>
       <a routerLink="/how-it-works" class="feature-card">
-        <span class="feature-icon">🧭</span>
-        <span class="feature-title">Auto-discovery</span>
-        <span class="feature-desc">Overlay subnets are read from the agent itself — nobody types a CIDR.</span>
+        <span class="feature-icon">🪶</span>
+        <span class="feature-title">No root, no daemon</span>
+        <span class="feature-desc">A userspace SOCKS proxy + env vars. Nothing global is touched on your machine.</span>
       </a>
       <a routerLink="/profiles" class="feature-card">
-        <span class="feature-icon">🪄</span>
-        <span class="feature-title">Zero-config wizard</span>
-        <span class="feature-desc">First run asks host + port, saves a profile, connects. Next runs are instant.</span>
+        <span class="feature-icon">🧬</span>
+        <span class="feature-title">Multi-cluster at once</span>
+        <span class="feature-desc">Run the same process against two clusters in parallel — each session is isolated.</span>
       </a>
       <a routerLink="/profiles" class="feature-card">
-        <span class="feature-icon">🗂️</span>
-        <span class="feature-title">Profiles</span>
-        <span class="feature-desc">One file per cluster in <code>~/.plug/</code>; automatic selection, <code>-p name</code> to pick.</span>
+        <span class="feature-icon">🔀</span>
+        <span class="feature-title">Port-forwards</span>
+        <span class="feature-desc">Raw-TCP drivers that ignore the proxy (AMQP…) get a per-session local port + injected env.</span>
       </a>
       <a routerLink="/agent" class="feature-card">
         <span class="feature-icon">🧩</span>
@@ -129,21 +129,17 @@ services:
       binary" command (see <a routerLink="/security">Security model</a>). Prefer GitHub? The same
       binaries are attached to every
       <a href="https://github.com/softwarity/plug/releases" target="_blank" rel="noopener">release</a>.
-    </p>
-    <p>
-      plug currently drives <a href="https://github.com/sshuttle/sshuttle" target="_blank"
-      rel="noopener">sshuttle</a> for the tunnel, so install that too for now
-      (<code>brew install sshuttle</code> / <code>apt install sshuttle</code>) — a
-      <a routerLink="/roadmap">native Go tunnel</a> will remove this last dependency.
+      That is the whole install — <strong>a single static binary, no other dependency, no root</strong>.
     </p>
 
-    <h3>3. Run your process in the cluster</h3>
+    <h3>3. Run your process against the cluster</h3>
     <app-code lang="bash">plug npm run start:dev</app-code>
     <p>
       First run: a <a routerLink="/profiles">short wizard</a> asks for the cluster host and port
-      (default <code>2222</code>) and saves a profile. Then plug discovers the overlay subnets,
-      brings the tunnel up (sudo prompts once — sshuttle needs it for local packet redirection) and
-      starts your command. <kbd>Ctrl-C</kbd> stops your process <em>and</em> tears the tunnel down.
+      (default <code>2222</code>) and saves a profile. Then plug opens a local SOCKS5 proxy, points
+      your command's environment at it, and runs it. In your code you address services by name —
+      <code>http://pdfbox:8080</code>, <code>mongodb:27017</code> — and they resolve inside the
+      cluster. <kbd>Ctrl-C</kbd> stops your process and closes the proxy. No sudo, ever.
     </p>
     <p>
       plug is a small <strong>launcher</strong>: on connect it asks the agent which version it
@@ -154,9 +150,9 @@ services:
 
     <h3>Compatibility</h3>
     <ul>
-      <li>CLI: <strong>macOS</strong> (Intel &amp; Apple silicon) and <strong>Linux</strong> natively; <strong>Windows</strong> via WSL2 (sshuttle has no native Windows support).</li>
-      <li>Cluster: <strong>Docker Swarm</strong> today — <a routerLink="/roadmap">Kubernetes is on the roadmap</a> (and already works with manual subnets).</li>
-      <li>Runtime-agnostic: NestJS, Spring, Quarkus, plain curl… anything that resolves DNS through the system.</li>
+      <li>CLI: <strong>macOS</strong>, <strong>Linux</strong> and <strong>Windows</strong> natively — a single static binary, nothing else to install.</li>
+      <li>Cluster: <strong>Docker Swarm</strong> today — <a routerLink="/roadmap">Kubernetes is on the roadmap</a>.</li>
+      <li>Runtime-agnostic: NestJS, Spring, Quarkus, curl… anything that honors the proxy env (and <a routerLink="/profiles">port-forwards</a> cover the rest).</li>
     </ul>
 
     <h3>Where to next</h3>

@@ -27,20 +27,40 @@ profile name [default]:
 cluster host: swarm-node.example.com
 agent port [2222]:
 [plug] profile "default" saved to /Users/you/.plug/default.conf
-[plug] routing 10.0.9.0/24 via swarm-node.example.com:2222
-[plug] tunnel up — cluster DNS and subnets are now reachable</app-code>
+[plug] socks5 proxy on 127.0.0.1:54123
+[plug] tunnel ready — running your command</app-code>
 
     <h3>The profile file</h3>
     <p>Created by the wizard, editable by hand:</p>
     <app-code lang="text"># ~/.plug/staging.conf
 host = swarm-node.example.com
 port = 2222
-# subnets = 10.0.9.0/24,10.0.10.0/24   (optional, skips auto-discovery)</app-code>
+# raw-TCP services whose driver ignores the proxy (see Port-forwards below):
+forward = AMQP_URL=amqp://rabbitmq:5672, MONGO_URL=mongodb://mongodb:27017</app-code>
+
+    <h3>Port-forwards — for drivers that ignore the proxy</h3>
     <p>
-      <code>subnets</code> is the only optional key: set it to pin the routed networks instead of
-      <a routerLink="/how-it-works">auto-discovery</a> — useful for exotic topologies, or for
-      Kubernetes today (<a routerLink="/roadmap">Roadmap</a>).
+      HTTP clients and the whole JVM honor the SOCKS proxy, so most things just work. Some raw-TCP
+      drivers (Node's <code>amqplib</code>, some Kafka/Redis clients) open sockets directly and
+      ignore it. Declare them as <code>forward = ENV=url</code>: plug opens a per-session local port
+      to the cluster service and sets <code>ENV</code> to the local address, preserving the scheme
+      and any credentials.
     </p>
+    <app-code lang="text">forward = AMQP_URL=amqp://user:pass@rabbitmq:5672/vhost
+# child sees:  AMQP_URL=amqp://user:pass@127.0.0.1:54210/vhost</app-code>
+    <p>
+      Your 12-factor app reads its connection string from the env, so no code changes. Each session
+      gets its own ports, so several clusters never collide.
+    </p>
+
+    <h3>Multiple clusters at once</h3>
+    <p>
+      There is no global state (no system DNS, no <code>/etc/hosts</code>, no firewall, no TUN), so
+      the same process can run against several clusters in parallel — each session has its own proxy
+      and forward ports:
+    </p>
+    <app-code lang="bash">plug -p prod    npm run start   # → cluster prod
+plug -p staging npm run start   # → cluster staging, side by side</app-code>
 
     <h3>plug init</h3>
     <p>
