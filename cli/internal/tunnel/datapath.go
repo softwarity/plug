@@ -22,6 +22,12 @@ import (
 // to be non-colliding (TEST-NET / benchmark range).
 const tunAddr = "198.18.0.1"
 
+// dnsResolverIP is a sentinel address routed into the TUN and set as the
+// system resolver: DNS queries land in gvisor (any dst, port 53) and are
+// forwarded to the cluster resolver. The cluster resolver answers cluster
+// names and forwards public names upstream, so browsing keeps working.
+const dnsResolverIP = "198.18.0.53"
+
 // Run brings up a userspace TUN, routes the given cluster subnets to it, and
 // relays every captured flow through the SSH transport until ctx is cancelled.
 // Requires root (TUN device + routes). ready is closed once traffic can flow.
@@ -45,10 +51,22 @@ func Run(ctx context.Context, tr *Transport, subnets []string, logf Logf, ready 
 	}
 	defer st.Close()
 
-	if err := configureInterface(name, tunAddr, subnets); err != nil {
+	// Route the cluster subnets plus the sentinel resolver address.
+	routes := append(append([]string{}, subnets...), dnsResolverIP+"/32")
+	if err := configureInterface(name, tunAddr, routes); err != nil {
 		return fmt.Errorf("configuring routes: %w", err)
 	}
-	logf("tunnel up — routing %d subnet(s) into the cluster", len(subnets))
+
+	// Point the system resolver at the tunnel so cluster names resolve.
+	// Restored on teardown (defer runs before the TUN closes).
+	restoreDNS, err := configureDNS(dnsResolverIP, logf)
+	if err != nil {
+		logf("DNS not redirected (%v) — names may not resolve, IPs still work", err)
+	} else {
+		defer restoreDNS()
+	}
+
+	logf("tunnel up — routing %d subnet(s) + DNS into the cluster", len(subnets))
 	close(ready)
 
 	<-ctx.Done()

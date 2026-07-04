@@ -18,6 +18,10 @@ import (
 // tunnel session at a time over the unix socket, mounting the TUN on request
 // and tearing it down when the client disconnects.
 func runDaemon() int {
+	// Recover from a crash that may have left the system DNS pointed at a
+	// now-dead tunnel — restore it before doing anything else.
+	tunnel.RestoreLeftoverDNS()
+
 	os.Remove(socketPath)
 	ln, err := net.Listen("unix", socketPath)
 	if err != nil {
@@ -33,6 +37,7 @@ func runDaemon() int {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-stop
+		tunnel.RestoreLeftoverDNS() // undo any in-flight DNS redirection
 		ln.Close()
 		os.Remove(socketPath)
 		os.Exit(0)
