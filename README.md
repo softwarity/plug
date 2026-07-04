@@ -81,10 +81,8 @@ the first `plug` run asks once, via a short wizard.)
 
 The `get` user is passwordless and locked (via `ForceCommand`) to a single
 "hand me a binary / installer" command — see
-[Security model](https://softwarity.github.io/plug/#/security). Prefer GitHub?
-The same binaries are attached to every
-[release](https://github.com/softwarity/plug/releases). Build from source with
-`make cli && make install`.
+[Security model](https://softwarity.github.io/plug/#/security). Or build from
+source with `make cli && make install`.
 
 That's the whole install — **no other dependency, no root**. The binary is a
 single static Go executable (~6&nbsp;MB).

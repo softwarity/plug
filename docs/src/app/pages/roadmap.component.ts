@@ -66,7 +66,7 @@ import { MatIconModule } from '@angular/material/icon';
       <strong>No Homebrew tap, by design.</strong> plug is distributed <em>from the cluster</em> —
       the agent image is the single source of the CLI (<code>ssh get&#64;host install | sh</code>).
       A separate package channel (brew, apt…) would be a second source to keep in sync, so it is a
-      deliberate non-goal. GitHub Releases remain as a fallback download.
+      deliberate non-goal.
     </div>
 
     <h3>Status</h3>

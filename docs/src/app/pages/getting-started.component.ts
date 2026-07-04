@@ -137,10 +137,8 @@ services:
     </p>
     <p>
       No key, no password — a passwordless <code>get</code> user locked to a single "hand me a
-      binary" command (see <a routerLink="/security">Security model</a>). Prefer GitHub? The same
-      binaries are attached to every
-      <a href="https://github.com/softwarity/plug/releases" target="_blank" rel="noopener">release</a>.
-      That is the whole install — <strong>a single static binary, no other dependency, no root</strong>.
+      binary" command (see <a routerLink="/security">Security model</a>). That is the whole install —
+      <strong>a single static binary, no other dependency, no root</strong>.
     </p>
 
     <h3>3. Run your process against the cluster</h3>
