@@ -5,7 +5,6 @@ import (
 	"bytes"
 	_ "embed"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -16,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
-	"time"
 )
 
 //go:embed keys/id_ed25519
@@ -547,14 +545,20 @@ func coreMain() {
 }
 
 func coreRun(cfg config, cmdArgs []string) int {
-	// Default data path is the zero-root SOCKS5 proxy. The TUN ("go") and
-	// sshuttle paths are opt-in for full transparency (they need root).
+	// Default is the zero-root SOCKS5 proxy. The TUN paths (via the root
+	// daemon, or in-process "go" for debugging) give full transparency.
 	mode := os.Getenv("PLUG_TUNNEL")
 	if mode == "" {
 		mode = "socks"
 	}
-	if mode == "socks" {
+	switch mode {
+	case "socks":
 		return coreRunSOCKS(cfg, cmdArgs)
+	case "tun", "go":
+		// handled below (they need the cluster subnets)
+	default:
+		info("unknown PLUG_TUNNEL=%q (use socks, tun or go)", mode)
+		return 1
 	}
 
 	keyPath, cleanupKey := writeKey()
@@ -580,29 +584,12 @@ func coreRun(cfg config, cmdArgs []string) int {
 		return 1
 	}
 
-	// Fully-transparent TUN path via the root daemon (no sudo at runtime).
+	// TUN via the root daemon (no sudo at runtime).
 	if mode == "tun" {
 		return runViaDaemon(cfg, subnets, cmdArgs)
 	}
-	// Same TUN path but in-process — needs root now (for debugging).
-	if mode == "go" {
-		return coreRunGo(cfg, subnets, cmdArgs)
-	}
-
-	if _, err := exec.LookPath("sshuttle"); err != nil {
-		info("sshuttle not found — install it first:  brew install sshuttle")
-		return 1
-	}
-	info("routing %s via %s:%s", strings.Join(subnets, " "), cfg.host, cfg.port)
-
-	tun, err := startTunnel(cfg, sshOpts, subnets)
-	if err != nil {
-		info("%v", err)
-		return 1
-	}
-	defer stopTunnel(tun)
-
-	return runChild(cmdArgs)
+	// Same TUN path in-process — needs root now (for debugging).
+	return coreRunGo(cfg, subnets, cmdArgs)
 }
 
 func writeKey() (string, func()) {
@@ -662,75 +649,6 @@ func discoverSubnets(cfg config, sshOpts []string) ([]string, error) {
 		}
 	}
 	return subnets, nil
-}
-
-func startTunnel(cfg config, sshOpts []string, subnets []string) (*exec.Cmd, error) {
-	args := []string{
-		"-r", fmt.Sprintf("%s@%s:%s", sshUser, cfg.host, cfg.port),
-		"--dns",
-		"--ssh-cmd", "ssh " + strings.Join(sshOpts, " "),
-	}
-	args = append(args, subnets...)
-
-	tun := exec.Command("sshuttle", args...)
-	stdout, err := tun.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	tun.Stderr = tun.Stdout
-	if err := tun.Start(); err != nil {
-		return nil, fmt.Errorf("starting sshuttle: %w", err)
-	}
-
-	ready := make(chan struct{})
-	failed := make(chan string, 1)
-	go func() {
-		var lastLine string
-		sc := bufio.NewScanner(stdout)
-		for sc.Scan() {
-			line := sc.Text()
-			if strings.TrimSpace(line) != "" {
-				lastLine = line
-			}
-			if strings.Contains(line, "Connected") {
-				close(ready)
-				io.Copy(io.Discard, stdout)
-				return
-			}
-			info("sshuttle: %s", line)
-		}
-		failed <- lastLine
-	}()
-
-	info("connecting (sudo may prompt for the local firewall)...")
-	select {
-	case <-ready:
-		info("tunnel up — cluster DNS and subnets are now reachable")
-		return tun, nil
-	case last := <-failed:
-		tun.Wait()
-		return nil, fmt.Errorf("sshuttle exited before connecting: %s", last)
-	case <-time.After(2 * time.Minute):
-		tun.Process.Kill()
-		tun.Wait()
-		return nil, fmt.Errorf("timed out waiting for the tunnel")
-	}
-}
-
-func stopTunnel(tun *exec.Cmd) {
-	if tun.Process == nil {
-		return
-	}
-	tun.Process.Signal(syscall.SIGTERM)
-	done := make(chan struct{})
-	go func() { tun.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		tun.Process.Kill()
-		<-done
-	}
-	info("tunnel closed")
 }
 
 func runChild(cmdArgs []string) int {
