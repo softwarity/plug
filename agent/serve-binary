@@ -1,82 +1,66 @@
 #!/bin/sh
 # ForceCommand for the anonymous "get" user. It can only:
-#   version                     print the agent version
-#   <os>-<arch> (uname style)   stream that CLI binary on stdout
-#   install                     emit a shell installer (adds plug to PATH + profile)
+#   version                          print the agent version
+#   install <os>-<arch> (uname)      emit a self-contained installer (binary embedded)
+#   <os>-<arch> (uname)              stream that raw CLI binary on stdout
 # Nothing else — no shell, ever.
-req=$(printf '%s' "$SSH_ORIGINAL_COMMAND" | tr 'A-Z' 'a-z')
+cmd=$(printf '%s' "$SSH_ORIGINAL_COMMAND" | tr 'A-Z' 'a-z')
+set -- $cmd
+verb=$1
+arg=$2
 
-if [ "$req" = "version" ]; then
+# binary_path <os-arch> -> /opt/plug/bin/plug-<os>-<arch>[.exe], normalizing arches.
+binary_path() {
+  o=${1%%-*}
+  a=${1#*-}
+  case "$a" in x86_64|amd64) a=amd64 ;; aarch64|arm64) a=arm64 ;; esac
+  ext=""
+  [ "$o" = windows ] && ext=".exe"
+  printf '/opt/plug/bin/plug-%s-%s%s' "$o" "$a" "$ext"
+}
+
+if [ "$verb" = "version" ]; then
   exec cat /opt/plug/VERSION
 fi
 
-if [ "$req" = "install" ]; then
-  # The installer needs the address the CLIENT uses to reach us. Priority:
-  #   1. positional args ($1 $2)               explicit override
-  #   2. /opt/plug/public (PLUG_PUBLIC_HOST)    what the admin set on the stack
-  #   3. SSH_CONNECTION server address          best-effort (wrong behind a mesh)
-  # With (2) set, the one-liner needs no repetition: ssh get@<host> install | sh
-  set -- $SSH_CONNECTION
-  def_host=$3
-  def_port=$4
-  if [ -f /opt/plug/public ]; then
-    read -r ph pp < /opt/plug/public
-    [ -n "$ph" ] && def_host=$ph
-    [ -n "$pp" ] && def_port=$pp
+# install: the client passes its uname os-arch; we embed THAT binary in the
+# installer, so the script needs neither the host nor a re-download. The cluster
+# is set up on the CLI's first run (its wizard) — the agent can't know the
+# address you reached it on (a Swarm routing mesh hides it).
+if [ "$verb" = "install" ]; then
+  f=$(binary_path "$arg")
+  if [ -z "$arg" ] || [ ! -f "$f" ]; then
+    echo "plug: unknown platform '$arg' — use: install \$(uname -s)-\$(uname -m)" >&2
+    exit 1
   fi
-  ver=$(cat /opt/plug/VERSION)
-  cat <<EOF
+  cat <<INSTALLER
 #!/bin/sh
-# plug installer (agent v$ver) — from https://softwarity.github.io/plug/
+# plug installer (v$(cat /opt/plug/VERSION)) — https://softwarity.github.io/plug/
 set -e
-HOST="\${1:-$def_host}"; PORT="\${2:-$def_port}"
-os=\$(uname -s | tr 'A-Z' 'a-z')
-arch=\$(uname -m)
-case "\$arch" in x86_64|amd64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; esac
-[ "\$os" = "linux" ] || [ "\$os" = "darwin" ] || { echo "plug: unsupported OS '\$os' (use WSL2 on Windows)" >&2; exit 1; }
-
 for d in "\$HOME/.local/bin" /usr/local/bin; do
   mkdir -p "\$d" 2>/dev/null && [ -w "\$d" ] && dest="\$d" && break
 done
-: "\${dest:?cannot find a writable bin dir; run as a user owning ~/.local/bin}"
-
-echo "plug: downloading \$os-\$arch from \$HOST:\$PORT ..."
-# -n: read stdin from /dev/null so we don't eat the rest of this script when
-# the installer itself is piped from stdin (ssh ... install | sh).
-ssh -n -p "\$PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    -o BatchMode=yes get@"\$HOST" "\$os-\$arch" > "\$dest/plug"
+: "\${dest:?plug: no writable bin dir found (need ~/.local/bin or /usr/local/bin)}"
+{ base64 -d 2>/dev/null || base64 -D; } > "\$dest/plug" <<'PLUG_B64'
+$(base64 < "$f")
+PLUG_B64
 chmod +x "\$dest/plug"
-
-mkdir -p "\$HOME/.plug"
-if [ ! -f "\$HOME/.plug/default.conf" ]; then
-  printf 'host = %s\nport = %s\n' "\$HOST" "\$PORT" > "\$HOME/.plug/default.conf"
-  echo "plug: wrote profile 'default' -> \$HOST:\$PORT"
-fi
-
 echo "plug: installed to \$dest/plug"
 case ":\$PATH:" in *":\$dest:"*) : ;; *) echo "plug: add \$dest to your PATH" ;; esac
-echo "plug: try  plug npm run start:dev"
-EOF
+echo "plug: run 'plug <your command>' — the first run asks for your cluster"
+INSTALLER
   exit 0
 fi
 
-os=${req%%-*}
-arch=${req#*-}
-case "$arch" in
-  x86_64|amd64) arch=amd64 ;;
-  aarch64|arm64) arch=arm64 ;;
-esac
-ext=""
-[ "$os" = "windows" ] && ext=".exe"
-
-f="/opt/plug/bin/plug-$os-$arch$ext"
-if [ -n "$os" ] && [ -f "$f" ]; then
+# raw binary (used by the launcher's version fetch and manual downloads)
+f=$(binary_path "$verb")
+if [ -n "$verb" ] && [ -f "$f" ]; then
   exec cat "$f"
 fi
 
 echo "plug $(cat /opt/plug/VERSION) — usage over ssh:" >&2
-echo '  ssh -p <port> get@<host> install | sh                    # install (recommended)' >&2
-echo '  ssh -p <port> get@<host> $(uname -s)-$(uname -m) > plug  # just the binary' >&2
+echo '  ssh -p <port> get@<host> install "$(uname -s)-$(uname -m)" | sh   # install (recommended)' >&2
+echo '  ssh -p <port> get@<host> "$(uname -s)-$(uname -m)" > plug          # just the binary' >&2
 echo '  ssh -p <port> get@<host> version' >&2
-echo "  available: $(ls /opt/plug/bin | sed 's/^plug-//' | tr '\n' ' ')" >&2
+echo "  platforms: $(ls /opt/plug/bin | sed 's/^plug-//' | tr '\n' ' ')" >&2
 exit 1

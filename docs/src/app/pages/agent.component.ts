@@ -57,13 +57,6 @@ docker stack deploy -c plug-stack.yml plug</app-code>
     </p>
     <app-code lang="bash">kubectl -n my-namespace apply -f plug-k8s.yaml</app-code>
 
-    <h3>Knowing its own address</h3>
-    <p>
-      Set <code>PLUG_PUBLIC_HOST</code> (and optionally <code>PLUG_PUBLIC_PORT</code>) on the agent to
-      the address developers reach it on. The installer bakes it into each dev's default profile, so
-      the one-liner needs no repetition — <code>ssh get&#64;host install | sh</code>.
-    </p>
-
     <h3>Port</h3>
     <p>
       <code>2222</code> is a convention, not a requirement. Publish any port you like and put it in
@@ -91,11 +84,13 @@ docker stack deploy -c plug-stack.yml plug</app-code>
     <p>
       The image is multi-stage: it compiles the five CLI binaries into <code>/opt/plug/bin/</code>
       and writes <code>/opt/plug/VERSION</code>. The <code>get</code> user serves three things and
-      nothing else — <code>version</code>, a named binary, and an <code>install</code> script:
+      nothing else — <code>version</code>, a named binary, and an <code>install</code> script with
+      that platform's binary <strong>embedded</strong> (so the installer needs no re-download and no
+      host):
     </p>
-    <app-code lang="bash">ssh -p 2222 get@&lt;host&gt; install | sh                      # install (PATH + profile)
-ssh -p 2222 get@&lt;host&gt; $(uname -s)-$(uname -m) > plug   # just the binary
-ssh -p 2222 get@&lt;host&gt; version                          # the agent version</app-code>
+    <app-code lang="bash">ssh -p 2222 get@&lt;host&gt; install "$(uname -s)-$(uname -m)" | sh  # install
+ssh -p 2222 get@&lt;host&gt; "$(uname -s)-$(uname -m)" > plug        # just the binary
+ssh -p 2222 get@&lt;host&gt; version                                 # the agent version</app-code>
     <p>
       The version baked into the image (and stamped into every binary) is what the
       <a routerLink="/profiles">launcher</a> asks for to run the matching version. Released images

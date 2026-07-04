@@ -17,10 +17,6 @@ services:
     image: docker.io/softwarity/plug-agent:latest
     ports:
       - "2222:22"
-    environment:
-      # The address devs reach the agent on — baked into their profile at
-      # install time so the one-liner needs no repetition. Optional.
-      - PLUG_PUBLIC_HOST=swarm.example.com
     networks:
       - app_net
     deploy:

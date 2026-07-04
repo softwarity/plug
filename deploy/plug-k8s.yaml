@@ -24,11 +24,6 @@ spec:
           image: docker.io/softwarity/plug-agent:latest
           ports:
             - containerPort: 22
-          # Optional: the address devs reach the NodePort on, so the installer
-          # bakes it into their profile with no repetition.
-          # env:
-          #   - { name: PLUG_PUBLIC_HOST, value: a-node.example.com }
-          #   - { name: PLUG_PUBLIC_PORT, value: "32222" }
 ---
 apiVersion: v1
 kind: Service

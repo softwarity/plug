@@ -48,8 +48,7 @@ address into the child's environment.
 ## Setup
 
 **Once, on the cluster** — add the agent to your application stack; it joins
-the stack's network automatically. Set `PLUG_PUBLIC_HOST` to the address devs
-reach it on, so their install needs no repetition:
+the stack's network automatically:
 
 ```yaml
 services:
@@ -57,8 +56,6 @@ services:
     image: docker.io/softwarity/plug-agent:latest
     ports:
       - "2222:22"
-    environment:
-      - PLUG_PUBLIC_HOST=swarm.example.com   # the address devs connect to
 ```
 
 Alternative — one standalone agent covering several stacks:
@@ -67,12 +64,15 @@ Alternative — one standalone agent covering several stacks:
 subnet/CIDR needed — the agent resolves service names from inside the cluster).
 
 **On each dev machine** — install straight from the cluster, one line. The
-agent's installer downloads the right binary, puts it on your `PATH` and writes
-a default profile pointing at `PLUG_PUBLIC_HOST`. No GitHub access, no root:
+agent embeds your binary in the installer (no re-download, no GitHub, no root):
 
 ```bash
-ssh -p 2222 get@<cluster-host> install | sh
+ssh -p 2222 get@<cluster-host> install "$(uname -s)-$(uname -m)" | sh
 ```
+
+The cluster address isn't baked in — the agent genuinely can't see the address
+you reached it on (a Swarm routing mesh hides it). So the first `plug` run asks
+for it once (a short wizard) and saves a profile.
 
 The `get` user is passwordless and locked (via `ForceCommand`) to a single
 "hand me a binary / installer" command — see
