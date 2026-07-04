@@ -15,6 +15,12 @@ import { CodeComponent } from '../code/code.component';
     </p>
 
     <h3>Automatic selection</h3>
+    <p>
+      The <a routerLink="/getting-started">installer</a> normally creates a profile for you, named
+      after the cluster host it reads from your <code>ssh get@&lt;host&gt;</code> command — so the
+      wizard below is really just the fallback when no profile exists yet. Install from several
+      clusters and each gets its own profile.
+    </p>
     <ul>
       <li><strong>No profile</strong> → a short wizard asks for a name, the cluster host and the agent port (default <code>2222</code>), saves the profile and uses it immediately.</li>
       <li><strong>One profile</strong> → used as is (plug prints which one, for transparency).</li>

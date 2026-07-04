@@ -561,7 +561,7 @@ func wizard(defaultName string, confirmOverwrite bool) string {
 	if err := os.MkdirAll(plugDir(), 0o700); err != nil {
 		fatal("%v", err)
 	}
-	content := fmt.Sprintf("host = %s\nport = %s\n# subnets = 10.0.9.0/24,10.0.10.0/24   (optional, skips auto-discovery)\n", host, port)
+	content := fmt.Sprintf("host = %s\nport = %s\n", host, port)
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		fatal("%v", err)
 	}

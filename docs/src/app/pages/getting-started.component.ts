@@ -124,9 +124,13 @@ services:
     </p>
     <app-code lang="bash">ssh -p 2222 get@&lt;cluster-host&gt; install | sh</app-code>
     <p>
-      The cluster address isn't baked in — the agent can't see the address you reached it on (a
-      Swarm routing mesh hides it). So the <a routerLink="/profiles">first run asks for it once</a>
-      and saves a profile.
+      The cluster address isn't baked into the agent — it can't see the address you reached it on (a
+      Swarm routing mesh hides it). Instead the installer reads <code>&lt;cluster-host&gt;</code>
+      straight from <em>your</em> <code>ssh</code> command and saves a
+      <a routerLink="/profiles">profile named after that host</a>, so plug is ready right away —
+      install from a second cluster and you get a second profile to run alongside. (Saved the script
+      and ran it later, with no live <code>ssh</code>? The <a routerLink="/profiles">first run</a>
+      asks once, via a short wizard.)
     </p>
     <p>
       No key, no password — a passwordless <code>get</code> user locked to a single "hand me a
@@ -139,11 +143,12 @@ services:
     <h3>3. Run your process against the cluster</h3>
     <app-code lang="bash">plug npm run start:dev</app-code>
     <p>
-      First run: a <a routerLink="/profiles">short wizard</a> asks for the cluster host and port
-      (default <code>2222</code>) and saves a profile. Then plug opens a local SOCKS5 proxy, points
-      your command's environment at it, and runs it. In your code you address services by name —
-      <code>http://pdfbox:8080</code>, <code>mongodb:27017</code> — and they resolve inside the
-      cluster. <kbd>Ctrl-C</kbd> stops your process and closes the proxy. No sudo, ever.
+      plug opens a local SOCKS5 proxy to the cluster profile the installer set up, points your
+      command's environment at it, and runs it — or asks once via a
+      <a routerLink="/profiles">short wizard</a> if no profile exists yet. In your code you address
+      services by name — <code>http://pdfbox:8080</code>, <code>mongodb:27017</code> — and they
+      resolve inside the cluster. <kbd>Ctrl-C</kbd> stops your process and closes the proxy. No sudo,
+      ever.
     </p>
     <p>
       plug is a small <strong>launcher</strong>: on connect it asks the agent which version it

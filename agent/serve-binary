@@ -22,6 +22,31 @@ if [ "$verb" = "install" ]; then
   cat <<'HEAD'
 #!/bin/sh
 set -e
+
+# Pre-create a profile from *your* ssh command, named after the cluster host.
+# The agent can't know which address you reached it on (a routing mesh hides
+# it), but your `ssh ... get@<host>` line does — and while this installer
+# streams, that ssh is still alive in the process table (blocked sending the
+# embedded binaries). So read host/port off it and save ~/.plug/<host>.conf,
+# so the first `plug` run needs no wizard. Naming by host means installing from
+# a second cluster (get@node1) adds a second profile rather than being ignored,
+# so `plug -p node0` and `plug -p node1` can run side by side. Best-effort:
+# silent if it can't tell (first run then falls back to the wizard); never
+# clobbers an existing profile for that host.
+_cmd=$(ps -A -o args= 2>/dev/null | grep 'get@' | grep -w install | grep -v grep | head -n1)
+_host=$(printf '%s\n' "$_cmd" | sed -n 's/.*get@\([A-Za-z0-9._-]*\).*/\1/p')
+_port=$(printf '%s\n' "$_cmd" | sed -n 's/.*-p[ =]*\([0-9][0-9]*\).*/\1/p')
+if [ -n "$_host" ]; then
+  _conf="$HOME/.plug/$_host.conf"
+  if [ -e "$_conf" ]; then
+    _profile="'$_host' (already configured)"
+  else
+    mkdir -p "$HOME/.plug"
+    printf 'host = %s\nport = %s\n' "$_host" "${_port:-2222}" > "$_conf"
+    _profile="'$_host' -> $_host:${_port:-2222}"
+  fi
+fi
+
 os=$(uname -s | tr 'A-Z' 'a-z')
 arch=$(uname -m)
 case "$arch" in x86_64|amd64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; esac
@@ -52,7 +77,12 @@ esac
 chmod +x "$dest/plug"
 echo "plug: installed to $dest/plug"
 case ":$PATH:" in *":$dest:"*) : ;; *) echo "plug: add $dest to your PATH" ;; esac
-echo "plug: run 'plug <your command>' — the first run asks for your cluster"
+if [ -n "$_profile" ]; then
+  echo "plug: profile $_profile"
+  echo "plug: run 'plug <your command>'  (several clusters? 'plug -p <name> <your command>')"
+else
+  echo "plug: run 'plug <your command>' — the first run asks for your cluster"
+fi
 TAIL
   exit 0
 fi

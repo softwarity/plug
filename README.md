@@ -71,9 +71,13 @@ re-download, no GitHub, no root):
 ssh -p 2222 get@<cluster-host> install | sh
 ```
 
-The cluster address isn't baked in — the agent genuinely can't see the address
-you reached it on (a Swarm routing mesh hides it). So the first `plug` run asks
-for it once (a short wizard) and saves a profile.
+The cluster address isn't baked into the agent — it genuinely can't see the
+address you reached it on (a Swarm routing mesh hides it). Instead the installer
+reads `<cluster-host>` straight from *your* `ssh` command and saves a profile
+named after that host, so plug is ready to use right away. Installing from a
+second cluster adds a second profile — so `plug -p node0` and `plug -p node1`
+run side by side. (Saved the script and ran it later, with no live `ssh`? Then
+the first `plug` run asks once, via a short wizard.)
 
 The `get` user is passwordless and locked (via `ForceCommand`) to a single
 "hand me a binary / installer" command — see
