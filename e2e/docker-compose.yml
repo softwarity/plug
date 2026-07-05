@@ -17,6 +17,14 @@ services:
       dockerfile: client.Dockerfile
     depends_on: [agent, web]
     networks: [edge]
+    # The seccomp supervisor (Go coverage) needs, INSIDE a container only, to
+    # install a seccomp user-notifier and process_vm_readv its child. Docker's
+    # default sandbox blocks both. On a real host neither is required — this is a
+    # Docker concession so the e2e can exercise the Go path.
+    security_opt:
+      - seccomp:unconfined
+    cap_add:
+      - SYS_PTRACE
 
 networks:
   edge:

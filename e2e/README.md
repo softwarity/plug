@@ -20,9 +20,15 @@ red **before** you retest by hand.
 ## Cases (the checklist)
 
 - **CONTROL** — curl `web` without plug → unreachable.
-- **CASE 1** (required) — libc (`curl`) reaches `web` by name → **PASS**.
-- **CASE 2** (xfail on Linux) — Go raw-TCP reaches `web` by name → **flips to PASS**
-  when the seccomp supervisor lands (Go bypasses libc + the pure-Go resolver).
+- **CASE 1** (required) — libc (`curl`) reaches `web` by name → **PASS** (the
+  preload hook).
+- **CASE 2** (required) — Go raw-TCP reaches `web` by name → **PASS** (the seccomp
+  supervisor; Go bypasses libc for both the pure-Go resolver and connect).
+
+> CASE 2 needs, **inside a container only**, `seccomp:unconfined` + `SYS_PTRACE`
+> on the client (see `docker-compose.yml`) so the supervisor can install its
+> seccomp user-notifier and `process_vm_readv` its child. On a real host neither
+> is required.
 
 ## Add a case
 

@@ -1,0 +1,3 @@
+# Supervisor binaries are built in the agent Dockerfile, never committed
+# (Linux-only ELF; cross-built with zig for amd64 + arm64).
+plug-seccomp-linux-*

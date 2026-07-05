@@ -61,8 +61,8 @@ func assetName() string {
 	}
 }
 
-// preloadVar is the loader environment variable for the current OS.
-func preloadVar() string {
+// PreloadVar is the loader environment variable for the current OS.
+func PreloadVar() string {
 	if runtime.GOOS == "darwin" {
 		return "DYLD_INSERT_LIBRARIES"
 	}
@@ -151,13 +151,11 @@ func extractLib() (string, error) {
 	return dst, nil
 }
 
-// Env returns the extra environment entries that load the hook into the child
-// and point it at the SOCKS proxy at socksAddr ("host:port"). It returns nil
-// (injection skipped) when disabled, unavailable on this platform, or if
-// extraction fails — in all those cases plug still works through the env-proxy.
-//
-// logf (may be nil) receives a one-line note about what was decided.
-func Env(socksAddr string, logf func(string, ...any)) []string {
+// Prepare extracts the hook library for this platform and returns its path. It
+// returns ok=false — with a one-line note via logf (may be nil) — when injection
+// is disabled, unavailable on this platform, or extraction fails, so the caller
+// falls back to the env-proxy cleanly.
+func Prepare(logf func(string, ...any)) (string, bool) {
 	note := func(format string, a ...any) {
 		if logf != nil {
 			logf(format, a...)
@@ -165,30 +163,45 @@ func Env(socksAddr string, logf func(string, ...any)) []string {
 	}
 	if Disabled() {
 		note("injection disabled (%s set)", EnvVarDisable)
-		return nil
+		return "", false
 	}
 	if !Available() {
 		note("injection unavailable for %s/%s — env-proxy only", runtime.GOOS, runtime.GOARCH)
-		return nil
+		return "", false
 	}
 	lib, err := extractLib()
 	if err != nil {
 		note("injection off: %v", err)
+		return "", false
+	}
+	return lib, true
+}
+
+// Env returns the extra environment entries that load the hook into the child
+// and point it at the SOCKS proxy at socksAddr ("host:port"). It returns nil
+// (injection skipped) when disabled, unavailable on this platform, or if
+// extraction fails — in all those cases plug still works through the env-proxy.
+//
+// logf (may be nil) receives a one-line note about what was decided.
+func Env(socksAddr string, logf func(string, ...any)) []string {
+	lib, ok := Prepare(logf)
+	if !ok {
 		return nil
 	}
-
 	env := []string{
-		preloadVar() + "=" + appendPreload(os.Getenv(preloadVar()), lib),
+		PreloadVar() + "=" + AppendPreload(os.Getenv(PreloadVar()), lib),
 		EnvVarSocks + "=" + socksAddr,
 	}
-	note("injection on — %s (transparent connect/DNS via SOCKS)", filepath.Base(lib))
+	if logf != nil {
+		logf("injection on — %s (transparent connect/DNS via SOCKS)", filepath.Base(lib))
+	}
 	return env
 }
 
-// appendPreload adds lib to an existing loader-list value. macOS and Linux both
+// AppendPreload adds lib to an existing loader-list value. macOS and Linux both
 // separate multiple entries; macOS uses ':' for DYLD_INSERT_LIBRARIES, as does
 // Linux for LD_PRELOAD (space also works on Linux, but ':' is safe on both).
-func appendPreload(existing, lib string) string {
+func AppendPreload(existing, lib string) string {
 	if existing == "" {
 		return lib
 	}

@@ -1,7 +1,8 @@
 // A *Go* client that reaches a service by RAW TCP (net.Dial + manual HTTP) — NOT
-// net/http, so it does NOT honor HTTP_PROXY. This tests the interception PATH
-// (hook), which on Linux Go bypasses (raw syscalls + pure-Go resolver). It is
-// expected to XFAIL on Linux until the seccomp supervisor lands.
+// net/http, so it does NOT honor HTTP_PROXY. Go bypasses libc for both the
+// pure-Go resolver and the raw connect() syscall, so neither the env-proxy nor
+// the preload hook reaches it — only the seccomp supervisor does. This is the
+// case that proves Go coverage on Linux (e2e CASE 2).
 package main
 
 import (

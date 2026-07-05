@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/softwarity/plug/cli/internal/inject"
+	"github.com/softwarity/plug/cli/internal/seccomp"
 	"github.com/softwarity/plug/cli/internal/tunnel"
 )
 
@@ -58,16 +60,18 @@ func coreRunSOCKS(cfg config, cmdArgs []string) int {
 
 	env := proxyEnv(socksAddr, httpAddr)
 
-	// N1: transparent connect()/DNS interception. On top of the proxy env, inject
-	// a native hook into the child so libc-based runtimes (Node, JVM, Python,
-	// curl…) route EVERY outbound TCP connection and DNS lookup through the SOCKS
-	// proxy above — cluster-side resolution, no per-service forward. This is
-	// additive; the proxy env AND the forwards below still apply, and anything the
-	// hook can't reach (Go/static binaries, non-TCP, SIP'd system binaries) falls
-	// back to them. Disable with PLUG_NO_INJECT=1; a no-op where unavailable.
-	if extra := inject.Env(socksAddr, info); extra != nil {
-		env = append(env, extra...)
-	}
+	// N1: transparent connect()/DNS interception. On top of the proxy env, load a
+	// native hook into the child so libc runtimes (Node, JVM, Python, curl…) route
+	// EVERY outbound TCP connection and DNS lookup through the SOCKS proxy above —
+	// cluster-side resolution, no per-service forward. On Linux this is paired with
+	// a rootless seccomp supervisor that extends the SAME coverage to Go /
+	// statically-linked binaries (which bypass libc for both resolution and
+	// connect). Both are additive and degrade to a no-op where unavailable; the
+	// proxy env AND the forwards below still apply, and anything neither reaches
+	// (non-TCP, SIP'd system binaries) falls back to them. Disable with
+	// PLUG_NO_INJECT=1 / PLUG_NO_SECCOMP=1.
+	cmdArgs, extra := setupInjection(cmdArgs, socksAddr)
+	env = append(env, extra...)
 
 	// Per-session port-forwards for raw-TCP drivers that ignore both proxies.
 	for _, f := range cfg.forwards {
@@ -99,6 +103,42 @@ func startProxy(serve func(ready chan<- string) error) (string, error) {
 		return addr, nil
 	case err := <-errc:
 		return "", err
+	}
+}
+
+// setupInjection loads the transparent hook and, on Linux, wraps the command
+// with the seccomp supervisor that extends coverage to Go / statically-linked
+// binaries. It returns the (possibly wrapped) command and the extra environment.
+//
+// macOS / Linux-without-supervisor: the command is unchanged and the env carries
+// the loader var (DYLD_INSERT_LIBRARIES / LD_PRELOAD) + PLUG_SOCKS, as before.
+//
+// Linux-with-supervisor: the command becomes `plug-seccomp <cmd>…` and the env
+// carries PLUG_SOCKS plus PLUG_PRELOAD — the hook the supervisor re-injects into
+// the CHILD only. We deliberately do NOT set LD_PRELOAD on the supervisor itself,
+// so its own resolver/SOCKS calls stay real (unhooked); it sets LD_PRELOAD for
+// the app right before exec.
+func setupInjection(cmdArgs []string, socksAddr string) ([]string, []string) {
+	lib, ok := inject.Prepare(info)
+	if !ok {
+		return cmdArgs, nil
+	}
+	preload := inject.AppendPreload(os.Getenv(inject.PreloadVar()), lib)
+
+	if runtime.GOOS == "linux" && seccomp.Available() {
+		if sup, ok := seccomp.Prepare(info); ok {
+			info("injection on — %s + seccomp Go-coverage supervisor", filepath.Base(lib))
+			return append([]string{sup}, cmdArgs...), []string{
+				seccomp.EnvVarPreload + "=" + preload,
+				inject.EnvVarSocks + "=" + socksAddr,
+			}
+		}
+	}
+
+	info("injection on — %s (transparent connect/DNS via SOCKS)", filepath.Base(lib))
+	return cmdArgs, []string{
+		inject.PreloadVar() + "=" + preload,
+		inject.EnvVarSocks + "=" + socksAddr,
 	}
 }
 

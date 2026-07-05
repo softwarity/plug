@@ -1,19 +1,36 @@
 # Release Notes
 
-## NEXT RELEASE
+## NEXT RELEASE — toward 1.0.0
 
-- **E2E test harness + CI** (`e2e/` + `.github/workflows/e2e.yml`): stands up a
-  mini-cluster in Docker and asserts cluster services are reachable **by name**
-  under plug — the regression guard, re-run on every push (free, public repo).
+- **Full process coverage — Go / statically-linked binaries are now covered on
+  Linux** (`cli/internal/seccomp`). A rootless seccomp *user-notifier* traps the
+  child's `connect(2)` at the kernel boundary and reroutes cluster connections
+  through the same SOCKS proxy — so a Go binary, which bypasses libc for **both**
+  name resolution (its pure-Go resolver) and the connection (a raw syscall),
+  reaches cluster services **by name**, exactly like a libc app. No root, no
+  daemon, no TUN: just an unprivileged seccomp filter + `process_vm_readv` on our
+  own child. The supervisor degrades to a transparent `exec` wrapper wherever
+  seccomp is denied, so wrapping is always safe. Opt out with `PLUG_NO_SECCOMP=1`.
+  - **Coverage matrix.** Go on **macOS**: already covered (Go uses libSystem →
+    the preload hook catches it). Go on **Linux**: covered (this supervisor).
+    Native **Windows** (`ws2_32`): planned — needs a CI runner to build/test.
+  - An **embedded DNS resolver** answers the child's own lookups so it never
+    needs `/etc/resolv.conf` rewritten: single-label → cluster (fake IP, routed
+    by name via SOCKS), dotted → resolved for real, `localhost` → loopback, AAAA
+    → answered empty so it falls back to IPv4. The split-horizon and
+    direct/external connectivity are preserved (loopback and real IPs are let
+    through untouched).
+- **E2E harness now proves it** (`e2e/` + `.github/workflows/e2e.yml`): the
+  mini-cluster asserts cluster services are reachable **by name** under plug for
+  **both** a libc client (`curl`) and a **Go** raw-TCP client (`goraw`) — both
+  required, both green. The regression guard, re-run on every push (free, public
+  repo).
 - Publishing is **CI-only**: the local Makefile was removed (the multi-arch
   image is built and pushed exclusively by CI; local builds are plain
   `go build` / `docker build`).
 - Docs: the `forward =` mechanism clarified — it rewrites an env var for
   **Go/statically-linked** apps the transparent hook can't reach, not for libc
   drivers like `amqplib` (which the hook already handles by name).
-- Toward **1.0.0 — full process coverage** (proofs in `experiments/`): Go is
-  already covered on **macOS** (via libSystem), and Linux Go is **proven** with a
-  seccomp interceptor (integration pending); native Windows via `ws2_32` planned.
 
 ---
 

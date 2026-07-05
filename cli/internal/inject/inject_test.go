@@ -73,10 +73,10 @@ func TestEnvShape(t *testing.T) {
 
 // TestAppendPreload keeps any pre-existing loader list and appends ours.
 func TestAppendPreload(t *testing.T) {
-	if got := appendPreload("", "/x/lib.so"); got != "/x/lib.so" {
+	if got := AppendPreload("", "/x/lib.so"); got != "/x/lib.so" {
 		t.Fatalf("empty: got %q", got)
 	}
-	if got := appendPreload("/a/b.so", "/x/lib.so"); got != "/a/b.so:/x/lib.so" {
+	if got := AppendPreload("/a/b.so", "/x/lib.so"); got != "/a/b.so:/x/lib.so" {
 		t.Fatalf("append: got %q", got)
 	}
 }
