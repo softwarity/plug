@@ -1,0 +1,101 @@
+# Matrix e2e. Each protocol is one CI job: bring up `agent` + ONE service, then
+# run each language client UNDER plug against it, asserting reach BY NAME.
+#
+# Services live on `internal` (invisible to clients); clients on `edge` see only
+# the agent — so only plug can make a service reachable. matrix.sh starts just
+# the service a protocol needs, then `run`s the clients.
+name: plug-e2e
+
+services:
+  agent:
+    image: softwarity/plug:e2e
+    networks: [edge, internal]
+
+  # ---- cluster services (started selectively per protocol) ----
+  httpbin:
+    image: mccutchen/go-httpbin:v2.15.0 # multi-arch drop-in httpbin (listens :8080)
+    networks: [internal]
+
+  postgres:
+    image: postgres:16-alpine
+    environment: { POSTGRES_USER: plug, POSTGRES_PASSWORD: plug, POSTGRES_DB: plug }
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U plug -d plug"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  mongo:
+    image: mongo:7
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  rabbitmq:
+    image: rabbitmq:3
+    environment: { RABBITMQ_DEFAULT_USER: plug, RABBITMQ_DEFAULT_PASS: plug }
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    volumes:
+      - ./services/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    networks: [internal]
+
+  grpc:
+    build: { context: ., dockerfile: services/grpc/Dockerfile }
+    networks: [internal]
+
+  # ---- language clients (run on demand: `<proto> <host:port>` as args) ----
+  # Each runs its command UNDER plug against the cluster service by name. The
+  # seccomp flags are only needed INSIDE a container (a real host needs neither);
+  # they let plug's Go-coverage supervisor install a user-notifier + read its child.
+  client-go:
+    build: { context: ., dockerfile: clients/go/Dockerfile }
+    networks: [edge]
+    environment: { PLUG_HOOK_DEBUG: "1" }
+    security_opt: [seccomp:unconfined]
+    cap_add: [SYS_PTRACE]
+
+  client-node:
+    build: { context: ., dockerfile: clients/node/Dockerfile }
+    networks: [edge]
+    environment: { PLUG_HOOK_DEBUG: "1" }
+    security_opt: [seccomp:unconfined]
+    cap_add: [SYS_PTRACE]
+
+  client-python:
+    build: { context: ., dockerfile: clients/python/Dockerfile }
+    networks: [edge]
+    environment: { PLUG_HOOK_DEBUG: "1" }
+    security_opt: [seccomp:unconfined]
+    cap_add: [SYS_PTRACE]
+
+  client-java:
+    build: { context: ., dockerfile: clients/java/Dockerfile }
+    networks: [edge]
+    environment: { PLUG_HOOK_DEBUG: "1" }
+    security_opt: [seccomp:unconfined]
+    cap_add: [SYS_PTRACE]
+
+networks:
+  edge:
+  internal:

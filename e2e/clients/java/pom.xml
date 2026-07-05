@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>io.plug.e2e</groupId>
+  <artifactId>client</artifactId>
+  <version>1.0.0</version>
+  <packaging>jar</packaging>
+
+  <!--
+    The Java "developer laptop" e2e client: reach a cluster service BY NAME, by
+    protocol, using the language's NATURAL driver. Invoked (under plug) as:
+        java -jar /app/client.jar <proto> <host:port>
+    plug sets JAVA_TOOL_OPTIONS=-DsocksProxyHost=... -DsocksProxyPort=... so the
+    JVM routes all TCP through plug's SOCKS proxy automatically. This code does
+    NOT configure any proxy; it just connects to <host:port> by name.
+  -->
+
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+    <postgresql.version>42.7.4</postgresql.version>
+    <jedis.version>5.2.0</jedis.version>
+    <mongo.version>5.2.1</mongo.version>
+    <amqp.version>5.22.0</amqp.version>
+    <paho.version>1.2.5</paho.version>
+    <grpc.version>1.68.1</grpc.version>
+    <annotation.version>1.3.2</annotation.version>
+    <shade.version>3.6.0</shade.version>
+  </properties>
+
+  <dependencies>
+    <!-- postgres: JDBC SELECT 1 -->
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+      <version>${postgresql.version}</version>
+    </dependency>
+
+    <!-- redis: PING -->
+    <dependency>
+      <groupId>redis.clients</groupId>
+      <artifactId>jedis</artifactId>
+      <version>${jedis.version}</version>
+    </dependency>
+
+    <!-- mongo: admin {ping:1} -->
+    <dependency>
+      <groupId>org.mongodb</groupId>
+      <artifactId>mongodb-driver-sync</artifactId>
+      <version>${mongo.version}</version>
+    </dependency>
+
+    <!-- amqp: queueDeclare / publish / basicGet -->
+    <dependency>
+      <groupId>com.rabbitmq</groupId>
+      <artifactId>amqp-client</artifactId>
+      <version>${amqp.version}</version>
+    </dependency>
+
+    <!-- mqtt: paho v3 pub/sub -->
+    <dependency>
+      <groupId>org.eclipse.paho</groupId>
+      <artifactId>org.eclipse.paho.client.mqttv3</artifactId>
+      <version>${paho.version}</version>
+    </dependency>
+
+    <!-- grpc: grpc.health.v1.Health/Check -->
+    <dependency>
+      <groupId>io.grpc</groupId>
+      <artifactId>grpc-netty-shaded</artifactId>
+      <version>${grpc.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>io.grpc</groupId>
+      <artifactId>grpc-protobuf</artifactId>
+      <version>${grpc.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>io.grpc</groupId>
+      <artifactId>grpc-stub</artifactId>
+      <version>${grpc.version}</version>
+    </dependency>
+    <!-- grpc-services: built-in Health stubs (HealthGrpc, HealthCheckRequest/Response) -->
+    <dependency>
+      <groupId>io.grpc</groupId>
+      <artifactId>grpc-services</artifactId>
+      <version>${grpc.version}</version>
+    </dependency>
+    <!-- generated gRPC stubs reference javax.annotation.Generated -->
+    <dependency>
+      <groupId>javax.annotation</groupId>
+      <artifactId>javax.annotation-api</artifactId>
+      <version>${annotation.version}</version>
+    </dependency>
+
+    <!-- http via built-in java.net.http.HttpClient (no dependency) -->
+  </dependencies>
+
+  <build>
+    <finalName>client</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>${shade.version}</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <!-- keep finalName so output is target/client.jar (no *-shaded suffix) -->
+              <shadedArtifactAttached>false</shadedArtifactAttached>
+              <createDependencyReducedPom>false</createDependencyReducedPom>
+              <transformers>
+                <transformer
+                    implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>io.plug.e2e.Client</mainClass>
+                </transformer>
+                <!-- gRPC/Netty ship SPI service files that must be merged, not overwritten -->
+                <transformer
+                    implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+              </transformers>
+              <filters>
+                <filter>
+                  <!-- drop signature files from signed jars so the shaded jar stays valid -->
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <exclude>META-INF/*.SF</exclude>
+                    <exclude>META-INF/*.DSA</exclude>
+                    <exclude>META-INF/*.RSA</exclude>
+                    <exclude>module-info.class</exclude>
+                  </excludes>
+                </filter>
+              </filters>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

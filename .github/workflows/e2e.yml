@@ -1,8 +1,10 @@
 name: E2E
 
-# Stands up a mini-cluster (agent + services) in Docker and asserts that plug
-# makes cluster services reachable BY NAME from a client that otherwise can't
-# see them. This is the regression guard: every push re-runs the full matrix.
+# Matrix e2e: one job PER PROTOCOL brings up `agent` + that one service, then
+# runs every language client (Go/Node/Python/Java) UNDER plug against it,
+# asserting the service is reachable BY NAME. The agent, client and gRPC images
+# are built ONCE and shared to the protocol jobs via an artifact. Each job writes
+# its grid to the run Summary; a final `grid` job renders the full matrix.
 on:
   push:
     branches: [main]
@@ -10,9 +12,89 @@ on:
   workflow_dispatch:
 
 jobs:
-  e2e:
+  build:
+    name: Build images
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Run the e2e harness
-        run: bash e2e/run.sh
+      - name: Build agent image (plug + hook + seccomp supervisor)
+        run: docker build -f agent/Dockerfile -t softwarity/plug:e2e .
+      - name: Build client + gRPC images
+        working-directory: e2e
+        run: docker compose -f compose.yml build
+      - name: Save all built images
+        run: |
+          docker save softwarity/plug:e2e plug-e2e-grpc \
+            plug-e2e-client-go plug-e2e-client-node plug-e2e-client-python plug-e2e-client-java \
+            | gzip > /tmp/e2e-images.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: e2e-images
+          path: /tmp/e2e-images.tar.gz
+          retention-days: 1
+
+  matrix:
+    name: ${{ matrix.proto }}
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        proto: [http, postgres, redis, mongo, amqp, mqtt, grpc]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v7
+        with:
+          name: e2e-images
+          path: /tmp
+      - name: Load prebuilt images
+        run: gunzip -c /tmp/e2e-images.tar.gz | docker load
+      - name: ${{ matrix.proto }} — every client under plug, by name
+        working-directory: e2e
+        env:
+          E2E_BUILD: "0" # images are preloaded; skip all builds
+          E2E_RESULT_DIR: results
+        run: bash matrix.sh ${{ matrix.proto }}
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: e2e-result-${{ matrix.proto }}
+          path: e2e/results/*.txt
+          retention-days: 1
+
+  grid:
+    name: Matrix grid
+    needs: matrix
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: results
+          pattern: e2e-result-*
+          merge-multiple: true
+      - name: Render the coverage matrix into the run summary
+        run: |
+          langs="go node python java"
+          protos="http postgres redis mongo amqp mqtt grpc"
+          {
+            echo "## plug e2e — coverage matrix (reachable BY NAME, under plug)"
+            echo
+            printf "| client |"; for p in $protos; do printf " %s |" "$p"; done; echo
+            printf "|---|";      for p in $protos; do printf "---|"; done; echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          for l in $langs; do
+            row="| **$l** |"
+            for p in $protos; do
+              v=$(grep -ho "\b$l=[A-Z?]*" "results/$p.txt" 2>/dev/null | cut -d= -f2)
+              case "$v" in
+                PASS) cell="✅" ;;
+                "")   cell="·"  ;;
+                *)    cell="❌" ;;
+              esac
+              [ "$l:$p" = "java:grpc" ] && [ "$v" != PASS ] && cell="⚠️"
+              row="$row $cell |"
+            done
+            echo "$row" >> "$GITHUB_STEP_SUMMARY"
+          done
+          { echo; echo "✅ pass · ⚠️ known gap · ❌ fail · \`·\` not run"; } >> "$GITHUB_STEP_SUMMARY"

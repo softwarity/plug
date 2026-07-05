@@ -1,37 +1,45 @@
-# e2e — full-path regression tests
+# e2e — coverage matrix
 
-Stands up a mini-cluster in Docker and runs client apps **under plug** against
-it, asserting cluster services are reachable **by name**. Runs locally and in CI
-(`.github/workflows/e2e.yml` — free on this public repo, on every push/PR).
+Proves that a client app, launched **under plug**, reaches a cluster service **by
+its name** — across a matrix of **languages × protocols**. This is the regression
+guard: if a change breaks a covered cell, the suite goes red before you retest by
+hand.
 
-This is the regression guard: if a change breaks a covered case, the suite goes
-red **before** you retest by hand.
+## Shape
 
-## Run
+- **One CI job per protocol** (`.github/workflows/e2e.yml`, matrix): each job
+  stands up `agent` + **one** service, then runs **every language client** under
+  plug against it. Isolated, parallel, and a red cell says exactly which
+  protocol/language broke. Adding a protocol = one more job; no heavy cluster.
+- **Clients** (`clients/<lang>/`) — Go, Node, Python, Java. Each is one small
+  program: `client <proto> <host:port>`, using the language's **natural driver**
+  for that protocol, doing the minimal op that proves the connection (`SELECT 1`,
+  `PING`, publish/consume, health check…) and printing `E2E-OK <proto>`.
+- **Services** — stock images (httpbin, postgres, redis, mongo, rabbitmq,
+  mosquitto) + a tiny gRPC health server (`services/grpc/`). On `internal` only,
+  so a client (on `edge`) can reach them **only** through plug.
 
-    bash e2e/run.sh      # builds the agent from source, brings it up, asserts, tears down
+## Protocols
 
-## Topology
+`http` · `postgres` · `redis` · `mongo` · `amqp` · `mqtt` · `grpc` — a
+representative of each connection *behaviour*: short req/resp, long binary
+session, messaging, pub/sub, HTTP/2 multiplexing.
 
-- `client` (edge net) — the "laptop": sees `agent`, **not** `web`.
-- `agent`  (edge + internal) — the plug agent (sshd + hook binaries).
-- `web`    (internal) — a cluster service, reachable **only** through plug.
+## Run locally
 
-## Cases (the checklist)
+    bash e2e/run.sh                    # the whole matrix (every protocol)
+    bash e2e/run.sh http postgres      # a subset of protocols
+    E2E_LANGS="go java" bash e2e/matrix.sh redis   # one protocol, some clients
 
-- **CONTROL** — curl `web` without plug → unreachable.
-- **CASE 1** (required) — libc (`curl`) reaches `web` by name → **PASS** (the
-  preload hook).
-- **CASE 2** (required) — Go raw-TCP reaches `web` by name → **PASS** (the seccomp
-  supervisor; Go bypasses libc for both the pure-Go resolver and connect).
+The first run builds the agent image (`docker rmi softwarity/plug:e2e` to force a
+rebuild after changing plug itself). Inside a container the clients need
+`seccomp:unconfined` + `SYS_PTRACE` (in `compose.yml`) for the Go-coverage
+supervisor — a real host needs neither.
 
-> CASE 2 needs, **inside a container only**, `seccomp:unconfined` + `SYS_PTRACE`
-> on the client (see `docker-compose.yml`) so the supervisor can install its
-> seccomp user-notifier and `process_vm_readv` its child. On a real host neither
-> is required.
+## Known gaps
 
-## Add a case
-
-One client (any language) + one assertion block in `run-cases.sh`. Required
-cases must PASS (they fail the suite); known gaps are XFAIL (warn only). The
-matrix here IS the "don't forget a case" checklist.
+Cells in `E2E_XFAIL` (default `java:grpc python:grpc`) warn instead of failing —
+these are the **shared-fake-table gap**: gRPC clients whose name resolution and
+`connect()` go through different interception layers (Netty native-epoll,
+c-ares), which don't yet share plug's fake-IP table. Fix pending; see
+RELEASE_NOTES.

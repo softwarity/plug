@@ -20,11 +20,22 @@
     → answered empty so it falls back to IPv4. The split-horizon and
     direct/external connectivity are preserved (loopback and real IPs are let
     through untouched).
-- **E2E harness now proves it** (`e2e/` + `.github/workflows/e2e.yml`): the
-  mini-cluster asserts cluster services are reachable **by name** under plug for
-  **both** a libc client (`curl`) and a **Go** raw-TCP client (`goraw`) — both
-  required, both green. The regression guard, re-run on every push (free, public
-  repo).
+- **E2E coverage matrix** (`e2e/` + `.github/workflows/e2e.yml`): a **languages ×
+  protocols** grid — Go / Node / Python / Java clients, each with its natural
+  driver, reaching **httpbin, postgres, redis, mongo, rabbitmq (AMQP), mosquitto
+  (MQTT), gRPC** cluster services **by name** under plug. One CI job per protocol
+  (isolated, parallel); the run Summary renders the full grid. **26/28 green**;
+  the 2 gaps are the shared-fake-table item below.
+- **Fix — the app-level proxy env no longer fights the hook on Linux.** When the
+  hook + supervisor are active they already intercept every `connect()`, so plug
+  no longer also sets `HTTP_PROXY` / `-DsocksProxyHost` there: those made some JVM
+  drivers hand the *fake* IP to the proxy (unroutable) and broke raw-TCP clients.
+  Rerouting is now the hook/supervisor's job alone. (macOS unchanged.)
+- **Known gap — Netty / async-DNS gRPC clients** (`java:grpc`, `python:grpc`):
+  when a client resolves the name through one layer (the libc hook, or c-ares) but
+  `connect()`s through the other (Netty's native epoll → the supervisor), the two
+  layers' **separate** fake-IP tables can't map it back. Fix in progress: a
+  **shared fake-IP table** between hook and supervisor.
 - Publishing is **CI-only**: the local Makefile was removed (the multi-arch
   image is built and pushed exclusively by CI; local builds are plain
   `go build` / `docker build`).

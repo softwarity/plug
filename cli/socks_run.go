@@ -58,20 +58,32 @@ func coreRunSOCKS(cfg config, cmdArgs []string) int {
 		return 1
 	}
 
-	env := proxyEnv(socksAddr, httpAddr)
-
-	// N1: transparent connect()/DNS interception. On top of the proxy env, load a
-	// native hook into the child so libc runtimes (Node, JVM, Python, curl…) route
-	// EVERY outbound TCP connection and DNS lookup through the SOCKS proxy above —
-	// cluster-side resolution, no per-service forward. On Linux this is paired with
-	// a rootless seccomp supervisor that extends the SAME coverage to Go /
-	// statically-linked binaries (which bypass libc for both resolution and
-	// connect). Both are additive and degrade to a no-op where unavailable; the
-	// proxy env AND the forwards below still apply, and anything neither reaches
-	// (non-TCP, SIP'd system binaries) falls back to them. Disable with
+	// N1: transparent connect()/DNS interception. Load a native hook into the
+	// child so libc runtimes (Node, JVM, Python, curl…) route EVERY outbound TCP
+	// connection and DNS lookup through the SOCKS proxy — cluster-side resolution,
+	// no per-service forward. On Linux this is paired with a rootless seccomp
+	// supervisor that extends the SAME coverage to Go / statically-linked binaries
+	// (which bypass libc for both resolution and connect). Disable with
 	// PLUG_NO_INJECT=1 / PLUG_NO_SECCOMP=1.
-	cmdArgs, extra := setupInjection(cmdArgs, socksAddr)
-	env = append(env, extra...)
+	cmdArgs, inj := setupInjection(cmdArgs, socksAddr)
+
+	var env []string
+	if inj != nil && runtime.GOOS == "linux" {
+		// Linux: the hook + the seccomp supervisor intercept every connect()
+		// transparently, so the app-level proxy env is redundant here — and it
+		// actively interferes with some JVM runtimes: -DsocksProxyHost makes the
+		// JVM hand the (hook-minted) fake IP to the proxy, which can't route it.
+		// Rely on the hook/supervisor; only pin loopback direct.
+		env = append(os.Environ(),
+			"NO_PROXY=127.0.0.1,localhost,::1", "no_proxy=127.0.0.1,localhost,::1")
+		env = append(env, inj...)
+	} else {
+		// macOS (DYLD hook, no supervisor) or no injection at all: keep the
+		// env-proxy as a fallback next to whatever injection is available (inj is
+		// nil when the hook is unavailable here).
+		env = proxyEnv(socksAddr, httpAddr)
+		env = append(env, inj...)
+	}
 
 	// Per-session port-forwards for raw-TCP drivers that ignore both proxies.
 	for _, f := range cfg.forwards {

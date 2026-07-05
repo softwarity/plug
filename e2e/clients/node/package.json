@@ -1,0 +1,20 @@
+{
+  "name": "plug-e2e-node-client",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Node.js e2e client for plug: reach a cluster service BY NAME, by protocol, using the language's natural driver.",
+  "type": "commonjs",
+  "main": "client.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "1.14.4",
+    "@grpc/proto-loader": "0.8.1",
+    "amqplib": "0.10.5",
+    "mongodb": "6.13.0",
+    "mqtt": "5.15.1",
+    "pg": "8.14.1",
+    "redis": "4.7.1"
+  }
+}
