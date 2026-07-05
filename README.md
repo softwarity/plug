@@ -94,11 +94,16 @@ the first `plug` run asks once, via a short wizard.)
 
 The `get` user is passwordless and locked (via `ForceCommand`) to a single
 "hand me a binary / installer" command — see
-[Security model](https://softwarity.github.io/plug/#/security). Or build from
-source with `make cli && make install`.
+[Security model](https://softwarity.github.io/plug/#/security). Or build the CLI
+from source: `go build -o plug ./cli`.
 
 That's the whole install — **no other dependency, no root**. The binary is a
 single static Go executable (~6&nbsp;MB).
+
+> **Building & publishing.** Local build: `go build -o plug ./cli` (CLI) or
+> `docker build -f agent/Dockerfile -t plug-local .` (agent image — local
+> testing only). The published multi-arch image comes **only from CI** (GitHub
+> Actions, on version tags) — it is never `docker push`ed by hand.
 
 ### Versions — the launcher model
 
@@ -130,9 +135,10 @@ A profile is a plain file you can also edit by hand:
 # ~/.plug/staging.conf
 host = swarm-node.example.com
 port = 2222
-# fallback for what the injected hook can't reach (Go/static binaries, non-TCP):
-# plug forwards a local port and rewrites the address into the child's env:
-forward = AMQP_URL=amqp://rabbitmq:5672, MONGO_URL=mongodb://mongodb:27017
+# ONLY for a Go/static binary the hook can't intercept, that reads its target
+# from the env (a libc app — Node/JVM/Python — needs nothing). plug rewrites the
+# env var to a local forwarded port:
+forward = DATABASE_URL=postgres://odb:5432/appdb
 ```
 
 `--host`/`--port` (or `$PLUG_HOST`/`$PLUG_PORT`) bypass profiles entirely.

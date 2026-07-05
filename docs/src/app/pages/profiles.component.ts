@@ -41,8 +41,9 @@ agent port [2222]:
     <app-code lang="text"># ~/.plug/staging.conf
 host = swarm-node.example.com
 port = 2222
-# fallback for what the injected hook can't reach (Go/static binaries, non-TCP):
-forward = AMQP_URL=amqp://rabbitmq:5672, MONGO_URL=mongodb://mongodb:27017</app-code>
+# ONLY for a Go/statically-linked binary the hook can't intercept, that reads
+# its target from the env (a libc app — Node, JVM, Python — needs nothing):
+forward = DATABASE_URL=postgres://odb:5432/appdb</app-code>
 
     <h3>Port-forwards — the escape hatch</h3>
     <p>
@@ -50,12 +51,14 @@ forward = AMQP_URL=amqp://rabbitmq:5672, MONGO_URL=mongodb://mongodb:27017</app-
       routes any <strong>libc</strong> process's TCP by name (Node, the JVM, Python…), so
       <code>amqplib</code>/<code>pg</code>/<code>redis</code> need nothing. Port-forwards are the
       fallback for what the hook can't reach — <strong>Go</strong>/statically-linked binaries (they
-      bypass libc), non-TCP, or when injection is disabled. Declare one as
-      <code>forward = ENV=url</code>: plug opens a per-session local port to the cluster service and
-      sets <code>ENV</code> to the local address, preserving the scheme and any credentials.
+      bypass libc), non-TCP, or when injection is disabled. Unlike the transparent hook, a forward
+      <strong>rewrites an env var</strong> (it does not intercept): declare
+      <code>forward = ENV=url</code>, and plug opens a per-session local port to the cluster service
+      and sets <code>ENV</code> to that local address (scheme and credentials preserved). It only
+      helps an app that reads its target from <code>ENV</code> — a hardcoded address won't use it.
     </p>
-    <app-code lang="text">forward = AMQP_URL=amqp://user:pass@rabbitmq:5672/vhost
-# child sees:  AMQP_URL=amqp://user:pass@127.0.0.1:54210/vhost</app-code>
+    <app-code lang="text">forward = DATABASE_URL=postgres://user:pass@odb:5432/appdb
+# the Go child sees:  DATABASE_URL=postgres://user:pass@127.0.0.1:54210/appdb</app-code>
     <p>
       Your 12-factor app reads its connection string from the env, so no code changes. Each session
       gets its own ports, so several clusters never collide.
