@@ -2,6 +2,12 @@
 
 ## NEXT RELEASE
 
+- Rootless `plug uninstall` — no sudo unless the retired root daemon left files.
+- Install one-liner skips the host-key check (the agent regenerates its key at
+  each start; it is not a secret) — matching what plug does internally, so a
+  redeployed agent no longer breaks reinstalls.
+- Local `make` builds carry the git rev (`dev+<rev>`), like CI.
+
 ---
 
 ## 0.1.0
