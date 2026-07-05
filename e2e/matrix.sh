@@ -81,7 +81,7 @@ echo "###############################################"
 # aggregate grid (read back by the `grid` job).
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   {
-    echo "### \`$proto\` — service \`$svc\`"
+    echo "### \`$proto\` — service \`$svc\`${E2E_MODE_LABEL:+ · ${E2E_MODE_LABEL} mode}"
     echo "| client | result |"
     echo "|---|---|"
     for l in "${langs[@]}"; do
@@ -94,8 +94,9 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
 fi
 if [ -n "${E2E_RESULT_DIR:-}" ]; then
   mkdir -p "$E2E_RESULT_DIR"
+  # E2E_RESULT_TAG keeps per-mode results from colliding (e.g. tun-grpc vs rootless-grpc).
   line="$proto"; for l in "${langs[@]}"; do line="$line $l=${result[$l]:-?}"; done
-  echo "$line" > "$E2E_RESULT_DIR/$proto.txt"
+  echo "$line" > "$E2E_RESULT_DIR/${E2E_RESULT_TAG:-$proto}.txt"
 fi
 
 $DC down -v --remove-orphans >/dev/null 2>&1
