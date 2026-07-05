@@ -153,16 +153,14 @@ func doAMQP(target string) {
 			return err
 		}
 		defer ch.Close()
-		q, err := ch.QueueDeclare("plug-e2e", false, true, false, false, nil)
-		if err != nil {
-			return err
-		}
-		if err := ch.PublishWithContext(context.Background(), "", q.Name, false, false,
+		// "plug-e2e" is pre-declared by the broker's definitions.json — clients
+		// don't declare at runtime (RabbitMQ 4 rejects some runtime declares).
+		if err := ch.PublishWithContext(context.Background(), "", "plug-e2e", false, false,
 			amqp.Publishing{Body: []byte("ping")}); err != nil {
 			return err
 		}
 		time.Sleep(200 * time.Millisecond)
-		msg, got, err := ch.Get(q.Name, true)
+		msg, got, err := ch.Get("plug-e2e", true)
 		if err != nil {
 			return err
 		}

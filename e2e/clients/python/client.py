@@ -136,7 +136,8 @@ def do_amqp(target):
         conn = pika.BlockingConnection(params)
         try:
             ch = conn.channel()
-            ch.queue_declare(queue="plug-e2e", durable=False, auto_delete=True)
+            # "plug-e2e" is pre-declared by the broker's definitions.json — no
+            # runtime queue_declare (RabbitMQ 4 rejects some runtime declares).
             ch.basic_publish(exchange="", routing_key="plug-e2e", body=b"ping")
             time.sleep(0.2)
             method, _props, body = ch.basic_get(queue="plug-e2e", auto_ack=True)

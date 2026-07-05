@@ -24,24 +24,29 @@
   protocols** grid — Go / Node / Python / Java clients, each with its natural
   driver, reaching **httpbin, postgres, redis, mongo, rabbitmq (AMQP), mosquitto
   (MQTT), gRPC** cluster services **by name** under plug. One CI job per protocol
-  (isolated, parallel); the run Summary renders the full grid. **26/28 green**;
-  the 2 gaps are the shared-fake-table item below.
+  (isolated, parallel); the run Summary renders the full grid. Services track
+  current majors (postgres 18, mongo 8, redis 8, rabbitmq 4…). **26/28 green**;
+  the 2 gaps are the gRPC item below.
 - **Fix — the app-level proxy env no longer fights the hook on Linux.** When the
   hook + supervisor are active they already intercept every `connect()`, so plug
   no longer also sets `HTTP_PROXY` / `-DsocksProxyHost` there: those made some JVM
   drivers hand the *fake* IP to the proxy (unroutable) and broke raw-TCP clients.
   Rerouting is now the hook/supervisor's job alone. (macOS unchanged.)
 - **Known gaps — gRPC on Java and Python** (`java:grpc`, `python:grpc`; the other
-  26 cells pass). plug routes both **by name** correctly — these are two distinct,
-  hard cases specific to gRPC's HTTP/2 stacks:
-  - **Java (Netty):** plug splices an intercepted connection with `dup2()`, which
-    invalidates the fd's epoll registration — and Netty arms its event loop for
-    the fd *before* `connect()` completes, so it never sees the connection come
-    up. Go / Node / libc drivers register after connect, so they're fine.
-  - **Python (grpcio):** it resolves names via **c-ares**, which sends DNS over
-    UDP with `sendto()` to the real nameserver — bypassing both the getaddrinfo
-    hook and the supervisor's connect-trap — so a cluster name never reaches
-    plug's resolver.
+  26 cells pass). Both are **hard**: gRPC's HTTP/2 stacks arm their event loop
+  (epoll) on the fd *before* `connect()` completes, and plug's only ways to hand
+  over the tunnelled connection — `dup2()` in the hook, `ADDFD` in the supervisor
+  — swap the fd's underlying file, stranding that registration. Go and Node
+  register *after* connect, so they're fine. Fixes were tried and don't hold:
+  - **Java (Netty):** negotiating on the app's *own* fd (no `dup2`) would keep the
+    registration — but Java 21's `NioSocketImpl` makes **every** JVM socket
+    non-blocking, so that path strands the whole JVM (JDBC, Jedis…), not just
+    Netty. Reverted.
+  - **Python (grpcio):** `GRPC_DNS_RESOLVER=native` fixes its c-ares DNS bypass,
+    but grpcio then does a **raw** connect → the supervisor's `ADDFD` hits the
+    same epoll-strand. Reverted.
+  - A real fix likely needs a different hand-off (e.g. per-runtime epoll
+    re-registration), tracked for later.
 - Publishing is **CI-only**: the local Makefile was removed (the multi-arch
   image is built and pushed exclusively by CI; local builds are plain
   `go build` / `docker build`).

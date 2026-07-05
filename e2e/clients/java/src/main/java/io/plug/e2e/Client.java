@@ -198,8 +198,8 @@ public final class Client {
             factory.setConnectionTimeout(TIMEOUT_MS);
             try (var conn = factory.newConnection();
                  Channel ch = conn.createChannel()) {
-                // non-durable, exclusive=false, autoDelete=true
-                ch.queueDeclare(queue, false, false, true, null);
+                // "plug-e2e" is pre-declared by the broker's definitions.json — no
+                // runtime queueDeclare (RabbitMQ 4 rejects some runtime declares).
                 // default exchange, routingKey = queue name
                 ch.basicPublish("", queue, null, "ping".getBytes(java.nio.charset.StandardCharsets.UTF_8));
                 Thread.sleep(200);

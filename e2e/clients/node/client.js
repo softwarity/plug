@@ -158,13 +158,11 @@ async function doAMQP(target) {
     try {
       conn = await amqp.connect(url, { timeout: 5000 });
       ch = await conn.createChannel();
-      const q = await ch.assertQueue('plug-e2e', {
-        durable: false,
-        autoDelete: true,
-      });
-      ch.sendToQueue(q.queue, Buffer.from('ping'));
+      // "plug-e2e" is pre-declared by the broker's definitions.json — no runtime
+      // assertQueue (RabbitMQ 4 rejects some runtime declares).
+      ch.sendToQueue('plug-e2e', Buffer.from('ping'));
       await sleep(200);
-      const msg = await ch.get(q.queue, { noAck: true });
+      const msg = await ch.get('plug-e2e', { noAck: true });
       if (!msg) {
         throw new Error('no message back');
       }

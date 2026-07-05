@@ -39,14 +39,16 @@ supervisor — a real host needs neither.
 ## Known gaps
 
 Cells in `E2E_XFAIL` (default `java:grpc python:grpc`) warn instead of failing.
-plug routes both **by name** correctly — these are two distinct, hard cases:
+Both are **hard**: gRPC's HTTP/2 stacks arm their event loop (epoll) on the fd
+*before* `connect()` completes, and plug hands over the tunnelled connection by
+swapping the fd's file (`dup2()` in the hook, `ADDFD` in the supervisor) — which
+strands that registration. Go/Node register *after* connect, so they're fine.
 
-- **java:grpc** — plug splices the intercepted connection with `dup2()`, which
-  invalidates the fd's epoll registration; Netty arms its event loop *before*
-  `connect()` returns, so it never sees the connection come up (go/node/libc
-  register after connect → fine).
-- **python:grpc** — grpcio resolves via **c-ares**, which does DNS with
-  `sendto()` to the real nameserver, bypassing both interception layers, so a
-  cluster name never reaches plug's resolver.
+- **java:grpc** (Netty) — the own-fd workaround can't be used: Java 21's
+  `NioSocketImpl` makes *every* JVM socket non-blocking, so it strands the whole
+  JVM, not just Netty.
+- **python:grpc** (grpcio) — `GRPC_DNS_RESOLVER=native` fixes its c-ares DNS
+  bypass, but grpcio then does a raw connect → the supervisor's `ADDFD` hits the
+  same strand.
 
-See RELEASE_NOTES for the fix directions.
+See RELEASE_NOTES for details.

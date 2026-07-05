@@ -17,7 +17,7 @@ services:
     networks: [internal]
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     environment: { POSTGRES_USER: plug, POSTGRES_PASSWORD: plug, POSTGRES_DB: plug }
     networks: [internal]
     healthcheck:
@@ -27,7 +27,7 @@ services:
       retries: 30
 
   redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     networks: [internal]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -36,7 +36,7 @@ services:
       retries: 30
 
   mongo:
-    image: mongo:7
+    image: mongo:8
     networks: [internal]
     healthcheck:
       test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
@@ -45,13 +45,18 @@ services:
       retries: 30
 
   rabbitmq:
-    image: rabbitmq:3
-    environment: { RABBITMQ_DEFAULT_USER: plug, RABBITMQ_DEFAULT_PASS: plug }
+    image: rabbitmq:4
+    # user, vhost, permissions and the plug-e2e queue are pre-loaded from
+    # definitions.json — clients never declare anything at runtime.
+    volumes:
+      - ./services/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./services/rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
     networks: [internal]
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      # ready only once the pre-loaded queue actually exists
+      test: ["CMD-SHELL", "rabbitmqctl -q list_queues name 2>/dev/null | grep -q plug-e2e"]
       interval: 3s
-      timeout: 5s
+      timeout: 10s
       retries: 30
 
   mosquitto:

@@ -11,7 +11,7 @@
   "dependencies": {
     "@grpc/grpc-js": "1.14.4",
     "@grpc/proto-loader": "0.8.1",
-    "amqplib": "0.10.5",
+    "amqplib": "^0.10.9",
     "mongodb": "6.13.0",
     "mqtt": "5.15.1",
     "pg": "8.14.1",
