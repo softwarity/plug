@@ -47,10 +47,13 @@ several sessions to different clusters run side by side):
 3. a **SOCKS5 proxy** (`ALL_PROXY`) and `JAVA_TOOL_OPTIONS=-DsocksProxyHost` for
    SOCKS-native tools and the whole JVM.
 
-Each layer hands the *hostname* to the agent, which resolves it **inside** the
-cluster (`socks5h` / remote DNS) — so `http://my-service:8080` and
-`amqp://rabbitmq:5672` both work. For the few things the hook can't reach —
-**Go**/statically-linked binaries (they bypass libc), non-TCP — declare a
+Routing is **split-horizon** by name shape: single-label names (`my-service`,
+`rabbitmq`) go to the cluster and resolve there (`socks5h` / remote DNS), while
+dotted FQDNs (`api.github.com`) and `localhost` resolve and connect **directly**
+— set `PLUG_DIRECT=<cidr,host,…>` to force extras direct. The single SSH
+connection **self-heals** (keepalive + transparent reconnect), so an idle
+VPN/NAT drop no longer needs a restart. For the few things the hook can't reach
+— **Go**/statically-linked binaries (they bypass libc), non-TCP — declare a
 **port-forward** (below).
 
 ## Setup
@@ -131,6 +134,9 @@ forward = AMQP_URL=amqp://rabbitmq:5672, MONGO_URL=mongodb://mongodb:27017
 ```
 
 `--host`/`--port` (or `$PLUG_HOST`/`$PLUG_PORT`) bypass profiles entirely.
+`PLUG_DIRECT=<cidr,host,suffix,…>` forces destinations to bypass the cluster and
+connect directly (a LAN host, a specific API) — on top of the automatic
+split-horizon, where dotted FQDNs already go direct.
 
 ### Port-forwards — the escape hatch
 
@@ -164,16 +170,23 @@ attached overlay networks.
 Only deploy the agent on clusters and networks you already trust (internal dev
 clusters). Never publish port 2222 on an untrusted network.
 
+The agent's SSH host key is pinned on first use (`~/.plug/known_hosts`); a
+changed key aborts the connection — a basic MITM tripwire on top of the
+no-secret transport.
+
 ## Roadmap
 
 - [x] Rootless data path — SOCKS5 + HTTP proxy + transparent connect()/DNS
       injection (macOS/Linux libc) + per-session port-forwards, multi-cluster
+- [x] Split-horizon routing (single-label → cluster, FQDN/LAN → direct,
+      `PLUG_DIRECT`) + self-healing transport (keepalive/reconnect) + host-key TOFU
 - [x] Install from the cluster (`get` user) + launcher with per-cluster versions
 - [x] Kubernetes manifest ([deploy/plug-k8s.yaml](deploy/plug-k8s.yaml)) — works
       today via NodePort or `kubectl port-forward`
 - [ ] Native-Windows interceptor (WinDivert/WFP) — WSL2 works today
 - [ ] Cover Go / statically-linked binaries (syscall-level hook, à la mirrord) —
       a port-forward covers them today
+- [ ] IPv6 fake-pool + v6-literal tunnelling (Swarm overlays are IPv4 today)
 - [ ] `kubectl exec` transport (no exposed port, RBAC-gated)
 - [ ] Embed the agent into an API gateway (dynamic enable/disable)
 

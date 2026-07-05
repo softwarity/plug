@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/softwarity/plug/cli/internal/inject"
@@ -21,7 +22,12 @@ import (
 // SOCKS-native tools take the SOCKS one; Node's HTTP stack (axios/fetch) speaks
 // HTTP-proxy only and chokes on SOCKS, so it gets the HTTP one.
 func coreRunSOCKS(cfg config, cmdArgs []string) int {
-	tr, err := tunnel.Dial(cfg.host, cfg.port, sshUser, embeddedKey)
+	// TOFU host-key pin lives next to the profiles, keyed by host:port.
+	knownHosts := ""
+	if home, err := os.UserHomeDir(); err == nil {
+		knownHosts = filepath.Join(home, ".plug", "known_hosts")
+	}
+	tr, err := tunnel.Dial(cfg.host, cfg.port, sshUser, embeddedKey, knownHosts, info)
 	if err != nil {
 		info("connect: %v", err)
 		return 1

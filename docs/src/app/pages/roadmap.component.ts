@@ -78,6 +78,8 @@ import { MatIconModule } from '@angular/material/icon';
       <tbody>
         <tr><td>SOCKS5 + HTTP proxy + per-session port-forwards</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
         <tr><td>Transparent <code>connect()</code>/DNS injection (macOS/Linux libc apps)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
+        <tr><td>Split-horizon routing (single-label → cluster, FQDN/LAN → direct) + <code>PLUG_DIRECT</code></td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
+        <tr><td>Self-healing transport (SSH keepalive + transparent reconnect) + host-key pinning</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
         <tr><td>Multi-cluster in parallel (compare environments)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
         <tr><td>Install from cluster + launcher (per-cluster versions)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
         <tr><td>Profiles: wizard, <code>ls</code> / <code>rm</code> / <code>rn</code> / <code>test</code></td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
@@ -86,6 +88,7 @@ import { MatIconModule } from '@angular/material/icon';
         <tr><td>Gateway hosting the tunnel + install surface</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
         <tr><td>Native-Windows interceptor (WinDivert/WFP) — WSL2 works today</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
         <tr><td>Cover Go / statically-linked binaries (syscall-level hook)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
+        <tr><td>IPv6 fake-pool + v6-literal tunnelling (Swarm overlays are IPv4 today)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
       </tbody>
     </table>
   `,

@@ -131,6 +131,43 @@ func TestInjectionEndToEnd(t *testing.T) {
 	}
 }
 
+// TestLocalhostStaysLocal proves the split-horizon boundary: "localhost" is a
+// single-label name, but it must NOT be sent to the cluster (which would reach
+// the agent's own loopback) — it resolves to 127.0.0.1 and connects directly.
+// Discriminating assertion: the SOCKS proxy is never contacted.
+func TestLocalhostStaysLocal(t *testing.T) {
+	if !Available() {
+		t.Skipf("no embedded hook for %s/%s", runtime.GOOS, runtime.GOARCH)
+	}
+	cc := findCC(t)
+	backend := startBackend(t)
+	socksAddr, lastTarget := startSOCKS(t, backend)
+	client := buildCClient(t, cc)
+
+	env := Env(socksAddr, nil)
+	if env == nil {
+		t.Fatal("Env nil despite Available()")
+	}
+	full := append(os.Environ(), env...)
+	full = append(full, "PLUG_HOOK_DEBUG=1")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, client, "localhost", portOf(backend))
+	cmd.Env = full
+	out, err := cmd.CombinedOutput()
+	t.Logf("child output:\n%s", out)
+	if err != nil {
+		t.Fatalf("child failed: %v", err)
+	}
+	if !strings.Contains(string(out), "BACKEND-REACHED") {
+		t.Fatalf("localhost did not reach the local backend; output:\n%s", out)
+	}
+	if got := lastTarget(); got != "" {
+		t.Fatalf("SOCKS was contacted for localhost (%q) — it must stay local", got)
+	}
+}
+
 // ---- helpers ----
 
 func findCC(t *testing.T) string {

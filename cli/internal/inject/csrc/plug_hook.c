@@ -57,11 +57,13 @@
 #include <stdarg.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -77,17 +79,117 @@
 // ---------------------------------------------------------------------------
 #define FAKE_NET_BASE 0xF0000000u  // 240.0.0.0
 #define FAKE_NET_MASK 0xF0000000u  // /4
-#define FAKE_MAX_ENTRIES 4096
 
 struct fake_entry {
     uint32_t ip;                 // host byte order
     char host[256];              // the original name we were asked to resolve
 };
 
-static struct fake_entry g_table[FAKE_MAX_ENTRIES];
+// Name→fakeIP table. Grown dynamically so a very long-lived process resolving
+// many distinct names never hits a silent ceiling (the old fixed 4096 cap
+// handed out un-recorded fakes past the limit, misrouting them).
+static struct fake_entry *g_table = NULL;
 static int g_table_len = 0;
+static int g_table_cap = 0;
 static uint32_t g_next = 1;      // offset within the pool (skip .0)
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
+
+// "Direct" set: real IPs that must bypass the proxy — a dotted name we resolved
+// locally (split-horizon, host-first), or a PLUG_DIRECT match. connect() sends
+// these straight out via the real connect().
+static uint32_t *g_direct = NULL;
+static int g_direct_len = 0;
+static int g_direct_cap = 0;
+
+static void direct_add(uint32_t ip) {
+    pthread_mutex_lock(&g_lock);
+    for (int i = 0; i < g_direct_len; i++)
+        if (g_direct[i] == ip) { pthread_mutex_unlock(&g_lock); return; }
+    if (g_direct_len == g_direct_cap) {
+        int nc = g_direct_cap ? g_direct_cap * 2 : 128;
+        uint32_t *n = (uint32_t *)realloc(g_direct, (size_t)nc * sizeof(*g_direct));
+        if (!n) { pthread_mutex_unlock(&g_lock); return; }
+        g_direct = n; g_direct_cap = nc;
+    }
+    g_direct[g_direct_len++] = ip;
+    pthread_mutex_unlock(&g_lock);
+}
+static int is_direct(uint32_t ip) {
+    int found = 0;
+    pthread_mutex_lock(&g_lock);
+    for (int i = 0; i < g_direct_len; i++)
+        if (g_direct[i] == ip) { found = 1; break; }
+    pthread_mutex_unlock(&g_lock);
+    return found;
+}
+
+// PLUG_DIRECT: user-declared bypass rules — CIDRs/IPs (matched against literal
+// connect targets) and names/suffixes (matched in getaddrinfo). Parsed once.
+#define DIRECT_RULES_MAX 64
+struct cidr_rule { uint32_t base, mask; };
+static struct cidr_rule g_dcidr[DIRECT_RULES_MAX];
+static int g_dcidr_len = 0;
+static char g_dname[DIRECT_RULES_MAX][256];
+static int g_dname_len = 0;
+
+static void parse_direct_env(void) {
+    const char *s = getenv("PLUG_DIRECT");
+    if (!s || !s[0]) return;
+    char buf[1024];
+    snprintf(buf, sizeof(buf), "%s", s);
+    for (char *tok = strtok(buf, ", \t"); tok; tok = strtok(NULL, ", \t")) {
+        char *slash = strchr(tok, '/');
+        char ipbuf[64];
+        int len = 32;
+        if (slash) {
+            size_t n = (size_t)(slash - tok);
+            if (n >= sizeof(ipbuf)) n = sizeof(ipbuf) - 1;
+            memcpy(ipbuf, tok, n);
+            ipbuf[n] = '\0';
+            len = atoi(slash + 1);
+        } else {
+            snprintf(ipbuf, sizeof(ipbuf), "%s", tok);
+        }
+        struct in_addr a;
+        if (inet_pton(AF_INET, ipbuf, &a) == 1 && len >= 0 && len <= 32 &&
+            g_dcidr_len < DIRECT_RULES_MAX) {
+            uint32_t mask = (len == 0) ? 0u : (0xFFFFFFFFu << (32 - len));
+            g_dcidr[g_dcidr_len].mask = mask;
+            g_dcidr[g_dcidr_len].base = ntohl(a.s_addr) & mask;
+            g_dcidr_len++;
+        } else if (!slash && g_dname_len < DIRECT_RULES_MAX) {
+            snprintf(g_dname[g_dname_len], sizeof(g_dname[0]), "%s", tok);
+            g_dname_len++;
+        }
+    }
+}
+static int direct_cidr_match(uint32_t ip) {
+    for (int i = 0; i < g_dcidr_len; i++)
+        if ((ip & g_dcidr[i].mask) == g_dcidr[i].base) return 1;
+    return 0;
+}
+static int ends_with_ci(const char *s, const char *suf) {
+    size_t ls = strlen(s), lf = strlen(suf);
+    return lf <= ls && strcasecmp(s + (ls - lf), suf) == 0;
+}
+static int direct_name_match(const char *name) {
+    for (int i = 0; i < g_dname_len; i++) {
+        const char *t = g_dname[i];
+        if (strcasecmp(name, t) == 0) return 1;
+        if (t[0] == '.') {
+            if (ends_with_ci(name, t)) return 1;
+        } else {
+            char dt[258];
+            snprintf(dt, sizeof(dt), ".%s", t);
+            if (ends_with_ci(name, dt)) return 1;
+        }
+    }
+    return 0;
+}
+// is_single_label reports whether a name has no dot (a cluster short-name).
+static int is_single_label(const char *name) {
+    return strchr(name, '.') == NULL;
+}
 
 // Resolved lazily from $PLUG_SOCKS on first use, then cached.
 static pthread_once_t g_socks_once = PTHREAD_ONCE_INIT;
@@ -111,6 +213,7 @@ static void plug_log(const char *fmt, ...) {
 static void parse_socks_env(void) {
     const char *dbg = getenv("PLUG_HOOK_DEBUG");
     g_debug = (dbg && dbg[0] && strcmp(dbg, "0") != 0);
+    parse_direct_env();
 
     const char *s = getenv("PLUG_SOCKS");
     if (!s || !s[0]) {
@@ -258,7 +361,13 @@ static uint32_t remember_name(const char *host) {
     uint32_t ip = FAKE_NET_BASE | (g_next & ~FAKE_NET_MASK);
     if (ip == FAKE_NET_BASE) ip++;  // skip the network address itself
     g_next++;
-    if (g_table_len < FAKE_MAX_ENTRIES) {
+    if (g_table_len == g_table_cap) {
+        int nc = g_table_cap ? g_table_cap * 2 : 256;
+        struct fake_entry *nt =
+            (struct fake_entry *)realloc(g_table, (size_t)nc * sizeof(*g_table));
+        if (nt) { g_table = nt; g_table_cap = nc; }
+    }
+    if (g_table_len < g_table_cap) {
         g_table[g_table_len].ip = ip;
         snprintf(g_table[g_table_len].host, sizeof(g_table[g_table_len].host),
                  "%s", host);
@@ -428,6 +537,40 @@ static int is_loopback4(uint32_t ip_host_order) {
 // dup2 preserves the app's fd number (so any reference it kept stays valid). We
 // then restore the non-blocking flag the app had set, if any.
 // ---------------------------------------------------------------------------
+// copy_sockopt carries a boolean/int option the app set on its own fd (before
+// connect) onto the proxy socket that will replace it — so TCP_NODELAY,
+// SO_KEEPALIVE etc. are not silently lost across the dup2.
+static void copy_sockopt(int from, int to, int level, int optname) {
+    int v = 0;
+    socklen_t l = sizeof(v);
+    if (getsockopt(from, level, optname, &v, &l) == 0 && v)
+        setsockopt(to, level, optname, &v, sizeof(v));
+}
+
+// fallback_direct connects the app's own fd straight to the real target,
+// bypassing the proxy. Used when the cluster can't reach a target (SOCKS
+// CONNECT refused) or the proxy itself is unreachable — the "try the other
+// one" half of the split-horizon policy. A name is resolved with the genuine
+// local resolver; a fake IP has no real target so it fails cleanly.
+static int fallback_direct(int fd, const char *host, uint32_t ip4, uint16_t port) {
+    uint32_t rip = ip4;
+    if (host) {
+        if (!resolve_ipv4_real(host, &rip)) { errno = EHOSTUNREACH; return -1; }
+    }
+    if ((rip & FAKE_NET_MASK) == FAKE_NET_BASE) { errno = EHOSTUNREACH; return -1; }
+    struct sockaddr_in sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons(port);
+    sa.sin_addr.s_addr = htonl(rip);
+#ifdef __APPLE__
+    sa.sin_len = sizeof(sa);
+#endif
+    plug_log("fallback direct → %u.%u.%u.%u:%u", (rip >> 24) & 0xff,
+             (rip >> 16) & 0xff, (rip >> 8) & 0xff, rip & 0xff, port);
+    return do_real_connect(fd, (struct sockaddr *)&sa, sizeof(sa));
+}
+
 static int route_through_socks(int fd, const char *host, uint32_t ip4,
                                uint16_t port) {
     // Remember and clear the caller's non-blocking flag for a clean handshake.
@@ -436,14 +579,30 @@ static int route_through_socks(int fd, const char *host, uint32_t ip4,
 
     int pfd = connect_to_proxy();
     if (pfd < 0) {
-        plug_log("cannot reach proxy %s:%d", g_socks_host, g_socks_port);
-        errno = ECONNREFUSED;
-        return -1;
+        plug_log("cannot reach proxy %s:%d — trying direct", g_socks_host,
+                 g_socks_port);
+        return fallback_direct(fd, host, ip4, port);
     }
+    // Bound the handshake so a hung cluster dial can't wedge the app's
+    // connect() indefinitely.
+    struct timeval tv = {10, 0};
+    setsockopt(pfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(pfd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
     if (socks5_negotiate(pfd, host, ip4, port) != 0) {
         close(pfd);
-        return -1;
+        plug_log("cluster refused %s — trying direct", host ? host : "literal");
+        return fallback_direct(fd, host, ip4, port);
     }
+
+    // Carry the app's pre-connect socket options onto the real connection, then
+    // clear the handshake timeouts so the app sees a normal blocking socket
+    // (a long-lived idle connection must not be reaped by SO_RCVTIMEO).
+    copy_sockopt(fd, pfd, IPPROTO_TCP, TCP_NODELAY);
+    copy_sockopt(fd, pfd, SOL_SOCKET, SO_KEEPALIVE);
+    struct timeval zero = {0, 0};
+    setsockopt(pfd, SOL_SOCKET, SO_RCVTIMEO, &zero, sizeof(zero));
+    setsockopt(pfd, SOL_SOCKET, SO_SNDTIMEO, &zero, sizeof(zero));
 
     // Splice the proxy socket onto the app's fd.
     if (dup2(pfd, fd) < 0) {
@@ -493,6 +652,9 @@ static int plug_connect(int fd, const struct sockaddr *addr, socklen_t len) {
         char host[256];
         if (lookup_fake(ip, host, sizeof(host))) {
             return route_through_socks(fd, host, 0, port);  // remote DNS
+        }
+        if (is_direct(ip) || direct_cidr_match(ip)) {
+            return do_real_connect(fd, addr, len);  // split / PLUG_DIRECT: direct
         }
         return route_through_socks(fd, NULL, ip, port);      // literal IPv4
     }
@@ -612,12 +774,35 @@ static int plug_getaddrinfo(const char *node, const char *service,
         return EAI_ADDRFAMILY;
     }
 
-    // Case 3: a real hostname.
+    // localhost stays local — never tunnelled to the cluster's own loopback.
+    if (strcasecmp(node, "localhost") == 0 || ends_with_ci(node, ".localhost")) {
+        return build_ai_v4(0x7f000001, port, socktype, res);
+    }
+
+    // Case 3: a real hostname. Split-horizon by shape (restores the old split
+    // resolver): single-label names ("pdfbox", "mongodb") are cluster-first;
+    // dotted FQDNs ("api.github.com") are host-first, so public/LAN names
+    // resolve and connect directly instead of tunnelling through the cluster.
     if (socks_configured()) {
-        // Proxy present: hand back a fake IP; connect() will recover the name and
-        // let the SOCKS proxy resolve it cluster-side (socks5h remote DNS).
+        if (direct_name_match(node) || !is_single_label(node)) {
+            // Host-first: resolve locally; on success go DIRECT (record the IP
+            // so connect() bypasses the proxy).
+            uint32_t rip;
+            if (resolve_ipv4_real(node, &rip) &&
+                (rip & FAKE_NET_MASK) != FAKE_NET_BASE) {
+                direct_add(rip);
+                plug_log("getaddrinfo(%s) → host %u.%u.%u.%u (direct)", node,
+                         (rip >> 24) & 0xff, (rip >> 16) & 0xff,
+                         (rip >> 8) & 0xff, rip & 0xff);
+                return build_ai_v4(rip, port, socktype, res);
+            }
+            if (direct_name_match(node)) return EAI_NONAME;  // explicit direct, unresolved
+            // Dotted name the host can't resolve → fall through to the cluster.
+        }
+        // Single-label (or dotted with local NXDOMAIN): cluster via a fake IP;
+        // connect() recovers the name and the proxy resolves it cluster-side.
         uint32_t fake = remember_name(node);
-        plug_log("getaddrinfo(%s) → fake 240.x %u.%u.%u.%u", node,
+        plug_log("getaddrinfo(%s) → fake %u.%u.%u.%u (cluster)", node,
                  (fake >> 24) & 0xff, (fake >> 16) & 0xff, (fake >> 8) & 0xff,
                  fake & 0xff);
         return build_ai_v4(fake, port, socktype, res);
@@ -696,5 +881,53 @@ PLUG_EXPORT int getaddrinfo(const char *node, const char *service,
     return plug_getaddrinfo(node, service, hints, res);
 }
 PLUG_EXPORT void freeaddrinfo(struct addrinfo *ai) { plug_freeaddrinfo(ai); }
+
+// Legacy resolver: some (older) libc programs resolve via gethostbyname()
+// rather than getaddrinfo(). Interpose it too, with the same split-horizon
+// policy, so they get cluster-side resolution as well. Linux only — on macOS
+// this symbol is our escape hatch to the genuine resolver (see resolve_syms),
+// so interposing it there would recurse forever; that stays a documented gap.
+PLUG_EXPORT struct hostent *gethostbyname(const char *name) {
+    if (!name) return NULL;
+    ensure_syms();
+    if (!socks_configured())
+        return real_gethostbyname ? real_gethostbyname(name) : NULL;
+
+    uint32_t ip;
+    if (strcasecmp(name, "localhost") == 0 || ends_with_ci(name, ".localhost")) {
+        ip = 0x7f000001;
+    } else if (direct_name_match(name) || !is_single_label(name)) {
+        uint32_t rip;
+        if (resolve_ipv4_real(name, &rip) && (rip & FAKE_NET_MASK) != FAKE_NET_BASE) {
+            direct_add(rip);
+            ip = rip; // host-first: real IP, connect() goes direct
+        } else if (direct_name_match(name)) {
+            return NULL; // explicit direct target the host can't resolve
+        } else {
+            ip = remember_name(name); // dotted, host-unknown → cluster
+        }
+    } else {
+        ip = remember_name(name); // single-label → cluster
+    }
+
+    // gethostbyname returns pointers into static storage (non-reentrant by
+    // spec, so callers already serialise — no lock needed beyond that contract).
+    static struct hostent he;
+    static in_addr_t addr;
+    static char *addr_list[2];
+    static char *aliases[1];
+    static char namebuf[256];
+    addr = htonl(ip);
+    addr_list[0] = (char *)&addr;
+    addr_list[1] = NULL;
+    aliases[0] = NULL;
+    snprintf(namebuf, sizeof(namebuf), "%s", name);
+    he.h_name = namebuf;
+    he.h_aliases = aliases;
+    he.h_addrtype = AF_INET;
+    he.h_length = 4;
+    he.h_addr_list = addr_list;
+    return &he;
+}
 
 #endif

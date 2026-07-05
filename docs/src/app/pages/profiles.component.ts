@@ -61,6 +61,22 @@ forward = AMQP_URL=amqp://rabbitmq:5672, MONGO_URL=mongodb://mongodb:27017</app-
       gets its own ports, so several clusters never collide.
     </p>
 
+    <h3>What goes to the cluster vs direct (split-horizon)</h3>
+    <p>
+      plug decides per destination by the <strong>shape of the name</strong> (restoring the original
+      split-horizon policy), and falls back to the other side if the first fails:
+    </p>
+    <ul>
+      <li><strong>Single-label names</strong> (<code>pdfbox</code>, <code>mongodb</code>) → the cluster, resolved cluster-side.</li>
+      <li><strong>Dotted FQDNs</strong> (<code>api.github.com</code>, a LAN host) → resolved and connected <strong>directly</strong> on your machine — no longer tunnelled through the cluster.</li>
+      <li><code>localhost</code> and <code>127.0.0.1</code> always stay local.</li>
+    </ul>
+    <p>
+      Force extras direct with <code>PLUG_DIRECT</code> — a comma-separated list of CIDRs, IPs,
+      hostnames or suffixes that must bypass the cluster (e.g. reach a service on your LAN):
+    </p>
+    <app-code lang="bash">PLUG_DIRECT=192.168.0.0/16,.corp.example.com plug npm run start:dev</app-code>
+
     <h3>Multiple clusters at once</h3>
     <p>
       There is no global state (no system DNS, no <code>/etc/hosts</code>, no firewall, no TUN), so

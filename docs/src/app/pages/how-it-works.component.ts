@@ -32,7 +32,10 @@ import { CodeComponent } from '../code/code.component';
         key, in-process — no <code>ssh</code> binary needed). Every outbound flow becomes an SSH
         <code>direct-tcpip</code> channel: <code>sshd</code> opens the real connection to
         <code>service:port</code> from <em>inside</em> the cluster, so it resolves the name with the
-        cluster's own resolver. No server code of ours — stock <code>sshd</code>.
+        cluster's own resolver. No server code of ours — stock <code>sshd</code>. The connection
+        <strong>self-heals</strong>: a keepalive keeps it warm and a drop (an idle NAT/VPN timeout)
+        is re-dialed transparently, so long sessions no longer need a restart. The agent's host key
+        is pinned on first use.
       </li>
       <li>
         <strong>Transparent connect()/DNS hook.</strong> A tiny native library is injected into the
@@ -41,7 +44,10 @@ import { CodeComponent } from '../code/code.component';
         TCP connection and name lookup of a <strong>libc-based</strong> process (Node, the JVM,
         Python, curl…) is routed through the tunnel, resolved cluster-side — which is what makes
         raw-TCP drivers (<code>amqplib</code>, <code>pg</code>, <code>mongodb</code>,
-        <code>redis</code>, gRPC…) work with no per-service config.
+        <code>redis</code>, gRPC…) work with no per-service config. Routing is
+        <strong>split-horizon</strong> by name shape — single-label names (<code>pdfbox</code>) go to
+        the cluster, dotted FQDNs (<code>api.github.com</code>) and <code>localhost</code> resolve and
+        connect <em>directly</em> — with <code>PLUG_DIRECT</code> to force extra CIDRs/hosts direct.
       </li>
       <li>
         <strong>HTTP proxy + SOCKS5 proxy.</strong> Alongside the hook, plug exports

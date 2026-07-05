@@ -29,7 +29,7 @@ func testTransport(t *testing.T) *Transport {
 	if err != nil {
 		t.Fatalf("PLUG_TEST_KEY: %v", err)
 	}
-	tr, err := Dial(host, port, "plug", key)
+	tr, err := Dial(host, port, "plug", key, "", nil)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
