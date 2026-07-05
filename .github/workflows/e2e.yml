@@ -99,7 +99,7 @@ jobs:
             for l in $langs; do
               row="| **$l** |"
               for p in $protos; do
-                v=$(grep -ho "\b$l=[A-Z?]*" "results/$mode-$p.txt" 2>/dev/null | cut -d= -f2)
+                v=$(grep -ho "\b$l=[A-Z?]*" "results/$mode-$p.txt" 2>/dev/null | cut -d= -f2 || true)
                 case "$v" in
                   PASS) cell="✅" ;;
                   "")   cell="·"  ;;

@@ -2,6 +2,17 @@
 
 ## NEXT RELEASE — toward 1.0.0
 
+- **`plug --tun` — total coverage on every runtime, one cross-platform data path**
+  (`cli/internal/tun`). An opt-in root mode that captures the child's cluster
+  traffic at the **IP layer** instead of the fd level: `wireguard-go/tun` opens a
+  userspace TUN (`/dev/net/tun`, `utun`, WinTUN), a **gVisor** netstack terminates
+  each TCP flow, and plug splices it to the SSH tunnel **by name** (a loopback DNS
+  server mints a fake `240/4` IP per cluster name; the OS routes that range into
+  the TUN). Because the child's socket is never touched, this covers **every
+  runtime uniformly** — including the gRPC stacks (Netty, grpcio) the fd-level
+  hook/supervisor can't. One Go codebase for Linux/macOS/Windows; needs root only
+  to create the device + routes. The rootless hook/supervisor stays the default
+  no-root path. **e2e: 28/28 green in TUN mode** (7 protocols × 4 languages).
 - **Full process coverage — Go / statically-linked binaries are now covered on
   Linux** (`cli/internal/seccomp`). A rootless seccomp *user-notifier* traps the
   child's `connect(2)` at the kernel boundary and reroutes cluster connections
@@ -23,21 +34,23 @@
 - **E2E coverage matrix** (`e2e/` + `.github/workflows/e2e.yml`): a **languages ×
   protocols** grid — Go / Node / Python / Java clients, each with its natural
   driver, reaching **httpbin, postgres, redis, mongo, rabbitmq (AMQP), mosquitto
-  (MQTT), gRPC** cluster services **by name** under plug. One CI job per protocol
-  (isolated, parallel); the run Summary renders the full grid. Services track
-  current majors (postgres 18, mongo 8, redis 8, rabbitmq 4…). **26/28 green**;
-  the 2 gaps are the gRPC item below.
+  (MQTT), gRPC** cluster services **by name** under plug. Run in **both modes**
+  (one job per mode × protocol, isolated + parallel); the run Summary renders a
+  grid per mode. Services track current majors (postgres 18, mongo 8, redis 8,
+  rabbitmq 4…). **Rootless: 26/28** (the 2 gRPC gaps below). **TUN: 28/28.**
 - **Fix — the app-level proxy env no longer fights the hook on Linux.** When the
   hook + supervisor are active they already intercept every `connect()`, so plug
   no longer also sets `HTTP_PROXY` / `-DsocksProxyHost` there: those made some JVM
   drivers hand the *fake* IP to the proxy (unroutable) and broke raw-TCP clients.
   Rerouting is now the hook/supervisor's job alone. (macOS unchanged.)
-- **Known gaps — gRPC on Java and Python** (`java:grpc`, `python:grpc`; the other
-  26 cells pass). Both are **hard**: gRPC's HTTP/2 stacks arm their event loop
-  (epoll) on the fd *before* `connect()` completes, and plug's only ways to hand
-  over the tunnelled connection — `dup2()` in the hook, `ADDFD` in the supervisor
-  — swap the fd's underlying file, stranding that registration. Go and Node
-  register *after* connect, so they're fine. Fixes were tried and don't hold:
+- **gRPC on Java and Python — the rootless-mode gap that motivated `--tun`.**
+  In the rootless path these two still fail (`java:grpc`, `python:grpc`; the other
+  26 cells pass); **`plug --tun` closes them** — IP-layer capture never touches
+  the fd, so all 28 pass. Why the fd-level path can't: gRPC's HTTP/2 stacks arm
+  their event loop (epoll) on the fd *before* `connect()` completes, and plug's
+  only ways to hand over the tunnelled connection — `dup2()` in the hook, `ADDFD`
+  in the supervisor — swap the fd's underlying file, stranding that registration.
+  Go and Node register *after* connect, so they're fine. In-band fixes don't hold:
   - **Java (Netty):** negotiating on the app's *own* fd (no `dup2`) would keep the
     registration — but Java 21's `NioSocketImpl` makes **every** JVM socket
     non-blocking, so that path strands the whole JVM (JDBC, Jedis…), not just
