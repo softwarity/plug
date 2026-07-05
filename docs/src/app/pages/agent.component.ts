@@ -88,9 +88,10 @@ docker stack deploy -c plug-stack.yml plug</app-code>
       the binaries <strong>embedded</strong> (it picks yours with <code>uname</code>, so the command
       needs no host and no re-download):
     </p>
-    <app-code lang="bash">ssh -p 2222 get@&lt;host&gt; install | sh                    # install
-ssh -p 2222 get@&lt;host&gt; $(uname -s)-$(uname -m) > plug   # just the binary
-ssh -p 2222 get@&lt;host&gt; version                          # the agent version</app-code>
+    <app-code lang="bash"># the agent regenerates its host key each start (not a secret here), so skip the check
+ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@&lt;host&gt; install | sh   # install
+ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@&lt;host&gt; $(uname -s)-$(uname -m) > plug   # binary
+ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@&lt;host&gt; version   # the agent version</app-code>
     <p>
       The version baked into the image (and stamped into every binary) is what the
       <a routerLink="/profiles">launcher</a> asks for to run the matching version. Released images

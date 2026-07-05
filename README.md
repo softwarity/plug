@@ -79,7 +79,9 @@ agent embeds the binaries in the installer, which picks yours with `uname` (no
 re-download, no GitHub, no root):
 
 ```bash
-ssh -p 2222 get@<cluster-host> install | sh
+# the agent regenerates its host key at each start (it is not a secret in plug's
+# model), so skip the host-key check — the same options plug uses internally:
+ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@<cluster-host> install | sh
 ```
 
 The cluster address isn't baked into the agent — it genuinely can't see the

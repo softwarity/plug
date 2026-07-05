@@ -25,15 +25,12 @@ var leftoverFiles = []string{
 	"/var/run/plugd-resolv.backup",
 }
 
-// uninstall removes everything plug ever installed: the (now retired) root
-// daemon, its files, every plug binary it can locate, and the cached versions.
-// Profiles in ~/.plug are kept unless the user opts to purge them. Needs root
-// to remove the daemon — sudo plug uninstall.
+// uninstall removes everything plug ever installed: every plug binary it can
+// locate and the cached versions (profiles in ~/.plug are kept unless the user
+// opts to purge them). It runs ROOTLESS — plug is a rootless tool. Only the
+// leftovers of the retired root daemon need `sudo plug uninstall`, and only if
+// they actually still exist on this machine.
 func uninstall(args []string) {
-	if os.Geteuid() != 0 {
-		fatal("this needs root — run:  sudo plug uninstall")
-	}
-
 	purge, asked := false, false
 	for _, a := range args {
 		switch a {
@@ -50,20 +47,10 @@ func uninstall(args []string) {
 		purge = promptPurge()
 	}
 
-	// 1. retired root daemon + its files
-	switch runtime.GOOS {
-	case "darwin":
-		exec.Command("launchctl", "bootout", "system/"+launchdLabel).Run()
-		os.Remove(launchdPlist)
-	case "linux":
-		exec.Command("systemctl", "disable", "--now", "plugd").Run()
-		os.Remove(systemdUnit)
-		exec.Command("systemctl", "daemon-reload").Run()
-	}
-	for _, f := range leftoverFiles {
-		os.Remove(f)
-	}
-	info("removed the root daemon and its files")
+	// 1. Legacy root daemon (retired). plug is rootless now, so this only
+	// matters for someone who tried the old daemon — and needs root only if the
+	// leftovers actually exist.
+	cleanupLegacyDaemon()
 
 	// 2. every plug binary we can locate
 	removeBinaries(home, plugDir)
@@ -78,6 +65,39 @@ func uninstall(args []string) {
 	}
 
 	info("plug uninstalled.")
+}
+
+// cleanupLegacyDaemon removes the retired root daemon and its files — but only
+// if any are actually present, and only escalates when needed. On a normal
+// rootless install there is nothing to do, so uninstall needs no root at all.
+func cleanupLegacyDaemon() {
+	present := false
+	for _, f := range append([]string{launchdPlist, systemdUnit}, leftoverFiles...) {
+		if _, err := os.Stat(f); err == nil {
+			present = true
+			break
+		}
+	}
+	if !present {
+		return // rootless install — nothing to clean, no sudo needed
+	}
+	if os.Geteuid() != 0 {
+		info("found leftovers from the old root daemon — remove them with:  sudo plug uninstall")
+		return
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		exec.Command("launchctl", "bootout", "system/"+launchdLabel).Run()
+		os.Remove(launchdPlist)
+	case "linux":
+		exec.Command("systemctl", "disable", "--now", "plugd").Run()
+		os.Remove(systemdUnit)
+		exec.Command("systemctl", "daemon-reload").Run()
+	}
+	for _, f := range leftoverFiles {
+		os.Remove(f)
+	}
+	info("removed the old root daemon and its files")
 }
 
 func removeBinaries(home, plugDir string) {

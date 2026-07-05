@@ -99,7 +99,8 @@ if [ -n "$verb" ] && [ -f "$f" ]; then
 fi
 
 echo "plug $(cat /opt/plug/VERSION) — usage over ssh:" >&2
-echo '  ssh -p <port> get@<host> install | sh                    # install (recommended)' >&2
-echo '  ssh -p <port> get@<host> $(uname -s)-$(uname -m) > plug  # just the binary' >&2
-echo '  ssh -p <port> get@<host> version' >&2
+echo '  # host key regenerated each start (not a secret) — skip the check:' >&2
+echo '  ssh -p <port> -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@<host> install | sh   # install (recommended)' >&2
+echo '  ssh -p <port> -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@<host> $(uname -s)-$(uname -m) > plug   # just the binary' >&2
+echo '  ssh -p <port> -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@<host> version' >&2
 exit 1

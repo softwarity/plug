@@ -125,7 +125,8 @@ services:
       One line, straight from the cluster — the agent embeds the binaries in the installer, which
       picks yours with <code>uname</code>. No re-download, no GitHub, no root:
     </p>
-    <app-code lang="bash">ssh -p 2222 get@&lt;cluster-host&gt; install | sh</app-code>
+    <app-code lang="bash"># the agent regenerates its host key each start (not a secret here) — skip the check
+ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@&lt;cluster-host&gt; install | sh</app-code>
     <p>
       The cluster address isn't baked into the agent — it can't see the address you reached it on (a
       Swarm routing mesh hides it). Instead the installer reads <code>&lt;cluster-host&gt;</code>
