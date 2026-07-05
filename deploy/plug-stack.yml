@@ -4,8 +4,8 @@
 # stack's network automatically — nothing else to declare:
 #
 #   services:
-#     plug-agent:
-#       image: docker.io/softwarity/plug-agent:latest
+#     plug:
+#       image: docker.io/softwarity/plug:latest
 #       ports:
 #         - "2222:22"
 #
@@ -13,8 +13,8 @@
 # their overlay networks explicitly, then:
 #   docker stack deploy -c plug-stack.yml plug
 services:
-  plug-agent:
-    image: docker.io/softwarity/plug-agent:latest
+  plug:
+    image: docker.io/softwarity/plug:latest
     ports:
       - "2222:22"
     networks:

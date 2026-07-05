@@ -9,29 +9,29 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: plug-agent
-  labels: { app: plug-agent }
+  name: plug
+  labels: { app: plug }
 spec:
   replicas: 1
   selector:
-    matchLabels: { app: plug-agent }
+    matchLabels: { app: plug }
   template:
     metadata:
-      labels: { app: plug-agent }
+      labels: { app: plug }
     spec:
       containers:
-        - name: plug-agent
-          image: docker.io/softwarity/plug-agent:latest
+        - name: plug
+          image: docker.io/softwarity/plug:latest
           ports:
             - containerPort: 22
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: plug-agent
+  name: plug
 spec:
   type: NodePort
-  selector: { app: plug-agent }
+  selector: { app: plug }
   ports:
     - port: 2222
       targetPort: 22
@@ -39,5 +39,5 @@ spec:
 # Reach it two ways:
 #   • NodePort:  plug --host <a-node> --port 32222 <cmd>
 #   • No exposed port — kubectl port-forward (RBAC-gated), then plug on localhost:
-#       kubectl -n <ns> port-forward svc/plug-agent 2222:2222
+#       kubectl -n <ns> port-forward svc/plug 2222:2222
 #       plug --host localhost <cmd>

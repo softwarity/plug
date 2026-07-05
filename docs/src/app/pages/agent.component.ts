@@ -22,8 +22,8 @@ import { CodeComponent } from '../code/code.component';
     </p>
     <app-code lang="yaml"># your existing docker-compose / stack file
 services:
-  plug-agent:
-    image: docker.io/softwarity/plug-agent:latest
+  plug:
+    image: docker.io/softwarity/plug:latest
     ports:
       - "2222:22"
 
@@ -52,7 +52,7 @@ docker stack deploy -c plug-stack.yml plug</app-code>
       target="_blank" rel="noopener">deploy/plug-k8s.yaml</a> in the target namespace. No subnet or
       CIDR is needed — the agent's <code>sshd</code> resolves service names via CoreDNS from inside
       the cluster, exactly like on Swarm. Reach it via the NodePort, or
-      <code>kubectl port-forward svc/plug-agent 2222:2222</code> for an RBAC-gated tunnel with no
+      <code>kubectl port-forward svc/plug 2222:2222</code> for an RBAC-gated tunnel with no
       exposed port.
     </p>
     <app-code lang="bash">kubectl -n my-namespace apply -f plug-k8s.yaml</app-code>
@@ -77,7 +77,7 @@ docker stack deploy -c plug-stack.yml plug</app-code>
     <p>
       Multi-arch manifest — <code>linux/amd64</code> and <code>linux/arm64</code>, each built on
       native runners (no QEMU). Hosted on
-      <a href="https://hub.docker.com/r/softwarity/plug-agent" target="_blank" rel="noopener">Docker Hub</a>.
+      <a href="https://hub.docker.com/r/softwarity/plug" target="_blank" rel="noopener">Docker Hub</a>.
     </p>
 
     <h3>It also serves the CLI</h3>
@@ -102,7 +102,7 @@ ssh -p 2222 get@&lt;host&gt; version                          # the agent versio
       <li>Two SSH users: <code>plug</code> (public-key, runs the tunnel) and <code>get</code> (passwordless, <code>ForceCommand</code>-locked to serving a binary) — see <a routerLink="/security">Security model</a>.</li>
       <li>Host keys are generated at container start — connections use <code>StrictHostKeyChecking=no</code>, consistent with the <a routerLink="/security">no-auth model</a>.</li>
       <li>The <code>plug</code> user has <code>AllowTcpForwarding</code> on: the CLI's SOCKS proxy and port-forwards ride SSH <code>direct-tcpip</code> channels, so <code>sshd</code> does the real dials from inside the cluster.</li>
-      <li>The container logs its attached networks at startup — <code>docker service logs &lt;stack&gt;_plug-agent</code> is your first debugging stop.</li>
+      <li>The container logs its attached networks at startup — <code>docker service logs &lt;stack&gt;_plug</code> is your first debugging stop.</li>
     </ul>
   `,
 })

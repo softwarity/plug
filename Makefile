@@ -1,4 +1,4 @@
-IMAGE   ?= docker.io/softwarity/plug-agent:latest
+IMAGE   ?= docker.io/softwarity/plug:latest
 VERSION ?= dev
 
 .PHONY: cli agent push install clean

@@ -1,5 +1,5 @@
 # Build context is the REPO ROOT (so the CLI sources are available):
-#   docker build -f agent/Dockerfile -t softwarity/plug-agent .
+#   docker build -f agent/Dockerfile -t softwarity/plug .
 # The version — VERSION plus the GIT_REV build metadata — is stamped into every
 # binary and written to /opt/plug/VERSION; the CLI compares against it to decide
 # whether to fetch a newer core, so even rebuilds of `latest` (same VERSION, new

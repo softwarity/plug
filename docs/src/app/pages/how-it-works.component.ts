@@ -18,7 +18,7 @@ import { CodeComponent } from '../code/code.component';
     </p>
 
     <app-code lang="text">┌─ your laptop ──────────────────┐        ┌─ swarm cluster ────────────┐
-│  plug &lt;cmd&gt;                    │        │  plug-agent (alpine+sshd)  │
+│  plug &lt;cmd&gt;                    │        │  plug agent (alpine+sshd)  │
 │   ├─ connect()/DNS hook (inj.) │        │                            │
 │   ├─ HTTP proxy   ─────────────┼──ssh───┼─→ direct-tcpip: sshd dials │
 │   ├─ SOCKS5 proxy              │  :2222 │   service:port & resolves  │

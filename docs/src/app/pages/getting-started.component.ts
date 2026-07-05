@@ -111,8 +111,8 @@ import { MatIconModule } from '@angular/material/icon';
     </p>
     <app-code lang="yaml"># your existing stack file
 services:
-  plug-agent:
-    image: docker.io/softwarity/plug-agent:latest
+  plug:
+    image: docker.io/softwarity/plug:latest
     ports:
       - "2222:22"</app-code>
     <p>
