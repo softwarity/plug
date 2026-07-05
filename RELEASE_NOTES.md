@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 0.2.0
+
 - Rootless `plug uninstall` — no sudo unless the retired root daemon left files.
 - Install one-liner skips the host-key check (the agent regenerates its key at
   each start; it is not a secret) — matching what plug does internally, so a
