@@ -6,9 +6,16 @@ on:
   pull_request:
 
 jobs:
-  build:
-    name: Build CLI
-    runs-on: ubuntu-latest
+  # plug's own code, built and unit-tested NATIVELY on all three OSes. The e2e
+  # Docker matrix (see e2e.yml) can only run on Linux runners, so this is where
+  # macOS and Windows get real coverage: vet + the unit suite on each.
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v5
@@ -18,6 +25,20 @@ jobs:
       - name: Vet
         working-directory: cli
         run: go vet ./...
+      - name: Test
+        working-directory: cli
+        run: go test ./...
+
+  build:
+    name: Build CLI
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
       - name: Cross-compile
         working-directory: cli
         env:
