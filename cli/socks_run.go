@@ -10,6 +10,7 @@ import (
 
 	"github.com/softwarity/plug/cli/internal/inject"
 	"github.com/softwarity/plug/cli/internal/seccomp"
+	"github.com/softwarity/plug/cli/internal/tun"
 	"github.com/softwarity/plug/cli/internal/tunnel"
 )
 
@@ -35,6 +36,20 @@ func coreRunSOCKS(cfg config, cmdArgs []string) int {
 		return 1
 	}
 	defer tr.Close()
+
+	// Root mode: a userspace TUN data path (needs root). It captures the child's
+	// cluster traffic at the IP layer and forwards it through the tunnel, so EVERY
+	// runtime is covered — including gRPC/Netty/grpcio, which the fd-level hook +
+	// supervisor can't do. One codebase for Linux/macOS/Windows. Bypasses the
+	// hook/supervisor/env-proxy entirely.
+	if cfg.root {
+		info("tunnel ready — running your command (TUN mode)")
+		code, rerr := tun.Run(tr, cmdArgs, info)
+		if rerr != nil {
+			info("%v", rerr)
+		}
+		return code
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

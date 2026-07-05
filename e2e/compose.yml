@@ -78,28 +78,32 @@ services:
     networks: [edge]
     environment: { PLUG_HOOK_DEBUG: "1" }
     security_opt: [seccomp:unconfined]
-    cap_add: [SYS_PTRACE]
+    cap_add: [SYS_PTRACE, NET_ADMIN] # NET_ADMIN: TUN mode creates the device + routes
+    devices: ["/dev/net/tun:/dev/net/tun"] # the TUN char device plug opens in root mode
 
   client-node:
     build: { context: ., dockerfile: clients/node/Dockerfile }
     networks: [edge]
     environment: { PLUG_HOOK_DEBUG: "1" }
     security_opt: [seccomp:unconfined]
-    cap_add: [SYS_PTRACE]
+    cap_add: [SYS_PTRACE, NET_ADMIN] # NET_ADMIN: TUN mode creates the device + routes
+    devices: ["/dev/net/tun:/dev/net/tun"]
 
   client-python:
     build: { context: ., dockerfile: clients/python/Dockerfile }
     networks: [edge]
     environment: { PLUG_HOOK_DEBUG: "1" }
     security_opt: [seccomp:unconfined]
-    cap_add: [SYS_PTRACE]
+    cap_add: [SYS_PTRACE, NET_ADMIN] # NET_ADMIN: TUN mode creates the device + routes
+    devices: ["/dev/net/tun:/dev/net/tun"]
 
   client-java:
     build: { context: ., dockerfile: clients/java/Dockerfile }
     networks: [edge]
     environment: { PLUG_HOOK_DEBUG: "1" }
     security_opt: [seccomp:unconfined]
-    cap_add: [SYS_PTRACE]
+    cap_add: [SYS_PTRACE, NET_ADMIN] # NET_ADMIN: TUN mode creates the device + routes
+    devices: ["/dev/net/tun:/dev/net/tun"]
 
 networks:
   edge:

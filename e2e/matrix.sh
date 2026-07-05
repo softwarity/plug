@@ -39,9 +39,12 @@ echo "=== up: agent + $svc ==="
 $DC up -d --wait $build agent "$svc"
 
 echo "=== clients under plug → $proto $target ==="
+# E2E_ROOT=1 exercises the kernel-redirect root mode (plug --root) instead of the
+# rootless hook/supervisor. The client entrypoints honour PLUG_ROOT.
+rootenv=""; [ "${E2E_ROOT:-0}" = 1 ] && rootenv="-e PLUG_ROOT=1"
 declare -A result
 for l in "${langs[@]}"; do
-  out=$($DC run --rm $build "client-$l" "$proto" "$target" 2>&1)
+  out=$($DC run --rm $build $rootenv "client-$l" "$proto" "$target" 2>&1)
   if echo "$out" | grep -q "E2E-OK"; then
     result[$l]=PASS
   else

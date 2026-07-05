@@ -14,9 +14,10 @@ RUN CGO_ENABLED=0 go build -o /eclient .
 FROM debian:bookworm-slim
 ARG TARGETARCH
 # openssh-client: plug's launcher shells out to ssh for its version check.
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates openssh-client \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates openssh-client iptables iproute2 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=agentimg /opt/plug/bin/plug-linux-${TARGETARCH} /usr/local/bin/plug
 COPY --from=build /eclient /usr/local/bin/eclient
 RUN chmod +x /usr/local/bin/plug /usr/local/bin/eclient
-ENTRYPOINT ["plug", "-H", "agent", "--port", "22", "/usr/local/bin/eclient"]
+# PLUG_ROOT=1 → run under the kernel-redirect root mode (needs cap NET_ADMIN).
+ENTRYPOINT ["sh", "-c", "exec plug ${PLUG_ROOT:+--root} -H agent --port 22 /usr/local/bin/eclient \"$@\"", "sh"]

@@ -47,6 +47,8 @@ Options:
   -p, --profile <name>   use profile ~/.plug/<name>.conf
   -H, --host <host>      agent host (bypasses profiles; also $PLUG_HOST)
       --port <port>      agent SSH port (default 2222; also $PLUG_PORT)
+      --tun              capture ALL traffic via a userspace TUN — covers every
+                         runtime (gRPC, static binaries, UDP), needs root
   -h, --help             show this help
 
 How it works:
@@ -75,6 +77,7 @@ type config struct {
 	host     string
 	port     string
 	forwards []forwardSpec
+	root     bool // --tun/--root: userspace-TUN data path (covers every runtime, needs root)
 }
 
 // forwardSpec declares a local port-forward for a raw-TCP service whose driver
@@ -133,6 +136,7 @@ type options struct {
 	profile string
 	host    string
 	port    string
+	root    bool
 }
 
 func main() {
@@ -515,6 +519,8 @@ func parseArgs(args []string) (options, []string) {
 			o.host = flagValue(args, &i)
 		case "--port":
 			o.port = flagValue(args, &i)
+		case "--root", "--tun":
+			o.root = true
 		default:
 			return o, args[i:]
 		}
@@ -565,6 +571,7 @@ func resolveConfig(o options) config {
 	if cfg.port == "" {
 		cfg.port = defaultPort
 	}
+	cfg.root = o.root
 	return cfg
 }
 
