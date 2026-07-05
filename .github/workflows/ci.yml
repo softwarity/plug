@@ -29,6 +29,56 @@ jobs:
         working-directory: cli
         run: go test ./...
 
+  # The visible cross-platform proof: build plug natively on each OS and loop
+  # real traffic through a real TUN device BY NAME (no agent, no Docker). This is
+  # where macOS and Windows show their TUN data path actually works, not just
+  # that the code compiles.
+  selftest:
+    name: TUN selftest (${{ matrix.os }})
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+      - name: Build plug
+        working-directory: cli
+        shell: bash
+        run: go build -o "plug${{ runner.os == 'Windows' && '.exe' || '' }}" .
+
+      - name: selftest — real utun/tun by name (under sudo)
+        if: runner.os != 'Windows'
+        working-directory: cli
+        shell: bash
+        run: |
+          set -o pipefail
+          sudo ./plug selftest 2>&1 | tee out.txt
+          grep -q "SELFTEST-OK" out.txt
+          echo "### TUN selftest — ${{ runner.os }} ✅ real device, traffic round-tripped by name" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: selftest — WinTUN by name (best-effort, needs the driver)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        working-directory: cli
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://www.wintun.net/builds/wintun-0.14.1.zip -OutFile wintun.zip
+          Expand-Archive wintun.zip -DestinationPath wintun -Force
+          Copy-Item wintun/wintun/bin/amd64/wintun.dll .
+          ./plug.exe selftest 2>&1 | Tee-Object -FilePath out.txt
+          if (Select-String -Path out.txt -Pattern "SELFTEST-OK") {
+            "### TUN selftest — Windows ✅ WinTUN, traffic round-tripped by name" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
+          } else {
+            "### TUN selftest — Windows ⚠️ WinTUN unavailable on this runner (driver/elevation)" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
+            exit 1
+          }
+
   build:
     name: Build CLI
     needs: test

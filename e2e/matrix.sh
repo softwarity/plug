@@ -39,12 +39,11 @@ echo "=== up: agent + $svc ==="
 $DC up -d --wait $build agent "$svc"
 
 echo "=== clients under plug → $proto $target ==="
-# E2E_ROOT=1 exercises the kernel-redirect root mode (plug --root) instead of the
-# rootless hook/supervisor. The client entrypoints honour PLUG_ROOT.
-rootenv=""; [ "${E2E_ROOT:-0}" = 1 ] && rootenv="-e PLUG_ROOT=1"
+# plug's single data path is the userspace TUN (needs NET_ADMIN + /dev/net/tun,
+# set on the client services in compose.yml). No mode flag — plug always uses it.
 declare -A result
 for l in "${langs[@]}"; do
-  out=$($DC run --rm $build $rootenv "client-$l" "$proto" "$target" 2>&1)
+  out=$($DC run --rm $build "client-$l" "$proto" "$target" 2>&1)
   if echo "$out" | grep -q "E2E-OK"; then
     result[$l]=PASS
   else
@@ -53,17 +52,10 @@ for l in "${langs[@]}"; do
   fi
 done
 
-# Known gaps: cells in E2E_XFAIL (space-separated "lang:proto") warn instead of
-# failing the suite. Default: java:grpc + python:grpc — two distinct hard cases
-# (NOT a name-mapping issue; plug routes them by name correctly):
-#   java:grpc   — plug splices the intercepted connection with dup2(), which
-#                 invalidates the fd's epoll registration; Netty arms its event
-#                 loop for the fd BEFORE connect() returns, so it never sees the
-#                 connection come up (go/node/libc register after connect → fine).
-#   python:grpc — grpcio resolves via c-ares, which does DNS with sendto() to the
-#                 real nameserver, bypassing both the getaddrinfo hook and the
-#                 connect-trap, so a cluster name never reaches plug's resolver.
-read -ra xfail <<<"${E2E_XFAIL-java:grpc python:grpc}"
+# E2E_XFAIL (space-separated "lang:proto") lets a cell warn instead of failing.
+# Empty by default: the TUN captures at the IP layer, so every runtime is covered
+# — including gRPC on the JVM/CPython, which the old fd-level path could never do.
+read -ra xfail <<<"${E2E_XFAIL-}"
 is_xfail() { local c; for c in "${xfail[@]}"; do [ "$c" = "$1:$proto" ] && return 0; done; return 1; }
 
 echo

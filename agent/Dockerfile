@@ -10,26 +10,11 @@ ARG GIT_REV=
 FROM golang:1.26-alpine AS build
 ARG VERSION
 ARG GIT_REV
-# zig cross-compiles the Linux hook lib (C) for both arches, targeting glibc —
-# the developer's runtime is almost always glibc, and a musl .so would not
-# LD_PRELOAD into their process. Built into libassets/ next to the committed
-# macOS .dylib (which can't be built on Linux) so go:embed carries every hook.
-RUN apk add --no-cache zig
+# plug is a single self-contained Go binary — its data path is the userspace TUN
+# (gVisor netstack + wireguard-go device), no C hook or seccomp supervisor to
+# cross-build anymore.
 WORKDIR /src
 COPY cli/ ./cli/
-RUN cd cli/internal/inject && \
-    zig cc -target x86_64-linux-gnu.2.28  -O2 -fPIC -shared -fvisibility=hidden \
-        -o libassets/plug-hook-linux-amd64.so csrc/plug_hook.c -ldl && \
-    zig cc -target aarch64-linux-gnu.2.28 -O2 -fPIC -shared -fvisibility=hidden \
-        -o libassets/plug-hook-linux-arm64.so csrc/plug_hook.c -ldl
-# The seccomp supervisor (Go / statically-linked coverage) — a small ELF wrapper
-# plug runs the child under on Linux. Same zig cross-build, both arches, into
-# superasset/ so go:embed carries it into the CLI.
-RUN cd cli/internal/seccomp && \
-    zig cc -target x86_64-linux-gnu.2.28  -O2 \
-        -o superasset/plug-seccomp-linux-amd64 csrc/plug_seccomp.c -lpthread && \
-    zig cc -target aarch64-linux-gnu.2.28 -O2 \
-        -o superasset/plug-seccomp-linux-arm64 csrc/plug_seccomp.c -lpthread
 WORKDIR /src/cli
 RUN mkdir -p /out/bin && \
     if [ -n "${GIT_REV}" ]; then V="${VERSION}+${GIT_REV}"; else V="${VERSION}"; fi && \

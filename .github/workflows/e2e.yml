@@ -1,14 +1,11 @@
 name: E2E
 
-# Matrix e2e: for each (mode, protocol) bring up `agent` + that one service, then
-# run every language client (Go/Node/Python/Java) UNDER plug against it, asserting
-# the service is reachable BY NAME. Two modes:
-#   - rootless (default): libc hook + seccomp supervisor. gRPC on the JVM/CPython
-#     is a known gap (fd-level splice strands the HTTP/2 event loop).
-#   - tun (`plug --tun`): userspace-TUN IP-layer capture. Runtime-agnostic → the
-#     grpc cases pass too. Needs NET_ADMIN + /dev/net/tun in the client.
-# Images are built ONCE and shared via an artifact. Each job writes its grid to
-# the run Summary; a final `grid` job renders the full matrix per mode.
+# Matrix e2e: one job PER PROTOCOL brings up `agent` + that one service, then
+# runs every language client (Go/Node/Python/Java) UNDER plug against it,
+# asserting the service is reachable BY NAME through plug's single data path (the
+# userspace TUN). The agent, client and gRPC images are built ONCE and shared to
+# the protocol jobs via an artifact. Each job writes its grid to the run Summary;
+# a final `grid` job renders the full matrix.
 on:
   push:
     branches: [main]
@@ -21,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Build agent image (plug + hook + seccomp supervisor)
+      - name: Build agent image (plug + SSH agent)
         run: docker build -f agent/Dockerfile -t softwarity/plug:e2e .
       - name: Build client + gRPC images
         working-directory: e2e
@@ -38,13 +35,12 @@ jobs:
           retention-days: 1
 
   matrix:
-    name: ${{ matrix.mode }} · ${{ matrix.proto }}
+    name: ${{ matrix.proto }}
     needs: build
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        mode: [rootless, tun]
         proto: [http, postgres, redis, mongo, amqp, mqtt, grpc]
     steps:
       - uses: actions/checkout@v6
@@ -54,22 +50,16 @@ jobs:
           path: /tmp
       - name: Load prebuilt images
         run: gunzip -c /tmp/e2e-images.tar.gz | docker load
-      - name: ${{ matrix.proto }} — every client under plug (${{ matrix.mode }})
+      - name: ${{ matrix.proto }} — every client under plug, by name
         working-directory: e2e
         env:
           E2E_BUILD: "0" # images are preloaded; skip all builds
           E2E_RESULT_DIR: results
-          E2E_RESULT_TAG: ${{ matrix.mode }}-${{ matrix.proto }}
-          E2E_MODE_LABEL: ${{ matrix.mode }}
-          # tun mode: capture at the IP layer (no known gaps). rootless: the two
-          # grpc cases warn instead of failing the suite.
-          E2E_ROOT: ${{ matrix.mode == 'tun' && '1' || '0' }}
-          E2E_XFAIL: ${{ matrix.mode == 'tun' && '' || 'java:grpc python:grpc' }}
         run: bash matrix.sh ${{ matrix.proto }}
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: e2e-result-${{ matrix.mode }}-${{ matrix.proto }}
+          name: e2e-result-${{ matrix.proto }}
           path: e2e/results/*.txt
           retention-days: 1
 
@@ -84,37 +74,28 @@ jobs:
           path: results
           pattern: e2e-result-*
           merge-multiple: true
-      - name: Render the coverage matrices into the run summary
+      - name: Render the coverage matrix into the run summary
         run: |
           langs="go node python java"
           protos="http postgres redis mongo amqp mqtt grpc"
-          render() {
-            mode="$1"; title="$2"
-            {
-              echo "## $title"
-              echo
-              printf "| client |"; for p in $protos; do printf " %s |" "$p"; done; echo
-              # `printf '%s'`: the separator starts with '-', which bare printf reads as a flag.
-              printf '%s' "|---|"; for p in $protos; do printf '%s' "---|"; done; echo
-            } >> "$GITHUB_STEP_SUMMARY"
-            for l in $langs; do
-              row="| **$l** |"
-              for p in $protos; do
-                v=$(grep -ho "\b$l=[A-Z?]*" "results/$mode-$p.txt" 2>/dev/null | cut -d= -f2 || true)
-                case "$v" in
-                  PASS) cell="✅" ;;
-                  "")   cell="·"  ;;
-                  *)    cell="❌" ;;
-                esac
-                if [ "$mode" = rootless ] && { [ "$l:$p" = "java:grpc" ] || [ "$l:$p" = "python:grpc" ]; } && [ "$v" != PASS ]; then
-                  cell="⚠️"
-                fi
-                row="$row $cell |"
-              done
-              echo "$row" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "## plug e2e — reachable BY NAME under plug (TUN data path)"
+            echo
+            printf "| client |"; for p in $protos; do printf " %s |" "$p"; done; echo
+            # printf '%s': the separator starts with '-', which bare printf reads as a flag.
+            printf '%s' "|---|"; for p in $protos; do printf '%s' "---|"; done; echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          for l in $langs; do
+            row="| **$l** |"
+            for p in $protos; do
+              v=$(grep -ho "\b$l=[A-Z?]*" "results/$p.txt" 2>/dev/null | cut -d= -f2 || true)
+              case "$v" in
+                PASS) cell="✅" ;;
+                "")   cell="·"  ;;
+                *)    cell="❌" ;;
+              esac
+              row="$row $cell |"
             done
-            echo >> "$GITHUB_STEP_SUMMARY"
-          }
-          render tun "TUN mode (\`plug --tun\`) — IP-layer capture, covers every runtime"
-          render rootless "Rootless mode (default) — libc hook + seccomp supervisor"
-          echo "✅ pass · ⚠️ known gap (fd-level can't splice gRPC) · ❌ fail · \`·\` not run" >> "$GITHUB_STEP_SUMMARY"
+            echo "$row" >> "$GITHUB_STEP_SUMMARY"
+          done
+          { echo; echo "✅ pass · ❌ fail · \`·\` not run"; } >> "$GITHUB_STEP_SUMMARY"

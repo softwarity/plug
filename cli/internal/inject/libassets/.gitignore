@@ -1,3 +1,0 @@
-# Linux hook libs are built in the agent Dockerfile, never committed
-# (only the macOS .dylib ships in git — Linux can build its own).
-*.so

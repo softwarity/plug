@@ -47,20 +47,14 @@ Options:
   -p, --profile <name>   use profile ~/.plug/<name>.conf
   -H, --host <host>      agent host (bypasses profiles; also $PLUG_HOST)
       --port <port>      agent SSH port (default 2222; also $PLUG_PORT)
-      --tun              capture ALL traffic via a userspace TUN — covers every
-                         runtime (gRPC, static binaries, UDP), needs root
   -h, --help             show this help
 
 How it works:
-  plug starts a local SOCKS5 proxy backed by an SSH tunnel to the agent
-  and points the child's environment at it (ALL_PROXY, JAVA_TOOL_OPTIONS).
-  Cluster names resolve because the proxy hands hostnames to the agent,
-  which resolves them inside the cluster. No root, no daemon — so several
-  sessions to different clusters run side by side.
-
-  For raw-TCP services whose driver ignores the proxy (AMQP, Kafka…),
-  declare a port-forward; plug opens a per-session local port and injects
-  its address into the child's environment.
+  plug runs your command under a userspace TUN backed by an SSH tunnel to the
+  agent. Cluster names resolve to it and every outbound connection is captured
+  at the IP layer and forwarded to the agent, which reaches the service inside
+  the cluster. One path, every runtime (gRPC included). Set up once by the
+  cluster install (a root helper), then just: plug <command>.
 
 Profiles (~/.plug/*.conf):
   host = swarm-node.example.com
@@ -77,7 +71,6 @@ type config struct {
 	host     string
 	port     string
 	forwards []forwardSpec
-	root     bool // --tun/--root: userspace-TUN data path (covers every runtime, needs root)
 }
 
 // forwardSpec declares a local port-forward for a raw-TCP service whose driver
@@ -136,7 +129,6 @@ type options struct {
 	profile string
 	host    string
 	port    string
-	root    bool
 }
 
 func main() {
@@ -182,6 +174,8 @@ func main() {
 	case "uninstall":
 		uninstall(args[1:])
 		return
+	case "selftest":
+		os.Exit(runSelfTest())
 	}
 	launcherRun(args)
 }
@@ -245,7 +239,7 @@ func coreEnv(cfg config) []string {
 
 // runCore executes the tunnel logic in this very process (version match / fallback).
 func runCore(cfg config, cmdArgs []string) {
-	os.Exit(coreRunSOCKS(cfg, cmdArgs))
+	os.Exit(coreRun(cfg, cmdArgs))
 }
 
 func versionsDir() string {
@@ -519,8 +513,6 @@ func parseArgs(args []string) (options, []string) {
 			o.host = flagValue(args, &i)
 		case "--port":
 			o.port = flagValue(args, &i)
-		case "--root", "--tun":
-			o.root = true
 		default:
 			return o, args[i:]
 		}
@@ -571,7 +563,6 @@ func resolveConfig(o options) config {
 	if cfg.port == "" {
 		cfg.port = defaultPort
 	}
-	cfg.root = o.root
 	return cfg
 }
 
@@ -732,7 +723,7 @@ func coreMain() {
 	if len(cmdArgs) == 0 {
 		fatal("core: no command")
 	}
-	os.Exit(coreRunSOCKS(cfg, cmdArgs))
+	os.Exit(coreRun(cfg, cmdArgs))
 }
 
 func runChild(cmdArgs []string) int {

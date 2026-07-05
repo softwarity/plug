@@ -22,4 +22,4 @@ COPY --from=build /src/target/client.jar /app/client.jar
 COPY --from=agentimg /opt/plug/bin/plug-linux-${TARGETARCH} /usr/local/bin/plug
 RUN chmod +x /usr/local/bin/plug
 # PLUG_ROOT=1 → run under the TUN root mode (needs cap NET_ADMIN + /dev/net/tun).
-ENTRYPOINT ["sh", "-c", "exec plug ${PLUG_ROOT:+--root} -H agent --port 22 java -jar /app/client.jar \"$@\"", "sh"]
+ENTRYPOINT ["plug", "-H", "agent", "--port", "22", "java", "-jar", "/app/client.jar"]
