@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 0.1.0
+
 ### Data path
 
 - Rootless, per-process tunnel to a tiny agent container over SSH
