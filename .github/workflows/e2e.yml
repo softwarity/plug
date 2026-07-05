@@ -94,7 +94,8 @@ jobs:
               echo "## $title"
               echo
               printf "| client |"; for p in $protos; do printf " %s |" "$p"; done; echo
-              printf "|---|";      for p in $protos; do printf "---|"; done; echo
+              # `printf '%s'`: the separator starts with '-', which bare printf reads as a flag.
+              printf '%s' "|---|"; for p in $protos; do printf '%s' "---|"; done; echo
             } >> "$GITHUB_STEP_SUMMARY"
             for l in $langs; do
               row="| **$l** |"
