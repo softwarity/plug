@@ -31,11 +31,17 @@
   no longer also sets `HTTP_PROXY` / `-DsocksProxyHost` there: those made some JVM
   drivers hand the *fake* IP to the proxy (unroutable) and broke raw-TCP clients.
   Rerouting is now the hook/supervisor's job alone. (macOS unchanged.)
-- **Known gap — Netty / async-DNS gRPC clients** (`java:grpc`, `python:grpc`):
-  when a client resolves the name through one layer (the libc hook, or c-ares) but
-  `connect()`s through the other (Netty's native epoll → the supervisor), the two
-  layers' **separate** fake-IP tables can't map it back. Fix in progress: a
-  **shared fake-IP table** between hook and supervisor.
+- **Known gaps — gRPC on Java and Python** (`java:grpc`, `python:grpc`; the other
+  26 cells pass). plug routes both **by name** correctly — these are two distinct,
+  hard cases specific to gRPC's HTTP/2 stacks:
+  - **Java (Netty):** plug splices an intercepted connection with `dup2()`, which
+    invalidates the fd's epoll registration — and Netty arms its event loop for
+    the fd *before* `connect()` completes, so it never sees the connection come
+    up. Go / Node / libc drivers register after connect, so they're fine.
+  - **Python (grpcio):** it resolves names via **c-ares**, which sends DNS over
+    UDP with `sendto()` to the real nameserver — bypassing both the getaddrinfo
+    hook and the supervisor's connect-trap — so a cluster name never reaches
+    plug's resolver.
 - Publishing is **CI-only**: the local Makefile was removed (the multi-arch
   image is built and pushed exclusively by CI; local builds are plain
   `go build` / `docker build`).

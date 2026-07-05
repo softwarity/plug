@@ -38,8 +38,15 @@ supervisor — a real host needs neither.
 
 ## Known gaps
 
-Cells in `E2E_XFAIL` (default `java:grpc python:grpc`) warn instead of failing —
-these are the **shared-fake-table gap**: gRPC clients whose name resolution and
-`connect()` go through different interception layers (Netty native-epoll,
-c-ares), which don't yet share plug's fake-IP table. Fix pending; see
-RELEASE_NOTES.
+Cells in `E2E_XFAIL` (default `java:grpc python:grpc`) warn instead of failing.
+plug routes both **by name** correctly — these are two distinct, hard cases:
+
+- **java:grpc** — plug splices the intercepted connection with `dup2()`, which
+  invalidates the fd's epoll registration; Netty arms its event loop *before*
+  `connect()` returns, so it never sees the connection come up (go/node/libc
+  register after connect → fine).
+- **python:grpc** — grpcio resolves via **c-ares**, which does DNS with
+  `sendto()` to the real nameserver, bypassing both interception layers, so a
+  cluster name never reaches plug's resolver.
+
+See RELEASE_NOTES for the fix directions.

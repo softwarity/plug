@@ -51,9 +51,15 @@ for l in "${langs[@]}"; do
 done
 
 # Known gaps: cells in E2E_XFAIL (space-separated "lang:proto") warn instead of
-# failing the suite. Default: java:grpc — Netty's native-epoll transport makes
-# raw connect() syscalls, and the hook's fake-IP table isn't shared with the
-# supervisor, so the name is lost (fix pending; see RELEASE_NOTES).
+# failing the suite. Default: java:grpc + python:grpc — two distinct hard cases
+# (NOT a name-mapping issue; plug routes them by name correctly):
+#   java:grpc   — plug splices the intercepted connection with dup2(), which
+#                 invalidates the fd's epoll registration; Netty arms its event
+#                 loop for the fd BEFORE connect() returns, so it never sees the
+#                 connection come up (go/node/libc register after connect → fine).
+#   python:grpc — grpcio resolves via c-ares, which does DNS with sendto() to the
+#                 real nameserver, bypassing both the getaddrinfo hook and the
+#                 connect-trap, so a cluster name never reaches plug's resolver.
 read -ra xfail <<<"${E2E_XFAIL-java:grpc python:grpc}"
 is_xfail() { local c; for c in "${xfail[@]}"; do [ "$c" = "$1:$proto" ] && return 0; done; return 1; }
 
