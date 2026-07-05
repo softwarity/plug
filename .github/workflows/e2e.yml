@@ -1,0 +1,18 @@
+name: E2E
+
+# Stands up a mini-cluster (agent + services) in Docker and asserts that plug
+# makes cluster services reachable BY NAME from a client that otherwise can't
+# see them. This is the regression guard: every push re-runs the full matrix.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run the e2e harness
+        run: bash e2e/run.sh

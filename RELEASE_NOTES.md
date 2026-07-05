@@ -2,6 +2,19 @@
 
 ## NEXT RELEASE
 
+- **E2E test harness + CI** (`e2e/` + `.github/workflows/e2e.yml`): stands up a
+  mini-cluster in Docker and asserts cluster services are reachable **by name**
+  under plug — the regression guard, re-run on every push (free, public repo).
+- Publishing is **CI-only**: the local Makefile was removed (the multi-arch
+  image is built and pushed exclusively by CI; local builds are plain
+  `go build` / `docker build`).
+- Docs: the `forward =` mechanism clarified — it rewrites an env var for
+  **Go/statically-linked** apps the transparent hook can't reach, not for libc
+  drivers like `amqplib` (which the hook already handles by name).
+- Toward **1.0.0 — full process coverage** (proofs in `experiments/`): Go is
+  already covered on **macOS** (via libSystem), and Linux Go is **proven** with a
+  seccomp interceptor (integration pending); native Windows via `ws2_32` planned.
+
 ---
 
 ## 0.2.0

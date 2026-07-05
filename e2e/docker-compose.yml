@@ -1,0 +1,23 @@
+# Mini-cluster: the client (edge) sees the agent but NOT web (internal), so only
+# plug can make `web` reachable by name.
+services:
+  agent:
+    image: softwarity/plug:e2e
+    networks: [edge, internal]
+
+  web:
+    build:
+      context: .
+      dockerfile: web.Dockerfile
+    networks: [internal]
+
+  client:
+    build:
+      context: .
+      dockerfile: client.Dockerfile
+    depends_on: [agent, web]
+    networks: [edge]
+
+networks:
+  edge:
+  internal:
