@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 1.0.0
+
 - **One mode: the userspace TUN, over the SSH tunnel** (`cli/internal/tun`). plug
   captures the child's cluster traffic at the **IP layer**: `wireguard-go/tun`
   opens a userspace TUN (`/dev/net/tun`, `utun`, WinTUN), a **gVisor** netstack
