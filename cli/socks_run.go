@@ -16,6 +16,17 @@ import (
 // install script sets that up once (a root helper), so day-to-day runs are
 // plain `plug <cmd>`.
 func coreRun(cfg config, cmdArgs []string) int {
+	// On an OS with a GLOBAL system resolver (macOS), a second `plug` for the same
+	// cluster must NOT re-install the datapath — it would fight the first over the
+	// system DNS + routes. Instead it GRAFTS: run the child directly, reaching the
+	// cluster through the leader's datapath. On Linux each launch is autonomous.
+	leader, release, _ := tun.AcquireCluster(cfg.host + ":" + cfg.port)
+	defer release()
+	if !leader {
+		info("plug already running for %s — joining that session", cfg.host)
+		return runChildEnv(cmdArgs, nil)
+	}
+
 	// TOFU host-key pin lives next to the profiles, keyed by host:port.
 	knownHosts := ""
 	if home, err := os.UserHomeDir(); err == nil {
