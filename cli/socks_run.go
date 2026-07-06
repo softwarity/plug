@@ -23,7 +23,15 @@ func dialTunnel(cfg config) (*tunnel.Transport, error) {
 			knownHosts = filepath.Join(home, ".plug", "known_hosts")
 		}
 	}
-	return tunnel.Dial(cfg.host, cfg.port, sshUser, embeddedKey, knownHosts, info)
+	tr, err := tunnel.Dial(cfg.host, cfg.port, sshUser, embeddedKey, knownHosts, info)
+	// The host key is pinned into knownHosts on first connect. Off localhost the
+	// dialer may be the setuid daemon (euid 0), which would leave the pin file
+	// root-owned under the user's ~/.plug — and the "key changed, remove the line"
+	// hint would then point at a file they can't edit without sudo. Hand it back.
+	if err == nil && knownHosts != "" {
+		chownToUser(knownHosts)
+	}
+	return tr, err
 }
 
 // isLoopback reports whether host is the local machine (no network to intercept).
