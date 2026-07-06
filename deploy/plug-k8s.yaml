@@ -3,9 +3,19 @@
 #   kubectl -n <your-namespace> apply -f plug-k8s.yaml
 #
 # Deploy it in the SAME namespace as the services you want to reach: the agent's
-# sshd resolves short names (myservice) via CoreDNS from inside that namespace,
-# and dials them for you. No subnet, no CIDR — the SOCKS proxy works by name.
-# Cross-namespace? Use the FQDN in your code (myservice.othernamespace).
+# sshd resolves short names (myservice) via the pod's resolver (CoreDNS) from
+# inside that namespace and opens the connection itself, over an SSH direct-tcpip
+# channel. No subnet, no CIDR — resolution happens by name, in-cluster.
+# Cross-namespace? Use the FQDN in your code (myservice.othernamespace, or the
+# full myservice.othernamespace.svc.cluster.local).
+#
+# How the data path works (for context): the `plug` CLI captures the child
+# process's cluster traffic at the IP layer with a userspace TUN (gVisor
+# netstack), then splices each flow — by name — through a single SSH tunnel to
+# this agent. sshd here does the actual name resolution and dialing from inside
+# the cluster. There is no SOCKS proxy and no server-side code of ours: just
+# stock openssh forwarding. Trusted dev clusters only — the transport has no
+# authentication by design (see the repo's security model).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -19,25 +29,52 @@ spec:
     metadata:
       labels: { app: plug }
     spec:
+      # sshd must start as root: it writes host keys at boot (ssh-keygen -A),
+      # binds the privileged port 22, and privilege-separates by forking to the
+      # unprivileged `plug`/`get` users per session. So we do NOT force
+      # runAsNonRoot or a read-only rootfs here (either breaks sshd); we keep the
+      # one hardening that is safe for sshd — the default seccomp profile.
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: plug
           image: docker.io/softwarity/plug:latest
+          imagePullPolicy: Always # image is a moving `latest` (rebuilt in place)
           ports:
-            - containerPort: 22
+            - name: ssh
+              containerPort: 22
+          # sshd is up as soon as it accepts TCP on 22; a plain TCP probe avoids
+          # needing credentials.
+          readinessProbe:
+            tcpSocket: { port: 22 }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: 22 }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          # Modest footprint: the agent only shuttles bytes over ssh.
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits: { cpu: 250m, memory: 128Mi }
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: plug
+  labels: { app: plug }
 spec:
   type: NodePort
   selector: { app: plug }
   ports:
-    - port: 2222
+    - name: ssh
+      port: 2222
       targetPort: 22
       nodePort: 32222
 # Reach it two ways:
 #   • NodePort:  plug --host <a-node> --port 32222 <cmd>
-#   • No exposed port — kubectl port-forward (RBAC-gated), then plug on localhost:
+#   • No exposed port — kubectl port-forward (gated by the API-server RBAC),
+#     then plug on localhost:
 #       kubectl -n <ns> port-forward svc/plug 2222:2222
 #       plug --host localhost <cmd>
