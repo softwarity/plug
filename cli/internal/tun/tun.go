@@ -27,6 +27,7 @@ import (
 	"net"
 	"os/exec"
 	"strings"
+	"sync"
 
 	wgtun "golang.zx2c4.com/wireguard/tun"
 	"gvisor.dev/gvisor/pkg/buffer"
@@ -63,6 +64,10 @@ func instanceNet(n int) (cidr, dnsIP string, base uint32) {
 // user-facing — dispatched at the very top of main().
 const NsShimVerb = "__plug-ns"
 
+// DaemonVerb is the hidden re-exec subcommand that runs the persistent macOS
+// datapath daemon for one cluster (see daemonMain). Dispatched at the top of main().
+const DaemonVerb = "__plug-daemon"
+
 // logfn is an optional progress sink.
 type logfn func(string, ...any)
 
@@ -72,12 +77,27 @@ func (l logfn) f(format string, a ...any) {
 	}
 }
 
-// Run sets up the TUN data path and runs cmdArgs under it, forwarding cluster
-// connections through tr. Returns the child's exit code.
-func Run(tr Dialer, cmdArgs []string, logf func(string, ...any)) (int, error) {
+// Datapath is a live TUN data path: the utun, its routes + DNS repoint, the
+// gVisor netstack, and the bridge pumping IP packets between them. It stays up
+// until Stop — so a daemon can hold it across many child processes. privResolv is
+// the child's private resolv.conf path on Linux ("" elsewhere).
+type Datapath struct {
+	Ifname     string
+	DNSIP      string
+	privResolv string
+	stop       func()
+	done       chan struct{}
+	once       sync.Once
+}
+
+// StartDatapath brings up the TUN, configures routes + the system/child DNS,
+// mounts the netstack and starts the bridge — WITHOUT running a child. tr is the
+// already-dialed cluster transport. The caller must Stop() it to tear everything
+// down (routes + DNS restored). This is the piece a daemon holds; Run wraps it.
+func StartDatapath(tr Dialer, logf func(string, ...any)) (*Datapath, error) {
 	log := logfn(logf)
 	if err := checkPriv(); err != nil {
-		return 1, err
+		return nil, err
 	}
 
 	// Phase 1: a single instance, N=0. Phase 2 will allocate N per active cluster.
@@ -86,9 +106,8 @@ func Run(tr Dialer, cmdArgs []string, logf func(string, ...any)) (int, error) {
 
 	dev, err := wgtun.CreateTUN(defaultTUNName, mtu)
 	if err != nil {
-		return 1, fmt.Errorf("create TUN (need root/helper): %w", err)
+		return nil, fmt.Errorf("create TUN (need root/helper): %w", err)
 	}
-	defer dev.Close()
 	ifname, _ := dev.Name()
 
 	// Networking + DNS handoff (privileged, per-OS). Routes cidr into the TUN and
@@ -100,9 +119,9 @@ func Run(tr Dialer, cmdArgs []string, logf func(string, ...any)) (int, error) {
 	// to that private resolv.conf.
 	upstreams, privResolv, cleanup, err := configure(dev, ifname, cidr, dnsIP, log)
 	if err != nil {
-		return 1, fmt.Errorf("configure %s: %w", ifname, err)
+		dev.Close()
+		return nil, fmt.Errorf("configure %s: %w", ifname, err)
 	}
-	defer cleanup()
 
 	tab := newFaketab(base)
 
@@ -111,16 +130,46 @@ func Run(tr Dialer, cmdArgs []string, logf func(string, ...any)) (int, error) {
 	// loopback socket, so macOS's getaddrinfo (which ignores /etc/resolv.conf)
 	// resolves cluster names via the system resolver we just repointed at dnsIP.
 	st, ep := buildStack(tab, tr, upstreamResolver(upstreams), log)
-	defer st.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	br := &bridge{dev: dev, ep: ep}
 	go br.toStack()      // TUN packets  → netstack
 	go br.fromStack(ctx) // netstack replies → TUN
 
 	log.f("root mode (TUN %s): DNS %s:53 in-netstack, %s → tunnel (covers every runtime)", ifname, dnsIP, cidr)
-	return runChild(cmdArgs, privResolv)
+
+	dp := &Datapath{Ifname: ifname, DNSIP: dnsIP, privResolv: privResolv, done: make(chan struct{})}
+	dp.stop = func() {
+		cancel()    // stop the bridge's fromStack loop
+		st.Close()  // tear down the netstack
+		cleanup()   // restore routes + system/child DNS
+		dev.Close() // remove the utun
+	}
+	return dp, nil
+}
+
+// Wait blocks until Stop is called (used by the daemon to hold the datapath).
+func (d *Datapath) Wait() { <-d.done }
+
+// Stop tears the datapath down exactly once and unblocks Wait. Safe to call from
+// a signal handler, a defer and the reaper concurrently.
+func (d *Datapath) Stop() {
+	d.once.Do(func() {
+		d.stop()
+		close(d.done)
+	})
+}
+
+// Run sets up the TUN data path and runs cmdArgs under it, forwarding cluster
+// connections through tr. It is the standalone path — still used on Linux and as
+// the non-daemon fallback. Returns the child's exit code.
+func Run(tr Dialer, cmdArgs []string, logf func(string, ...any)) (int, error) {
+	dp, err := StartDatapath(tr, logf)
+	if err != nil {
+		return 1, err
+	}
+	defer dp.Stop()
+	return runChild(cmdArgs, dp.privResolv)
 }
 
 // bridge pumps IP packets between the wireguard-go device and the gVisor

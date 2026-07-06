@@ -16,13 +16,17 @@
 - **Per-instance partition.** The fake range is carved into per-instance `/24`s
   (`198.18.<N>.0/24`, DNS at `.53`, never minted), laying the groundwork for
   multicluster.
-- **Multiple processes, one cluster (macOS).** Several `plug`s of the same cluster
-  now share one datapath: the first launch is the leader (owns the utun + DNS
-  repoint + tunnel), later ones graft onto it. Linux already did this per-launch
-  via mount namespaces.
+- **macOS: a persistent per-cluster daemon holds the datapath across restarts.**
+  Because macOS repoints DNS machine-wide, the datapath can't die with each
+  `plug <cmd>`. It now lives in a small daemon, started on demand and detached:
+  `plug <cmd>` just ensures it's up, registers as a client, and runs the child (no
+  tunnel of its own). Restart your processes freely — resolution survives. The
+  daemon tears down and restores your DNS 30s after the last `plug` of the cluster
+  exits; `plug down` stops it now; a hard kill is repaired from a DNS backup on the
+  next `plug`. Linux is unchanged (autonomous per launch via mount namespaces).
 - **Known macOS limits.** One active cluster at a time (the system resolver is
-  global); the leader must outlive the grafted processes. Simultaneous *different*
-  clusters on macOS/Windows is planned (transparent PID-routed, or suffix-based).
+  global). Simultaneous *different* clusters on macOS/Windows is planned
+  (transparent PID-routed, or suffix-based).
 
 ---
 

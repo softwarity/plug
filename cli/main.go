@@ -44,6 +44,7 @@ Usage:
   plug versions                        list locally cached versions
   plug version                         print the launcher version
   plug self-update                     update the launcher itself from a cluster
+  plug down                            stop the macOS datapath daemon (this cluster)
 
 Options:
   -p, --profile <name>   use profile ~/.plug/<name>.conf
@@ -143,6 +144,11 @@ func main() {
 		}
 		return
 	}
+	// The persistent macOS datapath daemon: a detached re-exec that holds the
+	// datapath for one cluster (see daemonMain). Checked before PLUG_CORE.
+	if len(os.Args) > 1 && os.Args[1] == tun.DaemonVerb {
+		os.Exit(daemonMain(os.Args[2:]))
+	}
 	// Core mode: this binary was exec'd by the launcher to do the real work.
 	if os.Getenv("PLUG_CORE") == "1" {
 		coreMain()
@@ -184,6 +190,9 @@ func main() {
 		return
 	case "uninstall":
 		uninstall(args[1:])
+		return
+	case "down":
+		cmdDown(args[1:])
 		return
 	case "selftest":
 		os.Exit(runSelfTest())

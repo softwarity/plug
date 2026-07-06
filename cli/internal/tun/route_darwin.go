@@ -160,3 +160,61 @@ func scutilRemove(key string) error {
 	_, err := scutil("remove " + key + "\nquit\n")
 	return err
 }
+
+// persistDNSBackup writes what's needed to restore the original DNS even after a
+// kill -9 of the daemon: the primary-service DNS key on the first line, then the
+// scutil rebuild script (`restore`). An empty script means the service had no DNS
+// dict → restoring means REMOVING our override.
+func persistDNSBackup(path, dnsKey, restore string) error {
+	return os.WriteFile(path, []byte(dnsKey+"\n"+restore), 0o644)
+}
+
+// loadDNSBackup parses a backup file into its key and restore script.
+func loadDNSBackup(path string) (dnsKey, restore string, err error) {
+	b, e := os.ReadFile(path)
+	if e != nil {
+		return "", "", e
+	}
+	dnsKey, restore, _ = strings.Cut(string(b), "\n")
+	return dnsKey, restore, nil
+}
+
+// restoreDNSBackup replays the backup at path — re-applying the saved DNS dict, or
+// removing our override if the service had none — then deletes the backup file.
+func restoreDNSBackup(path string) error {
+	dnsKey, restore, err := loadDNSBackup(path)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(restore) != "" {
+		_ = scutilSet(dnsKey, restore)
+	} else {
+		_ = scutilRemove(dnsKey)
+	}
+	return os.Remove(path)
+}
+
+// SaveDNSBackup snapshots the current primary-service DNS into the cluster's
+// backup file so a kill -9 of the daemon can be repaired. Call BEFORE the DNS is
+// overridden (StartDatapath).
+func SaveDNSBackup(key string) error {
+	svc, err := primaryService()
+	if err != nil {
+		return err
+	}
+	dnsKey := "State:/Network/Service/" + svc + "/DNS"
+	restore, _ := readDNSDict(dnsKey)
+	return persistDNSBackup(backupPath(key), dnsKey, restore)
+}
+
+// RestoreOrphanDNS restores a leftover DNS backup — a crashed daemon left the
+// system resolver pointed at a dead address — and removes it. No-op if none. Call
+// only while holding the leader lock, so any backup present can only be an orphan.
+func RestoreOrphanDNS(key string) {
+	if _, err := os.Stat(backupPath(key)); err == nil {
+		_ = restoreDNSBackup(backupPath(key))
+	}
+}
+
+// ClearDNSBackup drops the backup after a clean shutdown (cleanup already restored the DNS).
+func ClearDNSBackup(key string) { _ = os.Remove(backupPath(key)) }
