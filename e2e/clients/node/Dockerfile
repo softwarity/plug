@@ -4,7 +4,7 @@
 ARG AGENT_IMAGE=softwarity/plug:e2e
 FROM ${AGENT_IMAGE} AS agentimg
 
-FROM node:20-bookworm-slim
+FROM node:24-bookworm-slim
 ARG TARGETARCH
 # openssh-client: plug's launcher shells out to ssh for its version check.
 # iproute2: the TUN root mode configures the device + routes with `ip`.
