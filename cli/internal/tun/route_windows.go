@@ -2,6 +2,11 @@
 
 package tun
 
+import (
+	"os/exec"
+	"strings"
+)
+
 // Available reports whether the TUN data path can run on this OS. On Windows the
 // device is WinTUN (needs wintun.dll alongside the binary + Administrator).
 func Available() bool { return true }
@@ -13,22 +18,32 @@ const defaultTUNName = "plug0"
 func checkPriv() error { return nil }
 
 // configure assigns the adapter address, routes the fake range into it, and
-// points its DNS at our loopback resolver, via netsh.
+// points its DNS at our loopback resolver. Windows route config is WIP — the
+// dump below shows the real adapter name + address + route table so it can be
+// fixed against the actual runner state instead of guesswork.
 func configure(ifname, dnsAddr string, log logfn) ([]string, string, func(), error) {
 	for _, cmd := range [][]string{
 		{"netsh", "interface", "ipv4", "set", "address", "name=" + ifname, "static", "10.99.99.1", "255.255.255.0"},
-		// on-link route for the fake range via the adapter (named params + active store)
 		{"netsh", "interface", "ipv4", "add", "route", "prefix=" + fakeCIDR, "interface=" + ifname, "store=active"},
 		{"netsh", "interface", "ipv4", "set", "dnsservers", "name=" + ifname, "static", dnsAddr, "primary"},
 	} {
 		if err := run(cmd[0], cmd[1:]...); err != nil {
-			return nil, "", func() {}, err
+			log.f("tun[win]: %s failed: %v", strings.Join(cmd, " "), err)
 		}
 	}
+
+	// Diagnostics: what actually landed on the box.
+	for _, d := range [][]string{
+		{"netsh", "interface", "show", "interface"},
+		{"netsh", "interface", "ipv4", "show", "addresses", ifname},
+		{"netsh", "interface", "ipv4", "show", "route"},
+	} {
+		out, _ := exec.Command(d[0], d[1:]...).CombinedOutput()
+		log.f("tun[win-diag] %s ⇒\n%s", strings.Join(d[1:], " "), strings.TrimSpace(string(out)))
+	}
+
 	cleanup := func() {
 		_ = run("netsh", "interface", "ipv4", "delete", "route", fakeCIDR, ifname)
 	}
-	// Windows sets DNS per-adapter (netsh above), not via a global file — no
-	// mount-namespace trick needed; privResolv is empty.
 	return nil, "", cleanup, nil
 }
