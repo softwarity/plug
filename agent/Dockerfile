@@ -56,6 +56,8 @@ COPY --chown=plug:plug --chmod=600 agent/authorized_keys /home/plug/.ssh/authori
 RUN chmod 700 /home/plug/.ssh
 COPY --chmod=755 agent/serve-binary /usr/local/bin/serve-binary
 COPY --chmod=755 agent/entrypoint.sh /entrypoint.sh
+# The Windows PowerShell installer, streamed by serve-binary on `install-windows`.
+COPY --chmod=644 agent/install.ps1 /opt/plug/install.ps1
 
 COPY --from=build /out/bin/ /opt/plug/bin/
 COPY --from=build /out/VERSION /opt/plug/VERSION

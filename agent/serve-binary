@@ -13,6 +13,21 @@ if [ "$verb" = "version" ]; then
   exec cat /opt/plug/VERSION
 fi
 
+# install-windows: stream the PowerShell installer (parity of the unix `install`
+# branch below). Unlike unix — where every binary is small and base64-embedded so
+# `uname` can pick one client-side — Windows is a single target (amd64), so the
+# script just downloads plug-windows-amd64.exe over ssh (the `windows-amd64` verb)
+# instead of embedding it. The script is versioned in the repo (agent/install.ps1)
+# and baked into the image at /opt/plug/install.ps1. Invoke it with:
+#   ssh get@<host> install-windows | powershell -NoProfile -Command -
+if [ "$verb" = "install-windows" ] || [ "$verb" = "install.ps1" ]; then
+  if [ -f /opt/plug/install.ps1 ]; then
+    exec cat /opt/plug/install.ps1
+  fi
+  echo "plug: install.ps1 missing from this agent image" >&2
+  exit 1
+fi
+
 # install: emit an installer with every unix binary embedded. The script runs
 # uname CLIENT-side to pick the right one — so the command stays a bare
 # `ssh get@host install | sh`, with no host and no arch to supply. (The agent
@@ -125,7 +140,8 @@ fi
 
 echo "plug $(cat /opt/plug/VERSION) — usage over ssh:" >&2
 echo '  # host key regenerated each start (not a secret) — skip the check:' >&2
-echo '  ssh -p <port> -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@<host> install | sh   # install (recommended)' >&2
+echo '  ssh -p <port> -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@<host> install | sh   # install (linux/macOS, recommended)' >&2
+echo '  ssh -p <port> -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@<host> install-windows | powershell -NoProfile -Command -   # install (Windows)' >&2
 echo '  ssh -p <port> -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@<host> $(uname -s)-$(uname -m) > plug   # just the binary' >&2
 echo '  ssh -p <port> -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@<host> version' >&2
 exit 1
