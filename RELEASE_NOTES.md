@@ -11,7 +11,27 @@
   setuid euid is inherited, so the child is spawned under your uid/gid and
   supplementary groups. `sudo plug` still works (it drops via `SUDO_UID`); a
   genuine root login runs the child as root, unchanged. `self-update` re-applies
-  the setuid bit so an update doesn't silently disable the helper.
+  the setuid bit so an update doesn't silently disable the helper. Off localhost,
+  the pinned `known_hosts` (written by the euid-0 daemon) is chowned back to you,
+  so you can act on a "key changed" warning without sudo.
+- **Native Windows installer.** `ssh get@host install-windows | powershell
+  -NoProfile -Command -` mirrors the unix `install | sh`: it downloads `plug.exe`
+  + `wintun.dll` into `%LOCALAPPDATA%\Programs\plug`, adds it to PATH, and
+  pre-creates your profile — no admin needed to install (no WSL2). Launch still
+  needs an elevated terminal for now (WinTUN); a persistent SYSTEM service is the
+  planned "run without admin" path.
+- **Kubernetes manifest modernized.** `deploy/plug-k8s.yaml` now describes the
+  actual TUN data path (not the removed SOCKS proxy), with a TCP readiness/liveness
+  probe, modest resource limits, and a `deploy/README.md`. `kubectl exec` transport
+  was evaluated and dropped — `kubectl port-forward` already gives a zero-exposed
+  port gated by API-server RBAC.
+- **Multicluster (macOS/Windows) — design + attribution core.** The validated
+  approach routes by PID **at connect** (not at DNS): one system resolver, fake IPs
+  per name, and the flow attributed to a cluster by walking the connecting
+  process's ancestry to its `plug -p X` launcher. The attribution core landed
+  (isolated, unit-tested, wired into no live datapath); see `docs/multicluster.md`.
+  Linux multicluster already works via mount namespaces.
+- **e2e coverage: WebSocket** across all four language clients (Go/Node/Python/Java).
 
 ---
 
