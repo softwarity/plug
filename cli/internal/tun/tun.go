@@ -46,7 +46,7 @@ const (
 	mtu      = 1500        // TUN MTU; gVisor segments egress to this
 	headroom = 16          // scratch bytes wireguard-go needs before each packet
 	nicID    = 1           // the single netstack NIC
-	fakeCIDR = "240.0.0.0/4" // class-E space we route into the TUN
+	fakeCIDR = "198.18.0.0/15" // RFC 2544 range we route into the TUN (Windows-routable, unlike class-E 240/4)
 	dnsAddr  = "127.0.0.1"   // where the child's resolver is pointed (port 53)
 )
 

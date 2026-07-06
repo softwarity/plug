@@ -10,8 +10,11 @@ import (
 )
 
 const (
-	fakeBase = 0xF0000000 // 240.0.0.0
-	fakeMask = 0xF0000000 // /4
+	// 198.18.0.0/15 — the RFC 2544 benchmarking range: nothing routes it for real,
+	// and unlike class-E 240/4 the Windows TCP/IP stack actually routes it (Windows
+	// rejects 240/4 as a martian at connect(), so the TUN was unreachable there).
+	fakeBase = 0xC6120000 // 198.18.0.0
+	fakeMask = 0xFFFE0000 // /15
 )
 
 // faketab maps minted fake IPs (240/4) to cluster names. The DNS server mints;
