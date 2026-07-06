@@ -5,6 +5,8 @@ package tun
 import (
 	"fmt"
 	"net/netip"
+	"os/exec"
+	"strings"
 
 	"golang.org/x/sys/windows"
 	wgtun "golang.zx2c4.com/wireguard/tun"
@@ -25,7 +27,7 @@ func checkPriv() error { return nil }
 // (winipcfg) — NOT netsh. netsh returns success but does not actually assign an
 // address to a WinTUN adapter, which left it with no source IP (route present,
 // dial "unreachable"); wireguard-windows uses winipcfg for exactly this reason.
-func configure(dev any, _ /*ifname*/, dnsAddr string, log logfn) ([]string, string, func(), error) {
+func configure(dev any, ifname, dnsAddr string, log logfn) ([]string, string, func(), error) {
 	nt, ok := dev.(*wgtun.NativeTun)
 	if !ok {
 		return nil, "", func() {}, fmt.Errorf("windows TUN: unexpected device type %T", dev)
@@ -44,6 +46,15 @@ func configure(dev any, _ /*ifname*/, dnsAddr string, log logfn) ([]string, stri
 		if e := luid.SetDNS(v4, []netip.Addr{dns}, nil); e != nil {
 			log.f("tun[win]: set DNS: %v", e)
 		}
+	}
+
+	// diagnostics: confirm winipcfg actually applied the IP + route.
+	for _, d := range [][]string{
+		{"netsh", "interface", "ipv4", "show", "addresses", ifname},
+		{"netsh", "interface", "ipv4", "show", "route"},
+	} {
+		out, _ := exec.Command(d[0], d[1:]...).CombinedOutput()
+		log.f("tun[win-diag] %s ⇒\n%s", strings.Join(d[2:], " "), strings.TrimSpace(string(out)))
 	}
 
 	cleanup := func() {
