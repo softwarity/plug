@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -158,7 +159,23 @@ func startDaemonDetached(cfg config) error {
 	if n, _ := r.Read(buf); n == 1 {
 		return nil // ready
 	}
+	// Surface the daemon's own failure reason (its last log line) instead of an
+	// opaque "did not come up".
+	if reason := lastLogLine(logPath); reason != "" {
+		return fmt.Errorf("%s", reason)
+	}
 	return fmt.Errorf("daemon did not come up (see %s)", logPath)
+}
+
+// lastLogLine returns the last non-empty line of the daemon log — its failure
+// reason — stripped of the "[plug] " prefix.
+func lastLogLine(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	return strings.TrimPrefix(strings.TrimSpace(lines[len(lines)-1]), "[plug] ")
 }
 
 // cmdDown stops the running datapath daemon for the resolved cluster (`plug down`).
