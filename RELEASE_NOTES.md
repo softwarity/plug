@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 1.1.0
+
 - **macOS DNS fix — real apps resolve cluster names again.** A real app's
   `getaddrinfo(<service>)` used to return `ENOTFOUND` on macOS: the datapath was
   fine, but macOS resolves through mDNSResponder/SystemConfiguration, not
