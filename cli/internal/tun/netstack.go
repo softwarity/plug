@@ -104,14 +104,20 @@ func handleDNS(r *udp.ForwarderRequest, tab *faketab, upstream *net.Resolver, lo
 	conn := gonet.NewUDPConn(&wq, ep)
 	go func() {
 		defer conn.Close()
-		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 		buf := make([]byte, 512)
-		n, err := conn.Read(buf)
-		if err != nil {
-			return
-		}
-		if resp := answerDNS(buf[:n], tab, upstream); resp != nil {
-			_, _ = conn.Write(resp)
+		// A resolver (glibc getaddrinfo) sends A and AAAA from the SAME socket, so
+		// both land on THIS endpoint. Read in a loop and answer each — reading only
+		// once loses the second query, and the client then stalls until its retry
+		// timeout (which e.g. blows pymongo's 5s serverSelectionTimeout).
+		for {
+			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			n, err := conn.Read(buf)
+			if err != nil {
+				return // idle past the deadline (or closed) → done with this client
+			}
+			if resp := answerDNS(buf[:n], tab, upstream); resp != nil {
+				_, _ = conn.Write(resp)
+			}
 		}
 	}()
 }
