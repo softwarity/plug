@@ -1,6 +1,6 @@
 # Release Notes
 
-## NEXT RELEASE — toward 1.0.0
+## NEXT RELEASE
 
 - **One mode: the userspace TUN, over the SSH tunnel** (`cli/internal/tun`). plug
   captures the child's cluster traffic at the **IP layer**: `wireguard-go/tun`
