@@ -16,9 +16,10 @@ func checkPriv() error { return nil }
 // points its DNS at our loopback resolver, via netsh.
 func configure(ifname, dnsAddr string, log logfn) ([]string, string, func(), error) {
 	for _, cmd := range [][]string{
-		{"netsh", "interface", "ip", "set", "address", "name=" + ifname, "static", "10.99.99.1", "255.255.255.0"},
-		{"netsh", "interface", "ipv4", "add", "route", fakeCIDR, ifname},
-		{"netsh", "interface", "ip", "set", "dns", "name=" + ifname, "static", dnsAddr},
+		{"netsh", "interface", "ipv4", "set", "address", "name=" + ifname, "static", "10.99.99.1", "255.255.255.0"},
+		// on-link route for the fake range via the adapter (named params + active store)
+		{"netsh", "interface", "ipv4", "add", "route", "prefix=" + fakeCIDR, "interface=" + ifname, "store=active"},
+		{"netsh", "interface", "ipv4", "set", "dnsservers", "name=" + ifname, "static", dnsAddr, "primary"},
 	} {
 		if err := run(cmd[0], cmd[1:]...); err != nil {
 			return nil, "", func() {}, err

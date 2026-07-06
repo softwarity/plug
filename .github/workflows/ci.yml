@@ -6,9 +6,8 @@ on:
   pull_request:
 
 jobs:
-  # plug's own code, built and unit-tested NATIVELY on all three OSes. The e2e
-  # Docker matrix (see e2e.yml) can only run on Linux runners, so this is where
-  # macOS and Windows get real coverage: vet + the unit suite on each.
+  # plug's own code, built and unit-tested NATIVELY on all three OSes. Each job
+  # records its real PASS/FAIL as an artifact the `platforms` job reads back.
   test:
     name: Test (${{ matrix.os }})
     strategy:
@@ -28,11 +27,21 @@ jobs:
       - name: Test
         working-directory: cli
         run: go test ./...
+      - name: Record result
+        if: always()
+        shell: bash
+        run: mkdir -p plat && printf '%s' "${{ job.status }}" > "plat/test-${{ matrix.os }}.txt"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: plat-test-${{ matrix.os }}
+          path: plat/*.txt
+          retention-days: 1
 
-  # The visible cross-platform proof: build plug natively on each OS and loop
-  # real traffic through a real TUN device BY NAME (no agent, no Docker). This is
-  # where macOS and Windows show their TUN data path actually works, not just
-  # that the code compiles.
+  # The visible cross-platform proof: build plug natively on each OS and loop real
+  # traffic through a real TUN device BY NAME (no agent, no Docker). macOS/Linux
+  # run it under sudo and MUST pass. Windows is best-effort (WinTUN driver): the
+  # step records the honest PASS/FAIL and never masquerades as a pass it isn't.
   selftest:
     name: TUN selftest (${{ matrix.os }})
     needs: test
@@ -57,51 +66,76 @@ jobs:
         working-directory: cli
         shell: bash
         run: |
+          mkdir -p plat
           set -o pipefail
-          sudo ./plug selftest 2>&1 | tee out.txt
-          grep -q "SELFTEST-OK" out.txt
-          echo "### TUN selftest — ${{ runner.os }} ✅ real device, traffic round-tripped by name" >> "$GITHUB_STEP_SUMMARY"
+          if sudo ./plug selftest 2>&1 | tee out.txt && grep -q "SELFTEST-OK" out.txt; then
+            printf PASS > "plat/selftest-${{ matrix.os }}.txt"
+            echo "### TUN selftest — ${{ runner.os }} ✅ real device, traffic round-tripped by name" >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf FAIL > "plat/selftest-${{ matrix.os }}.txt"
+            echo "### TUN selftest — ${{ runner.os }} ❌ (see job log)" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
 
-      - name: selftest — WinTUN by name (best-effort, needs the driver)
+      - name: selftest — WinTUN by name (best-effort; WIP)
         if: runner.os == 'Windows'
         continue-on-error: true
         working-directory: cli
         shell: pwsh
         run: |
+          New-Item -ItemType Directory -Force plat | Out-Null
           Invoke-WebRequest https://www.wintun.net/builds/wintun-0.14.1.zip -OutFile wintun.zip
           Expand-Archive wintun.zip -DestinationPath wintun -Force
           Copy-Item wintun/wintun/bin/amd64/wintun.dll .
           ./plug.exe selftest 2>&1 | Tee-Object -FilePath out.txt
           if (Select-String -Path out.txt -Pattern "SELFTEST-OK") {
+            "PASS" | Out-File -NoNewline -FilePath plat/selftest-windows-latest.txt
             "### TUN selftest — Windows ✅ WinTUN, traffic round-tripped by name" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
           } else {
-            "### TUN selftest — Windows ⚠️ WinTUN unavailable on this runner (driver/elevation)" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
-            exit 1
+            "FAIL" | Out-File -NoNewline -FilePath plat/selftest-windows-latest.txt
+            "### TUN selftest — Windows ❌ WIP — WinTUN driver + adapter come up, but the 240/4 route isn't applied yet" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
           }
 
-  # One-glance platform grid in the run Summary: plug built + unit-tested AND its
-  # real TUN device exercised by name, on each OS. (The e2e protocol matrix is
-  # Linux-only — Docker — so THIS is where macOS/Windows coverage shows.)
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: plat-selftest-${{ matrix.os }}
+          path: cli/plat/*.txt
+          retention-days: 1
+
+  # One-glance platform grid in the run Summary, from the REAL per-OS results
+  # (not the job status — the Windows selftest is continue-on-error, so its true
+  # PASS/FAIL only lives in the marker it wrote).
   platforms:
     name: Platform coverage
     needs: [test, selftest]
     if: always()
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: plat
+          pattern: plat-*
+          merge-multiple: true
       - name: Render platform grid
         run: |
-          t='${{ needs.test.result }}'; s='${{ needs.selftest.result }}'
-          cell() { [ "$1" = success ] && echo "✅" || echo "⚠️ see jobs"; }
+          cell() {
+            case "$(cat "plat/$1" 2>/dev/null)" in
+              PASS|success) echo "✅" ;;
+              FAIL|failure) echo "❌" ;;
+              *)            echo "·" ;;
+            esac
+          }
           {
             echo "## Platform coverage — plug built + the real TUN exercised on each OS"
             echo
             echo "| Platform | Build + unit tests | TUN selftest (real device, by name) |"
             echo "|---|---|---|"
-            echo "| 🍎 macOS   | $(cell "$t") | $(cell "$s") |"
-            echo "| 🪟 Windows | $(cell "$t") | $(cell "$s") |"
-            echo "| 🐧 Linux   | $(cell "$t") | $(cell "$s") |"
+            echo "| 🍎 macOS   | $(cell test-macos-latest.txt)   | $(cell selftest-macos-latest.txt)   |"
+            echo "| 🪟 Windows | $(cell test-windows-latest.txt) | $(cell selftest-windows-latest.txt) |"
+            echo "| 🐧 Linux   | $(cell test-ubuntu-latest.txt)  | $(cell selftest-ubuntu-latest.txt)  |"
             echo
-            echo "_Per-OS detail in the Test / TUN selftest jobs. The e2e protocol matrix (7 services × 4 languages) is Linux-only._"
+            echo "_TUN selftest = a real utun / WinTUN / tun device, traffic looped BY NAME. Windows is WIP (driver loads; the 240/4 route config isn't done). The e2e protocol matrix (7 services × 4 languages) is Linux-only — Docker._"
           } >> "$GITHUB_STEP_SUMMARY"
 
   build:
