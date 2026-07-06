@@ -2,6 +2,28 @@
 
 ## NEXT RELEASE
 
+- **macOS DNS fix — real apps resolve cluster names again.** A real app's
+  `getaddrinfo(<service>)` used to return `ENOTFOUND` on macOS: the datapath was
+  fine, but macOS resolves through mDNSResponder/SystemConfiguration, not
+  `/etc/resolv.conf`. DNS is now served **at the IP layer** — a gVisor UDP
+  forwarder answers `:53` on a dedicated fake IP (`198.18.<N>.53`) reached through
+  the TUN — and the **system** resolver is repointed at it through each OS's
+  native channel: the SystemConfiguration **dynamic store** (`scutil`) on macOS
+  (`networksetup` can't touch a VPN's primary service, so it failed silently), a
+  per-child private `resolv.conf` on Linux, the adapter DNS (winipcfg) on Windows.
+  Proven end-to-end on macOS with an active corporate VPN. No `LD_PRELOAD`/DYLD
+  interposition — coverage stays universal (Go static and gRPC included).
+- **Per-instance partition.** The fake range is carved into per-instance `/24`s
+  (`198.18.<N>.0/24`, DNS at `.53`, never minted), laying the groundwork for
+  multicluster.
+- **Multiple processes, one cluster (macOS).** Several `plug`s of the same cluster
+  now share one datapath: the first launch is the leader (owns the utun + DNS
+  repoint + tunnel), later ones graft onto it. Linux already did this per-launch
+  via mount namespaces.
+- **Known macOS limits.** One active cluster at a time (the system resolver is
+  global); the leader must outlive the grafted processes. Simultaneous *different*
+  clusters on macOS/Windows is planned (transparent PID-routed, or suffix-based).
+
 ---
 
 ## 1.0.0
