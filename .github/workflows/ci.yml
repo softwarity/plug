@@ -56,45 +56,14 @@ jobs:
         with:
           go-version: stable
           cache: false
-      - name: Build plug
-        working-directory: cli
+      - name: selftest
         shell: bash
-        run: go build -o "plug${{ runner.os == 'Windows' && '.exe' || '' }}" .
-
-      - name: selftest — real utun/tun by name (under sudo)
-        if: runner.os != 'Windows'
-        working-directory: cli
-        shell: bash
-        run: |
-          mkdir -p plat
-          set -o pipefail
-          if sudo ./plug selftest 2>&1 | tee out.txt && grep -q "SELFTEST-OK" out.txt; then
-            printf PASS > "plat/selftest-${{ matrix.os }}.txt"
-            echo "### TUN selftest — ${{ runner.os }} ✅ real device, traffic round-tripped by name" >> "$GITHUB_STEP_SUMMARY"
-          else
-            printf FAIL > "plat/selftest-${{ matrix.os }}.txt"
-            echo "### TUN selftest — ${{ runner.os }} ❌ (see job log)" >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-
-      - name: selftest — WinTUN by name (best-effort; WIP)
-        if: runner.os == 'Windows'
-        continue-on-error: true
-        working-directory: cli
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force plat | Out-Null
-          Invoke-WebRequest https://www.wintun.net/builds/wintun-0.14.1.zip -OutFile wintun.zip
-          Expand-Archive wintun.zip -DestinationPath wintun -Force
-          Copy-Item wintun/wintun/bin/amd64/wintun.dll .
-          ./plug.exe selftest 2>&1 | Tee-Object -FilePath out.txt
-          if (Select-String -Path out.txt -Pattern "SELFTEST-OK") {
-            "PASS" | Out-File -NoNewline -FilePath plat/selftest-windows-latest.txt
-            "### TUN selftest — Windows ✅ WinTUN, traffic round-tripped by name" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
-          } else {
-            "FAIL" | Out-File -NoNewline -FilePath plat/selftest-windows-latest.txt
-            "### TUN selftest — Windows ❌ WIP — WinTUN driver + adapter come up, but the 240/4 route isn't applied yet" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
-          }
+        # Windows is WIP (WinTUN route config unfinished) — tolerate its failure;
+        # the marker still records the real result for the grid.
+        continue-on-error: ${{ matrix.os == 'windows-latest' }}
+        env:
+          PLAT_OS: ${{ matrix.os }}
+        run: bash scripts/selftest.sh
 
       - uses: actions/upload-artifact@v7
         if: always()
@@ -112,31 +81,14 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v6
       - uses: actions/download-artifact@v7
         with:
           path: plat
           pattern: plat-*
           merge-multiple: true
       - name: Render platform grid
-        run: |
-          cell() {
-            case "$(cat "plat/$1" 2>/dev/null)" in
-              PASS|success) echo "✅" ;;
-              FAIL|failure) echo "❌" ;;
-              *)            echo "·" ;;
-            esac
-          }
-          {
-            echo "## Platform coverage — plug built + the real TUN exercised on each OS"
-            echo
-            echo "| Platform | Build + unit tests | TUN selftest (real device, by name) |"
-            echo "|---|---|---|"
-            echo "| 🍎 macOS   | $(cell test-macos-latest.txt)   | $(cell selftest-macos-latest.txt)   |"
-            echo "| 🪟 Windows | $(cell test-windows-latest.txt) | $(cell selftest-windows-latest.txt) |"
-            echo "| 🐧 Linux   | $(cell test-ubuntu-latest.txt)  | $(cell selftest-ubuntu-latest.txt)  |"
-            echo
-            echo "_TUN selftest = a real utun / WinTUN / tun device, traffic looped BY NAME. Windows is WIP (driver loads; the 240/4 route config isn't done). The e2e protocol matrix (7 services × 4 languages) is Linux-only — Docker._"
-          } >> "$GITHUB_STEP_SUMMARY"
+        run: bash scripts/platform-grid.sh plat
 
   build:
     name: Build CLI
