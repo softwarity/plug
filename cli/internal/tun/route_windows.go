@@ -3,8 +3,12 @@
 package tun
 
 import (
-	"os/exec"
-	"strings"
+	"fmt"
+	"net/netip"
+
+	"golang.org/x/sys/windows"
+	wgtun "golang.zx2c4.com/wireguard/tun"
+	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 )
 
 // Available reports whether the TUN data path can run on this OS. On Windows the
@@ -17,36 +21,34 @@ const defaultTUNName = "plug0"
 // when not elevated, which is a better signal than a hand-rolled token check.
 func checkPriv() error { return nil }
 
-// configure assigns the adapter address, routes the fake range into it, and
-// points its DNS at our loopback resolver. Windows route config is WIP — the
-// dump below shows the real adapter name + address + route table so it can be
-// fixed against the actual runner state instead of guesswork.
-func configure(ifname, dnsAddr string, log logfn) ([]string, string, func(), error) {
-	for _, cmd := range [][]string{
-		// Fully NAMED params: mixing name= with positional (static 10.99…) makes
-		// netsh "succeed" without assigning the address, leaving plug0 with no
-		// source IP — so the 240/4 route was present but the dial was unreachable.
-		{"netsh", "interface", "ipv4", "set", "address", "name=" + ifname, "source=static", "address=10.99.99.1", "mask=255.255.255.0"},
-		{"netsh", "interface", "ipv4", "add", "route", "prefix=" + fakeCIDR, "interface=" + ifname, "store=active"},
-		{"netsh", "interface", "ipv4", "set", "dnsservers", "name=" + ifname, "source=static", "address=" + dnsAddr, "register=none"},
-	} {
-		if err := run(cmd[0], cmd[1:]...); err != nil {
-			log.f("tun[win]: %s failed: %v", strings.Join(cmd, " "), err)
+// configure programs the WinTUN adapter through its LUID via the IP Helper API
+// (winipcfg) — NOT netsh. netsh returns success but does not actually assign an
+// address to a WinTUN adapter, which left it with no source IP (route present,
+// dial "unreachable"); wireguard-windows uses winipcfg for exactly this reason.
+func configure(dev any, _ /*ifname*/, dnsAddr string, log logfn) ([]string, string, func(), error) {
+	nt, ok := dev.(*wgtun.NativeTun)
+	if !ok {
+		return nil, "", func() {}, fmt.Errorf("windows TUN: unexpected device type %T", dev)
+	}
+	luid := winipcfg.LUID(nt.LUID())
+	v4 := winipcfg.AddressFamily(windows.AF_INET)
+
+	if err := luid.SetIPAddresses([]netip.Prefix{netip.MustParsePrefix("10.99.99.1/24")}); err != nil {
+		return nil, "", func() {}, fmt.Errorf("assign adapter IP: %w", err)
+	}
+	// On-link route for the fake range: nexthop 0.0.0.0 → send straight out plug0.
+	if err := luid.AddRoute(netip.MustParsePrefix(fakeCIDR), netip.IPv4Unspecified(), 0); err != nil {
+		return nil, "", func() {}, fmt.Errorf("add %s route: %w", fakeCIDR, err)
+	}
+	if dns, err := netip.ParseAddr(dnsAddr); err == nil {
+		if e := luid.SetDNS(v4, []netip.Addr{dns}, nil); e != nil {
+			log.f("tun[win]: set DNS: %v", e)
 		}
 	}
 
-	// Diagnostics: what actually landed on the box.
-	for _, d := range [][]string{
-		{"netsh", "interface", "show", "interface"},
-		{"netsh", "interface", "ipv4", "show", "addresses", ifname},
-		{"netsh", "interface", "ipv4", "show", "route"},
-	} {
-		out, _ := exec.Command(d[0], d[1:]...).CombinedOutput()
-		log.f("tun[win-diag] %s ⇒\n%s", strings.Join(d[1:], " "), strings.TrimSpace(string(out)))
-	}
-
 	cleanup := func() {
-		_ = run("netsh", "interface", "ipv4", "delete", "route", fakeCIDR, ifname)
+		_ = luid.FlushRoutes(v4)
+		_ = luid.FlushIPAddresses(v4)
 	}
 	return nil, "", cleanup, nil
 }

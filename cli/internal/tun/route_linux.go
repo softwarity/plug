@@ -45,7 +45,7 @@ func hasEffCap(bit uint) bool {
 // configure brings the TUN up, routes the fake range into it, and repoints the
 // child's resolver at our loopback DNS — returning the child's former upstream
 // nameservers (read before the rewrite) and a cleanup that restores everything.
-func configure(ifname, dnsAddr string, log logfn) ([]string, string, func(), error) {
+func configure(_ any, ifname, dnsAddr string, log logfn) ([]string, string, func(), error) {
 	ups := resolvNameservers()
 
 	for _, cmd := range [][]string{

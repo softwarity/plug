@@ -28,7 +28,7 @@ func checkPriv() error {
 // macOS has no mount namespaces, so the resolver repoint is still global here
 // (restored on cleanup); privResolv is empty. Scoped per-launch DNS on macOS is a
 // separate problem (no netns) tracked for later.
-func configure(ifname, dnsAddr string, log logfn) ([]string, string, func(), error) {
+func configure(_ any, ifname, dnsAddr string, log logfn) ([]string, string, func(), error) {
 	ups := resolvNameservers()
 
 	for _, cmd := range [][]string{

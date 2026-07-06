@@ -84,7 +84,7 @@ func Run(tr Dialer, cmdArgs []string, logf func(string, ...any)) (int, error) {
 	// on Linux, the path to a PRIVATE resolv.conf we bind-mount into the child's
 	// mount namespace — so pointing the resolver at us never touches the global
 	// /etc/resolv.conf and two `plug` runs never collide.
-	upstreams, privResolv, cleanup, err := configure(ifname, dnsAddr, log)
+	upstreams, privResolv, cleanup, err := configure(dev, ifname, dnsAddr, log)
 	if err != nil {
 		return 1, fmt.Errorf("configure %s: %w", ifname, err)
 	}
