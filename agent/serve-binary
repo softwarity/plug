@@ -76,6 +76,22 @@ case "$os-$arch" in
 esac
 chmod +x "$dest/plug"
 echo "plug: installed to $dest/plug"
+# Grant the capabilities plug needs (TUN device + routes, per-launch mount ns,
+# bind :53) ONCE, so day-to-day `plug <command>` runs with no sudo. sudo prompts
+# on /dev/tty even through `| sh`. macOS has no file capabilities — use sudo there.
+if [ "$os" = linux ]; then
+  if command -v setcap >/dev/null 2>&1; then
+    echo "plug: granting network capabilities (one sudo now → future runs need none)…"
+    if sudo setcap cap_net_admin,cap_sys_admin,cap_net_bind_service+ep "$dest/plug"; then
+      echo "plug: ready — 'plug <command>' runs without sudo"
+    else
+      echo "plug: setcap failed — meanwhile run 'sudo plug <command>', or fix with:" >&2
+      echo "      sudo setcap cap_net_admin,cap_sys_admin,cap_net_bind_service+ep $dest/plug" >&2
+    fi
+  else
+    echo "plug: 'setcap' missing (install libcap2-bin) — meanwhile run 'sudo plug <command>'" >&2
+  fi
+fi
 case ":$PATH:" in *":$dest:"*) : ;; *) echo "plug: add $dest to your PATH" ;; esac
 if [ -n "$_profile" ]; then
   echo "plug: profile $_profile"

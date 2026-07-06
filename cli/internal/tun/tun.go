@@ -174,8 +174,12 @@ func (b *bridge) fromStack(ctx context.Context) {
 
 // run executes a privileged setup command (ip/route/ifconfig/netsh), surfacing
 // its output on failure. Shared by the per-OS configure() implementations.
+// withPrivCaps (Linux) passes plug's capabilities down to the helper, which
+// otherwise runs with none — file capabilities don't cross an exec.
 func run(bin string, args ...string) error {
-	out, err := exec.Command(bin, args...).CombinedOutput()
+	cmd := exec.Command(bin, args...)
+	withPrivCaps(cmd)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s %s: %v: %s", bin, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}

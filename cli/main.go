@@ -545,7 +545,14 @@ func resolveConfig(o options) config {
 	switch {
 	case o.host != "" || os.Getenv("PLUG_HOST") != "":
 	case o.profile != "":
-		cfg = loadProfile(o.profile)
+		// An unknown -p profile isn't an error: offer the wizard to create it, so
+		// reaching a new cluster is just `plug -p <newname> <cmd>` (no re-install).
+		if _, err := os.Stat(filepath.Join(plugDir(), o.profile+".conf")); err != nil {
+			info("profile %q doesn't exist yet — let's create it", o.profile)
+			cfg = loadProfile(wizard(o.profile, false))
+		} else {
+			cfg = loadProfile(o.profile)
+		}
 	default:
 		names := listProfiles()
 		switch len(names) {

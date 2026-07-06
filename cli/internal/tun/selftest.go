@@ -55,7 +55,7 @@ func SelfTest(logf func(string, ...any)) error {
 	defer dev.Close()
 	ifname, _ := dev.Name()
 
-	upstreams, _, cleanup, err := configure(ifname, dnsAddr, log)
+	upstreams, privResolv, cleanup, err := configure(ifname, dnsAddr, log)
 	if err != nil {
 		return fmt.Errorf("configure %s: %w", ifname, err)
 	}
@@ -114,5 +114,12 @@ func SelfTest(logf func(string, ...any)) error {
 		return fmt.Errorf("round-trip mismatch: got %q want %q", got, want)
 	}
 	log.f("selftest: %d bytes round-tripped through %s by name — OK", len(want), ifname)
+
+	// Also prove the per-launch DNS isolation (Linux mount namespace): a child
+	// must see ONLY our private resolver, confirming the mount-ns works — under a
+	// setcap'd non-root plug too, not just as root.
+	if err := checkLaunchIsolation(privResolv, log); err != nil {
+		return err
+	}
 	return nil
 }

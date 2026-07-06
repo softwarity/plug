@@ -5,6 +5,7 @@ package tun
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -14,11 +15,31 @@ func Available() bool { return true }
 // defaultTUNName is the interface name we ask wireguard-go to create.
 const defaultTUNName = "plug0"
 
+// capNetAdmin is the CAP_NET_ADMIN bit — the marker capability the install grants
+// (alongside CAP_SYS_ADMIN + CAP_NET_BIND_SERVICE) so plug runs without sudo.
+const capNetAdmin = 12
+
 func checkPriv() error {
-	if os.Geteuid() != 0 {
-		return fmt.Errorf("plug --tun needs root (create TUN + set routes): run with sudo, or install the plug helper")
+	if os.Geteuid() == 0 || hasEffCap(capNetAdmin) {
+		return nil
 	}
-	return nil
+	return fmt.Errorf("plug needs the privileged setup — re-run the cluster install (it grants file capabilities via sudo once), or run with sudo")
+}
+
+// hasEffCap reports whether the process holds capability `bit` in its effective
+// set (granted by file capabilities when the binary was setcap'd at install).
+func hasEffCap(bit uint) bool {
+	data, err := os.ReadFile("/proc/self/status")
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if v, ok := strings.CutPrefix(line, "CapEff:"); ok {
+			eff, err := strconv.ParseUint(strings.TrimSpace(v), 16, 64)
+			return err == nil && eff&(1<<bit) != 0
+		}
+	}
+	return false
 }
 
 // configure brings the TUN up, routes the fake range into it, and repoints the
