@@ -10,23 +10,36 @@ import (
 )
 
 const (
-	// 198.18.0.0/15 — the RFC 2544 benchmarking range: nothing routes it for real,
-	// and unlike class-E 240/4 the Windows TCP/IP stack actually routes it (Windows
-	// rejects 240/4 as a martian at connect(), so the TUN was unreachable there).
+	// 198.18.0.0/15 — the RFC 2544 benchmarking range: nothing routes it for
+	// real, and unlike class-E 240/4 the Windows TCP/IP stack actually routes it
+	// (Windows rejects 240/4 as a martian at connect(), which left the TUN
+	// unreachable there). plug carves this range into per-instance /24s: instance
+	// N owns 198.18.<N>.0/24 and serves its DNS on 198.18.<N>.53.
 	fakeBase = 0xC6120000 // 198.18.0.0
-	fakeMask = 0xFFFE0000 // /15
+	dnsHost  = 53         // reserved host byte: this instance's DNS is base|53
 )
 
-// faketab maps minted fake IPs (240/4) to cluster names. The DNS server mints;
-// the netstack forwarder looks up. In-process, shared, mutex-guarded.
+// faketab maps minted fake IPs to cluster names, all within ONE instance's
+// 198.18.<N>.0/24. The DNS forwarder mints; the netstack TCP forwarder looks up.
+// In-process, shared, mutex-guarded.
 type faketab struct {
 	mu   sync.Mutex
+	base uint32 // 198.18.<N>.0 — this instance's subnet
 	byIP map[uint32]string
-	next uint32
+	next uint32 // next host byte to hand out (1..254)
 }
 
-func newFaketab() *faketab { return &faketab{byIP: map[uint32]string{}, next: 1} }
+func newFaketab(base uint32) *faketab {
+	return &faketab{base: base, byIP: map[uint32]string{}, next: 1}
+}
 
+// dnsIP is this instance's reserved DNS address (198.18.<N>.53). It is never
+// minted for a service, so the resolver IP can't be aliased by a cluster name.
+func (t *faketab) dnsIP() uint32 { return t.base | dnsHost }
+
+// mint returns a stable fake IP inside this instance's /24 for name, or 0 if the
+// /24 is exhausted (254 services). The reserved DNS host (.53) is skipped; .0 and
+// .255 never occur since next stays in 1..254.
 func (t *faketab) mint(name string) uint32 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -35,7 +48,13 @@ func (t *faketab) mint(name string) uint32 {
 			return ip
 		}
 	}
-	ip := uint32(fakeBase) | (t.next & ^uint32(fakeMask))
+	if t.next == dnsHost {
+		t.next++
+	}
+	if t.next > 254 {
+		return 0 // subnet full — the caller NXDOMAINs rather than alias an IP
+	}
+	ip := t.base | t.next
 	t.next++
 	t.byIP[ip] = name
 	return ip
@@ -49,9 +68,9 @@ func (t *faketab) lookup(ip uint32) (string, bool) {
 }
 
 // upstreamResolver returns a resolver that dials the child's ORIGINAL
-// nameservers directly (bypassing the resolv.conf we just repointed at
-// ourselves), so our dotted-name lookups don't loop. Falls back to a public
-// resolver if the child had none.
+// nameservers directly (bypassing the resolver we just repointed at ourselves),
+// so our dotted-name lookups don't loop. Falls back to a public resolver if the
+// child had none.
 func upstreamResolver(servers []string) *net.Resolver {
 	if len(servers) == 0 {
 		servers = []string{"8.8.8.8"}
@@ -65,22 +84,10 @@ func upstreamResolver(servers []string) *net.Resolver {
 	}
 }
 
-func serveDNS(c *net.UDPConn, tab *faketab, upstream *net.Resolver, log logfn) {
-	buf := make([]byte, 512)
-	for {
-		n, from, err := c.ReadFromUDP(buf)
-		if err != nil {
-			return
-		}
-		if resp := answerDNS(buf[:n], tab, upstream); resp != nil {
-			c.WriteToUDP(resp, from)
-		}
-	}
-}
-
 // answerDNS parses the first question and builds a minimal response: A for a
-// single-label name → a fake IP; A for a dotted name → the real address; AAAA →
-// NODATA (force IPv4); localhost → 127.0.0.1.
+// single-label name → a fake IP in this instance's /24; A for a dotted name →
+// the real address via the saved upstream; AAAA → NODATA (force IPv4); localhost
+// → 127.0.0.1.
 func answerDNS(q []byte, tab *faketab, upstream *net.Resolver) []byte {
 	if len(q) < 13 {
 		return nil
@@ -100,8 +107,11 @@ func answerDNS(q []byte, tab *faketab, upstream *net.Resolver) []byte {
 	case strings.EqualFold(name, "localhost") || strings.HasSuffix(strings.ToLower(name), ".localhost"):
 		answerIP = net.IPv4(127, 0, 0, 1)
 	case !strings.Contains(name, "."): // single-label cluster name → fake
-		ip := tab.mint(name)
-		answerIP = net.IPv4(byte(ip>>24), byte(ip>>16), byte(ip>>8), byte(ip))
+		if ip := tab.mint(name); ip != 0 {
+			answerIP = net.IPv4(byte(ip>>24), byte(ip>>16), byte(ip>>8), byte(ip))
+		} else {
+			rcode = 3 // NXDOMAIN — this instance's /24 is exhausted
+		}
 	default: // dotted → resolve for real via the saved upstream
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 		defer cancel()

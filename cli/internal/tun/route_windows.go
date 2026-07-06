@@ -25,7 +25,9 @@ func checkPriv() error { return nil }
 // (winipcfg) — NOT netsh. netsh returns success but does not actually assign an
 // address to a WinTUN adapter, which left it with no source IP (route present,
 // dial "unreachable"); wireguard-windows uses winipcfg for exactly this reason.
-func configure(dev any, _, dnsAddr string, log logfn) ([]string, string, func(), error) {
+// It assigns the adapter IP, routes the instance's /24 on-link, and sets the
+// adapter DNS to dnsIP (198.18.<N>.53).
+func configure(dev any, _, cidr, dnsIP string, log logfn) ([]string, string, func(), error) {
 	nt, ok := dev.(*wgtun.NativeTun)
 	if !ok {
 		return nil, "", func() {}, fmt.Errorf("windows TUN: unexpected device type %T", dev)
@@ -36,11 +38,11 @@ func configure(dev any, _, dnsAddr string, log logfn) ([]string, string, func(),
 	if err := luid.SetIPAddresses([]netip.Prefix{netip.MustParsePrefix("10.99.99.1/24")}); err != nil {
 		return nil, "", func() {}, fmt.Errorf("assign adapter IP: %w", err)
 	}
-	// On-link route for the fake range: nexthop 0.0.0.0 → send straight out plug0.
-	if err := luid.AddRoute(netip.MustParsePrefix(fakeCIDR), netip.IPv4Unspecified(), 0); err != nil {
-		return nil, "", func() {}, fmt.Errorf("add %s route: %w", fakeCIDR, err)
+	// On-link route for the instance's /24: nexthop 0.0.0.0 → send straight out plug0.
+	if err := luid.AddRoute(netip.MustParsePrefix(cidr), netip.IPv4Unspecified(), 0); err != nil {
+		return nil, "", func() {}, fmt.Errorf("add %s route: %w", cidr, err)
 	}
-	if dns, err := netip.ParseAddr(dnsAddr); err == nil {
+	if dns, err := netip.ParseAddr(dnsIP); err == nil {
 		if e := luid.SetDNS(v4, []netip.Addr{dns}, nil); e != nil {
 			log.f("tun[win]: set DNS: %v", e)
 		}

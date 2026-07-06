@@ -2,6 +2,7 @@ package tun
 
 import (
 	"encoding/binary"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -18,15 +19,21 @@ func query(name string, qtype uint16) []byte {
 	return b
 }
 
+// mask24 is the /24 network mask — each instance mints within 198.18.<N>.0/24.
+const mask24 = 0xFFFFFF00
+
 func TestFaketabMintStableAndInRange(t *testing.T) {
-	tab := newFaketab()
+	tab := newFaketab(fakeBase) // instance 0: 198.18.0.0/24
 	a := tab.mint("grpc")
 	b := tab.mint("grpc")
 	if a != b {
 		t.Fatalf("mint not idempotent: %08x vs %08x", a, b)
 	}
-	if a&fakeMask != fakeBase {
-		t.Fatalf("minted %s is not in 240/4", ipStr(a))
+	if a&mask24 != fakeBase {
+		t.Fatalf("minted %s is not in the instance /24", ipStr(a))
+	}
+	if a == tab.dnsIP() {
+		t.Fatalf("minted the reserved DNS IP %s", ipStr(a))
 	}
 	if tab.mint("postgres") == a {
 		t.Fatal("distinct names must get distinct fakes")
@@ -36,6 +43,30 @@ func TestFaketabMintStableAndInRange(t *testing.T) {
 	}
 	if _, ok := tab.lookup(0xDEADBEEF); ok {
 		t.Fatal("lookup of an unminted fake must miss")
+	}
+}
+
+// TestMintReservesDNSAndExhausts checks the DNS host (.53) is never handed out
+// and that a full /24 exhausts to 0 (NXDOMAIN) rather than aliasing an IP.
+func TestMintReservesDNSAndExhausts(t *testing.T) {
+	tab := newFaketab(fakeBase)
+	dns := tab.dnsIP()
+	n := 0
+	for {
+		ip := tab.mint(fmt.Sprintf("svc%d", n))
+		if ip == 0 {
+			break
+		}
+		if ip == dns {
+			t.Fatalf("minted the reserved DNS IP %s", ipStr(ip))
+		}
+		if n++; n > 300 {
+			t.Fatal("mint never exhausted the /24")
+		}
+	}
+	// hosts 1..254 minus the reserved .53 = 253 usable service IPs.
+	if n != 253 {
+		t.Fatalf("expected 253 mintable service IPs, got %d", n)
 	}
 }
 
@@ -58,14 +89,14 @@ func answerIPv4(resp []byte) (uint32, bool) {
 }
 
 func TestAnswerSingleLabelMintsFake(t *testing.T) {
-	tab := newFaketab()
+	tab := newFaketab(fakeBase)
 	resp := answerDNS(query("grpc", 1), tab, upstreamResolver(nil))
 	ip, ok := answerIPv4(resp)
 	if !ok {
 		t.Fatal("expected an A answer for a single-label name")
 	}
-	if ip&fakeMask != fakeBase {
-		t.Fatalf("answer %s is not a 240/4 fake", ipStr(ip))
+	if ip&mask24 != fakeBase {
+		t.Fatalf("answer %s is not a fake in the instance /24", ipStr(ip))
 	}
 	if name, ok := tab.lookup(ip); !ok || name != "grpc" {
 		t.Fatalf("fake %s not mapped back to grpc (got %q,%v)", ipStr(ip), name, ok)
@@ -73,7 +104,7 @@ func TestAnswerSingleLabelMintsFake(t *testing.T) {
 }
 
 func TestAnswerLocalhostIsLoopback(t *testing.T) {
-	resp := answerDNS(query("localhost", 1), newFaketab(), upstreamResolver(nil))
+	resp := answerDNS(query("localhost", 1), newFaketab(fakeBase), upstreamResolver(nil))
 	ip, ok := answerIPv4(resp)
 	if !ok || ip != 0x7F000001 {
 		t.Fatalf("localhost → %08x,%v; want 127.0.0.1", ip, ok)
@@ -81,7 +112,7 @@ func TestAnswerLocalhostIsLoopback(t *testing.T) {
 }
 
 func TestAnswerAAAAIsNodata(t *testing.T) {
-	resp := answerDNS(query("grpc", 28), newFaketab(), upstreamResolver(nil))
+	resp := answerDNS(query("grpc", 28), newFaketab(fakeBase), upstreamResolver(nil))
 	if _, ok := answerIPv4(resp); ok {
 		t.Fatal("AAAA must be NODATA (no answer) to force IPv4")
 	}

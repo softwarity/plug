@@ -6,6 +6,10 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"os/signal"
+	"sync"
+	"syscall"
 	"time"
 
 	wgtun "golang.zx2c4.com/wireguard/tun"
@@ -21,15 +25,19 @@ func (d loopbackDialer) DialCluster(string) (net.Conn, error) {
 
 // SelfTest exercises the entire TUN data path on THIS OS with no SSH agent and
 // no Docker: it stands up a loopback echo server as the fake cluster service,
-// brings up the real TUN + netstack + DNS, resolves a name through plug's own
-// resolver, then dials the minted fake IP and checks bytes round-trip through
-// the device. It is the cross-platform proof that the privileged path (create
-// device + routes) and the datapath work natively on macOS / Windows / Linux.
+// brings up the real TUN + netstack + DNS, resolves a name by querying the
+// in-netstack resolver at dnsIP:53 THROUGH the TUN (exactly as the child would),
+// then dials the minted fake IP and checks bytes round-trip through the device.
+// It is the cross-platform proof that the privileged path (create device +
+// routes + system DNS) and the datapath work natively on macOS / Windows / Linux.
 func SelfTest(logf func(string, ...any)) error {
 	log := logfn(logf)
 	if err := checkPriv(); err != nil {
 		return err
 	}
+
+	const n = 0
+	cidr, dnsIP, base := instanceNet(n)
 
 	// The pretend cluster service: a loopback TCP echo server.
 	echo, err := net.Listen("tcp", "127.0.0.1:0")
@@ -55,40 +63,48 @@ func SelfTest(logf func(string, ...any)) error {
 	defer dev.Close()
 	ifname, _ := dev.Name()
 
-	upstreams, privResolv, cleanup, err := configure(dev, ifname, dnsAddr, log)
+	upstreams, privResolv, cleanup, err := configure(dev, ifname, cidr, dnsIP, log)
 	if err != nil {
 		return fmt.Errorf("configure %s: %w", ifname, err)
 	}
-	defer cleanup()
+	// The DNS repoint is the one piece of state that outlives this process, so a
+	// Ctrl-C mid-test MUST still undo it. Run cleanup once, from either the normal
+	// return path or a signal.
+	var once sync.Once
+	doCleanup := func() { once.Do(cleanup) }
+	defer doCleanup()
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigs)
+	go func() {
+		if _, ok := <-sigs; ok {
+			doCleanup()
+			os.Exit(130)
+		}
+	}()
 
-	tab := newFaketab()
-	dnsConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP(dnsAddr), Port: 53})
-	if err != nil {
-		return fmt.Errorf("dns %s:53: %w", dnsAddr, err)
-	}
-	defer dnsConn.Close()
-	go serveDNS(dnsConn, tab, upstreamResolver(upstreams), log)
+	tab := newFaketab(base)
 
-	st, ep := buildStack(tab, loopbackDialer{addr: echo.Addr().String()}, log)
+	st, ep := buildStack(tab, loopbackDialer{addr: echo.Addr().String()}, upstreamResolver(upstreams), log)
 	defer st.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	br := &bridge{dev: dev, ep: ep}
 	go br.toStack()
 	go br.fromStack(ctx)
-	log.f("selftest: TUN %s up, echo at %s", ifname, echo.Addr())
+	log.f("selftest: TUN %s up (DNS %s:53), echo at %s", ifname, dnsIP, echo.Addr())
 
-	// Resolve a cluster name through plug's own resolver (dial :53 directly, so
-	// this is portable — macOS/Windows don't consult /etc/resolv.conf for Go).
+	// Resolve a cluster name the REAL way: query dnsIP:53 THROUGH the TUN, so the
+	// netstack UDP forwarder answers — the exact path a child's getaddrinfo takes.
 	res := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
 		var d net.Dialer
-		return d.DialContext(ctx, network, net.JoinHostPort(dnsAddr, "53"))
+		return d.DialContext(ctx, network, net.JoinHostPort(dnsIP, "53"))
 	}}
 	rctx, rcancel := context.WithTimeout(ctx, 5*time.Second)
 	defer rcancel()
 	ips, err := res.LookupIP(rctx, "ip4", "selftest")
 	if err != nil || len(ips) == 0 {
-		return fmt.Errorf("resolve fake name: %w", err)
+		return fmt.Errorf("resolve fake name through the TUN: %w", err)
 	}
 	fake := ips[0].String()
 	log.f("selftest: name selftest → fake %s, dialing %s:%s through the TUN", fake, fake, echoPort)
@@ -115,10 +131,17 @@ func SelfTest(logf func(string, ...any)) error {
 	}
 	log.f("selftest: %d bytes round-tripped through %s by name — OK", len(want), ifname)
 
+	// On macOS, prove the REAL fix end to end: the SYSTEM resolver (getaddrinfo via
+	// mDNSResponder — the path a real app takes, which ignores /etc/resolv.conf)
+	// now resolves a single-label name to a fake IP. That was the ENOTFOUND bug.
+	if err := checkSystemResolver("plug-selftest-sys", log); err != nil {
+		return err
+	}
+
 	// Also prove the per-launch DNS isolation (Linux mount namespace): a child
-	// must see ONLY our private resolver, confirming the mount-ns works — under a
-	// setcap'd non-root plug too, not just as root.
-	if err := checkLaunchIsolation(privResolv, log); err != nil {
+	// must see ONLY our private resolver (nameserver dnsIP), confirming the
+	// mount-ns works — under a setcap'd non-root plug too, not just as root.
+	if err := checkLaunchIsolation(privResolv, dnsIP, log); err != nil {
 		return err
 	}
 	return nil

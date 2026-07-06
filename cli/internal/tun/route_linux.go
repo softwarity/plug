@@ -42,33 +42,34 @@ func hasEffCap(bit uint) bool {
 	return false
 }
 
-// configure brings the TUN up, routes the fake range into it, and repoints the
-// child's resolver at our loopback DNS — returning the child's former upstream
-// nameservers (read before the rewrite) and a cleanup that restores everything.
-func configure(_ any, ifname, dnsAddr string, log logfn) ([]string, string, func(), error) {
+// configure brings the TUN up, routes the instance's /24 into it, and points the
+// child's resolver at dnsIP (198.18.<N>.53) via a PRIVATE resolv.conf — runChild
+// bind-mounts it over /etc/resolv.conf inside the child's OWN mount namespace, so
+// pointing the resolver at us is scoped to this launch: the global
+// /etc/resolv.conf is never modified and two `plug` runs never collide. Returns
+// the child's former upstream nameservers (read before anything changes).
+func configure(_ any, ifname, cidr, dnsIP string, log logfn) ([]string, string, func(), error) {
 	ups := resolvNameservers()
 
 	for _, cmd := range [][]string{
 		{"ip", "link", "set", ifname, "up"},
 		{"ip", "addr", "add", "10.99.99.1/24", "dev", ifname},
-		{"ip", "route", "add", fakeCIDR, "dev", ifname},
+		{"ip", "route", "add", cidr, "dev", ifname},
 	} {
 		if err := run(cmd[0], cmd[1:]...); err != nil {
 			return nil, "", func() {}, err
 		}
 	}
-	// Replies to the child arrive on the TUN with a 240/4 source; their route
+	// Replies to the child arrive on the TUN with a 198.18/15 source; their route
 	// back is the TUN itself, so strict reverse-path filtering would drop them.
 	_ = run("sysctl", "-w", "net.ipv4.conf."+ifname+".rp_filter=2")
 	_ = run("sysctl", "-w", "net.ipv4.conf.all.rp_filter=2")
 
-	// A PRIVATE resolv.conf — runChild bind-mounts it over /etc/resolv.conf inside
-	// the child's OWN mount namespace, so pointing the resolver at us is scoped to
-	// this launch: the global /etc/resolv.conf is never modified and two `plug`
-	// runs never collide.
+	// A PRIVATE resolv.conf — bind-mounted over /etc/resolv.conf inside the child's
+	// mount namespace (see runChild), so the repoint is scoped to this launch.
 	privResolv := ""
 	if f, err := os.CreateTemp("", "plug-resolv-*.conf"); err == nil {
-		_, _ = f.WriteString("nameserver " + dnsAddr + "\n")
+		_, _ = f.WriteString("nameserver " + dnsIP + "\n")
 		_ = f.Close()
 		privResolv = f.Name()
 	} else {
@@ -76,7 +77,7 @@ func configure(_ any, ifname, dnsAddr string, log logfn) ([]string, string, func
 	}
 
 	cleanup := func() {
-		_ = run("ip", "route", "del", fakeCIDR, "dev", ifname)
+		_ = run("ip", "route", "del", cidr, "dev", ifname)
 		_ = run("ip", "addr", "del", "10.99.99.1/24", "dev", ifname)
 		if privResolv != "" {
 			_ = os.Remove(privResolv)

@@ -7,14 +7,13 @@
 // The pipeline, identical on Linux/macOS/Windows:
 //
 //   - wireguard-go/tun opens the device (/dev/net/tun, utun, WinTUN);
-//   - a tiny DNS server answers the child's lookups, minting a fake IP
-//     (240.0.0.0/4) per single-label cluster name (dotted → real upstream,
-//     localhost → loopback);
-//   - the OS routes 240/4 to the TUN, so the child's connect() to a fake IP
+//   - a gVisor userspace netstack, fed by the device, answers the child's DNS
+//     in-stack on 198.18.<N>.53:53 — minting a fake IP in 198.18.<N>.0/24 per
+//     single-label cluster name (dotted → real upstream, localhost → loopback);
+//   - the OS routes that /24 to the TUN, so the child's connect() to a fake IP
 //     surfaces as an IP packet we read;
-//   - a gVisor userspace netstack terminates that TCP flow and hands us a
-//     net.Conn; we map the fake IP back to the name and splice it to the SSH
-//     tunnel by name.
+//   - the netstack terminates that TCP flow and hands us a net.Conn; we map the
+//     fake IP back to the name and splice it to the SSH tunnel by name.
 //
 // The child's socket is NEVER touched, so this covers EVERY runtime uniformly.
 // Creating the TUN + setting routes needs root (or the plug helper); opt-in via
@@ -29,12 +28,12 @@ import (
 	"os/exec"
 	"strings"
 
+	wgtun "golang.zx2c4.com/wireguard/tun"
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/link/channel"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
-	wgtun "golang.zx2c4.com/wireguard/tun"
 )
 
 // Dialer is the cluster transport (satisfied by *tunnel.Transport).
@@ -43,12 +42,21 @@ type Dialer interface {
 }
 
 const (
-	mtu      = 1500        // TUN MTU; gVisor segments egress to this
-	headroom = 16          // scratch bytes wireguard-go needs before each packet
-	nicID    = 1           // the single netstack NIC
-	fakeCIDR = "198.18.0.0/15" // RFC 2544 range we route into the TUN (Windows-routable, unlike class-E 240/4)
-	dnsAddr  = "127.0.0.1"   // where the child's resolver is pointed (port 53)
+	mtu      = 1500 // TUN MTU; gVisor segments egress to this
+	headroom = 16   // scratch bytes wireguard-go needs before each packet
+	nicID    = 1    // the single netstack NIC
 )
+
+// instanceNet derives instance N's routed subnet and reserved DNS address. Each
+// instance owns 198.18.<N>.0/24 (routed into its own TUN) and answers DNS on
+// 198.18.<N>.53 — so concurrent instances never overlap (Phase 2 allocates N;
+// today N is fixed at 0).
+func instanceNet(n int) (cidr, dnsIP string, base uint32) {
+	base = uint32(fakeBase) | uint32(n)<<8 // 198.18.<n>.0
+	cidr = ipStr(base) + "/24"
+	dnsIP = ipStr(base | dnsHost)
+	return
+}
 
 // NsShimVerb is the hidden re-exec subcommand plug uses to enter a child's mount
 // namespace on Linux and bind-mount its private resolv.conf (see NsShimMain). Not
@@ -72,6 +80,10 @@ func Run(tr Dialer, cmdArgs []string, logf func(string, ...any)) (int, error) {
 		return 1, err
 	}
 
+	// Phase 1: a single instance, N=0. Phase 2 will allocate N per active cluster.
+	const n = 0
+	cidr, dnsIP, base := instanceNet(n)
+
 	dev, err := wgtun.CreateTUN(defaultTUNName, mtu)
 	if err != nil {
 		return 1, fmt.Errorf("create TUN (need root/helper): %w", err)
@@ -79,29 +91,26 @@ func Run(tr Dialer, cmdArgs []string, logf func(string, ...any)) (int, error) {
 	defer dev.Close()
 	ifname, _ := dev.Name()
 
-	// Networking + DNS handoff (privileged, per-OS). Returns the child's former
-	// upstream nameservers (captured so our own dotted-name lookups don't loop) and,
-	// on Linux, the path to a PRIVATE resolv.conf we bind-mount into the child's
-	// mount namespace — so pointing the resolver at us never touches the global
-	// /etc/resolv.conf and two `plug` runs never collide.
-	upstreams, privResolv, cleanup, err := configure(dev, ifname, dnsAddr, log)
+	// Networking + DNS handoff (privileged, per-OS). Routes cidr into the TUN and
+	// points the system resolver at dnsIP (198.18.<N>.53) — by the native channel
+	// of each OS: a bind-mounted PRIVATE resolv.conf on Linux (scoped to the child
+	// via its mount namespace), the SystemConfiguration dynamic store on macOS,
+	// the adapter DNS on Windows. Returns the child's former upstream nameservers
+	// (captured so our own dotted-name lookups don't loop) and, on Linux, the path
+	// to that private resolv.conf.
+	upstreams, privResolv, cleanup, err := configure(dev, ifname, cidr, dnsIP, log)
 	if err != nil {
 		return 1, fmt.Errorf("configure %s: %w", ifname, err)
 	}
 	defer cleanup()
 
-	tab := newFaketab()
+	tab := newFaketab(base)
 
-	// Fake DNS on loopback :53 — the child reaches it directly (not via the TUN).
-	dnsConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP(dnsAddr), Port: 53})
-	if err != nil {
-		return 1, fmt.Errorf("dns %s:53: %w", dnsAddr, err)
-	}
-	defer dnsConn.Close()
-	go serveDNS(dnsConn, tab, upstreamResolver(upstreams), log)
-
-	// Userspace netstack fed by the TUN.
-	st, ep := buildStack(tab, tr, log)
+	// Userspace netstack fed by the TUN. DNS is answered INSIDE the stack on
+	// dnsIP:53 (a UDP forwarder), reached by the child through the TUN — no
+	// loopback socket, so macOS's getaddrinfo (which ignores /etc/resolv.conf)
+	// resolves cluster names via the system resolver we just repointed at dnsIP.
+	st, ep := buildStack(tab, tr, upstreamResolver(upstreams), log)
 	defer st.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -110,7 +119,7 @@ func Run(tr Dialer, cmdArgs []string, logf func(string, ...any)) (int, error) {
 	go br.toStack()      // TUN packets  → netstack
 	go br.fromStack(ctx) // netstack replies → TUN
 
-	log.f("root mode (TUN %s): DNS %s:53, %s → netstack → tunnel (covers every runtime)", ifname, dnsAddr, fakeCIDR)
+	log.f("root mode (TUN %s): DNS %s:53 in-netstack, %s → tunnel (covers every runtime)", ifname, dnsIP, cidr)
 	return runChild(cmdArgs, privResolv)
 }
 
