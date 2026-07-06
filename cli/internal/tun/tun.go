@@ -50,6 +50,11 @@ const (
 	dnsAddr  = "127.0.0.1"   // where the child's resolver is pointed (port 53)
 )
 
+// NsShimVerb is the hidden re-exec subcommand plug uses to enter a child's mount
+// namespace on Linux and bind-mount its private resolv.conf (see NsShimMain). Not
+// user-facing — dispatched at the very top of main().
+const NsShimVerb = "__plug-ns"
+
 // logfn is an optional progress sink.
 type logfn func(string, ...any)
 
@@ -75,9 +80,11 @@ func Run(tr Dialer, cmdArgs []string, logf func(string, ...any)) (int, error) {
 	ifname, _ := dev.Name()
 
 	// Networking + DNS handoff (privileged, per-OS). Returns the child's former
-	// upstream nameservers (captured before we repoint the resolver at us) so our
-	// own dotted-name lookups don't loop back into our fake resolver.
-	upstreams, cleanup, err := configure(ifname, dnsAddr, log)
+	// upstream nameservers (captured so our own dotted-name lookups don't loop) and,
+	// on Linux, the path to a PRIVATE resolv.conf we bind-mount into the child's
+	// mount namespace — so pointing the resolver at us never touches the global
+	// /etc/resolv.conf and two `plug` runs never collide.
+	upstreams, privResolv, cleanup, err := configure(ifname, dnsAddr, log)
 	if err != nil {
 		return 1, fmt.Errorf("configure %s: %w", ifname, err)
 	}
@@ -104,7 +111,7 @@ func Run(tr Dialer, cmdArgs []string, logf func(string, ...any)) (int, error) {
 	go br.fromStack(ctx) // netstack replies → TUN
 
 	log.f("root mode (TUN %s): DNS %s:53, %s → netstack → tunnel (covers every runtime)", ifname, dnsAddr, fakeCIDR)
-	return runChild(cmdArgs)
+	return runChild(cmdArgs, privResolv)
 }
 
 // bridge pumps IP packets between the wireguard-go device and the gVisor

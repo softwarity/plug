@@ -25,7 +25,10 @@ func checkPriv() error {
 // into it, and repoints the resolver at our loopback DNS. macOS resolves via
 // SystemConfiguration, not /etc/resolv.conf, so the DNS rewrite is best-effort
 // (it covers Go's pure resolver and most CLI tools).
-func configure(ifname, dnsAddr string, log logfn) ([]string, func(), error) {
+// macOS has no mount namespaces, so the resolver repoint is still global here
+// (restored on cleanup); privResolv is empty. Scoped per-launch DNS on macOS is a
+// separate problem (no netns) tracked for later.
+func configure(ifname, dnsAddr string, log logfn) ([]string, string, func(), error) {
 	ups := resolvNameservers()
 
 	for _, cmd := range [][]string{
@@ -33,7 +36,7 @@ func configure(ifname, dnsAddr string, log logfn) ([]string, func(), error) {
 		{"route", "-n", "add", "-net", fakeCIDR, "-interface", ifname},
 	} {
 		if err := run(cmd[0], cmd[1:]...); err != nil {
-			return nil, func() {}, err
+			return nil, "", func() {}, err
 		}
 	}
 
@@ -48,7 +51,7 @@ func configure(ifname, dnsAddr string, log logfn) ([]string, func(), error) {
 			_ = os.WriteFile("/etc/resolv.conf", old, 0o644)
 		}
 	}
-	return ups, cleanup, nil
+	return ups, "", cleanup, nil
 }
 
 func resolvNameservers() []string {

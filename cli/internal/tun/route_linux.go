@@ -24,7 +24,7 @@ func checkPriv() error {
 // configure brings the TUN up, routes the fake range into it, and repoints the
 // child's resolver at our loopback DNS — returning the child's former upstream
 // nameservers (read before the rewrite) and a cleanup that restores everything.
-func configure(ifname, dnsAddr string, log logfn) ([]string, func(), error) {
+func configure(ifname, dnsAddr string, log logfn) ([]string, string, func(), error) {
 	ups := resolvNameservers()
 
 	for _, cmd := range [][]string{
@@ -33,7 +33,7 @@ func configure(ifname, dnsAddr string, log logfn) ([]string, func(), error) {
 		{"ip", "route", "add", fakeCIDR, "dev", ifname},
 	} {
 		if err := run(cmd[0], cmd[1:]...); err != nil {
-			return nil, func() {}, err
+			return nil, "", func() {}, err
 		}
 	}
 	// Replies to the child arrive on the TUN with a 240/4 source; their route
@@ -41,19 +41,27 @@ func configure(ifname, dnsAddr string, log logfn) ([]string, func(), error) {
 	_ = run("sysctl", "-w", "net.ipv4.conf."+ifname+".rp_filter=2")
 	_ = run("sysctl", "-w", "net.ipv4.conf.all.rp_filter=2")
 
-	old, _ := os.ReadFile("/etc/resolv.conf")
-	if err := os.WriteFile("/etc/resolv.conf", []byte("nameserver "+dnsAddr+"\n"), 0o644); err != nil {
-		log.f("tun: warning: could not repoint /etc/resolv.conf (%v) — cluster names may not resolve", err)
+	// A PRIVATE resolv.conf — runChild bind-mounts it over /etc/resolv.conf inside
+	// the child's OWN mount namespace, so pointing the resolver at us is scoped to
+	// this launch: the global /etc/resolv.conf is never modified and two `plug`
+	// runs never collide.
+	privResolv := ""
+	if f, err := os.CreateTemp("", "plug-resolv-*.conf"); err == nil {
+		_, _ = f.WriteString("nameserver " + dnsAddr + "\n")
+		_ = f.Close()
+		privResolv = f.Name()
+	} else {
+		log.f("tun: warning: private resolv.conf: %v — cluster names may not resolve", err)
 	}
 
 	cleanup := func() {
 		_ = run("ip", "route", "del", fakeCIDR, "dev", ifname)
 		_ = run("ip", "addr", "del", "10.99.99.1/24", "dev", ifname)
-		if old != nil {
-			_ = os.WriteFile("/etc/resolv.conf", old, 0o644)
+		if privResolv != "" {
+			_ = os.Remove(privResolv)
 		}
 	}
-	return ups, cleanup, nil
+	return ups, privResolv, cleanup, nil
 }
 
 // resolvNameservers returns the `nameserver` entries currently in resolv.conf.

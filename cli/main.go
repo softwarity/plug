@@ -17,6 +17,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/softwarity/plug/cli/internal/tun"
 )
 
 //go:embed keys/id_ed25519
@@ -132,6 +134,15 @@ type options struct {
 }
 
 func main() {
+	// Mount-namespace shim: a re-exec of ourselves (inside the child's new mount
+	// ns) that bind-mounts its private resolv.conf and execs the real command.
+	// Checked first — it inherits PLUG_CORE=1 and must not fall into coreMain.
+	if len(os.Args) > 1 && os.Args[1] == tun.NsShimVerb {
+		if err := tun.NsShimMain(os.Args[2:]); err != nil {
+			fatal("%v", err)
+		}
+		return
+	}
 	// Core mode: this binary was exec'd by the launcher to do the real work.
 	if os.Getenv("PLUG_CORE") == "1" {
 		coreMain()
