@@ -98,4 +98,8 @@ jobs:
             done
             echo "$row" >> "$GITHUB_STEP_SUMMARY"
           done
-          { echo; echo "✅ pass · ❌ fail · \`·\` not run"; } >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo; echo "✅ pass · ❌ fail · \`·\` not run"
+            echo
+            echo "> **macOS / Windows** coverage is in the **CI** workflow (native build + unit tests + a real-TUN \`selftest\` on each OS). This e2e protocol matrix is Linux-only because it runs Docker services."
+          } >> "$GITHUB_STEP_SUMMARY"

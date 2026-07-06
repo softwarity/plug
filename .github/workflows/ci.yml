@@ -79,6 +79,31 @@ jobs:
             exit 1
           }
 
+  # One-glance platform grid in the run Summary: plug built + unit-tested AND its
+  # real TUN device exercised by name, on each OS. (The e2e protocol matrix is
+  # Linux-only — Docker — so THIS is where macOS/Windows coverage shows.)
+  platforms:
+    name: Platform coverage
+    needs: [test, selftest]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Render platform grid
+        run: |
+          t='${{ needs.test.result }}'; s='${{ needs.selftest.result }}'
+          cell() { [ "$1" = success ] && echo "✅" || echo "⚠️ see jobs"; }
+          {
+            echo "## Platform coverage — plug built + the real TUN exercised on each OS"
+            echo
+            echo "| Platform | Build + unit tests | TUN selftest (real device, by name) |"
+            echo "|---|---|---|"
+            echo "| 🍎 macOS   | $(cell "$t") | $(cell "$s") |"
+            echo "| 🪟 Windows | $(cell "$t") | $(cell "$s") |"
+            echo "| 🐧 Linux   | $(cell "$t") | $(cell "$s") |"
+            echo
+            echo "_Per-OS detail in the Test / TUN selftest jobs. The e2e protocol matrix (7 services × 4 languages) is Linux-only._"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   build:
     name: Build CLI
     needs: test
