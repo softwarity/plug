@@ -125,7 +125,10 @@ func startDaemonDetached(cfg config) error {
 	}
 	_ = os.MkdirAll("/var/run/plug", 0o755)
 	logPath := filepath.Join("/var/run/plug", tun.ClusterHash(cfg.host+":"+cfg.port)+".log")
-	logf, _ := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	// TRUNC, not APPEND: one daemon owns one log for its lifetime. Appending across
+	// daemon lifetimes accumulates dead lines from earlier (e.g. pre-fix) attempts,
+	// which read as live failures and send you chasing ghosts when diagnosing.
+	logf, _ := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 
 	r, w, err := os.Pipe()
 	if err != nil {

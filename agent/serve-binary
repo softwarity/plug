@@ -76,9 +76,10 @@ case "$os-$arch" in
 esac
 chmod +x "$dest/plug"
 echo "plug: installed to $dest/plug"
-# Grant the capabilities plug needs (TUN device + routes, per-launch mount ns,
-# bind :53) ONCE, so day-to-day `plug <command>` runs with no sudo. sudo prompts
-# on /dev/tty even through `| sh`. macOS has no file capabilities — use sudo there.
+# Grant the privilege plug needs (TUN device + routes, per-launch mount ns, bind
+# :53) ONCE, so day-to-day `plug <command>` runs with no sudo. sudo prompts on
+# /dev/tty even through `| sh`. Linux = file capabilities; macOS has none, so it's
+# a setuid-root helper that drops your command back to you (see privdrop_unix.go).
 if [ "$os" = linux ]; then
   if command -v setcap >/dev/null 2>&1; then
     echo "plug: granting network capabilities (one sudo now → future runs need none)…"
@@ -90,6 +91,14 @@ if [ "$os" = linux ]; then
     fi
   else
     echo "plug: 'setcap' missing (install libcap2-bin) — meanwhile run 'sudo plug <command>'" >&2
+  fi
+elif [ "$os" = darwin ]; then
+  echo "plug: installing the privileged helper (one sudo now → future runs need none)…"
+  if sudo chown root:wheel "$dest/plug" && sudo chmod u+s "$dest/plug"; then
+    echo "plug: ready — 'plug <command>' runs without sudo"
+  else
+    echo "plug: could not install the setuid helper — meanwhile run 'sudo plug <command>', or fix with:" >&2
+    echo "      sudo chown root:wheel '$dest/plug' && sudo chmod u+s '$dest/plug'" >&2
   fi
 fi
 case ":$PATH:" in *":$dest:"*) : ;; *) echo "plug: add $dest to your PATH" ;; esac

@@ -2,6 +2,17 @@
 
 ## NEXT RELEASE
 
+- **macOS: `plug <command>` now runs without sudo (setuid-root helper).** The
+  install posts the launcher as a setuid-root helper (`chown root:wheel` +
+  `chmod u+s`, one sudo at install — the macOS counterpart of the Linux `setcap`),
+  so day-to-day `plug <command>` needs no sudo, matching Linux. plug starts with
+  euid 0 to hold the utun + DNS, then **drops your command back to your own user**
+  before running it — unlike a Linux capability (dropped for free across exec), a
+  setuid euid is inherited, so the child is spawned under your uid/gid and
+  supplementary groups. `sudo plug` still works (it drops via `SUDO_UID`); a
+  genuine root login runs the child as root, unchanged. `self-update` re-applies
+  the setuid bit so an update doesn't silently disable the helper.
+
 ---
 
 ## 1.1.0

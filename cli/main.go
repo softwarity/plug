@@ -269,7 +269,12 @@ func versionsDir() string {
 func ensureVersion(v string, cfg config) (string, error) {
 	dir := filepath.Join(versionsDir(), v)
 	bin := filepath.Join(dir, "plug")
+	// Hand the cache back to the user: the setuid helper writes it as euid 0, so
+	// without this it lands root-owned (can't be listed/cleaned without sudo). Also
+	// self-heals a cache an earlier privileged run already left root-owned.
+	own := func() { chownToUser(versionsDir()); chownToUser(dir); chownToUser(bin) }
 	if fi, err := os.Stat(bin); err == nil && fi.Size() > 1<<20 {
+		own()
 		return bin, nil
 	}
 	data, err := getDownload(cfg, fmt.Sprintf("%s-%s", runtime.GOOS, runtime.GOARCH), "v"+v)
@@ -298,6 +303,7 @@ func ensureVersion(v string, cfg config) (string, error) {
 	if err := os.Rename(tmp.Name(), bin); err != nil {
 		return "", err
 	}
+	own()
 	return bin, nil
 }
 
@@ -359,6 +365,9 @@ func selfUpdate(args []string) {
 	if err := os.Rename(tmp.Name(), self); err != nil {
 		fatal("cannot replace %s: %v", self, err)
 	}
+	// A rename installs a fresh inode that lost the macOS setuid bit — re-apply it
+	// so the helper keeps working without a sudo (no-op off macOS / when not root).
+	preserveHelperPrivilege(self)
 	info("launcher updated %s → v%s", version, remote)
 }
 
@@ -767,6 +776,10 @@ func runChildEnv(cmdArgs []string, env []string) int {
 	if env != nil {
 		child.Env = env
 	}
+	// When plug is the macOS setuid-root helper, this process runs with euid 0 so
+	// it can hold the utun + DNS — but YOUR command must not. Drop the child back to
+	// the human user (no-op on the Linux caps path). See privdrop_unix.go.
+	applyPrivDrop(child)
 
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
