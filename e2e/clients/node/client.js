@@ -257,6 +257,38 @@ async function doGRPC(target) {
   ok('grpc', target + ' → health SERVING');
 }
 
+// ---- websocket --------------------------------------------------------------
+
+async function doWebSocket(target) {
+  const WebSocket = require('ws');
+  const url = 'ws://' + target + '/';
+  const msg = 'plug-e2e-ws-42';
+  const got = await retry(
+    () =>
+      new Promise((resolve, reject) => {
+        const socket = new WebSocket(url, { handshakeTimeout: 5000 });
+        const timer = setTimeout(() => {
+          socket.terminate();
+          reject(new Error('timeout'));
+        }, 6000);
+        socket.on('open', () => socket.send(msg));
+        socket.on('message', (data) => {
+          clearTimeout(timer);
+          socket.close();
+          resolve(data.toString());
+        });
+        socket.on('error', (err) => {
+          clearTimeout(timer);
+          reject(err);
+        });
+      })
+  );
+  if (got !== msg) {
+    return die('websocket', new Error('echo mismatch: ' + JSON.stringify(got)));
+  }
+  ok('websocket', url + ' → echo "' + got + '"');
+}
+
 // ---- helpers ----------------------------------------------------------------
 
 // splitTarget parses "host:port" (IPv6-naive, matches the e2e host:port form).
@@ -287,6 +319,7 @@ async function main() {
     amqp: doAMQP,
     mqtt: doMQTT,
     grpc: doGRPC,
+    websocket: doWebSocket,
   };
   const handler = handlers[proto];
   if (!handler) {

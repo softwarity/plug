@@ -69,6 +69,10 @@ services:
     build: { context: ., dockerfile: services/grpc/Dockerfile }
     networks: [internal]
 
+  wsserver:
+    build: { context: ., dockerfile: services/websocket/Dockerfile }
+    networks: [internal]
+
   # ---- language clients (run on demand: `<proto> <host:port>` as args) ----
   # Each runs its command UNDER plug against the cluster service by name. The
   # seccomp flags are only needed INSIDE a container (a real host needs neither);

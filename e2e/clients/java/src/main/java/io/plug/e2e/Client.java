@@ -15,6 +15,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.net.http.WebSocket;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
@@ -62,6 +63,7 @@ public final class Client {
                 case "amqp" -> doAmqp(target);
                 case "mqtt" -> doMqtt(target);
                 case "grpc" -> doGrpc(target);
+                case "websocket" -> doWebSocket(target);
                 default -> die(proto, "proto not implemented in the java client");
             }
         } catch (Throwable t) {
@@ -280,6 +282,48 @@ public final class Client {
                 Thread.currentThread().interrupt();
             }
         }
+    }
+
+    // doWebSocket uses the JDK-native java.net.http.WebSocket (no extra dependency):
+    // HTTP Upgrade by name, send a text frame, assert the echo comes back verbatim.
+    private static void doWebSocket(String target) throws Exception {
+        String url = "ws://" + target + "/";
+        String msg = "plug-e2e-ws-42";
+        String got = retry(() -> {
+            java.util.concurrent.BlockingQueue<String> recv =
+                    new java.util.concurrent.ArrayBlockingQueue<>(1);
+            WebSocket ws = HttpClient.newHttpClient().newWebSocketBuilder()
+                    .connectTimeout(TIMEOUT)
+                    .buildAsync(URI.create(url), new WebSocket.Listener() {
+                        private final StringBuilder buf = new StringBuilder();
+
+                        @Override
+                        public java.util.concurrent.CompletionStage<?> onText(
+                                WebSocket webSocket, CharSequence data, boolean last) {
+                            buf.append(data);
+                            if (last) {
+                                recv.offer(buf.toString());
+                            }
+                            webSocket.request(1);
+                            return null;
+                        }
+                    })
+                    .get(5, TimeUnit.SECONDS);
+            try {
+                ws.sendText(msg, true);
+                String echoed = recv.poll(6, TimeUnit.SECONDS);
+                if (echoed == null) {
+                    throw new IllegalStateException("no echo received");
+                }
+                return echoed;
+            } finally {
+                ws.sendClose(WebSocket.NORMAL_CLOSURE, "bye");
+            }
+        });
+        if (!msg.equals(got)) {
+            die("websocket", "echo mismatch: " + got);
+        }
+        ok("websocket", url + " → echo \"" + got + "\"");
     }
 
     private Client() {

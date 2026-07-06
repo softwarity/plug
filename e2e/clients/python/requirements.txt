@@ -6,3 +6,4 @@ pika==1.4.1
 paho-mqtt==2.1.0
 grpcio==1.81.1
 grpcio-health-checking==1.81.1
+websocket-client==1.8.0

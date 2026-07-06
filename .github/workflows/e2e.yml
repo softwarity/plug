@@ -41,7 +41,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        proto: [http, postgres, redis, mongo, amqp, mqtt, grpc]
+        proto: [http, postgres, redis, mongo, amqp, mqtt, grpc, websocket]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/download-artifact@v7
@@ -77,7 +77,7 @@ jobs:
       - name: Render the coverage matrix into the run summary
         run: |
           langs="go node python java"
-          protos="http postgres redis mongo amqp mqtt grpc"
+          protos="http postgres redis mongo amqp mqtt grpc websocket"
           {
             echo "## plug e2e — reachable BY NAME under plug (TUN data path)"
             echo

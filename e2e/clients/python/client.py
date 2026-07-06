@@ -215,6 +215,28 @@ def do_grpc(target):
     ok("grpc", f"{target} -> health SERVING")
 
 
+def do_websocket(target):
+    import websocket  # websocket-client (synchronous)
+
+    url = "ws://" + target + "/"
+    msg = "plug-e2e-ws-42"
+
+    def attempt():
+        ws = websocket.create_connection(url, timeout=5)
+        try:
+            ws.send(msg)
+            return ws.recv()
+        finally:
+            ws.close()
+
+    got, err = retry(attempt)
+    if err is not None:
+        die("websocket", f"{url}: {err}")
+    if got != msg:
+        die("websocket", f"echo mismatch: {got!r}")
+    ok("websocket", f"{url} -> echo {got!r}")
+
+
 DISPATCH = {
     "http": do_http,
     "postgres": do_postgres,
@@ -223,6 +245,7 @@ DISPATCH = {
     "amqp": do_amqp,
     "mqtt": do_mqtt,
     "grpc": do_grpc,
+    "websocket": do_websocket,
 }
 
 

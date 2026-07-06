@@ -2,7 +2,7 @@
 # One protocol, end-to-end: bring up `agent` + the protocol's service, then run
 # each language client UNDER plug against it BY NAME, and print a PASS/FAIL grid.
 #
-#   bash e2e/matrix.sh <proto>          # http | postgres | redis | mongo | amqp | mqtt | grpc
+#   bash e2e/matrix.sh <proto>          # http | postgres | redis | mongo | amqp | mqtt | grpc | websocket
 #   E2E_LANGS="go node" bash e2e/matrix.sh http   # subset of clients
 #
 # Exits non-zero if any client fails (this is the regression guard).
@@ -20,6 +20,7 @@ case "$proto" in
   amqp)     svc=rabbitmq;  target="rabbitmq:5672" ;;
   mqtt)     svc=mosquitto; target="mosquitto:1883" ;;
   grpc)     svc=grpc;      target="grpc:50051" ;;
+  websocket) svc=wsserver; target="wsserver:8090" ;;
   *) echo "unknown proto: $proto"; exit 2 ;;
 esac
 

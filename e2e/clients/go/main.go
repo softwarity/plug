@@ -16,6 +16,7 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/gorilla/websocket"
 	_ "github.com/lib/pq"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/redis/go-redis/v9"
@@ -68,6 +69,8 @@ func main() {
 		doMQTT(target)
 	case "grpc":
 		doGRPC(target)
+	case "websocket":
+		doWebSocket(target)
 	default:
 		die("proto %q not implemented in the go client", proto)
 	}
@@ -92,6 +95,40 @@ func doHTTP(target string) {
 		die("http GET %s: %v", url, err)
 	}
 	ok("http", fmt.Sprintf("%s → 200 (%d bytes)", url, len(body)))
+}
+
+// doWebSocket opens a ws:// connection BY NAME, sends a text frame and asserts the
+// echo server returns it verbatim — exercising HTTP Upgrade + a bidirectional
+// frame round-trip through plug's TUN.
+func doWebSocket(target string) {
+	url := "ws://" + target + "/"
+	const msg = "plug-e2e-ws-42"
+	var got string
+	err := retry(func() error {
+		c, _, err := websocket.DefaultDialer.Dial(url, nil)
+		if err != nil {
+			return err
+		}
+		defer c.Close()
+		_ = c.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		if err := c.WriteMessage(websocket.TextMessage, []byte(msg)); err != nil {
+			return err
+		}
+		_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+		_, b, err := c.ReadMessage()
+		if err != nil {
+			return err
+		}
+		got = string(b)
+		return nil
+	})
+	if err != nil {
+		die("websocket %s: %v", url, err)
+	}
+	if got != msg {
+		die("websocket echo mismatch: got %q want %q", got, msg)
+	}
+	ok("websocket", fmt.Sprintf("%s → echo %q", url, got))
 }
 
 func doPostgres(target string) {
