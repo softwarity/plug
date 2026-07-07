@@ -2,11 +2,11 @@
 // the language's NATURAL driver. Invoked (under plug) as:
 //   node /app/client.js <proto> <host:port>
 //
-// http goes through Node's built-in `http` module (http.get resolves through
-// libc, which plug's hook covers — do NOT use fetch/undici, it ignores proxy
-// env); every other protocol is a raw-TCP driver → it exercises the seccomp
-// supervisor. Prints "E2E-OK <proto> — …" and exits 0 on success, otherwise
-// prints "E2E-FAIL <proto> <error>" and exits non-zero.
+// Every protocol just connects to <host:port> by name and lets the driver do its
+// thing: no proxy, no hook, no config. plug captures at the IP layer through its
+// userspace TUN, so the app's socket is never touched and each driver reaches the
+// cluster service by name uniformly. Prints "E2E-OK <proto> — …" and exits 0 on
+// success, otherwise prints "E2E-FAIL <proto> <error>" and exits non-zero.
 
 'use strict';
 

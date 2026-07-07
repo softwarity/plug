@@ -2,10 +2,10 @@
 // language's NATURAL driver. Invoked (under plug) as:
 //     java -jar /app/client.jar <proto> <host:port>
 //
-// http goes through java.net.http.HttpClient; every other protocol is a raw-TCP
-// driver. plug sets JAVA_TOOL_OPTIONS=-DsocksProxyHost=... -DsocksProxyPort=...
-// so the JVM routes all TCP through plug's SOCKS proxy automatically — this code
-// does NOT configure any proxy, it just connects to <host:port> by name.
+// Every protocol just connects to <host:port> by name and lets the driver do its
+// thing: no proxy, no hook, no config. plug captures at the IP layer through its
+// userspace TUN, so the JVM's socket is never touched and each driver reaches the
+// cluster service by name uniformly.
 //
 // Prints "E2E-OK <proto> — …" and exits 0 on success, or
 // "E2E-FAIL <proto> <error>" and exits 1 on failure. A bash harness greps these.

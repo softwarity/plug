@@ -74,9 +74,11 @@ services:
     networks: [internal]
 
   # ---- language clients (run on demand: `<proto> <host:port>` as args) ----
-  # Each runs its command UNDER plug against the cluster service by name. The
-  # seccomp flags are only needed INSIDE a container (a real host needs neither);
-  # they let plug's Go-coverage supervisor install a user-notifier + read its child.
+  # Each runs its command UNDER plug against the cluster service by name. plug
+  # captures at the IP layer through its userspace TUN, so the client reaches the
+  # service by its natural driver — no proxy, no hook. The caps/devices below are
+  # only needed INSIDE a container (a real host needs none): NET_ADMIN + SYS_ADMIN
+  # + /dev/net/tun let plug create the TUN, set routes, and repoint DNS.
   client-go:
     build: { context: ., dockerfile: clients/go/Dockerfile }
     networks: [edge]
