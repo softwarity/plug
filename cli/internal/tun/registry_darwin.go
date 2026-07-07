@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 )
 
@@ -26,10 +27,35 @@ func RegisterClient(key string, pid int) func() {
 		return func() {}
 	}
 	marker := filepath.Join(dir, strconv.Itoa(pid))
-	if os.WriteFile(marker, nil, 0o644) != nil {
+	// The marker carries the cluster key, so the multicluster router can go the
+	// OTHER way — PID → cluster — by reading it (clusterForPID). Harmless to the
+	// single-cluster daemon, which only reads the marker's NAME (the pid).
+	if os.WriteFile(marker, []byte(key), 0o644) != nil {
 		return func() {}
 	}
 	return func() { _ = os.Remove(marker) }
+}
+
+// clusterForPID reports the cluster a registered launcher PID belongs to, by
+// finding its marker across the per-cluster client dirs and reading the key it
+// carries. It is the reverse of the registry (cluster→PIDs) and the lookup the
+// multicluster router needs (PID→cluster; see walkToCluster in pidroute.go). A
+// daemon holding N clusters caches this — the fs scan is the source of truth.
+func clusterForPID(pid int) (string, bool) {
+	entries, err := os.ReadDir(graftDir)
+	if err != nil {
+		return "", false
+	}
+	name := strconv.Itoa(pid)
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasSuffix(e.Name(), ".clients") {
+			continue
+		}
+		if b, err := os.ReadFile(filepath.Join(graftDir, e.Name(), name)); err == nil {
+			return strings.TrimSpace(string(b)), true
+		}
+	}
+	return "", false
 }
 
 // LiveClients counts client markers whose process is still alive, reaping stale
