@@ -36,7 +36,9 @@ $PlugExe       = Join-Path $InstallDir 'plug.exe'
 $WintunDll     = Join-Path $InstallDir 'wintun.dll'
 
 function Info($msg) { Write-Host "plug: $msg" }
-function Die($msg)  { Write-Error "plug: $msg"; exit 1 }
+# throw (not Write-Error + exit): under `powershell -Command -` a piped script's
+# `exit` does not reliably stop it, so an error used to print yet the script ran on.
+function Die($msg)  { throw "plug: $msg" }
 
 # --- 1. Discover the cluster host/port from the live ssh invocation ----------
 # You reached the agent with `ssh ... get@<host> install-windows`; the agent can
@@ -48,15 +50,27 @@ function Die($msg)  { Write-Error "plug: $msg"; exit 1 }
 $SshHost = $null
 $SshPort = $DefaultPort
 $profileMsg = $null
-try {
-    $line = Get-CimInstance Win32_Process -Filter "Name='ssh.exe'" |
-            Where-Object { $_.CommandLine -match 'get@' -and $_.CommandLine -match 'install-windows' } |
-            Select-Object -First 1 -ExpandProperty CommandLine
-    if ($line) {
-        if ($line -match 'get@([A-Za-z0-9._-]+)') { $SshHost = $Matches[1] }
-        if ($line -match '-p[ =]*([0-9]+)')       { $SshPort = $Matches[1] }
-    }
-} catch { }
+
+# (a) Explicit override — the robust path from Git Bash / MSYS, where the ssh that
+# streams this script is an MSYS process whose Win32 CommandLine the auto-detect
+# below cannot read. Pass it on the powershell side of the pipe:
+#   ssh ... get@<host> install-windows | PLUG_HOST=<host> PLUG_PORT=<port> powershell -NoProfile -Command -
+if ($env:PLUG_HOST) { $SshHost = $env:PLUG_HOST }
+if ($env:PLUG_PORT) { $SshPort = $env:PLUG_PORT }
+
+# (b) Otherwise auto-detect from the live ssh invocation — works with the native
+# Windows OpenSSH client, whose process CommandLine is readable.
+if (-not $SshHost) {
+    try {
+        $line = Get-CimInstance Win32_Process -Filter "Name='ssh.exe'" |
+                Where-Object { $_.CommandLine -match 'get@' -and $_.CommandLine -match 'install-windows' } |
+                Select-Object -First 1 -ExpandProperty CommandLine
+        if ($line) {
+            if ($line -match 'get@([A-Za-z0-9._-]+)') { $SshHost = $Matches[1] }
+            if ($line -match '-p[ =]*([0-9]+)')       { $SshPort = $Matches[1] }
+        }
+    } catch { }
+}
 
 if ($SshHost) {
     $plugCfgDir = Join-Path $env:USERPROFILE '.plug'
@@ -76,7 +90,7 @@ New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
 function Get-AgentBinary($outFile) {
     if (-not $SshHost) {
-        Die 'cannot download plug.exe: no cluster host detected (run from an `ssh ... get@<host> install-windows | powershell -` line)'
+        Die 'no cluster host detected. From Git Bash, pass it on the powershell side of the pipe: | PLUG_HOST=<host> PLUG_PORT=<port> powershell -NoProfile -Command -   (the native Windows OpenSSH client is auto-detected without this)'
     }
     if (-not (Get-Command ssh -ErrorAction SilentlyContinue)) {
         Die 'ssh.exe not found. Install the Windows OpenSSH client (Settings > Apps > Optional Features > OpenSSH Client), then re-run.'

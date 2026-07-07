@@ -164,28 +164,41 @@ use its FQDN (`myservice.othernamespace`). See [deploy/README.md](deploy/README.
 
 ## Windows
 
-Native Windows is supported (no WSL2 needed). Install straight from the cluster,
-one line — same model as unix, just piped into PowerShell instead of `sh`:
+Native Windows is supported (no WSL2 needed). You need an `ssh` client; this guide
+**assumes [Git for Windows](https://git-scm.com/download/win) is installed** — it
+ships both `ssh` and Git Bash, which nearly every Windows dev already has. (Windows'
+built-in OpenSSH client works too — see the note below.)
 
-```powershell
+**1. Install — from Git Bash, one line.** Same model as unix, piped into PowerShell
+instead of `sh`. The `ssh` bundled with Git is an MSYS process whose Windows command
+line the installer can't introspect, so **pass the cluster host/port explicitly** on
+the PowerShell side of the pipe — that's what names your profile:
+
+```bash
 # host key regenerated each start (not a secret) — skip the check, as plug does internally:
-ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL get@<cluster-host> install-windows | powershell -NoProfile -Command -
+ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    get@<cluster-host> install-windows \
+  | PLUG_HOST=<cluster-host> PLUG_PORT=2222 powershell -NoProfile -Command -
 ```
 
 This downloads `plug.exe` and `wintun.dll` into `%LOCALAPPDATA%\Programs\plug`,
-adds it to your PATH, and pre-creates a `~/.plug/<host>.conf` profile from your
-`ssh` line. Installing needs **no administrator rights**. Requires the built-in
-Windows OpenSSH client (*Settings → Apps → Optional Features → OpenSSH Client*).
+adds it to your PATH, and pre-creates a `~/.plug/<host>.conf` profile. Installing
+needs **no administrator rights**. Open a new terminal afterwards so the PATH takes
+effect.
 
-**Running — the one caveat.** plug's Windows data path is a WinTUN adapter, and
-creating it plus its routes requires **Administrator**. Unlike Linux (`setcap`) or
-macOS (setuid helper) — where one grant at install lets every later run start
-unprivileged — Windows has no per-binary privilege bit, and the process holding
-the adapter is the same one running your command in the foreground. So **for now,
-start `plug` from an elevated terminal** (*Run as administrator*):
+> **Using Windows' native OpenSSH client instead?** Run the same line from a normal
+> PowerShell (with `UserKnownHostsFile=NUL`) and **drop the `PLUG_HOST=/PLUG_PORT=`
+> prefix** — that client's command line *is* readable, so the host is auto-detected.
+
+**2. Run — the one caveat: an elevated terminal.** plug's Windows data path is a
+WinTUN adapter, and creating it plus its routes requires **Administrator**. Unlike
+Linux (`setcap`) or macOS (setuid helper) — where one grant at install lets every
+later run start unprivileged — Windows has no per-binary privilege bit, and the
+process holding the adapter is the same one running your command in the foreground.
+So **for now, start `plug` from an elevated terminal** (*Run as administrator*):
 
 ```powershell
-plug npm run start:dev
+plug <your command>            # several clusters? plug -p <name> <your command>
 ```
 
 A future release will move the Windows data path into a persistent **SYSTEM

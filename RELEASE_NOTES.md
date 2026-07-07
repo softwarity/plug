@@ -2,6 +2,14 @@
 
 ## NEXT RELEASE
 
+- **Windows installer works from Git Bash.** The one-liner used to fail there with
+  `no cluster host detected`: the installer read the host off the live `ssh`
+  process's command line, which is unreadable when that `ssh` is Git's MSYS build.
+  You can now pass it explicitly — `… install-windows | PLUG_HOST=<host> PLUG_PORT=<port>
+  powershell -NoProfile -Command -` — while the native Windows OpenSSH client is
+  still auto-detected with no prefix. Also, a fatal installer error now actually
+  stops the script (a piped `powershell -Command -` ignored the old `exit`), and the
+  README documents the Git-Bash path assuming Git for Windows is present.
 - **Attribution hardened against PID recycling.** The by-process router now stamps
   each hop of the ancestry walk with the process's start time and refuses a
   temporally impossible chain — an "ancestor" that started *after* its child is a
