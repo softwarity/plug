@@ -2,6 +2,23 @@
 
 ## NEXT RELEASE
 
+- **Windows: real cluster access, by name — validated end-to-end.** A local `plug curl
+  http://my-service:8081/…` now resolves the single-label cluster name and reaches the
+  service, returning real content — the same as macOS/Linux, on a real Windows machine.
+  The missing piece was DNS: Windows never issues a DNS query for a *bare* single-label
+  name (LLMNR/NetBIOS only), so plug now advertises a **search suffix** on the WinTUN
+  adapter (`my-service` → `my-service.plug`), routes `.plug` to the in-stack resolver
+  via an **NRPT** rule, and strips the suffix back — the mechanism Tailscale/WireGuard
+  use for short names. Also fixed on the way: the launcher exec'd a downloaded version
+  without the `.exe` suffix, and couldn't find `wintun.dll` (WinTUN loads it from the
+  binary's own dir, not PATH) — both now handled.
+- **Windows: datapath as a SYSTEM service (no-admin + multicluster groundwork).** The
+  global datapath now has a Windows SCM service counterpart to the macOS daemon: it
+  holds one WinTUN + a tunnel per active cluster (routed by PID at connect) and a
+  non-elevated `plug <cmd>` delegates to it — so day-to-day runs need **no admin**
+  (one UAC at install to create the service) and several clusters run at once. Falls
+  back to the in-process elevated path if the service isn't installed. Build-validated
+  on all three OSes; runtime validation on Windows is next. See `docs/windows-service.md`.
 - **Windows installer works from Git Bash.** The one-liner used to fail there with
   `no cluster host detected`: the installer read the host off the live `ssh`
   process's command line, which is unreadable when that `ssh` is Git's MSYS build.

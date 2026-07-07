@@ -187,15 +187,35 @@ if (-not $onPath) {
     Info "$InstallDir already on PATH"
 }
 
-# --- Done: report profile + the admin caveat ---------------------------------
-if ($profileMsg) { Info "profile $profileMsg" }
+# --- 5. Install the datapath SERVICE (the ONE admin step) --------------------
+# Day-to-day `plug <cmd>` should need no admin. The privileged work (WinTUN +
+# routes + DNS) runs in an on-demand SYSTEM service; a non-elevated launcher
+# starts it through the SCM. Creating a service needs admin ONCE, so we
+# self-elevate just for that. If declined, plug still works from an elevated
+# terminal (it falls back to holding the datapath in-process).
+$svcInstalled = $false
+if (Get-Service -Name plug -ErrorAction SilentlyContinue) {
+    $svcInstalled = $true
+    Info "datapath service already installed"
+} else {
+    Info "installing the datapath service (Windows will prompt for admin ONCE)..."
+    try {
+        $p = Start-Process -FilePath $PlugExe -ArgumentList 'install-service' -Verb RunAs -Wait -PassThru
+        if ($p.ExitCode -eq 0) { $svcInstalled = $true; Info "datapath service installed." }
+        else { Info "service install exited $($p.ExitCode) — retry later:  plug install-service   (elevated)" }
+    } catch {
+        Info "admin declined — to enable no-admin runs later:  plug install-service   (elevated terminal)"
+    }
+}
 
+# --- Done --------------------------------------------------------------------
+if ($profileMsg) { Info "profile $profileMsg" }
 Write-Host ''
 Info "ready."
-Info "IMPORTANT: creating the WinTUN adapter and routes needs Administrator."
-Info "Start plug from an elevated terminal (Run as administrator), then:"
-if ($profileMsg) {
+if ($svcInstalled) {
+    Info "no admin needed day-to-day:"
     Info "    plug <your command>          (several clusters? plug -p <name> <your command>)"
 } else {
-    Info "    plug <your command>          (the first run asks for your cluster)"
+    Info "service not installed — for now start plug from an ELEVATED terminal:"
+    Info "    plug <your command>          (or run 'plug install-service' elevated to drop the admin need)"
 }
