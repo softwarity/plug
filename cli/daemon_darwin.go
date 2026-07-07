@@ -14,91 +14,147 @@ import (
 	"time"
 
 	"github.com/softwarity/plug/cli/internal/tun"
+	"github.com/softwarity/plug/cli/internal/tunnel"
 )
 
-// daemonMain runs the persistent datapath for ONE cluster on macOS, where the
-// system resolver is global. It holds the leader lock, brings the datapath up,
-// tells the launcher it's ready (fd 3), and stays up until no client is left for
-// 30s or it gets SIGTERM (`plug down`). Runs as root (re-exec'd from a sudo plug).
-// args[0] = "host:port".
-func daemonMain(args []string) int {
-	if len(args) < 1 {
-		return 1
-	}
-	key := args[0]
-	host, port, err := net.SplitHostPort(key)
-	if err != nil {
-		host, port = key, ""
-	}
+// globalKey is the pseudo-cluster key under which the ONE global daemon holds its
+// lock and DNS backup. macOS repoints DNS machine-wide, so a single daemon owns
+// the datapath for ALL clusters and routes each flow to the right tunnel by PID
+// at connect (docs/multicluster.md). No real cluster key is ever "@global".
+const globalKey = "@global"
 
-	// Hold the leader lock for our whole life — that is what makes DaemonAlive true
-	// for the clients that graft onto us.
-	leader, release, _ := tun.AcquireCluster(key)
+// daemonMain runs the persistent GLOBAL datapath on macOS: one utun + netstack +
+// system-DNS repoint, plus a tunnel PER active cluster, routed by PID at connect.
+// It reconciles its tunnel set against the client registry and stays up until no
+// cluster has a live client for 30s, or SIGTERM (`plug down`). Runs as root.
+func daemonMain(_ []string) int {
+	leader, release, _ := tun.AcquireCluster(globalKey)
 	if !leader {
 		return 0 // another daemon won the start race
 	}
 	defer release()
 
-	// Crash net, FIRST: repair a DNS a crashed daemon may have left pointing at a
-	// dead resolver — otherwise even resolving the agent host below would fail.
-	tun.RestoreOrphanDNS(key)
+	// Crash net, first: repair a DNS a crashed daemon may have left pointing at a
+	// dead resolver — else even resolving an agent host below would fail.
+	tun.RestoreOrphanDNS(globalKey)
 
-	tr, err := dialTunnel(config{host: host, port: port})
-	if err != nil {
-		daemonReady(false)
-		info("daemon: connect %s: %v", host, err)
-		return 1
-	}
-	defer tr.Close()
+	ct := tun.NewClusterTransports()
+	_ = tun.SaveDNSBackup(globalKey) // snapshot the clean DNS before we override it
 
-	// Snapshot the (clean) DNS before StartDatapath overrides it.
-	_ = tun.SaveDNSBackup(key)
-
-	dp, err := tun.StartDatapath(tr, info)
+	dp, err := tun.StartGlobalDatapath(ct, info)
 	if err != nil {
 		daemonReady(false)
 		info("daemon: %v", err)
 		return 1
 	}
-	daemonReady(true)
-	info("daemon: datapath up for %s (DNS %s)", host, dp.DNSIP)
 
-	go reap(key, dp) // stop 30s after the last client leaves
+	// First reconcile BEFORE signalling ready, so the cluster that started us has
+	// its tunnel open by the time `plug <cmd>` proceeds.
+	tunnels := map[string]*tunnel.Transport{}
+	reconcileOnce(ct, tunnels)
+	daemonReady(true)
+	info("daemon: global datapath up (multicluster), %d cluster(s)", len(tunnels))
+
+	stop := make(chan struct{})
+	go reconcileLoop(ct, tunnels, stop)
+	go reapGlobal(dp, stop)
+
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT) // `plug down`
 	go func() { <-sigs; dp.Stop() }()
 
 	dp.Wait()
+	close(stop)
 	dp.Stop() // idempotent
-	tun.ClearDNSBackup(key)
-	info("daemon: datapath down for %s", host)
+	closeAll(ct, tunnels)
+	tun.ClearDNSBackup(globalKey)
+	info("daemon: global datapath down")
 	return 0
 }
 
-// reap stops the datapath once no client of the cluster has been alive for grace —
-// long enough to ride through a `kill + relaunch` of a process.
-func reap(key string, dp *tun.Datapath) {
+// reconcileLoop re-syncs the tunnel set with the active clusters every 2s.
+func reconcileLoop(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transport, stop <-chan struct{}) {
+	tk := time.NewTicker(2 * time.Second)
+	defer tk.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-tk.C:
+			reconcileOnce(ct, tunnels)
+		}
+	}
+}
+
+// reconcileOnce opens a tunnel for each active cluster missing one and closes
+// tunnels whose cluster no longer has a live client. Each open/close flips the
+// cluster's ready marker so `plug -p X <cmd>` can wait for its own tunnel.
+func reconcileOnce(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transport) {
+	active := map[string]bool{}
+	for _, key := range tun.ActiveClusters() {
+		active[key] = true
+		if _, have := tunnels[key]; have {
+			continue
+		}
+		host, port, err := net.SplitHostPort(key)
+		if err != nil {
+			host, port = key, ""
+		}
+		tr, err := dialTunnel(config{host: host, port: port})
+		if err != nil {
+			info("daemon: connect %s: %v", key, err)
+			continue
+		}
+		tunnels[key] = tr
+		ct.Set(key, tr)
+		tun.MarkClusterReady(key)
+		info("daemon: tunnel up for %s", key)
+	}
+	for key, tr := range tunnels {
+		if !active[key] {
+			tun.UnmarkClusterReady(key)
+			ct.Remove(key)
+			tr.Close()
+			delete(tunnels, key)
+			info("daemon: tunnel down for %s", key)
+		}
+	}
+}
+
+// reapGlobal stops the datapath once no cluster has had a live client for grace —
+// long enough to ride through a kill+relaunch of a process.
+func reapGlobal(dp *tun.Datapath, stop <-chan struct{}) {
 	const grace = 30 * time.Second
 	tk := time.NewTicker(2 * time.Second)
 	defer tk.Stop()
 	var emptySince time.Time
-	for range tk.C {
-		if tun.LiveClients(key) > 0 {
-			emptySince = time.Time{}
-			continue
-		}
-		if emptySince.IsZero() {
-			emptySince = time.Now()
-			continue
-		}
-		if time.Since(emptySince) >= grace {
-			if tun.LiveClients(key) > 0 { // a client may have just registered
+	for {
+		select {
+		case <-stop:
+			return
+		case <-tk.C:
+			if len(tun.ActiveClusters()) > 0 {
 				emptySince = time.Time{}
 				continue
 			}
-			dp.Stop()
-			return
+			if emptySince.IsZero() {
+				emptySince = time.Now()
+				continue
+			}
+			if time.Since(emptySince) >= grace {
+				dp.Stop()
+				return
+			}
 		}
+	}
+}
+
+func closeAll(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transport) {
+	for key, tr := range tunnels {
+		tun.UnmarkClusterReady(key)
+		ct.Remove(key)
+		tr.Close()
+		delete(tunnels, key)
 	}
 }
 
@@ -115,19 +171,17 @@ func daemonReady(ok bool) {
 	_ = f.Close()
 }
 
-// startDaemonDetached re-execs plug as a DETACHED daemon (new session) for the
-// cluster and blocks until it signals ready (a byte on the pipe) or fails (EOF).
-// Called by coreRun (macOS) when no daemon is up yet.
-func startDaemonDetached(cfg config) error {
+// startDaemonDetached re-execs plug as the DETACHED GLOBAL daemon (new session)
+// and blocks until it signals ready (a byte on the pipe) or fails (EOF). Called by
+// coreRun when no daemon is up. The daemon serves ALL clusters, so no key is
+// passed; cfg is unused beyond triggering the start.
+func startDaemonDetached(_ config) error {
 	self, err := os.Executable()
 	if err != nil {
 		return err
 	}
 	_ = os.MkdirAll("/var/run/plug", 0o755)
-	logPath := filepath.Join("/var/run/plug", tun.ClusterHash(cfg.host+":"+cfg.port)+".log")
-	// TRUNC, not APPEND: one daemon owns one log for its lifetime. Appending across
-	// daemon lifetimes accumulates dead lines from earlier (e.g. pre-fix) attempts,
-	// which read as live failures and send you chasing ghosts when diagnosing.
+	logPath := filepath.Join("/var/run/plug", "daemon.log")
 	logf, _ := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 
 	r, w, err := os.Pipe()
@@ -139,7 +193,7 @@ func startDaemonDetached(cfg config) error {
 	}
 	defer r.Close()
 
-	cmd := exec.Command(self, tun.DaemonVerb, cfg.host+":"+cfg.port)
+	cmd := exec.Command(self, tun.DaemonVerb) // no key → global daemon
 	cmd.Env = append(os.Environ(), "PLUG_CORE=1")
 	cmd.Stdout = logf
 	cmd.Stderr = logf
@@ -162,8 +216,6 @@ func startDaemonDetached(cfg config) error {
 	if n, _ := r.Read(buf); n == 1 {
 		return nil // ready
 	}
-	// Surface the daemon's own failure reason (its last log line) instead of an
-	// opaque "did not come up".
 	if reason := lastLogLine(logPath); reason != "" {
 		return fmt.Errorf("%s", reason)
 	}
@@ -181,26 +233,20 @@ func lastLogLine(path string) string {
 	return strings.TrimPrefix(strings.TrimSpace(lines[len(lines)-1]), "[plug] ")
 }
 
-// cmdDown stops the running datapath daemon for the resolved cluster (`plug down`).
-func cmdDown(args []string) {
-	opts, _ := parseArgs(args)
-	cfg := resolveConfig(opts)
-	if cfg.host == "" {
-		fatal("no agent host: use --host, $PLUG_HOST or a profile")
-	}
-	key := cfg.host + ":" + cfg.port
-	if !tun.DaemonAlive(key) {
-		tun.RestoreOrphanDNS(key) // repair the DNS if a crashed daemon left it broken
-		info("no plug daemon running for %s", cfg.host)
+// cmdDown stops the running global datapath daemon (`plug down`).
+func cmdDown(_ []string) {
+	if !tun.DaemonAlive(globalKey) {
+		tun.RestoreOrphanDNS(globalKey) // repair the DNS if a crashed daemon left it broken
+		info("no plug daemon running")
 		return
 	}
-	pid := tun.DaemonPID(key)
+	pid := tun.DaemonPID(globalKey)
 	if pid == 0 {
-		info("plug daemon for %s: unknown pid", cfg.host)
+		info("plug daemon: unknown pid")
 		return
 	}
 	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
 		fatal("stopping daemon (pid %d): %v", pid, err)
 	}
-	info("stopped the plug daemon for %s", cfg.host)
+	info("stopped the plug daemon")
 }

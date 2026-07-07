@@ -25,14 +25,15 @@ import (
 // to handleTCP, which splices it to the SSH tunnel by name; DNS (UDP:53 to the
 // instance's dnsIP) is answered in-stack by handleDNS.
 // dialFunc picks the cluster transport for an intercepted flow by its source
-// port, or ok=false to refuse it (unattributable → RST). Single-cluster returns a
-// constant (constDial); multicluster resolves srcPort→PID→cluster→tunnel.
-type dialFunc func(srcPort uint16) (Dialer, bool)
+// port, returning the transport and the cluster key it was attributed to (for
+// logs), or ok=false to refuse it (unattributable → RST). Single-cluster returns
+// a constant (constDial); multicluster resolves srcPort→PID→cluster→tunnel.
+type dialFunc func(srcPort uint16) (d Dialer, cluster string, ok bool)
 
 // constDial is the single-cluster case: every flow goes to the one transport, no
 // attribution. This keeps the proven single-cluster datapath behaviour exact.
 func constDial(tr Dialer) dialFunc {
-	return func(uint16) (Dialer, bool) { return tr, true }
+	return func(uint16) (Dialer, string, bool) { return tr, "", true }
 }
 
 func buildStack(tab *faketab, df dialFunc, upstream *net.Resolver, log logfn) (*stack.Stack, *channel.Endpoint) {
@@ -78,10 +79,15 @@ func handleTCP(r *tcp.ForwarderRequest, tab *faketab, df dialFunc, log logfn) {
 	// the key the multicluster router walks (srcPort→PID→ancestry→cluster). We
 	// refuse an unattributable flow rather than mis-route it. Single-cluster
 	// (constDial) always attributes, so this path is unchanged there.
-	dialer, ok := df(id.RemotePort)
+	dialer, cluster, ok := df(id.RemotePort)
 	if !ok {
+		log.f("tun: %s:%d → %s: refused (unattributable flow, src port %d)", ipStr(fake), id.LocalPort, name, id.RemotePort)
 		r.Complete(true) // RST — flow can't be attributed to a cluster
 		return
+	}
+	via := ""
+	if cluster != "" {
+		via = " via " + cluster
 	}
 
 	var wq waiter.Queue
@@ -96,11 +102,11 @@ func handleTCP(r *tcp.ForwarderRequest, tab *faketab, df dialFunc, log logfn) {
 	target := net.JoinHostPort(name, strconv.Itoa(int(id.LocalPort)))
 	up, err := dialer.DialCluster(target)
 	if err != nil {
-		log.f("tun: cluster %s: %v", target, err)
+		log.f("tun: %s%s: %v", target, via, err)
 		local.Close()
 		return
 	}
-	log.f("tun: %s:%d → %s (by name)", ipStr(fake), id.LocalPort, target)
+	log.f("tun: %s:%d → %s%s (by name)", ipStr(fake), id.LocalPort, target, via)
 	go relay(local, up)
 }
 

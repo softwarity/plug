@@ -86,3 +86,47 @@ func processAlive(pid int) bool {
 	err := syscall.Kill(pid, 0)
 	return err == nil || err == syscall.EPERM
 }
+
+// ActiveClusters returns the keys of clusters that currently have at least one
+// live client, read from the per-cluster client dirs (each marker carries its
+// key). The global daemon reconciles its tunnel set against this — open a tunnel
+// for each active cluster, close the rest — so the registry doubles as the IPC:
+// a `plug -p X` just registers, and the daemon discovers cluster X. Stale markers
+// are reaped on the way.
+func ActiveClusters() []string {
+	entries, err := os.ReadDir(graftDir)
+	if err != nil {
+		return nil
+	}
+	var keys []string
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasSuffix(e.Name(), ".clients") {
+			continue
+		}
+		dir := filepath.Join(graftDir, e.Name())
+		markers, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		key := ""
+		for _, m := range markers {
+			pid, err := strconv.Atoi(m.Name())
+			if err != nil {
+				continue
+			}
+			if !processAlive(pid) {
+				_ = os.Remove(filepath.Join(dir, m.Name())) // reap stale
+				continue
+			}
+			if key == "" {
+				if b, err := os.ReadFile(filepath.Join(dir, m.Name())); err == nil {
+					key = strings.TrimSpace(string(b))
+				}
+			}
+		}
+		if key != "" {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}

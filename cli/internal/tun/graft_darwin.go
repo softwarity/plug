@@ -26,6 +26,17 @@ func lockPath(key string) string { return filepath.Join(graftDir, ClusterHash(ke
 // backupPath is the per-cluster DNS backup file (the anti-crash net).
 func backupPath(key string) string { return filepath.Join(graftDir, ClusterHash(key)+".dns.bak") }
 
+// readyPath marks that the global daemon holds a LIVE tunnel for this cluster.
+func readyPath(key string) string { return filepath.Join(graftDir, ClusterHash(key)+".ready") }
+
+// MarkClusterReady / UnmarkClusterReady are called by the daemon's reconcile loop
+// when a cluster's tunnel opens / closes. ClusterReady lets a `plug -p X <cmd>`
+// wait for its own tunnel before running: the datapath is up daemon-wide, but the
+// per-cluster tunnel opens on the next reconcile after the client registers.
+func MarkClusterReady(key string)   { _ = os.WriteFile(readyPath(key), nil, 0o644) }
+func UnmarkClusterReady(key string) { _ = os.Remove(readyPath(key)) }
+func ClusterReady(key string) bool  { _, err := os.Stat(readyPath(key)); return err == nil }
+
 // AcquireCluster coordinates per-cluster datapath ownership on macOS, where the
 // system resolver is GLOBAL (one entry machine-wide). The holder of the exclusive
 // flock is the LEADER that owns the utun + scutil DNS repoint + tunnel; anyone who
