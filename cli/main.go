@@ -302,6 +302,7 @@ func ensureVersion(v string, cfg config) (string, error) {
 	own := func() { chownToUser(versionsDir()); chownToUser(dir); chownToUser(bin) }
 	if fi, err := os.Stat(bin); err == nil && fi.Size() > 1<<20 {
 		own()
+		ensureWintunBeside(bin)
 		return bin, nil
 	}
 	data, err := getDownload(cfg, fmt.Sprintf("%s-%s", runtime.GOOS, runtime.GOARCH), "v"+v)
@@ -331,7 +332,32 @@ func ensureVersion(v string, cfg config) (string, error) {
 		return "", err
 	}
 	own()
+	ensureWintunBeside(bin)
 	return bin, nil
+}
+
+// ensureWintunBeside copies wintun.dll next to a versioned binary on Windows.
+// WinTUN's loader looks only in the executable's OWN directory (a hardening choice,
+// not the PATH), so a binary run from ~/.plug/versions/<v>/ can't find the wintun.dll
+// the installer dropped in the launcher dir — "Error loading wintun.dll ... module
+// could not be found". Best-effort: copy it from beside the launcher; no-op elsewhere.
+func ensureWintunBeside(bin string) {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	dst := filepath.Join(filepath.Dir(bin), "wintun.dll")
+	if _, err := os.Stat(dst); err == nil {
+		return // already there
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return
+	}
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(self), "wintun.dll"))
+	if err != nil {
+		return // launcher has none beside it — nothing to copy
+	}
+	_ = os.WriteFile(dst, data, 0o644)
 }
 
 func listVersions() {

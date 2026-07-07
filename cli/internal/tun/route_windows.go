@@ -69,12 +69,14 @@ func configure(dev any, _, cidr, dnsIP string, log logfn) ([]string, string, fun
 	return nil, "", cleanup, nil
 }
 
-// setSystemNRPT installs a catch-all Name Resolution Policy Table rule (namespace
-// ".") sending every DNS query to dnsIP. This is what makes single-label cluster
-// names resolve on Windows — the equivalent of scutil on macOS / resolv.conf on
-// Linux. Driven through the DnsClient cmdlets, which encode the DnsPolicyConfig
-// registry correctly (the same table WireGuard-Windows writes by hand), and flush
-// the resolver cache so a prior negative answer ("Could not resolve") doesn't stick.
+// setSystemNRPT installs a Name Resolution Policy Table rule routing the ".plug"
+// search suffix to dnsIP. Paired with that suffix on plug0 (SetDNS above), it makes
+// single-label cluster names resolve on Windows: getaddrinfo appends the suffix (a
+// real DNS query at last), NRPT sends ".plug" here, answerDNS strips it back. It is
+// the Windows equivalent of scutil on macOS / resolv.conf on Linux, and the same
+// suffix+NRPT mechanism Tailscale/WireGuard use. Driven through the DnsClient cmdlets
+// (they encode the DnsPolicyConfig registry correctly), flushing the resolver cache
+// so a prior "Could not resolve" negative doesn't stick.
 func setSystemNRPT(dnsIP string) error {
 	clearSystemNRPT(dnsIP) // drop a stale rule a crashed run may have left
 	return psRun("Add-DnsClientNrptRule -Namespace '." + searchSuffix + "' -NameServers '" + dnsIP + "'; Clear-DnsClientCache")
