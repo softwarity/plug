@@ -72,7 +72,7 @@ Kubernetes: see [Kubernetes](#kubernetes) below.
 serves the right binary; the installer reads the cluster address from *your* `ssh`
 command and saves a profile named after that host, so plug is ready immediately.
 
-```shell
+```sh
 # Linux / macOS — the agent regenerates its host key at each start (not a secret
 # in plug's model), so skip the host-key check:
 ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@<cluster-host> install | sh
