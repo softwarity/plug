@@ -43,11 +43,11 @@ _Snapshot 2026-07-07 (branch `main`). "proven" = validated at runtime; "coded" =
 
 | Feature | Linux | macOS | Windows | Notes |
 |---|:--:|:--:|:--:|---|
-| Simultaneous different clusters | ✅ | ❌ | ❌ | Linux via mount-ns; mac/win one-at-a-time today |
-| PID-at-connect attribution core | ⚠️ | ⚠️ | ❌ | coded+tested, **not wired**; see docs/multicluster.md |
-| ↳ `ppidOf` | ✅ | ✅ | ❌ | /proc · `ps` · (ToolHelp TODO) |
-| ↳ `pidForLocalPort` | ✅ | ❌ | ❌ | /proc/net/tcp · (lsof/sysctl TODO) · (GetExtendedTcpTable TODO) |
-| N-tunnel daemon + handleTCP wiring | ❌ | ❌ | ❌ | next step, validate on 2 clusters |
+| Simultaneous different clusters | ✅ | ✅ | ⚠️ | Linux mount-ns; **macOS validated e2e** (PID-at-connect); Windows: bricks ready, daemon TODO |
+| PID-at-connect attribution wired | — | ✅ | ❌ | macOS global daemon routes each flow by PID — proven on two live clusters |
+| ↳ `ppidOf` | ✅ | ✅ | ⚠️ | /proc · `ps` · ToolHelp (coded, not yet run on Windows) |
+| ↳ `pidForLocalPort` | ✅ | ✅ | ⚠️ | /proc/net/tcp+fd · lsof · GetExtendedTcpTable (coded, not yet run) |
+| N-tunnel global daemon | — | ✅ | ❌ | macOS done + validated; Windows = SYSTEM service TODO |
 
 ## Profiles & CLI
 
@@ -81,6 +81,6 @@ _Snapshot 2026-07-07 (branch `main`). "proven" = validated at runtime; "coded" =
 ## Biggest holes (priority order)
 
 1. **Windows "no-admin" run** — needs a persistent SYSTEM service (like the macOS daemon) driven over IPC. Installer + datapath done; elevation model missing.
-2. **Multicluster on macOS/Windows** — attribution core landed; needs the N-tunnel daemon + `handleTCP` wiring + macOS/Windows `pidForLocalPort`.
+2. **Multicluster on Windows** — macOS is done and validated end to end on two live clusters; Windows has the attribution bricks (coded) but still needs the SYSTEM-service N-tunnel daemon.
 3. **Windows real-app + VPN** — datapath (selftest) green, but real end-to-end use and VPN behaviour unproven.
 4. **`self-update` on Linux** loses file-caps (pre-existing; macOS already re-applies its bit).
