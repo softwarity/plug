@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 1.2.0
+
 - **Simultaneous clusters on macOS.** A single global datapath daemon now holds
   one tunnel per cluster and routes each connection to the right one by the
   calling process — so `plug -p a <cmd>` and `plug -p b <cmd>` run at the same
