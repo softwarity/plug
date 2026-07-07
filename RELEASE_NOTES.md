@@ -2,6 +2,20 @@
 
 ## NEXT RELEASE
 
+- **Simultaneous clusters on macOS.** A single global datapath daemon now holds
+  one tunnel per cluster and routes each connection to the right one by the
+  calling process — so `plug -p a <cmd>` and `plug -p b <cmd>` run at the same
+  time, each reaching its own cluster (Linux already did this via mount
+  namespaces). Windows attribution bricks are in; its daemon is next.
+- **Profiles: create by naming, no separate `init`.** Reaching a new cluster is
+  just `plug -p <name> <command>` (wizard on first run, then remembered).
+  `plug -p <name> -H <host> [--port <p>]` defines it non-interactively, with or
+  without a command to run; `plug test -H <host>` probes an agent without saving
+  anything. `plug init` is gone from the help (still works).
+- **Leaner CLI help.** `plug -h` lists the everyday commands only — no
+  implementation talk. The concept moved to `plug about`. `self-update` and (on
+  macOS) `down` are unlisted: versions auto-update on connect, and the datapath
+  tears itself down after the last `plug` exits.
 - **macOS: `plug <command>` now runs without sudo (setuid-root helper).** The
   install posts the launcher as a setuid-root helper (`chown root:wheel` +
   `chmod u+s`, one sudo at install — the macOS counterpart of the Linux `setcap`),

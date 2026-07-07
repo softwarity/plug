@@ -59,11 +59,19 @@ func cmdRenameProfile(args []string) {
 // cmdTestProfile implements `plug test [profile]`: check the agent is reachable
 // and print its version. With no name, tests the selected/default profile.
 func cmdTestProfile(args []string) {
+	opts, rest := parseArgs(args)
 	var cfg config
-	if len(args) >= 1 {
-		cfg = loadProfile(args[0])
-	} else {
-		cfg = resolveConfig(options{})
+	switch {
+	case opts.host != "":
+		// plug test -H host [--port p]: probe that agent directly, no profile.
+		cfg = config{host: opts.host, port: opts.port}
+	case opts.profile != "":
+		// plug test -p X: probe an existing profile (never creates one).
+		cfg = loadProfile(opts.profile)
+	case len(rest) >= 1:
+		cfg = loadProfile(rest[0]) // plug test <profile-name>
+	default:
+		cfg = resolveConfig(options{}) // plug test: the default/only profile
 	}
 	if cfg.host == "" {
 		fatal("no host to test")

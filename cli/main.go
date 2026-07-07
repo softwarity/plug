@@ -32,43 +32,46 @@ const getUser = "get"    // download user (passwordless, ForceCommand)
 const defaultPort = "2222"
 const agentHome = "/opt/plug"
 
-const usageText = `plug — run a local process as if it were inside your cluster network.
+// usage lists the everyday commands only — no implementation talk, and no rarely
+// needed ones (self-update: versions auto-update on connect; down: the background
+// tears itself down; both still work, just unlisted).
+func usage() string {
+	return `plug — run a local command as if it were inside your cluster.
 
 Usage:
   plug [options] <command> [args...]   run <command> wired to the cluster
-  plug init                            create a profile interactively
-  plug ls                              list profiles (name host:port)
+  plug ls                              list profiles
   plug test [profile]                  check an agent is reachable
   plug rn <old> <new>                  rename a profile (alias: mv)
   plug rm <profile>                    remove a profile
-  plug versions                        list locally cached versions
-  plug version                         print the launcher version
-  plug self-update                     update the launcher itself from a cluster
-  plug down                            stop the macOS datapath daemon (this cluster)
+  plug versions                        list cached versions
+  plug uninstall                       remove plug from this machine
+  plug about                           what plug is, in a few lines
 
 Options:
   -p, --profile <name>   use profile ~/.plug/<name>.conf
-  -H, --host <host>      agent host (bypasses profiles; also $PLUG_HOST)
+  -H, --host <host>      agent host (also $PLUG_HOST)
       --port <port>      agent SSH port (default 2222; also $PLUG_PORT)
   -h, --help             show this help
+`
+}
 
-How it works:
-  plug runs your command under a userspace TUN backed by an SSH tunnel to the
-  agent. Cluster names resolve to it and every outbound connection is captured
-  at the IP layer and forwarded to the agent, which reaches the service inside
-  the cluster. One path, every runtime (gRPC included). Set up once by the
-  cluster install (a root helper), then just: plug <command>.
+// cmdAbout explains the concept in a few lines — the "why", not the plumbing.
+func cmdAbout() {
+	fmt.Print(`plug runs your local command as if it ran inside your cluster: cluster service
+names resolve, and their services are reachable — no code change, no proxy config.
 
-Profiles (~/.plug/*.conf):
-  host = swarm-node.example.com
-  port = 2222
-  forward = AMQP_URL=amqp://rabbitmq:5672, MONGO_URL=mongodb://mongodb:27017
+Set it up once per cluster (the install grants the privilege plug needs), then:
 
-Install from a cluster (no GitHub needed):
-  ssh -p 2222 get@<host> install | sh
+  plug <your command>            e.g.  plug npm run start:dev
+
+Several clusters? Just name one with -p — plug creates the profile on first run:
+
+  plug -p staging <command>
 
 Docs: https://softwarity.github.io/plug/
-`
+`)
+}
 
 type config struct {
 	host     string
@@ -157,15 +160,18 @@ func main() {
 
 	args := os.Args[1:]
 	if len(args) == 0 {
-		fmt.Print(usageText)
+		fmt.Print(usage())
 		os.Exit(2)
 	}
 	switch args[0] {
 	case "-h", "--help":
-		fmt.Print(usageText)
+		fmt.Print(usage())
 		return
 	case "version":
 		fmt.Println(version)
+		return
+	case "about":
+		cmdAbout()
 		return
 	case "versions":
 		listVersions()
@@ -207,7 +213,24 @@ func main() {
 func launcherRun(args []string) {
 	opts, cmdArgs := parseArgs(args)
 	if len(cmdArgs) == 0 {
-		fatal("no command given\n\n" + usageText)
+		// `plug -p <name>` with no command creates (or reconfigures) that profile.
+		// With -H/--port too it's written non-interactively (scriptable); otherwise
+		// the wizard asks. Bare `plug` with no -p still just shows usage.
+		if opts.profile != "" {
+			name := opts.profile
+			if opts.host != "" {
+				port := opts.port
+				if port == "" {
+					port = defaultPort
+				}
+				writeProfile(name, opts.host, port)
+			} else {
+				name = wizard(name, true)
+			}
+			info("try it:  plug -p %s <your command>", name)
+			return
+		}
+		fatal("no command given\n\n" + usage())
 	}
 	cfg := resolveConfig(opts)
 	if cfg.host == "" {
@@ -534,7 +557,7 @@ func parseArgs(args []string) (options, []string) {
 	for i < len(args) {
 		switch args[i] {
 		case "-h", "--help":
-			fmt.Print(usageText)
+			fmt.Print(usage())
 			os.Exit(0)
 		case "-p", "--profile":
 			o.profile = flagValue(args, &i)
@@ -561,6 +584,15 @@ func flagValue(args []string, i *int) string {
 func resolveConfig(o options) config {
 	var cfg config
 	switch {
+	case o.profile != "" && o.host != "":
+		// -p X -H host [--port p]: (re)define profile X from these, then use it —
+		// "set it and run" in one line, no wizard.
+		port := o.port
+		if port == "" {
+			port = defaultPort
+		}
+		writeProfile(o.profile, o.host, port)
+		cfg = config{host: o.host, port: port}
 	case o.host != "" || os.Getenv("PLUG_HOST") != "":
 	case o.profile != "":
 		// An unknown -p profile isn't an error: offer the wizard to create it, so
@@ -698,9 +730,16 @@ func wizard(defaultName string, confirmOverwrite bool) string {
 	}
 	port := prompt(in, "agent port", defaultPort)
 
+	return writeProfile(name, host, port)
+}
+
+// writeProfile saves ~/.plug/<name>.conf with host/port and returns name. Shared
+// by the wizard and the non-interactive `plug -p <name> -H <host> [--port <p>]`.
+func writeProfile(name, host, port string) string {
 	if err := os.MkdirAll(plugDir(), 0o700); err != nil {
 		fatal("%v", err)
 	}
+	path := filepath.Join(plugDir(), name+".conf")
 	content := fmt.Sprintf("host = %s\nport = %s\n", host, port)
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		fatal("%v", err)

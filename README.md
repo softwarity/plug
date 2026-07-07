@@ -112,12 +112,21 @@ plug curl http://my-service:8080/health
 
 Profiles live in `~/.plug/*.conf` and are picked automatically: no profile → a
 short wizard; one profile → used as is; several → interactive, or `-p staging`.
-`plug init` runs the wizard on demand. `--host`/`--port` (or `$PLUG_HOST`/
-`$PLUG_PORT`) bypass profiles. `PLUG_DIRECT=<cidr,host,suffix,…>` forces extra
-destinations to bypass the cluster (on top of the automatic split-horizon).
+Reaching a new cluster is just naming it — the profile is created on first use:
 
-CLI: `plug init` · `plug ls` · `plug rm`/`rn` · `plug test` · `plug versions` ·
-`plug self-update` · `plug down` (macOS: stop the daemon) · `plug uninstall`.
+```bash
+plug -p staging <command>                 # wizard on first run, then remembered
+plug -p staging -H node --port 2222        # define it non-interactively (no wizard)
+plug -p staging -H node <command>          # define it and run, in one line
+plug test -H node                          # probe an agent without saving anything
+```
+
+`--host`/`--port` (or `$PLUG_HOST`/`$PLUG_PORT`) target an agent directly.
+`PLUG_DIRECT=<cidr,host,suffix,…>` forces extra destinations to bypass the cluster.
+
+CLI: `plug ls` · `plug test` · `plug rn`/`rm` · `plug versions` · `plug uninstall`
+· `plug about`. (`plug self-update` and — on macOS — `plug down` still work; they're
+just rarely needed: versions auto-update on connect, the datapath tears itself down.)
 
 ## Multiple clusters at once
 
