@@ -56,11 +56,14 @@ COPY --chown=plug:plug --chmod=600 agent/authorized_keys /home/plug/.ssh/authori
 RUN chmod 700 /home/plug/.ssh
 COPY --chmod=755 agent/serve-binary /usr/local/bin/serve-binary
 COPY --chmod=755 agent/entrypoint.sh /entrypoint.sh
-# The Windows PowerShell installer, streamed by serve-binary on `install-windows`.
-COPY --chmod=644 agent/install.ps1 /opt/plug/install.ps1
-
 COPY --from=build /out/bin/ /opt/plug/bin/
 COPY --from=build /out/VERSION /opt/plug/VERSION
+# The Windows PowerShell installer, streamed by serve-binary on `install-windows`.
+# MUST come AFTER the COPYs above: a `--chmod=644` COPY that is the FIRST to create
+# /opt/plug applies 644 to the directory itself, dropping its +x so the unprivileged
+# `get` user can't traverse it — which breaks serving VERSION and the binaries. By
+# now /opt/plug already exists as 0755, so this only sets install.ps1's own mode.
+COPY --chmod=644 agent/install.ps1 /opt/plug/install.ps1
 
 EXPOSE 22
 ENTRYPOINT ["/entrypoint.sh"]
