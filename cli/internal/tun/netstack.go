@@ -81,7 +81,7 @@ func handleTCP(r *tcp.ForwarderRequest, tab *faketab, df dialFunc, log logfn) {
 	// (constDial) always attributes, so this path is unchanged there.
 	dialer, cluster, ok := df(id.RemotePort)
 	if !ok {
-		log.f("tun: %s:%d → %s: refused (unattributable flow, src port %d)", ipStr(fake), id.LocalPort, name, id.RemotePort)
+		log.f("tun: → %s: refused (unattributable flow, src port %d)", name, id.RemotePort)
 		r.Complete(true) // RST — flow can't be attributed to a cluster
 		return
 	}
@@ -89,25 +89,32 @@ func handleTCP(r *tcp.ForwarderRequest, tab *faketab, df dialFunc, log logfn) {
 	if cluster != "" {
 		via = " via " + cluster
 	}
-
-	var wq waiter.Queue
-	ep, terr := r.CreateEndpoint(&wq)
-	if terr != nil {
-		r.Complete(true)
-		return
-	}
-	r.Complete(false)
-	local := gonet.NewTCPConn(&wq, ep)
-
 	target := net.JoinHostPort(name, strconv.Itoa(int(id.LocalPort)))
-	up, err := dialer.DialCluster(target)
-	if err != nil {
-		log.f("tun: %s%s: %v", target, via, err)
-		local.Close()
-		return
-	}
-	log.f("tun: %s:%d → %s%s (by name)", ipStr(fake), id.LocalPort, target, via)
-	go relay(local, up)
+
+	// Dial the cluster BEFORE accepting the client's connection, off the forwarder
+	// goroutine. A failed dial then RSTs at once (Complete(true)) instead of
+	// half-opening a connection the client keeps retransmitting into — which
+	// spammed the log and raced the SSH channel. It also makes reachability honest:
+	// the client sees ESTABLISHED only once the flow is spliced end to end, so a
+	// name that isn't in this cluster is cleanly refused.
+	go func() {
+		up, err := dialer.DialCluster(target)
+		if err != nil {
+			log.f("tun: %s%s: %v", target, via, err)
+			r.Complete(true) // RST — unreachable in that cluster
+			return
+		}
+		var wq waiter.Queue
+		ep, terr := r.CreateEndpoint(&wq)
+		if terr != nil {
+			up.Close()
+			r.Complete(true)
+			return
+		}
+		r.Complete(false) // accept — established end to end
+		log.f("tun: %s:%d → %s%s (by name)", ipStr(fake), id.LocalPort, target, via)
+		relay(gonet.NewTCPConn(&wq, ep), up)
+	}()
 }
 
 // handleDNS answers one DNS query that arrived at this instance's dnsIP:53
