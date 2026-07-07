@@ -24,7 +24,18 @@ import (
 // ANY fake destination and may reply from it. Every accepted TCP flow is handed
 // to handleTCP, which splices it to the SSH tunnel by name; DNS (UDP:53 to the
 // instance's dnsIP) is answered in-stack by handleDNS.
-func buildStack(tab *faketab, tr Dialer, upstream *net.Resolver, log logfn) (*stack.Stack, *channel.Endpoint) {
+// dialFunc picks the cluster transport for an intercepted flow by its source
+// port, or ok=false to refuse it (unattributable → RST). Single-cluster returns a
+// constant (constDial); multicluster resolves srcPort→PID→cluster→tunnel.
+type dialFunc func(srcPort uint16) (Dialer, bool)
+
+// constDial is the single-cluster case: every flow goes to the one transport, no
+// attribution. This keeps the proven single-cluster datapath behaviour exact.
+func constDial(tr Dialer) dialFunc {
+	return func(uint16) (Dialer, bool) { return tr, true }
+}
+
+func buildStack(tab *faketab, df dialFunc, upstream *net.Resolver, log logfn) (*stack.Stack, *channel.Endpoint) {
 	s := stack.New(stack.Options{
 		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, ipv6.NewProtocol},
 		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol},
@@ -38,7 +49,7 @@ func buildStack(tab *faketab, tr Dialer, upstream *net.Resolver, log logfn) (*st
 	s.AddRoute(tcpip.Route{Destination: header.IPv4EmptySubnet, NIC: nicID})
 
 	tcpFwd := tcp.NewForwarder(s, 0, 2048, func(r *tcp.ForwarderRequest) {
-		handleTCP(r, tab, tr, log)
+		handleTCP(r, tab, df, log)
 	})
 	s.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpFwd.HandlePacket)
 
@@ -55,12 +66,21 @@ func buildStack(tab *faketab, tr Dialer, upstream *net.Resolver, log logfn) (*st
 
 // handleTCP completes the netstack handshake for one intercepted flow, maps its
 // fake destination back to the cluster name, dials the tunnel, and relays.
-func handleTCP(r *tcp.ForwarderRequest, tab *faketab, tr Dialer, log logfn) {
+func handleTCP(r *tcp.ForwarderRequest, tab *faketab, df dialFunc, log logfn) {
 	id := r.ID()
 	fake := addrToU32(id.LocalAddress) // LocalAddress/Port = the original destination
 	name, ok := tab.lookup(fake)
 	if !ok {
 		r.Complete(true) // RST — we never minted this fake
+		return
+	}
+	// Pick the cluster this flow belongs to. RemotePort is the app's source port,
+	// the key the multicluster router walks (srcPort→PID→ancestry→cluster). We
+	// refuse an unattributable flow rather than mis-route it. Single-cluster
+	// (constDial) always attributes, so this path is unchanged there.
+	dialer, ok := df(id.RemotePort)
+	if !ok {
+		r.Complete(true) // RST — flow can't be attributed to a cluster
 		return
 	}
 
@@ -74,7 +94,7 @@ func handleTCP(r *tcp.ForwarderRequest, tab *faketab, tr Dialer, log logfn) {
 	local := gonet.NewTCPConn(&wq, ep)
 
 	target := net.JoinHostPort(name, strconv.Itoa(int(id.LocalPort)))
-	up, err := tr.DialCluster(target)
+	up, err := dialer.DialCluster(target)
 	if err != nil {
 		log.f("tun: cluster %s: %v", target, err)
 		local.Close()
