@@ -15,6 +15,26 @@ import (
 // Windows (a persistent SYSTEM service, like the macOS daemon) is the remaining
 // step — the single-cluster Windows path never calls these.
 
+// procStart returns pid's creation time as raw FILETIME ticks (100 ns since 1601),
+// via OpenProcess + GetProcessTimes. Numeric and boot-stable; only comparability
+// feeds the ancestry walk, so a recycled PID gets a strictly newer stamp and a
+// parent younger than its child is rejected. QUERY_LIMITED_INFORMATION is the
+// least-privileged handle that still yields times, and a SYSTEM service can open
+// any process. We assemble the 64-bit tick count ourselves rather than lean on a
+// FILETIME→epoch helper — the offset is a constant and only ordering matters.
+func procStart(pid int) (int64, bool) {
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		return 0, false
+	}
+	defer windows.CloseHandle(h)
+	var creation, exit, kernel, user windows.Filetime
+	if err := windows.GetProcessTimes(h, &creation, &exit, &kernel, &user); err != nil {
+		return 0, false
+	}
+	return int64(uint64(creation.HighDateTime)<<32 | uint64(creation.LowDateTime)), true
+}
+
 // ppidOf returns pid's parent PID via a ToolHelp process snapshot.
 func ppidOf(pid int) (int, bool) {
 	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)

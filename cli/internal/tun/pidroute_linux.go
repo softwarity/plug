@@ -32,6 +32,31 @@ func ppidOf(pid int) (int, bool) {
 	return ppid, true
 }
 
+// procStart returns pid's start time as clock ticks since boot — /proc/<pid>/stat
+// field 22 (starttime). Numeric and boot-stable; only comparability feeds the
+// ancestry walk. Same last-')' split as ppidOf (comm may hold spaces and ')'):
+// after it, field 22 overall is the 20th token (index 19).
+func procStart(pid int) (int64, bool) {
+	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return 0, false
+	}
+	s := string(b)
+	i := strings.LastIndexByte(s, ')')
+	if i < 0 {
+		return 0, false
+	}
+	f := strings.Fields(s[i+1:])
+	if len(f) < 20 {
+		return 0, false
+	}
+	st, err := strconv.ParseInt(f[19], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return st, true
+}
+
 // pidForLocalPort finds the PID owning the TCP socket whose LOCAL port is srcPort:
 // match /proc/net/tcp{,6} to get the socket inode, then scan /proc/<pid>/fd for a
 // "socket:[inode]" symlink. The daemon runs as root, so it sees every process's

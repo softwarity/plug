@@ -20,6 +20,18 @@ func TestPpidOfSelfWindows(t *testing.T) {
 	}
 }
 
+// TestProcStartSelfWindows: the GetProcessTimes-based creation stamp must be a
+// positive, readable value for our own process (feeds the recycled-PID guard).
+func TestProcStartSelfWindows(t *testing.T) {
+	st, ok := procStart(os.Getpid())
+	if !ok {
+		t.Skip("procStart unavailable in this environment")
+	}
+	if st <= 0 {
+		t.Fatalf("procStart(self) = %d, want > 0", st)
+	}
+}
+
 // TestPidForLocalPortSelfWindows proves the GetExtendedTcpTable lookup against a
 // real socket: a local connection's source port must resolve back to THIS process.
 func TestPidForLocalPortSelfWindows(t *testing.T) {

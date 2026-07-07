@@ -16,6 +16,7 @@ func multiDial(ct *ClusterTransports) dialFunc {
 		clusterForPID: clusterForPID,
 		pidForConn:    pidForLocalPort,
 		ppidOf:        ppidOf,
+		startOf:       procStart,
 	}
 	return func(srcPort uint16) (Dialer, string, bool) {
 		if d, key, ok := ct.sole(); ok {

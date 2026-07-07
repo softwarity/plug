@@ -1,19 +1,22 @@
 package tun
 
+import "math"
+
 // --- Multicluster: attributing an intercepted connection to a cluster ---------
 //
 // The validated design (see docs/multicluster.md) routes by PID AT CONNECT, not
 // at DNS: one system resolver, fake IPs minted per NAME (shared across clusters),
 // and when the app connect()s a fake IP the daemon attributes the flow to a
 // cluster by walking the connecting process's parent chain up to the `plug -p X`
-// launcher that started it. Bare names stay transparent; the only refusal is a
-// process we cannot attribute (e.g. detached via setsid) — "refuse en cas de
-// doute" (a hard RST, never a wrong-cluster route).
+// launcher that started it. Bare names stay transparent; a process we cannot
+// attribute (detached via setsid, or a chain broken by PID recycling) is refused
+// — "refuse en cas de doute" (a hard RST, never a wrong-cluster route).
 //
-// This file is the attribution CORE. It is intentionally NOT yet wired into
-// handleTCP — that, plus the N-tunnel daemon, is the next step, to be validated
-// on two real clusters. Everything here compiles, is unit-tested where pure, and
-// touches no live datapath, so the proven single-cluster path is unaffected.
+// This file is the attribution CORE, kept pure so it is fully unit-tested. On
+// macOS it is LIVE: multiDial (router_darwin.go) feeds it into the global daemon's
+// datapath, validated on two real clusters. Windows shares this core and the
+// per-OS primitives (pidroute_windows.go) but not yet the N-tunnel daemon — that
+// SYSTEM service is the remaining step; the single-cluster path calls none of this.
 
 // clusterRouter maps an intercepted flow (identified by its source port) to the
 // cluster key it must be spliced to, or ok=false to refuse it. handleTCP will
@@ -40,6 +43,13 @@ type pidRouter struct {
 	pidForConn func(srcPort uint16) (int, bool)
 	// ppidOf returns pid's parent (per-OS: /proc, sysctl, toolhelp).
 	ppidOf func(pid int) (int, bool)
+	// startOf returns pid's creation stamp (per-OS unit, monotonic within a boot).
+	// The walk uses it to reject a recycled PID: a parent cannot have started AFTER
+	// its child, so a younger "ancestor" is a stale number, not a real forebear.
+	// Absent ⇒ refuse (in doubt, no route). This matters most on Windows, which —
+	// unlike unix — does not re-parent orphans, so a dead parent's PID lingers in
+	// the child and may already name a younger, unrelated process.
+	startOf func(pid int) (int64, bool)
 }
 
 // maxAncestry bounds the parent-chain walk — a guard against a cycle or a runaway
@@ -51,15 +61,30 @@ func (r pidRouter) route(srcPort uint16) (string, bool) {
 	if !ok {
 		return "", false // socket vanished or unattributable — refuse
 	}
-	return walkToCluster(pid, r.ppidOf, r.clusterForPID)
+	return walkToCluster(pid, r.ppidOf, r.startOf, r.clusterForPID)
 }
 
 // walkToCluster climbs pid's ancestry until an ancestor is a registered launcher
 // and returns its cluster. Pure — the injected funcs make it fully testable. It
-// stops at init (pid<=1), on a broken or self-referential chain, or after
-// maxAncestry hops, refusing (ok=false) rather than guessing.
-func walkToCluster(pid int, ppidOf func(int) (int, bool), clusterForPID func(int) (string, bool)) (string, bool) {
+// refuses (ok=false) rather than guessing at init (pid<=1), on a broken or
+// self-referential chain, or after maxAncestry hops.
+//
+// It also refuses a TEMPORALLY IMPOSSIBLE chain: startOf stamps each hop, and a
+// parent that started after its child is a recycled PID (same number, new,
+// unrelated process), not a real forebear — so a younger ancestor aborts the walk
+// instead of misrouting the flow to whatever cluster that stranger belongs to.
+// prev seeds at +inf so the origin itself is never rejected; a hop with no stamp
+// refuses (in doubt, no route).
+func walkToCluster(pid int, ppidOf func(int) (int, bool), startOf func(int) (int64, bool), clusterForPID func(int) (string, bool)) (string, bool) {
+	prev := int64(math.MaxInt64) // the origin has no child to be younger than
 	for i := 0; pid > 1 && i < maxAncestry; i++ {
+		start, ok := startOf(pid)
+		if !ok {
+			return "", false
+		}
+		if start > prev {
+			return "", false // an ancestor younger than its child ⇒ recycled PID
+		}
 		if key, ok := clusterForPID(pid); ok {
 			return key, true
 		}
@@ -67,7 +92,7 @@ func walkToCluster(pid int, ppidOf func(int) (int, bool), clusterForPID func(int
 		if !ok || ppid == pid || ppid <= 0 {
 			return "", false
 		}
-		pid = ppid
+		prev, pid = start, ppid
 	}
 	return "", false
 }

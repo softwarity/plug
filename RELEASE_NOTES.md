@@ -2,6 +2,15 @@
 
 ## NEXT RELEASE
 
+- **Attribution hardened against PID recycling.** The by-process router now stamps
+  each hop of the ancestry walk with the process's start time and refuses a
+  temporally impossible chain — an "ancestor" that started *after* its child is a
+  recycled PID (same number, new unrelated process), so the walk aborts rather than
+  misroute the flow to that stranger's cluster. This matters most on Windows, which
+  (unlike unix) never re-parents an orphan, so a dead parent's PID lingers in the
+  child; the guard is wired and unit-tested on all three OSes, and preps the Windows
+  daemon.
+
 ---
 
 ## 1.2.0

@@ -3,10 +3,31 @@
 package tun
 
 import (
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// procStart returns pid's start time as Unix seconds, via `ps -o lstart=` (cgo-free,
+// like ppidOf). Only comparability feeds the ancestry walk, not the unit, so a
+// coarse second granularity is enough to catch a recycled PID — and two processes
+// born in the same second compare equal (<=), never a false "younger parent".
+// LANG/LC pinned to C so we parse the fixed English date form regardless of locale.
+func procStart(pid int) (int64, bool) {
+	cmd := exec.Command("ps", "-o", "lstart=", "-p", strconv.Itoa(pid))
+	cmd.Env = append(os.Environ(), "LANG=C", "LC_ALL=C")
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, false
+	}
+	t, err := time.Parse("Mon Jan _2 15:04:05 2006", strings.TrimSpace(string(out)))
+	if err != nil {
+		return 0, false
+	}
+	return t.Unix(), true
+}
 
 // ppidOf returns pid's parent via `ps -o ppid=`. Cgo-free on purpose — the
 // datapath builds with CGO_ENABLED=0, so we avoid libproc. The parent walk is a
