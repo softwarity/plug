@@ -291,7 +291,11 @@ func versionsDir() string {
 
 func ensureVersion(v string, cfg config) (string, error) {
 	dir := filepath.Join(versionsDir(), v)
-	bin := filepath.Join(dir, "plug")
+	name := "plug"
+	if runtime.GOOS == "windows" {
+		name += ".exe" // Windows won't exec a versioned binary without the extension
+	}
+	bin := filepath.Join(dir, name)
 	// Hand the cache back to the user: the setuid helper writes it as euid 0, so
 	// without this it lands root-owned (can't be listed/cleaned without sudo). Also
 	// self-heals a cache an earlier privileged run already left root-owned.
