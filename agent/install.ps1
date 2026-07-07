@@ -101,14 +101,19 @@ function Get-AgentBinary($outFile) {
     # to the file (no newline mangling) and is Windows-PowerShell-5.1 compatible
     # (ProcessStartInfo.ArgumentList is not). stderr goes to a temp file.
     $errFile = Join-Path ([System.IO.Path]::GetTempPath()) ("plug-ssh-" + [guid]::NewGuid().ToString('N') + '.err')
+    # A throwaway known_hosts FILE (a real path, not the NUL device): interpreted the
+    # same by native and MSYS/Git ssh, and unique per run, so a recreated agent's new
+    # host key never clashes with a stale one (StrictHostKeyChecking=no records it).
+    $khFile  = Join-Path ([System.IO.Path]::GetTempPath()) ("plug-kh-" + [guid]::NewGuid().ToString('N'))
     $sshArgs = @('-p', $SshPort,
                  '-o', 'StrictHostKeyChecking=no',
-                 '-o', 'UserKnownHostsFile=NUL',
+                 '-o', "UserKnownHostsFile=$khFile",
                  '-o', 'LogLevel=ERROR',
                  '-o', 'BatchMode=yes',
                  "get@$SshHost", 'windows-amd64')
     $p = Start-Process -FilePath 'ssh' -ArgumentList $sshArgs -NoNewWindow -Wait -PassThru `
                        -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+    Remove-Item -LiteralPath $khFile -ErrorAction SilentlyContinue
     $stderr = ''
     if (Test-Path -LiteralPath $errFile) {
         $stderr = (Get-Content -LiteralPath $errFile -Raw -ErrorAction SilentlyContinue)
