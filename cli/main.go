@@ -200,6 +200,12 @@ func main() {
 	case "down":
 		cmdDown(args[1:])
 		return
+	case "install-service":
+		installService() // Windows: create the SCM datapath service (elevated, once)
+		return
+	case "remove-service":
+		removeService()
+		return
 	case "selftest":
 		os.Exit(runSelfTest())
 	}

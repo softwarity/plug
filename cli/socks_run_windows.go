@@ -7,28 +7,37 @@ import (
 	"time"
 
 	"github.com/softwarity/plug/cli/internal/tun"
+	"golang.org/x/sys/windows"
 )
 
-// coreRun on Windows: the datapath is held by the SYSTEM service (daemon_windows.go),
-// which serves every cluster. A `plug -p X <cmd>` opens NO tunnel of its own and needs
-// NO admin — it registers as a client of cluster X (the marker carries X's key), makes
-// sure the service is running (starting it through the SCM, which the installer lets
-// users do), waits for the service to have opened X's tunnel, then runs the child. The
-// child's flows are attributed back to X by PID at connect. Restart processes freely:
-// the service and every tunnel survive them.
+// coreRun on Windows picks the datapath model at runtime:
+//
+//   - service installed → delegate to the SYSTEM service (daemon_windows.go). No
+//     admin, and multicluster: the service holds N tunnels and attributes each flow
+//     by PID at connect. This is the "run without admin" path.
+//   - not installed     → hold the datapath in THIS (elevated) process for the
+//     child's lifetime. Single-cluster; needs an elevated terminal. This is the
+//     original path — validated first — kept as a fallback so plug always works even
+//     before the service is set up (or if it fails).
 func coreRun(cfg config, cmdArgs []string) int {
+	if serviceInstalled() {
+		return coreRunViaService(cfg, cmdArgs)
+	}
+	return coreRunInProcess(cfg, cmdArgs)
+}
+
+// coreRunViaService registers as a client of the cluster, makes sure the service is
+// running (started via the SCM, which the installer lets non-admins do), waits for
+// the service to open our cluster's tunnel, then runs the child. No tunnel of its own.
+func coreRunViaService(cfg config, cmdArgs []string) int {
 	key := cfg.host + ":" + cfg.port
-	// Register FIRST (marker carries our cluster key) so the service's reconcile sees
-	// us — and opens our cluster's tunnel — before we run.
 	unregister := tun.RegisterClient(key, os.Getpid())
 	defer unregister()
 
 	if !tun.DaemonAlive(globalKey) {
-		// Two `plug` at once both try to start the service; the SCM serialises it.
-		// If OUR start fails but the service is now up (the other won), proceed.
 		if err := startService(); err != nil && !tun.DaemonAlive(globalKey) {
 			info("cannot start the plug service: %v", err)
-			info("is the service installed? re-run the installer once (it needs admin only to install the service).")
+			info("try:  plug down  then retry, or reinstall the service (plug install-service, elevated).")
 			return 1
 		}
 	}
@@ -36,9 +45,25 @@ func coreRun(cfg config, cmdArgs []string) int {
 	return runChildEnv(cmdArgs, nil)
 }
 
-// waitClusterReady blocks until the service has opened OUR cluster's tunnel (its ready
-// marker) or a short timeout — then runs the child anyway (best effort: the datapath
-// is up service-wide, the tunnel opens on the service's next reconcile).
+// coreRunInProcess holds the datapath in this elevated process for the child's
+// lifetime — the single-cluster fallback (the pre-service Windows path).
+func coreRunInProcess(cfg config, cmdArgs []string) int {
+	tr, err := dialTunnel(cfg)
+	if err != nil {
+		info("connect: %v", err)
+		return 1
+	}
+	defer tr.Close()
+	info("tunnel ready — running your command")
+	code, rerr := tun.Run(tr, cmdArgs, info)
+	if rerr != nil {
+		info("%v", rerr)
+	}
+	return code
+}
+
+// waitClusterReady blocks until the service opened OUR cluster's tunnel (its ready
+// marker) or a short timeout, then runs the child anyway (best effort).
 func waitClusterReady(key string) {
 	deadline := time.Now().Add(12 * time.Second)
 	for time.Now().Before(deadline) {
@@ -48,4 +73,23 @@ func waitClusterReady(key string) {
 		time.Sleep(150 * time.Millisecond)
 	}
 	info("cluster %s: tunnel not ready yet — starting anyway", key)
+}
+
+// serviceInstalled reports whether the SCM service exists, regardless of run state.
+func serviceInstalled() bool {
+	scm, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
+	if err != nil {
+		return false
+	}
+	defer windows.CloseServiceHandle(scm)
+	name, err := windows.UTF16PtrFromString(tun.ServiceName)
+	if err != nil {
+		return false
+	}
+	sh, err := windows.OpenService(scm, name, windows.SERVICE_QUERY_STATUS)
+	if err != nil {
+		return false
+	}
+	windows.CloseServiceHandle(sh)
+	return true
 }

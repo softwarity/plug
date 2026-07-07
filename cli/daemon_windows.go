@@ -4,12 +4,14 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	"github.com/softwarity/plug/cli/internal/tun"
 	"github.com/softwarity/plug/cli/internal/tunnel"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
+	"golang.org/x/sys/windows/svc/mgr"
 )
 
 // The Windows GLOBAL datapath lives in an SCM service (the counterpart of the macOS
@@ -145,4 +147,63 @@ func cmdDown(_ []string) {
 		return
 	}
 	info("stopped the plug service")
+}
+
+// installService creates the SCM service (the ONE admin step — the installer runs
+// `plug install-service` elevated). The service is on-demand (StartManual): the
+// launcher starts it via the SCM when needed and the reaper stops it when idle. The
+// SDDL then grants Authenticated Users START/STOP so day-to-day `plug <cmd>` runs
+// unelevated — the whole point. Points the service at THIS exe (which sits beside
+// wintun.dll after install) with the daemon verb. Idempotent.
+func installService() {
+	exe, err := os.Executable()
+	if err != nil {
+		fatal("locate plug.exe: %v", err)
+	}
+	m, err := mgr.Connect()
+	if err != nil {
+		fatal("connect to the service manager (run this elevated): %v", err)
+	}
+	defer m.Disconnect()
+	if s, err := m.OpenService(tun.ServiceName); err == nil {
+		s.Close()
+		info("service %q already installed", tun.ServiceName)
+		return
+	}
+	s, err := m.CreateService(tun.ServiceName, exe, mgr.Config{
+		DisplayName: "plug cluster datapath",
+		Description: "Holds the plug userspace-TUN datapath so plug reaches cluster services without per-run admin.",
+		StartType:   mgr.StartManual,
+	}, tun.DaemonVerb)
+	if err != nil {
+		fatal("create service (run this elevated): %v", err)
+	}
+	defer s.Close()
+	// Grant Authenticated Users START/STOP/QUERY so a non-elevated launcher can bring
+	// the service up. sc.exe via exec.Command keeps the SDDL a single clean arg (no
+	// shell quoting). SY=SYSTEM, BA=Builtin Admins, AU=Authenticated Users.
+	const sddl = "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWRPWPLORC;;;AU)"
+	if out, err := exec.Command("sc.exe", "sdset", tun.ServiceName, sddl).CombinedOutput(); err != nil {
+		info("warning: could not set the service ACL (%v: %s) — non-admin start may fail", err, out)
+	}
+	info("service %q installed (on-demand). Day-to-day `plug <cmd>` now needs no admin.", tun.ServiceName)
+}
+
+// removeService deletes the SCM service (`plug remove-service`, elevated).
+func removeService() {
+	m, err := mgr.Connect()
+	if err != nil {
+		fatal("connect to the service manager (run this elevated): %v", err)
+	}
+	defer m.Disconnect()
+	s, err := m.OpenService(tun.ServiceName)
+	if err != nil {
+		info("service %q not installed", tun.ServiceName)
+		return
+	}
+	defer s.Close()
+	if err := s.Delete(); err != nil {
+		fatal("delete service: %v", err)
+	}
+	info("service %q removed", tun.ServiceName)
 }
