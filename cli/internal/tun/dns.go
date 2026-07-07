@@ -19,6 +19,14 @@ const (
 	dnsHost  = 53         // reserved host byte: this instance's DNS is base|53
 )
 
+// searchSuffix is the DNS search suffix plug0 advertises on Windows so the OS
+// actually issues a DNS query for a single-label cluster name. Windows resolves a
+// BARE name (my-service) via LLMNR/NetBIOS, never DNS — so getaddrinfo never reaches
+// our resolver. With this suffix in the search list, getaddrinfo tries
+// "my-service.plug"; an NRPT rule routes ".plug" to our resolver, and answerDNS
+// strips it back to the bare name. No effect on macOS/Linux (nothing appends it).
+const searchSuffix = "plug"
+
 // faketab maps minted fake IPs to cluster names, all within ONE instance's
 // 198.18.<N>.0/24. The DNS forwarder mints; the netstack TCP forwarder looks up.
 // In-process, shared, mutex-guarded.
@@ -106,6 +114,19 @@ func answerDNS(q []byte, tab *faketab, upstream *net.Resolver) []byte {
 	case qtype != 1: // non-A → NODATA
 	case strings.EqualFold(name, "localhost") || strings.HasSuffix(strings.ToLower(name), ".localhost"):
 		answerIP = net.IPv4(127, 0, 0, 1)
+	case strings.HasSuffix(strings.ToLower(name), "."+searchSuffix):
+		// Windows appended plug0's search suffix (my-service → my-service.plug) to
+		// force a DNS query. Strip it and mint the SAME fake IP as the bare name, so
+		// the connect maps back to "my-service" for the agent to resolve.
+		if base := name[:len(name)-len(searchSuffix)-1]; base != "" && !strings.Contains(base, ".") {
+			if ip := tab.mint(base); ip != 0 {
+				answerIP = net.IPv4(byte(ip>>24), byte(ip>>16), byte(ip>>8), byte(ip))
+			} else {
+				rcode = 3
+			}
+		} else {
+			rcode = 3
+		}
 	case !strings.Contains(name, "."): // single-label cluster name → fake
 		if ip := tab.mint(name); ip != 0 {
 			answerIP = net.IPv4(byte(ip>>24), byte(ip>>16), byte(ip>>8), byte(ip))

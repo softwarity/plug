@@ -43,21 +43,22 @@ func configure(dev any, _, cidr, dnsIP string, log logfn) ([]string, string, fun
 	if err := luid.AddRoute(netip.MustParsePrefix(cidr), netip.IPv4Unspecified(), 0); err != nil {
 		return nil, "", func() {}, fmt.Errorf("add %s route: %w", cidr, err)
 	}
+	// Advertise the search suffix on plug0 too: Windows won't DNS-query a BARE
+	// single-label name (LLMNR/NetBIOS only), so getaddrinfo must be nudged to try
+	// "my-service.<suffix>" — that's what turns it into a real DNS query.
 	if dns, err := netip.ParseAddr(dnsIP); err == nil {
-		if e := luid.SetDNS(v4, []netip.Addr{dns}, nil); e != nil {
+		if e := luid.SetDNS(v4, []netip.Addr{dns}, []string{searchSuffix}); e != nil {
 			log.f("tun[win]: set DNS: %v", e)
 		}
 	}
-	// Adapter DNS alone doesn't cover SINGLE-LABEL names (my-service): Windows
-	// devolution + interface ordering skip it, so getaddrinfo("my-service") never
-	// reaches our resolver ("Could not resolve host"). An NRPT catch-all rule points
-	// ALL name resolution at dnsIP — the Windows counterpart of the macOS scutil
-	// repoint. Our in-stack DNS answers cluster names with a fake IP and forwards the
-	// rest to the saved upstreams, so a machine-wide rule is safe.
+	// Route that suffix to our resolver via NRPT (the Windows counterpart of the
+	// macOS scutil repoint; the same mechanism Tailscale/WireGuard use). ".<suffix>"
+	// is surgical — only "*.<suffix>" goes in-stack, real internet DNS is untouched —
+	// and answerDNS strips the suffix back to the bare cluster name.
 	if err := setSystemNRPT(dnsIP); err != nil {
 		log.f("tun[win]: NRPT repoint failed — single-label names may not resolve: %v", err)
 	} else {
-		log.f("tun[win]: system DNS repointed to %s (NRPT catch-all)", dnsIP)
+		log.f("tun[win]: system DNS repointed — *.%s → %s (NRPT)", searchSuffix, dnsIP)
 	}
 
 	cleanup := func() {
@@ -76,7 +77,7 @@ func configure(dev any, _, cidr, dnsIP string, log logfn) ([]string, string, fun
 // the resolver cache so a prior negative answer ("Could not resolve") doesn't stick.
 func setSystemNRPT(dnsIP string) error {
 	clearSystemNRPT(dnsIP) // drop a stale rule a crashed run may have left
-	return psRun("Add-DnsClientNrptRule -Namespace '.' -NameServers '" + dnsIP + "'; Clear-DnsClientCache")
+	return psRun("Add-DnsClientNrptRule -Namespace '." + searchSuffix + "' -NameServers '" + dnsIP + "'; Clear-DnsClientCache")
 }
 
 // clearSystemNRPT removes the rule(s) pointing at dnsIP and flushes the cache. Keyed
