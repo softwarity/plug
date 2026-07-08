@@ -27,6 +27,7 @@ export class AppComponent {
     { path: '/profiles', label: 'Profiles & versions', icon: 'settings' },
     { path: '/agent', label: 'Agent & deployment', icon: 'dns' },
     { path: '/security', label: 'Security model', icon: 'shield' },
+    { path: '/coverage', label: 'Coverage matrix', icon: 'table_chart' },
     { path: '/roadmap', label: 'Roadmap', icon: 'map' },
   ];
 }

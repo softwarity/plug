@@ -26,5 +26,9 @@ export const routes: Routes = [
     path: 'roadmap',
     loadComponent: () => import('./pages/roadmap.component').then((m) => m.RoadmapComponent),
   },
+  {
+    path: 'coverage',
+    loadComponent: () => import('./pages/coverage.component').then((m) => m.CoverageComponent),
+  },
   { path: '**', redirectTo: '' },
 ];
