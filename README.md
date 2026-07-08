@@ -238,7 +238,7 @@ tripwire on top of the no-secret transport).
 - [ ] IPv6 fake-pool + v6-literal tunnelling
 - [ ] Generalize the multi-protocol selftest per OS
 
-📊 [Coverage matrix](docs/coverage.md) — what works on which OS (Linux · macOS · Windows), feature by feature.
+📊 [Coverage matrix](https://softwarity.github.io/plug/#/coverage) — what works on which OS (Linux · macOS · Windows), feature by feature.
 
 Distribution is **from the cluster only** (one source: the agent image) — no
 Homebrew tap or separate package channel by design.
