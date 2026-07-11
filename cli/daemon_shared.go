@@ -35,10 +35,12 @@ func reconcileOnce(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transpo
 		tr, err := dialTunnel(config{host: host, port: port})
 		if err != nil {
 			info("daemon: connect %s: %v", key, err)
+			tun.MarkClusterError(key, err.Error()) // surface the reason to a waiting launcher
 			continue
 		}
 		tunnels[key] = tr
 		ct.Set(key, tr)
+		tun.ClearClusterError(key)
 		tun.MarkClusterReady(key)
 		info("daemon: tunnel up for %s", key)
 	}

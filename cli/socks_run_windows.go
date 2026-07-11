@@ -72,6 +72,10 @@ func waitClusterReady(key string) {
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
+	if msg := tun.ClusterError(key); msg != "" {
+		info("cluster %s: %s", key, msg)
+		return
+	}
 	info("cluster %s: tunnel not ready yet — starting anyway", key)
 }
 
