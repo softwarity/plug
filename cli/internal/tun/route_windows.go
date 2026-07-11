@@ -5,9 +5,9 @@ package tun
 import (
 	"fmt"
 	"net/netip"
-	"os/exec"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 	wgtun "golang.zx2c4.com/wireguard/tun"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 )
@@ -69,25 +69,71 @@ func configure(dev any, _, cidr, dnsIP string, log logfn) ([]string, string, fun
 	return nil, "", cleanup, nil
 }
 
+// NRPT rules live under this policy key, one subkey (a GUID) per rule. plug writes
+// its own directly rather than via the Add-DnsClientNrptRule cmdlet: the cmdlet costs
+// ~1.5 s just to start PowerShell, and it was run twice on every datapath bring-up —
+// the bulk of the Windows cold-start latency.
+const nrptConfigPath = `SOFTWARE\Policies\Microsoft\Windows NT\DNSClient\DnsPolicyConfig`
+const nrptRuleName = `{6F3B2A1C-4D5E-6F70-8A9B-0C1D2E3F4A5B}` // stable id for plug's rule
+
 // setSystemNRPT installs a Name Resolution Policy Table rule routing the ".plug"
-// search suffix to dnsIP. Paired with that suffix on plug0 (SetDNS above), it makes
-// single-label cluster names resolve on Windows: getaddrinfo appends the suffix (a
-// real DNS query at last), NRPT sends ".plug" here, answerDNS strips it back. It is
-// the Windows equivalent of scutil on macOS / resolv.conf on Linux, and the same
-// suffix+NRPT mechanism Tailscale/WireGuard use. Driven through the DnsClient cmdlets
-// (they encode the DnsPolicyConfig registry correctly), flushing the resolver cache
-// so a prior "Could not resolve" negative doesn't stick.
+// search suffix to dnsIP by writing DnsPolicyConfig directly (same shape the cmdlet
+// encodes). Paired with that suffix on plug0 (SetDNS above), it makes single-label
+// cluster names resolve on Windows: getaddrinfo appends the suffix (a real DNS query
+// at last), NRPT sends ".plug" here, answerDNS strips it back. It is the Windows
+// equivalent of scutil on macOS / resolv.conf on Linux, and the same suffix+NRPT
+// mechanism Tailscale/WireGuard use.
 func setSystemNRPT(dnsIP string) error {
-	clearSystemNRPT(dnsIP) // drop a stale rule a crashed run may have left
-	return psRun("Add-DnsClientNrptRule -Namespace '." + searchSuffix + "' -NameServers '" + dnsIP + "'; Clear-DnsClientCache")
+	clearSystemNRPT(dnsIP) // drop a stale rule a crashed run (or an old pwsh one) may have left
+	k, _, err := registry.CreateKey(registry.LOCAL_MACHINE, nrptConfigPath+`\`+nrptRuleName, registry.SET_VALUE)
+	if err != nil {
+		return err
+	}
+	defer k.Close()
+	if err := k.SetDWordValue("Version", 2); err != nil {
+		return err
+	}
+	if err := k.SetStringsValue("Name", []string{"." + searchSuffix}); err != nil {
+		return err
+	}
+	if err := k.SetStringValue("GenericDNSServers", dnsIP); err != nil {
+		return err
+	}
+	if err := k.SetDWordValue("ConfigOptions", 0x8); err != nil { // 0x8 = use GenericDNSServers
+		return err
+	}
+	flushDNS() // so a prior "Could not resolve" negative doesn't stick
+	return nil
 }
 
-// clearSystemNRPT removes the rule(s) pointing at dnsIP and flushes the cache. Keyed
-// on the server IP so it targets only ours, and tolerant of there being none.
+// clearSystemNRPT removes every DnsPolicyConfig rule whose DNS server is dnsIP (ours)
+// and flushes the cache. Keyed on the server IP so it also reaps stale rules from an
+// older run — including the pre-registry PowerShell ones — and tolerant of none.
 func clearSystemNRPT(dnsIP string) {
-	_ = psRun("Get-DnsClientNrptRule | Where-Object { $_.NameServers -contains '" + dnsIP + "' } | Remove-DnsClientNrptRule -Force; Clear-DnsClientCache")
+	base, err := registry.OpenKey(registry.LOCAL_MACHINE, nrptConfigPath, registry.READ|registry.WRITE)
+	if err != nil {
+		return
+	}
+	defer base.Close()
+	subs, err := base.ReadSubKeyNames(-1)
+	if err != nil {
+		return
+	}
+	for _, sub := range subs {
+		s, err := registry.OpenKey(base, sub, registry.QUERY_VALUE)
+		if err != nil {
+			continue
+		}
+		servers, _, _ := s.GetStringValue("GenericDNSServers")
+		s.Close()
+		if servers == dnsIP {
+			_ = registry.DeleteKey(base, sub)
+		}
+	}
+	flushDNS()
 }
 
-func psRun(script string) error {
-	return exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script).Run()
+// flushDNS clears the resolver cache via dnsapi.dll — no external process.
+func flushDNS() {
+	_, _, _ = windows.NewLazySystemDLL("dnsapi.dll").NewProc("DnsFlushResolverCache").Call()
 }
