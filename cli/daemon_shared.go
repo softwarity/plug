@@ -16,6 +16,14 @@ import (
 // real cluster key is ever "@global".
 const globalKey = "@global"
 
+// tunnelGrace keeps a cluster's tunnel open briefly after its last client goes away,
+// so back-to-back `plug`s of that cluster reuse it (a ~0.2 s run) instead of
+// re-dialing (~1 s). Idle timers live here; the datapath as a whole is still reaped
+// after globalKey's longer grace once no cluster has any client at all.
+const tunnelGrace = 20 * time.Second
+
+var tunnelIdleSince = map[string]time.Time{}
+
 // reconcileOnce opens a tunnel for each active cluster missing one and closes tunnels
 // whose cluster no longer has a live client. Each open/close flips the cluster's ready
 // marker so `plug -p X <cmd>` can wait for its own tunnel. Shared by macOS and Windows
@@ -45,19 +53,33 @@ func reconcileOnce(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transpo
 		info("daemon: tunnel up for %s", key)
 	}
 	for key, tr := range tunnels {
-		if !active[key] {
-			tun.UnmarkClusterReady(key)
-			ct.Remove(key)
-			tr.Close()
-			delete(tunnels, key)
-			info("daemon: tunnel down for %s", key)
+		if active[key] {
+			delete(tunnelIdleSince, key) // in use — reset the idle timer
+			continue
 		}
+		// No live client. Hold the tunnel through tunnelGrace so back-to-back `plug`s
+		// of the same cluster reuse it instead of paying a fresh dial each time.
+		if tunnelIdleSince[key].IsZero() {
+			tunnelIdleSince[key] = time.Now()
+			continue
+		}
+		if time.Since(tunnelIdleSince[key]) < tunnelGrace {
+			continue
+		}
+		tun.UnmarkClusterReady(key)
+		ct.Remove(key)
+		tr.Close()
+		delete(tunnels, key)
+		delete(tunnelIdleSince, key)
+		info("daemon: tunnel down for %s", key)
 	}
 }
 
-// reconcileLoop re-syncs the tunnel set with the active clusters every 2s.
+// reconcileLoop re-syncs the tunnel set with the active clusters. It polls often so a
+// just-registered client's tunnel opens near-instantly (that open is what the launcher
+// waits on); tunnelGrace, not the tick, governs how long an idle tunnel lives.
 func reconcileLoop(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transport, stop <-chan struct{}) {
-	tk := time.NewTicker(2 * time.Second)
+	tk := time.NewTicker(300 * time.Millisecond)
 	defer tk.Stop()
 	for {
 		select {
