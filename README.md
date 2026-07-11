@@ -85,7 +85,7 @@ is the OS-native equivalent of the same thing:
 |---|---|---|
 | **Linux** | `setcap cap_net_admin,cap_sys_admin,cap_net_bind_service` (one sudo) | `plug <cmd>` — no sudo |
 | **macOS** | setuid-root helper (`chown root:wheel` + `chmod u+s`, one sudo); plug starts euid 0 to hold the TUN + DNS, then **drops your command back to your user** | `plug <cmd>` — no sudo |
-| **Windows** | see [Windows](#windows) | *Administrator per session (helper WIP)* |
+| **Windows** | SYSTEM service, installed once from an elevated Git Bash (grants *Authenticated Users* the right to start it) | `plug <cmd>` — no admin |
 
 On macOS the data path lives in a small **per-cluster daemon** (started on demand,
 detached): because macOS repoints DNS machine-wide, the datapath must survive each
@@ -132,10 +132,11 @@ just rarely needed: versions auto-update on connect, the datapath tears itself d
 
 - **Linux**: already supported — each launch gets a private resolver in its own
   mount namespace, so `plug -p a <cmd>` and `plug -p b <cmd>` run side by side.
-- **macOS / Windows**: **one active cluster at a time** today (the system resolver
-  is machine-wide). Simultaneous *different* clusters is designed (transparent,
-  bare names, disambiguated at `connect()` by process ancestry) — see
-  [docs/multicluster.md](docs/multicluster.md).
+- **Windows**: supported — the SYSTEM service holds one tunnel per cluster and
+  disambiguates each flow at `connect()` by process ancestry, so `plug -p a <cmd>`
+  and `plug -p b <cmd>` run side by side.
+- **macOS**: one active cluster at a time today; the same PID-at-connect design
+  applies (transparent, bare names) — see [docs/multicluster.md](docs/multicluster.md).
 
 ## Kubernetes
 
@@ -164,47 +165,43 @@ use its FQDN (`myservice.othernamespace`). See [deploy/README.md](deploy/README.
 
 ## Windows
 
-Native Windows is supported (no WSL2 needed). You need an `ssh` client; this guide
-**assumes [Git for Windows](https://git-scm.com/download/win) is installed** — it
-ships both `ssh` and Git Bash, which nearly every Windows dev already has. (Windows'
-built-in OpenSSH client works too — see the note below.)
+Native Windows is supported (no WSL2 needed). This guide **assumes [Git for
+Windows](https://git-scm.com/download/win) is installed** — it ships `ssh` and Git
+Bash, the assumed Windows dev shell.
 
-**1. Install — from Git Bash, one line.** Same model as unix, piped into PowerShell
-instead of `sh`. The `ssh` bundled with Git is an MSYS process whose Windows command
-line the installer can't introspect, so **pass the cluster host/port explicitly** on
-the PowerShell side of the pipe — that's what names your profile:
+**1. Install — from Git Bash, run as Administrator.** Same model as unix, piped into
+`bash`. This one step needs admin **once**: it installs the data path as a Windows
+SYSTEM service, after which no run ever needs admin again. The `ssh` bundled with
+Git is an MSYS process whose Windows command line the installer can't read, so
+**pass the cluster host/port explicitly** — that also names your profile:
 
 ```bash
-# host key regenerated each start (not a secret) — skip the check, as plug does internally:
-ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+# host key regenerated each start (not a secret) — skip the check, as plug does internally.
+# -n: otherwise the piped ssh waits on a stdin that never closes and hangs after streaming.
+ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
     get@<cluster-host> install-windows \
-  | PLUG_HOST=<cluster-host> PLUG_PORT=2222 powershell -NoProfile -Command -
+  | PLUG_HOST=<cluster-host> PLUG_PORT=2222 bash
 ```
 
-This downloads `plug.exe` and `wintun.dll` into `%LOCALAPPDATA%\Programs\plug`,
-adds it to your PATH, and pre-creates a `~/.plug/<host>.conf` profile. Installing
-needs **no administrator rights**. Open a new terminal afterwards so the PATH takes
-effect.
+This downloads `plug.exe` and `wintun.dll` (both from the agent) into
+`%LOCALAPPDATA%\Programs\plug`, adds it to your PATH, pre-creates a
+`~/.plug/<host>.conf` profile, and installs the **`plug` SYSTEM service**. Open a
+new Git Bash afterwards so the PATH takes effect.
 
-> **Using Windows' native OpenSSH client instead?** Run the same line from a normal
-> PowerShell (with `UserKnownHostsFile=NUL`) and **drop the `PLUG_HOST=/PLUG_PORT=`
-> prefix** — that client's command line *is* readable, so the host is auto-detected.
+**2. Run — no admin, from any terminal.** The data path (a WinTUN adapter + routes +
+DNS) needs privilege, but it lives in the SYSTEM service installed above — not in
+your `plug` process. Each `plug <cmd>` is a **non-elevated** launcher that starts the
+service on demand (the install granted *Authenticated Users* that right) and delegates
+the data path to it, so your command runs attached to your terminal, as you:
 
-**2. Run — the one caveat: an elevated terminal.** plug's Windows data path is a
-WinTUN adapter, and creating it plus its routes requires **Administrator**. Unlike
-Linux (`setcap`) or macOS (setuid helper) — where one grant at install lets every
-later run start unprivileged — Windows has no per-binary privilege bit, and the
-process holding the adapter is the same one running your command in the foreground.
-So **for now, start `plug` from an elevated terminal** (*Run as administrator*):
-
-```powershell
+```bash
 plug <your command>            # several clusters? plug -p <name> <your command>
 ```
 
-A future release will move the Windows data path into a persistent **SYSTEM
-service** (like the macOS daemon) driven by a non-elevated launcher over IPC —
-the path to "install once, run without admin" while keeping your command attached
-to your terminal. A scheduled task alone can't (it runs detached from the console).
+Several clusters run **side by side**: the service holds one tunnel per cluster and
+attributes each flow to the right one by process ancestry at `connect()`. The service
+tears its data path down ~30 s after the last `plug` exits and restarts on the next
+run. Manage it by hand with `plug install-service` / `plug remove-service` (elevated).
 
 ## Security model — read this
 
@@ -233,8 +230,8 @@ tripwire on top of the no-secret transport).
 - [x] macOS DNS at the IP layer (works under a corporate VPN) + persistent
       per-cluster daemon
 - [x] Kubernetes manifest — NodePort or `kubectl port-forward`
-- [ ] Multicluster on macOS/Windows (PID-at-connect) — [design](docs/multicluster.md)
-- [ ] Windows "no-prompt admin" helper (elevated task/service) — see [Windows](#windows)
+- [x] Windows no-admin SYSTEM service + multicluster (PID-at-connect) — see [Windows](#windows)
+- [ ] Multicluster on macOS (PID-at-connect) — [design](docs/multicluster.md)
 - [ ] IPv6 fake-pool + v6-literal tunnelling
 - [ ] Generalize the multi-protocol selftest per OS
 
