@@ -100,8 +100,8 @@ loop:
 }
 
 // startService asks the SCM to start the plug service. A non-elevated launcher can do
-// this when the installer granted Authenticated Users SERVICE_START on the service
-// (see agent/install.ps1) — the crux of "run without admin".
+// this because installService granted Authenticated Users SERVICE_START on the service
+// (the SDDL in installService) — the crux of "run without admin".
 func startService() error {
 	scm, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
 	if err != nil {
