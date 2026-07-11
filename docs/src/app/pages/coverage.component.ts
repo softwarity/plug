@@ -79,11 +79,11 @@ interface Hole {
       What works where, and where the holes are — features × OS. One process run
       <strong>as if it were inside the cluster</strong>, via a userspace TUN over an SSH tunnel.
     </p>
-    <p class="snap">snapshot {{ snapshot }} · Windows datapath validated end-to-end, SYSTEM service coded</p>
+    <p class="snap">snapshot {{ snapshot }} · Windows validated end-to-end on a real box: no-admin service + multicluster</p>
 
     <div class="legend">
       <span><i class="dot d-ok">✓</i> works (proven at runtime)</span>
-      <span><i class="dot d-warn">!</i> coded / partial — not yet e2e-validated</span>
+      <span><i class="dot d-warn">!</i> partial — not yet e2e-validated</span>
       <span><i class="dot d-no">✕</i> not yet</span>
       <span><i class="dot d-na">–</i> n/a by design</span>
     </div>
@@ -145,7 +145,7 @@ interface Hole {
   `,
 })
 export class CoverageComponent {
-  protected readonly snapshot = '2026-07-08';
+  protected readonly snapshot = '2026-07-11';
   protected readonly os = ['Linux', 'macOS', 'Windows'];
 
   protected glyph(s: St): string {
@@ -155,18 +155,18 @@ export class CoverageComponent {
   protected readonly holes: Hole[] = [
     {
       sev: 'warn',
-      t: 'Windows SYSTEM service — runtime',
-      d: 'The service (no-admin + multicluster) is written and build-validated on all three OSes. Needs a real Windows run: SCM lifecycle, service ACL for non-admin start, session-0 DNS.',
-    },
-    {
-      sev: 'warn',
       t: 'Windows e2e in CI',
-      d: 'Lock down install + service + name resolution (getaddrinfo) with an all-Windows-container e2e on a hosted runner; the full protocol grid needs a self-hosted (WSL2) runner.',
+      d: 'The full Windows path — Git Bash install, no-admin service, multicluster, name resolution — is validated by hand on a real box; automate it on a self-hosted (WSL2) or mesh-connected runner.',
     },
     {
       sev: 'warn',
-      t: 'Windows real-app + VPN',
-      d: 'A plain cluster is now proven end-to-end on Windows. Corporate-VPN behaviour and self-heal there are still unproven.',
+      t: 'Windows under a corporate VPN + self-heal',
+      d: 'A plain cluster is proven end-to-end on Windows (datapath, DNS, no-admin, multicluster). Corporate-VPN behaviour and VPN/sleep self-heal there are still unproven.',
+    },
+    {
+      sev: 'warn',
+      t: 'First run after a cold start / host-key reset',
+      d: 'The very first plug after the service has torn down (or a known_hosts reset) can exceed the 12 s ready-wait while the tunnel comes up; the next run is instant. A more patient wait would smooth it.',
     },
     {
       sev: 'warn',
@@ -179,14 +179,14 @@ export class CoverageComponent {
     {
       title: 'Install & privilege',
       rows: [
-        { feat: 'Install from the cluster (one-liner)', os: ['ok', 'ok', 'ok'], note: '<code>install | sh</code> · <code>install-windows | powershell</code> (Git Bash: <code>PLUG_HOST=</code>)' },
+        { feat: 'Install from the cluster (one-liner)', os: ['ok', 'ok', 'ok'], note: '<code>install | sh</code> · <code>install-windows | bash</code> (Git Bash, <code>PLUG_HOST=</code>)' },
         { feat: 'No sudo/admin to install', os: ['ok', 'ok', 'ok'], note: 'binaries + PATH; one UAC only to create the service' },
-        { feat: 'One-time privilege grant at install', os: ['ok', 'ok', 'warn'], note: 'setcap · setuid helper · SCM service (coded)' },
-        { feat: '<b>plug &lt;cmd&gt;</b> without sudo/admin', os: ['ok', 'ok', 'warn'], note: 'Windows: via the service (coded) → no admin; else falls back to an elevated terminal' },
+        { feat: 'One-time privilege grant at install', os: ['ok', 'ok', 'ok'], note: 'setcap · setuid helper · SCM SYSTEM service (validated on a real box)' },
+        { feat: '<b>plug &lt;cmd&gt;</b> without sudo/admin', os: ['ok', 'ok', 'ok'], note: 'Windows: a non-elevated launcher starts the SYSTEM service via its ACL (proven, LIMITED token)' },
         { feat: 'Child runs as you (privilege drop)', os: ['ok', 'ok', 'na'], note: "caps don't cross exec · Credential drop · service is SYSTEM" },
         { feat: 'self-update preserves privilege', os: ['warn', 'ok', 'na'], note: 'setcap lost on update · macOS re-applies setuid' },
         { feat: 'Pre-create profile at install', os: ['ok', 'ok', 'ok'], note: 'reads host/port off the live ssh' },
-        { feat: 'Uninstall', os: ['ok', 'ok', 'warn'], note: 'unix covered; Windows path unverified' },
+        { feat: 'Uninstall', os: ['ok', 'ok', 'ok'], note: 'unix + Windows (remove-service, wipe) covered' },
       ],
     },
     {
@@ -206,21 +206,21 @@ export class CoverageComponent {
     {
       title: 'Daemon / persistence',
       rows: [
-        { feat: 'Persistent global datapath', os: ['na', 'ok', 'warn'], note: 'Linux autonomous · macOS daemon · Windows SCM service (coded)' },
-        { feat: 'Survives process restarts', os: ['ok', 'ok', 'warn'], note: 'per-launch · daemon · service (coded)' },
-        { feat: 'Graft (multi-process, same cluster)', os: ['ok', 'ok', 'warn'], note: 'flock leader/graft · service is the single owner' },
-        { feat: '<b>plug down</b>', os: ['na', 'ok', 'warn'], note: 'stops the daemon (macOS) / service (Windows, coded)' },
+        { feat: 'Persistent global datapath', os: ['na', 'ok', 'ok'], note: 'Linux autonomous · macOS daemon · Windows SCM service (validated)' },
+        { feat: 'Survives process restarts', os: ['ok', 'ok', 'ok'], note: 'per-launch · daemon · service + 30&thinsp;s self-teardown (validated)' },
+        { feat: 'Graft (multi-process, same cluster)', os: ['ok', 'ok', 'ok'], note: 'flock leader/graft · service is the single owner (3 concurrent sessions proven)' },
+        { feat: '<b>plug down</b>', os: ['na', 'ok', 'ok'], note: 'stops the daemon (macOS) / service (Windows)' },
       ],
     },
     {
       title: 'Multicluster — different clusters at once',
       rows: [
-        { feat: 'Simultaneous different clusters', os: ['ok', 'ok', 'warn'], note: 'Linux mount-ns · <b>macOS validated e2e</b> · Windows service (coded)' },
-        { feat: 'PID-at-connect attribution', os: ['na', 'ok', 'warn'], note: '<code>multiDial</code> shared; macOS proven on 2 live clusters · Windows service coded' },
-        { feat: 'ppidOf', os: ['ok', 'ok', 'warn'], note: '/proc · ps · ToolHelp (coded, unit-tested)', sub: true },
-        { feat: 'pidForLocalPort', os: ['ok', 'ok', 'warn'], note: '/proc/net · lsof · GetExtendedTcpTable (coded, unit-tested)', sub: true },
-        { feat: 'procStart (recycle guard)', os: ['ok', 'ok', 'warn'], note: 'ps lstart · /proc stat · GetProcessTimes — rejects a reused PID', sub: true },
-        { feat: 'N-tunnel global daemon', os: ['na', 'ok', 'warn'], note: 'macOS done + validated · Windows = SCM service (coded)' },
+        { feat: 'Simultaneous different clusters', os: ['ok', 'ok', 'ok'], note: 'Linux mount-ns · <b>macOS + Windows validated e2e</b> (neo + llm, by name)' },
+        { feat: 'PID-at-connect attribution', os: ['na', 'ok', 'ok'], note: '<code>multiDial</code> shared; proven on 2 live clusters on macOS &amp; Windows' },
+        { feat: 'ppidOf', os: ['ok', 'ok', 'ok'], note: '/proc · ps · ToolHelp (unit-tested)', sub: true },
+        { feat: 'pidForLocalPort', os: ['ok', 'ok', 'ok'], note: '/proc/net · lsof · GetExtendedTcpTable (unit-tested)', sub: true },
+        { feat: 'procStart (recycle guard)', os: ['ok', 'ok', 'ok'], note: 'ps lstart · /proc stat · GetProcessTimes — rejects a reused PID', sub: true },
+        { feat: 'N-tunnel global daemon', os: ['na', 'ok', 'ok'], note: 'macOS daemon · Windows SCM service — both validated' },
       ],
     },
     {
