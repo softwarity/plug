@@ -1,13 +1,13 @@
 # Multicluster — design (PID-at-connect)
 
-Status: **design validated, attribution core landed (`cli/internal/tun/pidroute*.go`), not yet wired into the datapath.** The single-cluster path is unchanged and stays the proven one until this is validated on two real clusters.
+Status: **shipped and validated on two real clusters** — macOS daemon and Windows SYSTEM service. The attribution core (`cli/internal/tun/pidroute*.go`) is wired into the datapath, which routes each flow by PID at connect. Linux uses per-launch mount namespaces and needs no attribution.
 
 ## The problem
 
 Running two *different* clusters at once on the same machine.
 
 - **Linux is already there.** Each `plug` launch gets a private `/etc/resolv.conf` bind-mounted in its own mount namespace, so two launches never share DNS — `plug -p A` and `plug -p B` are isolated for free.
-- **macOS / Windows are the hard case.** There is no per-process resolver: plug repoints the **system** resolver (macOS `scutil` dynamic store, Windows adapter DNS), which is **machine-wide**. Two clusters would fight over one resolver. That is why 1.1.0 documents "one active cluster at a time" on macOS.
+- **macOS / Windows are the hard case.** There is no per-process resolver: plug repoints the **system** resolver (macOS `scutil` dynamic store, Windows adapter DNS), which is **machine-wide**. Two clusters would fight over one resolver. 1.1.0 documented "one active cluster at a time" there; the PID-at-connect approach below now runs several side by side on **Windows** (SYSTEM service) and macOS.
 
 ## Why not suffixes
 

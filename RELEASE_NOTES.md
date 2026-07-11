@@ -2,31 +2,38 @@
 
 ## NEXT RELEASE
 
-- **Windows: real cluster access, by name — validated end-to-end.** A local `plug curl
-  http://my-service:8081/…` now resolves the single-label cluster name and reaches the
-  service, returning real content — the same as macOS/Linux, on a real Windows machine.
-  The missing piece was DNS: Windows never issues a DNS query for a *bare* single-label
-  name (LLMNR/NetBIOS only), so plug now advertises a **search suffix** on the WinTUN
-  adapter (`my-service` → `my-service.plug`), routes `.plug` to the in-stack resolver
-  via an **NRPT** rule, and strips the suffix back — the mechanism Tailscale/WireGuard
-  use for short names. Also fixed on the way: the launcher exec'd a downloaded version
-  without the `.exe` suffix, and couldn't find `wintun.dll` (WinTUN loads it from the
-  binary's own dir, not PATH) — both now handled.
-- **Windows: datapath as a SYSTEM service (no-admin + multicluster groundwork).** The
-  global datapath now has a Windows SCM service counterpart to the macOS daemon: it
-  holds one WinTUN + a tunnel per active cluster (routed by PID at connect) and a
-  non-elevated `plug <cmd>` delegates to it — so day-to-day runs need **no admin**
-  (one UAC at install to create the service) and several clusters run at once. Falls
-  back to the in-process elevated path if the service isn't installed. Build-validated
-  on all three OSes; runtime validation on Windows is next. See `docs/windows-service.md`.
-- **Windows installer works from Git Bash.** The one-liner used to fail there with
-  `no cluster host detected`: the installer read the host off the live `ssh`
-  process's command line, which is unreadable when that `ssh` is Git's MSYS build.
-  You can now pass it explicitly — `… install-windows | PLUG_HOST=<host> PLUG_PORT=<port>
-  powershell -NoProfile -Command -` — while the native Windows OpenSSH client is
-  still auto-detected with no prefix. Also, a fatal installer error now actually
-  stops the script (a piped `powershell -Command -` ignored the old `exit`), and the
-  README documents the Git-Bash path assuming Git for Windows is present.
+- **Windows: no-admin data path, validated end-to-end on a real machine.** The Windows
+  data path (WinTUN + routes + DNS) now lives in a **SYSTEM service** — the SCM
+  counterpart of the macOS daemon. Install it once from an **elevated Git Bash**; after
+  that every `plug <cmd>` is a **non-elevated** launcher that starts the service via its
+  ACL (Authenticated Users may start it) and delegates to it — proven from a genuinely
+  non-elevated (LIMITED-token) process. Several clusters run **side by side**: the service
+  holds one tunnel per cluster and attributes each flow by process ancestry at connect
+  (validated on two live clusters + concurrent same-cluster sessions).
+- **Windows: real cluster access by name.** `plug curl http://my-service:8081/…` resolves
+  the single-label cluster name and reaches the service. Windows never queries a *bare*
+  single-label name (LLMNR/NetBIOS only), so plug advertises a **search suffix** on the
+  WinTUN adapter (`my-service` → `my-service.plug`), routes `.plug` to the in-stack
+  resolver via an **NRPT** rule, and strips the suffix back — the Tailscale/WireGuard
+  mechanism. (The launcher also handles the `.exe` suffix and `wintun.dll` beside a
+  downloaded version.)
+- **Windows installer is pure Git Bash.** `ssh get@<host> install-windows | PLUG_HOST=<host>
+  PLUG_PORT=<port> bash` — bash, not PowerShell: a piped bash script's `exit` is reliable
+  (a piped `powershell -Command -` was not, so a failed install used to run on with
+  misleading output). It fetches plug.exe **and wintun.dll from the agent** (no wintun.net
+  dependency, no more intermittent fetch), sets PATH + a profile, and installs the service
+  when elevated (else it tells you to re-run elevated).
+- **Windows cold-start ~15 s → ~0.8 s.** The NRPT rule goes in via the **registry** instead
+  of two PowerShell starts (~3 s), the reconcile opens a cluster tunnel in ~0.3 s, and an
+  idle tunnel is held for a short grace so back-to-back runs reuse it (~0.3 s). No DNS
+  hijack is left in place while idle — short local names resolve normally between runs.
+- **Concurrent sessions no longer knock each other out.** A channel the agent *rejects*
+  (a bare name that isn't a cluster service — Windows probes plenty, e.g. WPAD) no longer
+  triggers a reconnect that tore down every other channel on the shared SSH connection;
+  only 1 of N concurrent `plug`s used to survive. Cross-platform (shared transport).
+- **Version probe & download use crypto/ssh on Windows** (like the data tunnel) instead of
+  the external `ssh` binary, which hangs on Windows when its stdout is captured over a pipe
+  — that had frozen every `plug` at the version probe.
 - **Attribution hardened against PID recycling.** The by-process router now stamps
   each hop of the ancestry walk with the process's start time and refuses a
   temporally impossible chain — an "ancestor" that started *after* its child is a
