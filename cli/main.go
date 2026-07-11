@@ -434,6 +434,12 @@ func selfUpdate(args []string) {
 
 func getSSHArgs(cfg config, remoteCmd string) []string {
 	return []string{
+		// -n: never read stdin. Both callers (version probe, binary download) only
+		// consume stdout, and on Windows exec.Command wires the child's stdin to the
+		// NUL device — which makes OpenSSH-for-Windows block forever instead of seeing
+		// EOF, hanging every `plug <cmd>` at the version probe. -n sidesteps it and is
+		// harmless on macOS/Linux.
+		"-n",
 		"-p", cfg.port,
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
@@ -444,14 +450,45 @@ func getSSHArgs(cfg config, remoteCmd string) []string {
 }
 
 func agentVersion(cfg config) (string, error) {
-	out, err := exec.Command("ssh", getSSHArgs(cfg, "version")...).Output()
+	out, errOut, err := sshFileCapture(getSSHArgs(cfg, "version"))
 	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
-			return "", fmt.Errorf("%s", strings.TrimSpace(string(ee.Stderr)))
+		if s := strings.TrimSpace(errOut); s != "" {
+			return "", fmt.Errorf("%s", s)
 		}
 		return "", err
 	}
-	return strings.TrimSpace(string(out)), nil
+	return strings.TrimSpace(out), nil
+}
+
+// sshFileCapture runs `ssh <args>` with stdin closed and stdout/stderr redirected
+// to *temp files* rather than the in-memory pipes exec.Cmd.Output would use.
+//
+// Why files: on Windows, OpenSSH forks a child that inherits and holds the stdout
+// pipe's write end open past ssh's own exit, so the pipe never reaches EOF and
+// Output()/Wait() hang forever — every `plug <cmd>` froze at the version probe. A
+// real file has no reader-side EOF wait, so it returns the instant ssh exits.
+// Harmless on macOS/Linux (a rare, tiny read), so it's unconditional.
+func sshFileCapture(args []string) (stdout, stderr string, err error) {
+	of, err := os.CreateTemp("", "plug-ssh-out-*")
+	if err != nil {
+		return "", "", err
+	}
+	defer os.Remove(of.Name())
+	defer of.Close()
+	ef, err := os.CreateTemp("", "plug-ssh-err-*")
+	if err != nil {
+		return "", "", err
+	}
+	defer os.Remove(ef.Name())
+	defer ef.Close()
+	cmd := exec.Command("ssh", args...)
+	cmd.Stdin = strings.NewReader("")
+	cmd.Stdout = of
+	cmd.Stderr = ef
+	runErr := cmd.Run()
+	ob, _ := os.ReadFile(of.Name())
+	eb, _ := os.ReadFile(ef.Name())
+	return string(ob), string(eb), runErr
 }
 
 // updateHold keeps the "updated" line on screen briefly before the child runs
@@ -468,7 +505,14 @@ var minBarDuration = 2 * time.Second
 // the transfer is quick and the child usually wipes the screen right after.
 // label is the version being fetched, for the display.
 func getDownload(cfg config, osArch, label string) ([]byte, error) {
+	// Windows can't stream over a pipe here: OpenSSH forks a child that keeps the
+	// pipe's write end open, so reading to EOF / Wait() hangs (same root cause as
+	// sshFileCapture). Fetch to a temp file instead — no live byte-bar, but correct.
+	if runtime.GOOS == "windows" {
+		return getDownloadFile(cfg, osArch, label)
+	}
 	cmd := exec.Command("ssh", getSSHArgs(cfg, osArch)...)
+	cmd.Stdin = strings.NewReader("") // harmless on unix; keeps ssh off a tty stdin
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	stdout, err := cmd.StdoutPipe()
@@ -486,6 +530,39 @@ func getDownload(cfg config, osArch, label string) ([]byte, error) {
 		return nil, werr
 	}
 	return data, rerr
+}
+
+// getDownloadFile fetches the binary on Windows by redirecting ssh's stdout to a
+// temp file (see getDownload for why a pipe hangs). It shows a brief "fetching"
+// line rather than a live byte-bar; the LAN transfer is near-instant anyway.
+func getDownloadFile(cfg config, osArch, label string) ([]byte, error) {
+	of, err := os.CreateTemp("", "plug-dl-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(of.Name())
+	defer of.Close()
+	ef, err := os.CreateTemp("", "plug-dl-err-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(ef.Name())
+	defer ef.Close()
+	if isTTY(os.Stderr) {
+		fmt.Fprintf(os.Stderr, "fetching v%s ...\n", label)
+	}
+	cmd := exec.Command("ssh", getSSHArgs(cfg, osArch)...)
+	cmd.Stdin = strings.NewReader("")
+	cmd.Stdout = of
+	cmd.Stderr = ef
+	if err := cmd.Run(); err != nil {
+		eb, _ := os.ReadFile(ef.Name())
+		if s := strings.TrimSpace(string(eb)); s != "" {
+			return nil, fmt.Errorf("%s", s)
+		}
+		return nil, err
+	}
+	return os.ReadFile(of.Name())
 }
 
 // readWithProgress reads r to EOF. When animate is set it draws an indeterminate
