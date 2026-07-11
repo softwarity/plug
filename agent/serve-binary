@@ -13,18 +13,29 @@ if [ "$verb" = "version" ]; then
   exec cat /opt/plug/VERSION
 fi
 
-# install-windows: stream the PowerShell installer (parity of the unix `install`
-# branch below). Unlike unix — where every binary is small and base64-embedded so
-# `uname` can pick one client-side — Windows is a single target (amd64), so the
-# script just downloads plug-windows-amd64.exe over ssh (the `windows-amd64` verb)
-# instead of embedding it. The script is versioned in the repo (agent/install.ps1)
-# and baked into the image at /opt/plug/install.ps1. Invoke it with:
-#   ssh get@<host> install-windows | powershell -NoProfile -Command -
-if [ "$verb" = "install-windows" ] || [ "$verb" = "install.ps1" ]; then
-  if [ -f /opt/plug/install.ps1 ]; then
-    exec cat /opt/plug/install.ps1
+# wintun.dll: the WinTUN driver DLL, baked into the image so the Windows installer
+# fetches it from the agent (not wintun.net — no runtime external dependency, no
+# intermittent fetch). Raw binary on stdout, like the CLI binaries below.
+if [ "$verb" = "wintun" ]; then
+  if [ -f /opt/plug/wintun.dll ]; then
+    exec cat /opt/plug/wintun.dll
   fi
-  echo "plug: install.ps1 missing from this agent image" >&2
+  echo "plug: wintun.dll missing from this agent image" >&2
+  exit 1
+fi
+
+# install-windows: stream the Git Bash installer. Windows is a single target
+# (amd64), so the script downloads plug-windows-amd64.exe + wintun.dll over ssh
+# (the `windows-amd64` / `wintun` verbs) rather than embedding them. It is bash —
+# not PowerShell — because Git Bash is the assumed Windows shell and a piped bash
+# script's `exit` is reliable. Versioned at agent/install.sh, baked in at
+# /opt/plug/install.sh. Invoke it with:
+#   ssh get@<host> install-windows | PLUG_HOST=<host> PLUG_PORT=<port> bash
+if [ "$verb" = "install-windows" ] || [ "$verb" = "install.sh" ]; then
+  if [ -f /opt/plug/install.sh ]; then
+    exec cat /opt/plug/install.sh
+  fi
+  echo "plug: install.sh missing from this agent image" >&2
   exit 1
 fi
 

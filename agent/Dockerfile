@@ -26,6 +26,14 @@ RUN mkdir -p /out/bin && \
     done && \
     printf '%s' "$V" > /out/VERSION
 
+# WinTUN driver DLL, fetched once at build so the agent serves it to the Windows
+# installer (the installer pulls it from us — no run-time dependency on wintun.net,
+# and no more intermittent fetch).
+ARG WINTUN_VERSION=0.14.1
+RUN apk add --no-cache curl unzip && \
+    curl -fsSL "https://www.wintun.net/builds/wintun-${WINTUN_VERSION}.zip" -o /tmp/wintun.zip && \
+    unzip -j /tmp/wintun.zip 'wintun/bin/amd64/wintun.dll' -d /out
+
 FROM alpine:3.21
 
 # openssh only: the CLI tunnels via SSH direct-tcpip, sshd resolves cluster
@@ -58,12 +66,13 @@ COPY --chmod=755 agent/serve-binary /usr/local/bin/serve-binary
 COPY --chmod=755 agent/entrypoint.sh /entrypoint.sh
 COPY --from=build /out/bin/ /opt/plug/bin/
 COPY --from=build /out/VERSION /opt/plug/VERSION
-# The Windows PowerShell installer, streamed by serve-binary on `install-windows`.
-# MUST come AFTER the COPYs above: a `--chmod=644` COPY that is the FIRST to create
-# /opt/plug applies 644 to the directory itself, dropping its +x so the unprivileged
-# `get` user can't traverse it — which breaks serving VERSION and the binaries. By
-# now /opt/plug already exists as 0755, so this only sets install.ps1's own mode.
-COPY --chmod=644 agent/install.ps1 /opt/plug/install.ps1
+# The WinTUN DLL (served on the `wintun` verb) and the Git Bash installer (served
+# on `install-windows`). MUST come AFTER the COPYs above: a COPY that is the FIRST
+# to create /opt/plug would apply its mode to the directory itself, dropping the +x
+# the unprivileged `get` user needs to traverse it. By now /opt/plug is already
+# 0755, so these only set their own files' modes.
+COPY --from=build /out/wintun.dll /opt/plug/wintun.dll
+COPY --chmod=644 agent/install.sh /opt/plug/install.sh
 
 EXPOSE 22
 ENTRYPOINT ["/entrypoint.sh"]
