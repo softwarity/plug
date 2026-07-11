@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -34,6 +35,35 @@ type dialFunc func(srcPort uint16) (d Dialer, cluster string, ok bool)
 // attribution. This keeps the proven single-cluster datapath behaviour exact.
 func constDial(tr Dialer) dialFunc {
 	return func(uint16) (Dialer, string, bool) { return tr, "", true }
+}
+
+// refusedLimiter throttles the "unattributable flow" log. While a cluster is
+// active the TUN also catches the machine's own bare-name probes (Windows WPAD,
+// mDNS…) that can't be attributed to any cluster — dozens of lines a second that
+// otherwise drown the real datapath log. First sight of a name logs; repeats are
+// dropped for the window.
+var refusedLimiter = newLogLimiter(30 * time.Second)
+
+type logLimiter struct {
+	mu     sync.Mutex
+	last   map[string]time.Time
+	window time.Duration
+}
+
+func newLogLimiter(window time.Duration) *logLimiter {
+	return &logLimiter{last: map[string]time.Time{}, window: window}
+}
+
+// allow reports whether key may be logged now, recording the time when it may.
+func (l *logLimiter) allow(key string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := time.Now()
+	if t, ok := l.last[key]; ok && now.Sub(t) < l.window {
+		return false
+	}
+	l.last[key] = now
+	return true
 }
 
 func buildStack(tab *faketab, df dialFunc, upstream *net.Resolver, log logfn) (*stack.Stack, *channel.Endpoint) {
@@ -81,7 +111,9 @@ func handleTCP(r *tcp.ForwarderRequest, tab *faketab, df dialFunc, log logfn) {
 	// (constDial) always attributes, so this path is unchanged there.
 	dialer, cluster, ok := df(id.RemotePort)
 	if !ok {
-		log.f("tun: → %s: refused (unattributable flow, src port %d)", name, id.RemotePort)
+		if refusedLimiter.allow(name) {
+			log.f("tun: → %s: refused (unattributable flow; repeats hidden)", name)
+		}
 		r.Complete(true) // RST — flow can't be attributed to a cluster
 		return
 	}
