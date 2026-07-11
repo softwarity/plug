@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/softwarity/plug/cli/internal/tun"
 	"github.com/softwarity/plug/cli/internal/tunnel"
 )
 
@@ -19,7 +20,13 @@ func dialTunnel(cfg config) (*tunnel.Transport, error) {
 	// dev agent is recreated with a fresh key — so skip it for localhost. For real
 	// hosts, pin the key next to the profiles.
 	if !isLoopback(cfg.host) {
-		if home, err := os.UserHomeDir(); err == nil {
+		if shared := tun.SharedKnownHosts(); shared != "" {
+			// Windows: a machine-wide, user-writable path (%ProgramData%\plug) shared by
+			// the SYSTEM service and the launcher. The service can't pin under the user's
+			// home, and its own profile dir isn't user-accessible — so a "host key changed"
+			// there could not be reset without admin. Here the user can remove the line.
+			knownHosts = shared
+		} else if home, err := os.UserHomeDir(); err == nil {
 			knownHosts = filepath.Join(home, ".plug", "known_hosts")
 		}
 	}

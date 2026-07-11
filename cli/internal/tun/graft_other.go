@@ -10,3 +10,7 @@ package tun
 func AcquireCluster(_ string) (leader bool, release func(), err error) {
 	return true, func() {}, nil
 }
+
+// SharedKnownHosts is Windows-only (its SYSTEM service needs a user-writable TOFU
+// file). Elsewhere dialTunnel pins under the user's ~/.plug, so this returns "".
+func SharedKnownHosts() string { return "" }

@@ -29,6 +29,11 @@ func backupPath(key string) string { return filepath.Join(graftDir, ClusterHash(
 // readyPath marks that the global daemon holds a LIVE tunnel for this cluster.
 func readyPath(key string) string { return filepath.Join(graftDir, ClusterHash(key)+".ready") }
 
+// SharedKnownHosts is Windows-only (its SYSTEM service needs a user-writable TOFU
+// file). On macOS the daemon pins under the user's ~/.plug and chowns it back, so
+// this returns "" and dialTunnel keeps that path.
+func SharedKnownHosts() string { return "" }
+
 // MarkClusterReady / UnmarkClusterReady are called by the daemon's reconcile loop
 // when a cluster's tunnel opens / closes. ClusterReady lets a `plug -p X <cmd>`
 // wait for its own tunnel before running: the datapath is up daemon-wide, but the

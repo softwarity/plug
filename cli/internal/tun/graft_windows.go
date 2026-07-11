@@ -38,6 +38,12 @@ func ClusterHash(key string) string {
 // readyPath marks that the service holds a LIVE tunnel for this cluster.
 func readyPath(key string) string { return filepath.Join(graftDir, ClusterHash(key)+".ready") }
 
+// SharedKnownHosts is the machine-wide TOFU host-key file, in the ProgramData dir
+// the installer makes user-writable. The SYSTEM service (which opens the tunnels)
+// and the non-elevated launcher share it, and — unlike the service's own
+// %SystemProfile% home — a user can edit it to reset a changed key without admin.
+func SharedKnownHosts() string { return filepath.Join(graftDir, "known_hosts") }
+
 // MarkClusterReady / UnmarkClusterReady / ClusterReady let a `plug -p X <cmd>` wait
 // for the service to have opened X's tunnel before running (the datapath is up
 // service-wide, the per-cluster tunnel opens on the next reconcile).
