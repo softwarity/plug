@@ -174,7 +174,17 @@ func (t *Transport) DialContext(ctx context.Context, network, addr string) (net.
 	if ctx.Err() != nil {
 		return nil, ctx.Err() // the caller gave up — not a dead transport
 	}
-	// The open failed: the connection may be dead. Reconnect once and retry.
+	// A channel REJECTED by the agent (the cluster name doesn't resolve, the port is
+	// refused…) means the SSH connection is HEALTHY. Reconnecting on it is not only
+	// pointless — it closes the shared connection and tears down every other channel
+	// riding it. That turned Windows' constant WPAD/mDNS probes (bare names the agent
+	// rejects) into cascading reconnects that killed concurrent `plug` sessions. Surface
+	// a rejection as-is, without touching the connection.
+	var oce *ssh.OpenChannelError
+	if errors.As(err, &oce) {
+		return nil, err
+	}
+	// Otherwise the connection may be dead. Reconnect once and retry.
 	cl2, rerr := t.reconnectFrom(cl)
 	if rerr != nil {
 		return nil, err // surface the original open error
