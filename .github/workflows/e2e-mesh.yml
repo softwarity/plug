@@ -1,0 +1,62 @@
+name: e2e-mesh
+
+# Cross-OS e2e that native-Linux Docker can't give us: run plug NATIVELY on a
+# macOS/Windows runner against a REAL cluster, reaching services BY NAME. The
+# cluster can't run as Linux containers on a mac/win runner, so it runs on its
+# own Linux run (cluster.yml) and the client connects over a Tailscale mesh.
+#
+# Flow:  start-cluster (dispatches cluster.yml, keeps its run id)
+#          └─ e2e-mac (joins the mesh, asserts httpbin reachable by name)
+#             └─ kill-cluster (cancels the cluster run — always)
+#
+# Dispatch-only until the Tailscale secrets exist and it's proven; then add a
+# push/schedule trigger. Needs repo secrets TS_OAUTH_ID / TS_OAUTH_SECRET.
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: write # dispatch + cancel the cluster run
+  contents: read
+
+jobs:
+  start-cluster:
+    name: start cluster
+    runs-on: ubuntu-latest
+    outputs:
+      cluster_id: ${{ steps.dispatch.outputs.id }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }})" >> "$GITHUB_OUTPUT"
+
+  e2e-mac:
+    name: e2e (macOS, by name over the mesh)
+    needs: start-cluster
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          cache: false
+      - name: Join the tailnet
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+          hostname: plug-mac-${{ github.run_id }}
+      - name: Reach httpbin by name through the cluster
+        run: bash scripts/ci/e2e-client.sh plug-cluster-${{ github.run_id }} 2222
+
+  kill-cluster:
+    name: kill cluster
+    needs: [start-cluster, e2e-mac]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel ${{ needs.start-cluster.outputs.cluster_id }} || true

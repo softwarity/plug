@@ -1,0 +1,11 @@
+# Overlay for the CI "mesh cluster" (scripts/ci/cluster-serve.sh):
+#   docker compose -f compose.yml -f compose.cluster.yml up -d agent httpbin
+#
+# The normal e2e keeps clients IN the compose network, so the agent needs no
+# published port. Here the client lives on a *different runner* and reaches the
+# agent over the tailnet, so we publish its SSH port on the host — the runner's
+# tailnet IP:2222 then lands on the agent. Services stay internal-only.
+services:
+  agent:
+    ports:
+      - "2222:22"
