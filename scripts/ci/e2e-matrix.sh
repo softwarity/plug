@@ -68,18 +68,7 @@ plug() { perl -e 'alarm shift @ARGV; exec @ARGV or exit 127' 45 $sudo "./plug$ex
 
 # --- build the four language clients natively ---
 echo "=== build clients ==="
-# macOS: force the cgo resolver (getaddrinfo) into the go client. Go's default
-# resolver on mac reads /etc/resolv.conf, which macOS does NOT repoint at plug
-# (plug overrides DNS via a scoped resolver + /etc/resolver/<suffix>), so bare
-# single-label cluster names get NXDOMAIN there. getaddrinfo goes through
-# /etc/resolver and resolves — exactly like node/python/java, which pass 8/8.
-build_go() {
-  ( cd "$clients/go"
-    case "$(uname -s)" in
-      Darwin) CGO_ENABLED=1 go build -tags netcgo -o "eclient$ext" . ;;
-      *)      go build -o "eclient$ext" . ;;
-    esac )
-}
+build_go()     { ( cd "$clients/go" && go build -o "eclient$ext" . ); }
 build_node()   { ( cd "$clients/node" && npm install --omit=dev --no-audit --no-fund ); }
 # --break-system-packages: macOS runners ship a Homebrew Python that refuses a
 # plain `pip install` (externally-managed-environment).
