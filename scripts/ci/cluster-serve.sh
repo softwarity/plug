@@ -16,12 +16,13 @@ ttl="${PLUG_CLUSTER_TTL:-1800}"
 echo "=== build agent image ==="
 docker build -f "$root/agent/Dockerfile" -t softwarity/plug:e2e "$root"
 
-echo "=== up agent + services ==="
+echo "=== up agent + all services ==="
 cd "$root/e2e"
 compose="docker compose -f compose.yml -f compose.cluster.yml"
-# MVP: just what the macOS http test needs. Add postgres/redis/... here as the
-# matrix grows.
-$compose up -d agent httpbin
+# The full protocol matrix: one service per protocol. grpc/wsserver are built
+# (compose build); the rest are pulled images. --wait blocks on the healthchecks.
+$compose up -d --build --wait \
+  agent httpbin postgres redis mongo rabbitmq mosquitto grpc wsserver
 $compose ps
 
 echo "=== cluster up — serving for ${ttl}s (or until this run is cancelled) ==="
