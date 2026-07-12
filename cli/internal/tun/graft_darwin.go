@@ -26,6 +26,12 @@ func lockPath(key string) string { return filepath.Join(graftDir, ClusterHash(ke
 // backupPath is the per-cluster DNS backup file (the anti-crash net).
 func backupPath(key string) string { return filepath.Join(graftDir, ClusterHash(key)+".dns.bak") }
 
+// resolvBackupPath is the per-cluster /etc/resolv.conf snapshot (the anti-crash
+// net for the resolv.conf override, alongside backupPath's scutil snapshot).
+func resolvBackupPath(key string) string {
+	return filepath.Join(graftDir, ClusterHash(key)+".resolv.bak")
+}
+
 // readyPath marks that the global daemon holds a LIVE tunnel for this cluster.
 func readyPath(key string) string { return filepath.Join(graftDir, ClusterHash(key)+".ready") }
 

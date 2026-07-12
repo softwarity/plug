@@ -3,9 +3,65 @@
 package tun
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// TestResolvSnapshotRoundTrip covers the /etc/resolv.conf override's crash net: a
+// regular file, a symlink (the macOS default → /var/run/resolv.conf) and an absent
+// file must each snapshot and restore verbatim. The mesh e2e can't exercise this
+// (it never crashes mid-session), so the round-trip is unit-tested here.
+func TestResolvSnapshotRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	orig := resolvConf
+	t.Cleanup(func() { resolvConf = orig })
+	resolvConf = filepath.Join(dir, "resolv.conf")
+
+	// Regular file → snapshot, override at plug's DNS, restore the original content.
+	want := "nameserver 8.8.8.8\nsearch corp.example\n"
+	if err := os.WriteFile(resolvConf, []byte(want), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snap := snapshotResolv()
+	writeResolv("198.18.0.53")
+	if b, _ := os.ReadFile(resolvConf); !strings.Contains(string(b), "198.18.0.53") || !strings.Contains(string(b), "search plug") {
+		t.Fatalf("writeResolv didn't point at plug: %q", b)
+	}
+	restoreResolv(snap)
+	if b, _ := os.ReadFile(resolvConf); string(b) != want {
+		t.Fatalf("regular-file restore mismatch: got %q want %q", b, want)
+	}
+
+	// Symlink (the usual macOS case) → restore recreates the symlink to the target.
+	target := filepath.Join(dir, "run-resolv.conf")
+	if err := os.WriteFile(target, []byte("nameserver 1.1.1.1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Remove(resolvConf)
+	if err := os.Symlink(target, resolvConf); err != nil {
+		t.Fatal(err)
+	}
+	snap = snapshotResolv()
+	writeResolv("198.18.0.53")
+	if fi, _ := os.Lstat(resolvConf); fi != nil && fi.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("writeResolv should replace the symlink with a regular file (decoupled from configd)")
+	}
+	restoreResolv(snap)
+	if got, err := os.Readlink(resolvConf); err != nil || got != target {
+		t.Fatalf("symlink restore mismatch: got %q err %v want %q", got, err, target)
+	}
+
+	// Absent → snapshot "N" → restore leaves it absent.
+	_ = os.Remove(resolvConf)
+	snap = snapshotResolv()
+	writeResolv("198.18.0.53")
+	restoreResolv(snap)
+	if _, err := os.Lstat(resolvConf); !os.IsNotExist(err) {
+		t.Fatalf("absent restore should leave no file, got err %v", err)
+	}
+}
 
 func TestDNSBackupRoundTrip(t *testing.T) {
 	dir := t.TempDir()

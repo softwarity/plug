@@ -79,6 +79,14 @@ func configure(_ any, ifname, cidr, dnsIP string, log logfn) ([]string, string, 
 	_ = os.MkdirAll("/etc/resolver", 0o755)
 	_ = os.WriteFile(resolverFile, []byte("nameserver "+dnsIP+"\n"), 0o644)
 
+	// Also point /etc/resolv.conf at us. getaddrinfo (node/python/java) already
+	// resolves via the scoped resolver above, but a program with its OWN resolver —
+	// Go's pure-Go resolver, used by CGO_ENABLED=0 static binaries — reads only this
+	// file, and would otherwise NXDOMAIN on cluster names against the original
+	// upstream. The crash net is in SaveDNSBackup / RestoreOrphanDNS.
+	resolvSnap := snapshotResolv()
+	writeResolv(dnsIP)
+
 	// Make mDNSResponder pick up the new resolvers and drop any stale (negative) cache.
 	flushDNS := func() {
 		_ = run("dscacheutil", "-flushcache")
@@ -87,6 +95,7 @@ func configure(_ any, ifname, cidr, dnsIP string, log logfn) ([]string, string, 
 	flushDNS()
 
 	cleanup := func() {
+		restoreResolv(resolvSnap)
 		_ = os.Remove(resolverFile)
 		if restore != "" {
 			_ = scutilSet(dnsKey, restore) // put the original DNS dict back
@@ -191,6 +200,47 @@ func scutilRemove(key string) error {
 	return err
 }
 
+// resolvConf is macOS's /etc/resolv.conf. getaddrinfo ignores it (it resolves via
+// SystemConfiguration), but a program with its OWN resolver — notably Go's pure-Go
+// resolver, used by CGO_ENABLED=0 static binaries, common in clusters — reads only
+// this file. macOS is single-cluster (the scutil primary-service override is already
+// machine-wide, and a 2nd cluster is refused), so a global resolv.conf is consistent.
+var resolvConf = "/etc/resolv.conf" // overridable in tests
+
+// snapshotResolv captures /etc/resolv.conf as a restorable token: "L\n<target>" for
+// a symlink (the usual case — it points at /var/run/resolv.conf), "F\n<content>" for
+// a regular file, or "N" if absent.
+func snapshotResolv() string {
+	if target, err := os.Readlink(resolvConf); err == nil {
+		return "L\n" + target
+	}
+	if data, err := os.ReadFile(resolvConf); err == nil {
+		return "F\n" + string(data)
+	}
+	return "N"
+}
+
+// writeResolv points /etc/resolv.conf at plug's in-stack DNS with the ".plug" search
+// suffix, as a FRESH regular file (replacing any symlink) so configd's own /var/run
+// regeneration can't clobber it.
+func writeResolv(dnsIP string) {
+	_ = os.Remove(resolvConf)
+	_ = os.WriteFile(resolvConf,
+		[]byte("# plug — cluster DNS (macOS is single-cluster)\nnameserver "+dnsIP+"\nsearch "+searchSuffix+"\n"),
+		0o644)
+}
+
+// restoreResolv puts /etc/resolv.conf back from a snapshotResolv() token.
+func restoreResolv(snap string) {
+	_ = os.Remove(resolvConf)
+	switch kind, rest, _ := strings.Cut(snap, "\n"); kind {
+	case "L":
+		_ = os.Symlink(rest, resolvConf)
+	case "F":
+		_ = os.WriteFile(resolvConf, []byte(rest), 0o644)
+	}
+}
+
 // persistDNSBackup writes what's needed to restore the original DNS even after a
 // kill -9 of the daemon: the primary-service DNS key on the first line, then the
 // scutil rebuild script (`restore`). An empty script means the service had no DNS
@@ -228,6 +278,9 @@ func restoreDNSBackup(path string) error {
 // backup file so a kill -9 of the daemon can be repaired. Call BEFORE the DNS is
 // overridden (StartDatapath).
 func SaveDNSBackup(key string) error {
+	// Snapshot /etc/resolv.conf too — configure() restores it on a clean exit, this
+	// is the net for a crashed daemon (restored by RestoreOrphanDNS).
+	_ = os.WriteFile(resolvBackupPath(key), []byte(snapshotResolv()), 0o644)
 	svc, err := primaryService()
 	if err != nil {
 		return err
@@ -241,10 +294,17 @@ func SaveDNSBackup(key string) error {
 // system resolver pointed at a dead address — and removes it. No-op if none. Call
 // only while holding the leader lock, so any backup present can only be an orphan.
 func RestoreOrphanDNS(key string) {
+	if b, err := os.ReadFile(resolvBackupPath(key)); err == nil {
+		restoreResolv(string(b))
+		_ = os.Remove(resolvBackupPath(key))
+	}
 	if _, err := os.Stat(backupPath(key)); err == nil {
 		_ = restoreDNSBackup(backupPath(key))
 	}
 }
 
 // ClearDNSBackup drops the backup after a clean shutdown (cleanup already restored the DNS).
-func ClearDNSBackup(key string) { _ = os.Remove(backupPath(key)) }
+func ClearDNSBackup(key string) {
+	_ = os.Remove(backupPath(key))
+	_ = os.Remove(resolvBackupPath(key))
+}
