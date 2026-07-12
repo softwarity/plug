@@ -97,12 +97,11 @@ plug rm staging          # remove a profile</app-code>
       <li><strong>Cheap.</strong> Cached binaries are a few MB each; the first connect to a new version pays one small download.</li>
     </ul>
     <app-code lang="bash">plug version         # the launcher's own version
-plug versions        # launcher + every cached cluster version
-plug self-update     # update the launcher itself (rare — only if bootstrap changes)</app-code>
+plug versions        # launcher + every cached cluster version</app-code>
     <p>
       The launcher itself almost never needs updating: the download protocol it speaks to the agent
-      (<code>version</code> + <code>&lt;os-arch&gt;</code>) is frozen. If it ever must change,
-      <code>plug self-update</code> replaces the launcher from any cluster.
+      (<code>version</code> + <code>&lt;os-arch&gt;</code>) is frozen — if it ever must change, just
+      reinstall it from the cluster.
     </p>
   `,
 })

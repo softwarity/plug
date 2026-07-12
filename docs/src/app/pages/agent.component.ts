@@ -91,9 +91,7 @@ docker stack deploy -c plug-stack.yml plug</app-code>
     </p>
     <app-code lang="bash"># the agent regenerates its host key each start (not a secret here), so skip the check
 ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@&lt;host&gt; install | sh   # install (Linux/macOS)
-ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@&lt;host&gt; install-windows | bash -s -- &lt;host&gt; 2222   # install (Windows, Git Bash)
-ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@&lt;host&gt; $(uname -s)-$(uname -m) > plug   # just the binary
-ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@&lt;host&gt; version   # the agent version</app-code>
+ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@&lt;host&gt; install-windows | bash -s -- &lt;host&gt; 2222   # install (Windows, Git Bash)</app-code>
     <p>
       The version baked into the image (and stamped into every binary) is what the
       <a routerLink="/profiles">launcher</a> asks for to run the matching version. Released images

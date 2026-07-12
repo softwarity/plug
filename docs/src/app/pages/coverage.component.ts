@@ -169,11 +169,6 @@ export class CoverageComponent {
       t: 'macOS multicluster',
       d: 'Linux and Windows run several clusters at once; macOS holds one at a time today. The shared PID-at-connect design applies, but is not yet wired and validated on the macOS daemon.',
     },
-    {
-      sev: 'warn',
-      t: 'self-update on Linux',
-      d: 'Loses file-caps on update (pre-existing). macOS already re-applies its setuid bit.',
-    },
   ];
 
   protected readonly sections: Section[] = [
@@ -185,7 +180,6 @@ export class CoverageComponent {
         { feat: 'One-time privilege grant at install', os: ['ok', 'ok', 'ok'], note: 'setcap · setuid helper · SCM SYSTEM service (validated on a real box)' },
         { feat: '<b>plug &lt;cmd&gt;</b> without sudo/admin', os: ['ok', 'ok', 'ok'], note: 'Windows: a non-elevated launcher starts the SYSTEM service via its ACL (proven, LIMITED token)' },
         { feat: 'Child runs as you (privilege drop)', os: ['ok', 'ok', 'na'], note: "caps don't cross exec · Credential drop · service is SYSTEM" },
-        { feat: 'self-update preserves privilege', os: ['warn', 'ok', 'na'], note: 'setcap lost on update · macOS re-applies setuid' },
         { feat: 'Pre-create profile at install', os: ['ok', 'ok', 'ok'], note: 'reads host/port off the live ssh' },
         { feat: 'Uninstall', os: ['ok', 'ok', 'ok'], note: 'unix + Windows (remove-service, wipe) covered' },
       ],
@@ -229,7 +223,7 @@ export class CoverageComponent {
       rows: [
         { feat: 'Profiles ~/.plug/*.conf', os: ['ok', 'ok', 'ok'], note: 'create by naming · ls · rm · rn/mv · test' },
         { feat: '-p profile / --host / --port', os: ['ok', 'ok', 'ok'], note: 'flags override the selected profile' },
-        { feat: 'Launcher versions (per-cluster)', os: ['ok', 'ok', 'ok'], note: 'versions · self-update · <code>.exe</code> + wintun.dll handled on Windows' },
+        { feat: 'Launcher versions (per-cluster)', os: ['ok', 'ok', 'ok'], note: 'versions · <code>.exe</code> + wintun.dll handled on Windows' },
         { feat: 'Host-key TOFU pin', os: ['ok', 'ok', 'ok'], note: 'localhost skipped; pin chowned (macOS)' },
       ],
     },
@@ -241,7 +235,6 @@ export class CoverageComponent {
         { feat: 'Kubernetes — NodePort', st: 'ok', note: '<code>deploy/plug-k8s.yaml</code>, --port 32222' },
         { feat: 'Kubernetes — kubectl port-forward', st: 'ok', note: 'zero exposed port, API-server RBAC' },
         { feat: 'Cross-namespace', st: 'ok', note: 'via FQDN <code>svc.othernamespace</code>' },
-        { feat: 'kubectl exec transport', st: 'no', note: 'dropped — port-forward already covers it' },
       ],
     },
     {
@@ -250,8 +243,6 @@ export class CoverageComponent {
       rows: [
         { feat: 'UDP / QUIC / ping', st: 'no', note: 'TCP only (SSH tunnel); most clients fall back to TCP' },
         { feat: 'IPv6 literal (hard-coded)', st: 'no', note: 'fake IPs are IPv4; by-name cluster service is fine' },
-        { feat: 'Root / helper required', st: 'na', note: 'by design — the price of covering every runtime' },
-        { feat: 'Authentication', st: 'na', note: 'none by design — trusted dev clusters only' },
       ],
     },
   ];

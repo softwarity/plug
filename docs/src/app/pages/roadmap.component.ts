@@ -87,7 +87,7 @@ import { MatIconModule } from '@angular/material/icon';
         <tr><td><code>kubectl exec</code> transport (no exposed port)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
         <tr><td>Gateway hosting the tunnel + install surface</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
         <tr><td>IPv6 fake-pool + v6-literal tunnelling (overlays are IPv4 today)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
-        <tr><td>Generalize the multi-protocol selftest per OS</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
+        <tr><td>Native protocol e2e on every OS (8 protocols × 4 languages, by name over a mesh)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
       </tbody>
     </table>
   `,

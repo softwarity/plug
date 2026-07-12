@@ -153,6 +153,4 @@ echo "plug $(cat /opt/plug/VERSION) — usage over ssh:" >&2
 echo '  # host key regenerated each start (not a secret) — skip the check:' >&2
 echo '  ssh -p <port> -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@<host> install | sh   # install (linux/macOS, recommended)' >&2
 echo '  ssh -n -p <port> -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@<host> install-windows | bash -s -- <host> <port>   # install (Windows, Git Bash)' >&2
-echo '  ssh -p <port> -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@<host> $(uname -s)-$(uname -m) > plug   # just the binary' >&2
-echo '  ssh -p <port> -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@<host> version' >&2
 exit 1
