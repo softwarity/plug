@@ -275,16 +275,34 @@ func launcherRun(args []string) {
 // coreEnv builds the environment for the privileged core re-exec. Host/port/forwards
 // travel over PLUG_CORE_* vars — a private launcher→core channel, NOT a user-facing
 // option (there is none: the cluster comes from --host or a profile).
+//
+// COMPAT: launcher and core are routinely DIFFERENT versions (an installed setuid
+// launcher execs the cluster's exact core, older or newer — that's the launcher
+// model). The env channel is therefore an inter-version protocol: also set the
+// legacy PLUG_HOST/PLUG_PORT names so an older downloaded core still finds its
+// cluster, and coreMain reads the legacy names as a fallback for older launchers.
 func coreEnv(cfg config) []string {
-	env := append(os.Environ(), "PLUG_CORE=1", "PLUG_CORE_HOST="+cfg.host, "PLUG_CORE_PORT="+cfg.port)
+	env := append(os.Environ(), "PLUG_CORE=1",
+		"PLUG_CORE_HOST="+cfg.host, "PLUG_CORE_PORT="+cfg.port,
+		"PLUG_HOST="+cfg.host, "PLUG_PORT="+cfg.port) // legacy channel for older cores
 	if len(cfg.forwards) > 0 {
 		var decls []string
 		for _, f := range cfg.forwards {
 			decls = append(decls, f.decl())
 		}
-		env = append(env, "PLUG_CORE_FORWARDS="+strings.Join(decls, "\n"))
+		env = append(env, "PLUG_CORE_FORWARDS="+strings.Join(decls, "\n"),
+			"PLUG_FORWARDS="+strings.Join(decls, "\n"))
 	}
 	return env
+}
+
+// coreGetenv reads a launcher→core variable: the current name first, then the
+// legacy one (an OLDER launcher exec'ing this newer core only sets the legacy names).
+func coreGetenv(name, legacy string) string {
+	if v := os.Getenv(name); v != "" {
+		return v
+	}
+	return os.Getenv(legacy)
 }
 
 // runCore executes the tunnel logic in this very process (version match / fallback).
@@ -791,13 +809,13 @@ func openTTY(hint string) *os.File {
 
 func coreMain() {
 	cfg := config{
-		host: os.Getenv("PLUG_CORE_HOST"),
-		port: os.Getenv("PLUG_CORE_PORT"),
+		host: coreGetenv("PLUG_CORE_HOST", "PLUG_HOST"),
+		port: coreGetenv("PLUG_CORE_PORT", "PLUG_PORT"),
 	}
 	if cfg.port == "" {
 		cfg.port = defaultPort
 	}
-	if s := os.Getenv("PLUG_CORE_FORWARDS"); s != "" {
+	if s := coreGetenv("PLUG_CORE_FORWARDS", "PLUG_FORWARDS"); s != "" {
 		for _, line := range strings.Split(s, "\n") {
 			if f, ok := parseForward(line); ok {
 				cfg.forwards = append(cfg.forwards, f)
