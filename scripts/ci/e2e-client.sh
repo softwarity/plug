@@ -31,18 +31,25 @@ done
 
 sudo=""; [ "$(id -u)" = 0 ] || sudo=sudo
 
-# 1) Agent reachable + version? (no utun/sudo needed — just the get-user probe.)
-echo "=== plug test (agent reachable via $ip) ==="
+echo "=== tailscale DNS state (did --accept-dns=false apply?) ==="
+tailscale status --json 2>/dev/null | grep -iE '"MagicDNSSuffix"|"CurrentTailnet"' | head -3 || true
+scutil --dns 2>/dev/null | grep -iE "nameserver|resolver #1|domain" | head -8 || true
+
+echo "=== agent reachable via $ip ==="
 ./plug test --host "$ip" --port "$port" 2>&1 || echo "(plug test returned $?)"
 
-# 2) The real assertion: reach httpbin BY NAME through the datapath. Verbose, so a
-# DNS miss vs a connection failure vs an HTTP error is visible in the log.
-echo "=== plug: reach httpbin BY NAME through the cluster ==="
+echo "=== BASELINE: plug selftest (in-process DNS on THIS runner) ==="
+$sudo ./plug selftest 2>&1 | grep -iE "SELFTEST-OK|198\.18|resolve|fail|error|dns" | head -12 || echo "(selftest exit $?)"
+
+echo "=== ASSERTION: plug --host curl httpbin (daemon path) ==="
 out="$($sudo ./plug --host "$ip" --port "$port" \
         curl -sS -m 25 -o /dev/null -w 'HTTP=%{http_code}' http://httpbin:8080/get 2>&1)"
 rc=$?
-echo "$out"
-echo "(plug/curl exit: $rc)"
+echo "$out"; echo "(plug/curl exit: $rc)"
+
+echo "=== plug daemon log + resolver after ==="
+$sudo cat /var/run/plug/*.log 2>/dev/null | tail -40 || echo "(no /var/run/plug log)"
+scutil --dns 2>/dev/null | grep -iE "nameserver|resolver #1" | head -6 || true
 
 if [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'HTTP=200'; then
   echo "E2E-MESH-OK — httpbin reached by name over the mesh"
