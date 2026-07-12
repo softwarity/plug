@@ -122,8 +122,12 @@ jobs:
 
   image:
     name: Build & publish image
-    needs: build
-    if: github.event_name == 'push'
+    # Publish ONLY once EVERY test has passed — unit tests, the TUN selftests on
+    # all three OSes, and the full mesh e2e (protocol matrix + multicluster). An
+    # image must never ship from a commit the e2e didn't bless. The e2e only runs
+    # on main, which also scopes publication to main pushes.
+    needs: [build, selftest, e2e]
+    if: success() && github.event_name == 'push'
     uses: ./.github/workflows/_docker.yml
     secrets: inherit
 
@@ -134,21 +138,29 @@ jobs:
   # separate workflow; gated to main and run only after the unit tests pass, since
   # it's heavy and needs the Tailscale secrets. Needs TAILSCALE_CLIENT_ID/SECRET.
   start-cluster:
-    name: start cluster
+    name: start clusters
     needs: test
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
-      actions: write # dispatch the cluster run
+      actions: write # dispatch the cluster runs
       contents: read
     outputs:
-      cluster_id: ${{ steps.dispatch.outputs.id }}
+      cluster_id_a: ${{ steps.dispatch_a.outputs.id }}
+      cluster_id_b: ${{ steps.dispatch_b.outputs.id }}
     steps:
       - uses: actions/checkout@v6
-      - id: dispatch
+      # TWO clusters, so the e2e can assert multicluster: the same service name
+      # must reach the RIGHT backend through each plug (each cluster's `ident`
+      # answers its own corr id).
+      - id: dispatch_a
         env:
           GH_TOKEN: ${{ github.token }}
-        run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }})" >> "$GITHUB_OUTPUT"
+        run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-a)" >> "$GITHUB_OUTPUT"
+      - id: dispatch_b
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-b)" >> "$GITHUB_OUTPUT"
 
   e2e:
     name: e2e (${{ matrix.os }}, by name over the mesh)
@@ -177,21 +189,23 @@ jobs:
           tags: tag:ci
           hostname: plug-${{ matrix.os }}-${{ github.run_id }}
           args: --accept-dns=false # reach the cluster by tailnet IP; don't let Tailscale drive DNS
-      - name: Protocol matrix by name (native, over the mesh)
+      - name: Protocol matrix + multicluster (native, over the mesh)
         shell: bash # Windows too: Git Bash is the assumed Windows shell
-        run: bash scripts/ci/e2e-matrix.sh plug-cluster-${{ github.run_id }} 2222
+        run: bash scripts/ci/e2e-matrix.sh plug-cluster-${{ github.run_id }}-a plug-cluster-${{ github.run_id }}-b 2222
 
   kill-cluster:
-    name: kill cluster
+    name: kill clusters
     needs: [start-cluster, e2e]
     if: always() && needs.start-cluster.result == 'success'
     runs-on: ubuntu-latest
     permissions:
-      actions: write # cancel the cluster run
+      actions: write # cancel the cluster runs
       contents: read
     steps:
       # No checkout here, so pass --repo explicitly, otherwise the cancel silently
-      # fails and the cluster run sleeps out its full TTL.
+      # fails and the cluster runs sleep out their full TTL.
       - env:
           GH_TOKEN: ${{ github.token }}
-        run: gh run cancel ${{ needs.start-cluster.outputs.cluster_id }} --repo ${{ github.repository }} || true
+        run: |
+          gh run cancel ${{ needs.start-cluster.outputs.cluster_id_a }} --repo ${{ github.repository }} || true
+          gh run cancel ${{ needs.start-cluster.outputs.cluster_id_b }} --repo ${{ github.repository }} || true

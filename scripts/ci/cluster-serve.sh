@@ -19,10 +19,11 @@ docker build -f "$root/agent/Dockerfile" -t softwarity/plug:e2e "$root"
 echo "=== up agent + all services ==="
 cd "$root/e2e"
 compose="docker compose -f compose.yml -f compose.cluster.yml"
-# The full protocol matrix: one service per protocol. grpc/wsserver are built
+# The full protocol matrix: one service per protocol, plus `ident` (answers this
+# cluster's PLUG_CLUSTER_IDENT — the multicluster assert). grpc/wsserver are built
 # (compose build); the rest are pulled images. --wait blocks on the healthchecks.
 $compose up -d --build --wait \
-  agent httpbin postgres redis mongo rabbitmq mosquitto grpc wsserver
+  agent httpbin postgres redis mongo rabbitmq mosquitto grpc wsserver ident
 $compose ps
 
 echo "=== cluster up — serving for ${ttl}s (or until this run is cancelled) ==="

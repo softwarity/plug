@@ -35,4 +35,7 @@ jobs:
       - name: Serve the cluster (idle until cancelled)
         env:
           PLUG_CLUSTER_TTL: "1200" # backstop only — kill-cluster cancels this run when the e2e jobs finish
+          # The cluster's identity, served by the `ident` service — the multicluster
+          # e2e asserts that the SAME name reaches the RIGHT cluster through each plug.
+          PLUG_CLUSTER_IDENT: ${{ inputs.corr }}
         run: bash scripts/ci/cluster-serve.sh

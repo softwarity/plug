@@ -9,3 +9,11 @@ services:
   agent:
     ports:
       - "2222:22"
+
+  # Answers this cluster's identity (PLUG_CLUSTER_IDENT, its corr id) on :5678.
+  # The multicluster e2e reaches http://ident:5678 through TWO plugs at once and
+  # asserts each one lands on its OWN cluster — same name, right backend.
+  ident:
+    image: hashicorp/http-echo
+    command: ["-listen=:5678", "-text=${PLUG_CLUSTER_IDENT:-solo}"]
+    networks: [internal]

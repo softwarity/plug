@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
-# Full protocol matrix, run NATIVELY on this runner (macOS, or Windows via Git
-# Bash): build plug + the four language clients, then run each client UNDER plug
-# against each cluster service BY NAME over the Tailscale mesh, and render a
-# PASS/FAIL grid. Same coverage as the Linux docker matrix (e2e/matrix.sh), but
-# native — which only a real macOS/Windows host can prove.
+# Full protocol matrix, run NATIVELY on this runner (Linux, macOS, or Windows via
+# Git Bash): build plug + the four language clients, then run each client UNDER
+# plug against each cluster service BY NAME over the Tailscale mesh, and render a
+# PASS/FAIL grid. Then the MULTICLUSTER assert: two clusters are up (A and B, each
+# serving its own id on http://ident:5678), and the SAME name must reach the RIGHT
+# backend through each plug — simultaneously on Linux/Windows, sequentially on
+# macOS (until PID-at-connect lands on its daemon).
 #
-#   e2e-matrix.sh <cluster-tailnet-name> [port]
+#   e2e-matrix.sh <cluster-a-tailnet-name> <cluster-b-tailnet-name> [port]
 #
 # Portable to macOS's bash 3.2: no associative arrays.
 set -uo pipefail
-peer="${1:?usage: e2e-matrix.sh <cluster-tailnet-name> [port]}"
-port="${2:-2222}"
+peer="${1:?usage: e2e-matrix.sh <cluster-a> <cluster-b> [port]}"
+peer_b="${2:?usage: e2e-matrix.sh <cluster-a> <cluster-b> [port]}"
+port="${3:-2222}"
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 clients="$root/e2e/clients"
 cd "$root/cli"
@@ -50,21 +53,27 @@ if [ -n "$linux_caps" ]; then
   sudo setcap cap_net_admin,cap_sys_admin,cap_net_bind_service+ep "./plug$ext"
 fi
 
-# --- wait for the cluster over the tailnet ---
-echo "=== wait for cluster $peer:$port ==="
-ip=""
-for _ in $(seq 1 90); do
-  ip="$(tailscale ip -4 "$peer" 2>/dev/null | head -1 || true)"
-  if [ -n "$ip" ] && "./plug$ext" test --host "$ip" --port "$port" >/dev/null 2>&1; then
-    echo "cluster reachable at $ip:$port"; break
-  fi
-  ip=""; sleep 3
-done
-[ -n "$ip" ] || { echo "cluster $peer never became reachable" >&2; exit 1; }
+# --- wait for a cluster over the tailnet (echoes its IP once plug reaches it) ---
+wait_cluster() {
+  wc_ip=""
+  for _ in $(seq 1 90); do
+    wc_ip="$(tailscale ip -4 "$1" 2>/dev/null | head -1 || true)"
+    if [ -n "$wc_ip" ] && "./plug$ext" test --host "$wc_ip" --port "$port" >/dev/null 2>&1; then
+      echo "$wc_ip"; return 0
+    fi
+    wc_ip=""; sleep 3
+  done
+  return 1
+}
+
+echo "=== wait for cluster A ($peer:$port) ==="
+ip="$(wait_cluster "$peer")" || { echo "cluster $peer never became reachable" >&2; exit 1; }
+echo "cluster A reachable at $ip:$port"
 
 # Per-cell timeout: a client with no timeout of its own must not hang the whole
 # job. perl's alarm is on every runner (incl. Git Bash) and survives exec.
-plug() { perl -e 'alarm shift @ARGV; exec @ARGV or exit 127' 45 $sudo "./plug$ext" --host "$ip" --port "$port" "$@"; }
+plug_to() { to="$1"; shift; perl -e 'alarm shift @ARGV; exec @ARGV or exit 127' 45 $sudo "./plug$ext" --host "$to" --port "$port" "$@"; }
+plug()    { plug_to "$ip" "$@"; }
 
 # --- build the four language clients natively ---
 echo "=== build clients ==="
@@ -115,9 +124,68 @@ for entry in $PROTOS; do
     if [ "$r" != PASS ]; then
       fails=$((fails + 1))
       echo "--- $l / $proto FAIL ---"; printf '%s\n' "$out" | tail -8 | sed 's/^/    /'
+      # go-on-mac only: the failure pattern (5/8 pass) rules out a plain "wrong
+      # resolver" story — capture, INSIDE a live plug session, what the system
+      # resolver config looks like and which resolver path Go actually takes
+      # (GODEBUG=netdns=2 logs the choice), so the run itself carries the diagnosis.
+      if [ "$l" = go ] && [ "$(uname -s)" = Darwin ]; then
+        echo "    --- go/mac DNS diagnosis (inside a live session) ---"
+        plug bash -c "echo '--- resolv.conf ---'; cat /etc/resolv.conf; echo '--- scutil --dns (head) ---'; scutil --dns | head -25; echo '--- retry under GODEBUG=netdns=2 ---'; GODEBUG=netdns=2 '$clients/go/eclient$ext' '$proto' '$target'" 2>&1 | head -45 | sed 's/^/    diag| /'
+      fi
     fi
   done
 done
+
+# --- multicluster: two clusters, the SAME name must reach the RIGHT backend ---
+# Each cluster's `ident` service answers that cluster's own id (its corr), so
+# reaching http://ident:5678 through each plug proves the flows don't cross.
+echo "=== multicluster: http://ident:5678 through plug-A and plug-B ==="
+expect_a="${peer#plug-cluster-}"
+expect_b="${peer_b#plug-cluster-}"
+ip_b="$(wait_cluster "$peer_b")" || { echo "cluster $peer_b never became reachable" >&2; exit 1; }
+echo "cluster B reachable at $ip_b:$port"
+
+mc=PASS; a_out=""; b_out=""
+case "$(uname -s)" in
+  Darwin)
+    # macOS holds one cluster at a time today (PID-at-connect is designed but not
+    # wired on its daemon — the machine-wide DNS is not the limiter): prove A,
+    # tear the daemon down, prove B.
+    mc_mode="sequential — simultaneous lands with PID-at-connect on the daemon"
+    a_out="$(plug_to "$ip" curl -s http://ident:5678 2>/dev/null || true)"
+    for _ in $(seq 1 10); do
+      $sudo "./plug$ext" down 2>&1 | grep -q "no plug daemon" && break
+      sleep 2
+    done
+    b_out="$(plug_to "$ip_b" curl -s http://ident:5678 2>/dev/null || true)"
+    ;;
+  *)
+    # Linux (a private resolver per launch) and Windows (the SYSTEM service holds
+    # one tunnel per cluster, attributed at connect()): BOTH plugs live at once.
+    mc_mode="simultaneous"
+    if [ "$ext" = ".exe" ]; then
+      # The Windows multicluster path IS the SYSTEM service — install it now (the
+      # runner is elevated), after the single-cluster grid ran the direct path.
+      echo "--- install the datapath service (the Windows multicluster path) ---"
+      "./plug$ext" install-service || echo "install-service failed — staying on the direct path"
+    fi
+    : > /tmp/mc-a.out
+    plug_to "$ip" bash -c "curl -s http://ident:5678 > /tmp/mc-a.out && sleep 8" &
+    mc_pid=$!
+    sleep 4 # let A establish and answer while it is still alive...
+    b_out="$(plug_to "$ip_b" curl -s http://ident:5678 2>/dev/null || true)" # ...then hit B DURING A
+    wait "$mc_pid" 2>/dev/null || true
+    a_out="$(cat /tmp/mc-a.out 2>/dev/null || true)"
+    ;;
+esac
+case "$a_out" in *"$expect_a"*) : ;; *) mc=FAIL ;; esac
+case "$b_out" in *"$expect_b"*) : ;; *) mc=FAIL ;; esac
+if [ "$mc" = PASS ]; then
+  echo "multicluster OK ($mc_mode) — A→$a_out · B→$b_out"
+else
+  fails=$((fails + 1))
+  echo "--- multicluster FAIL ($mc_mode) — A said '${a_out:-<nothing>}' (want $expect_a), B said '${b_out:-<nothing>}' (want $expect_b)"
+fi
 
 # --- render the grid ---
 lookup() { printf '%s\n' "$results" | awk -v a="$1" -v b="$2" '$1==a && $2==b {print $3}'; }
@@ -134,6 +202,12 @@ render() {
     printf "| **%s** |" "$l"
     for p in $protolist; do printf " %s |" "$(glyph "$(lookup "$l" "$p")")"; done; echo
   done
+  echo
+  if [ "$mc" = PASS ]; then
+    echo "**multicluster** ✅ ($mc_mode) — A→\`$expect_a\` · B→\`$expect_b\`"
+  else
+    echo "**multicluster** ❌ ($mc_mode) — A said \`${a_out:-nothing}\` (want \`$expect_a\`) · B said \`${b_out:-nothing}\` (want \`$expect_b\`)"
+  fi
 }
 render | tee -a "${GITHUB_STEP_SUMMARY:-/dev/stderr}"
 
