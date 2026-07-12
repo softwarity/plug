@@ -129,8 +129,12 @@ for entry in $PROTOS; do
       # resolver config looks like and which resolver path Go actually takes
       # (GODEBUG=netdns=2 logs the choice), so the run itself carries the diagnosis.
       if [ "$l" = go ] && [ "$(uname -s)" = Darwin ]; then
+        # Config looked right and Go picks the cgo order, yet SOME names time out
+        # while others resolve — so ask plug's DNS DIRECTLY (dig) for a failing
+        # name vs a passing one, plus the same via the system default, to split
+        # "answerDNS doesn't reply for this name" from "this client's query path".
         echo "    --- go/mac DNS diagnosis (inside a live session) ---"
-        plug bash -c "echo '--- resolv.conf ---'; cat /etc/resolv.conf; echo '--- scutil --dns (head) ---'; scutil --dns | head -25; echo '--- retry under GODEBUG=netdns=2 ---'; GODEBUG=netdns=2 '$clients/go/eclient$ext' '$proto' '$target'" 2>&1 | head -45 | sed 's/^/    diag| /'
+        plug bash -c "echo '--- dig $proto-target direct @198.18.0.53 ---'; dig +time=3 +tries=1 +short ${target%%:*} @198.18.0.53; echo '--- dig httpbin direct @198.18.0.53 ---'; dig +time=3 +tries=1 +short httpbin @198.18.0.53; echo '--- dig ${target%%:*} system default ---'; dig +time=3 +tries=1 +short ${target%%:*}; echo '--- retry under GODEBUG=netdns=2 (12s cap) ---'; GODEBUG=netdns=2 perl -e 'alarm 12; exec @ARGV' '$clients/go/eclient$ext' '$proto' '$target'" 2>&1 | head -40 | sed 's/^/    diag| /'
       fi
     fi
   done
@@ -152,12 +156,12 @@ case "$(uname -s)" in
     # wired on its daemon — the machine-wide DNS is not the limiter): prove A,
     # tear the daemon down, prove B.
     mc_mode="sequential — simultaneous lands with PID-at-connect on the daemon"
-    a_out="$(plug_to "$ip" curl -s http://ident:5678 2>/dev/null || true)"
+    a_out="$(plug_to "$ip" curl -s http://ident:5678 2>/tmp/mc-a.err || true)"
     for _ in $(seq 1 10); do
       $sudo "./plug$ext" down 2>&1 | grep -q "no plug daemon" && break
       sleep 2
     done
-    b_out="$(plug_to "$ip_b" curl -s http://ident:5678 2>/dev/null || true)"
+    b_out="$(plug_to "$ip_b" curl -s http://ident:5678 2>/tmp/mc-b.err || true)"
     ;;
   *)
     # Linux (a private resolver per launch) and Windows (the SYSTEM service holds
@@ -170,10 +174,10 @@ case "$(uname -s)" in
       "./plug$ext" install-service || echo "install-service failed — staying on the direct path"
     fi
     : > /tmp/mc-a.out
-    plug_to "$ip" bash -c "curl -s http://ident:5678 > /tmp/mc-a.out && sleep 8" &
+    plug_to "$ip" bash -c "curl -s http://ident:5678 > /tmp/mc-a.out && sleep 8" 2>/tmp/mc-a.err &
     mc_pid=$!
     sleep 4 # let A establish and answer while it is still alive...
-    b_out="$(plug_to "$ip_b" curl -s http://ident:5678 2>/dev/null || true)" # ...then hit B DURING A
+    b_out="$(plug_to "$ip_b" curl -sS http://ident:5678 2>/tmp/mc-b.err || true)" # ...then hit B DURING A
     wait "$mc_pid" 2>/dev/null || true
     a_out="$(cat /tmp/mc-a.out 2>/dev/null || true)"
     ;;
@@ -185,6 +189,8 @@ if [ "$mc" = PASS ]; then
 else
   fails=$((fails + 1))
   echo "--- multicluster FAIL ($mc_mode) — A said '${a_out:-<nothing>}' (want $expect_a), B said '${b_out:-<nothing>}' (want $expect_b)"
+  echo "    --- plug-A stderr ---"; tail -8 /tmp/mc-a.err 2>/dev/null | sed 's/^/    /'
+  echo "    --- plug-B stderr ---"; tail -8 /tmp/mc-b.err 2>/dev/null | sed 's/^/    /'
 fi
 
 # --- render the grid ---
