@@ -45,7 +45,7 @@ ssh -p 2222 get@&lt;host&gt; cat /etc/shadow                  # ForceCommand ign
     <h3>The rules</h3>
     <ul>
       <li><strong>Never</strong> publish the agent port on an untrusted or public network.</li>
-      <li>Attach the agent <strong>only to the networks devs actually need</strong> — the networks list in the <a routerLink="/agent">stack descriptor</a> is your scoping tool.</li>
+      <li>Attach the agent <strong>only to the networks devs actually need</strong> — the networks list in the <a routerLink="/swarm">stack descriptor</a> is your scoping tool.</li>
       <li>Production clusters: don't. If you must debug against production-like data, use a dedicated staging cluster.</li>
       <li>Defense in depth is still available <em>around</em> plug: firewall the published port to your office/VPN CIDR at the host or cloud level.</li>
     </ul>

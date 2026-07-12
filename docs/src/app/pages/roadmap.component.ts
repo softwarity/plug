@@ -37,7 +37,7 @@ import { MatIconModule } from '@angular/material/icon';
 
     <h3>Kubernetes transport</h3>
     <p>
-      The agent already runs on Kubernetes (a <a routerLink="/agent">manifest</a> with a NodePort, or
+      The agent already runs on Kubernetes (a <a routerLink="/kubernetes">manifest</a> with a NodePort, or
       <code>kubectl port-forward</code> for an RBAC-gated tunnel with no exposed port). Planned next:
       a <code>kubectl exec</code> transport (tunnel through <code>kubectl exec</code> to a plain pod:
       zero exposed port, access governed by each developer's kubeconfig RBAC — which also softens the

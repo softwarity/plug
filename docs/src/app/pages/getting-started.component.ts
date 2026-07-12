@@ -65,7 +65,7 @@ import { MatIconModule } from '@angular/material/icon';
     <app-code lang="text">plug npm run start:dev   ──►   http://my-service:8080 answers, like from any workload in the cluster</app-code>
 
     <div class="callout">
-      <strong>Two pieces.</strong> A tiny <a routerLink="/agent">agent container</a> (Alpine + sshd)
+      <strong>Two pieces.</strong> A tiny <a routerLink="/swarm">agent container</a> (Alpine + sshd)
       deployed once on the cluster — and a single static <code>plug</code> binary on each dev
       machine. Set up once per cluster; after that, day-to-day runs need no sudo or admin.
     </div>
@@ -92,7 +92,7 @@ import { MatIconModule } from '@angular/material/icon';
         <span class="feature-title">Several clusters at once</span>
         <span class="feature-desc">Run the same process against two clusters in parallel — each session stays isolated.</span>
       </a>
-      <a routerLink="/agent" class="feature-card">
+      <a routerLink="/swarm" class="feature-card">
         <mat-icon class="feature-icon">devices</mat-icon>
         <span class="feature-title">Linux · macOS · Windows</span>
         <span class="feature-desc">Native on all three (no WSL2 needed); a multi-arch <code>amd64</code>/<code>arm64</code> agent image.</span>
@@ -115,8 +115,8 @@ services:
     ports:
       - "2222:22"</app-code>
     <p>
-      See <a routerLink="/agent">Agent &amp; deployment</a> for the standalone and Kubernetes
-      variants.
+      See <a routerLink="/swarm">Agent &amp; Swarm</a> for the standalone variant, or
+      <a routerLink="/kubernetes">Agent &amp; Kubernetes</a> for the cluster.
     </p>
 
     <h3>2. Install the CLI (each dev machine)</h3>
@@ -158,7 +158,7 @@ ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@&lt;
     <p>
       Read <a routerLink="/how-it-works">How it works</a> for the mechanics,
       <a routerLink="/profiles">Profiles &amp; versions</a> for day-to-day usage,
-      <a routerLink="/agent">Agent &amp; deployment</a> for the cluster side,
+      <a routerLink="/swarm">Agent &amp; Swarm</a> for the cluster side,
       <a routerLink="/security">Security model</a> before deploying anywhere sensitive, the
       <a routerLink="/coverage">Coverage matrix</a> for what works on which OS, and the
       <a routerLink="/roadmap">Roadmap</a> for what's coming.

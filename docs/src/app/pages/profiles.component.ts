@@ -58,12 +58,11 @@ port = 2222</app-code>
     <app-code lang="bash">plug -p prod    npm run start   # → cluster prod
 plug -p staging npm run start   # → cluster staging, side by side</app-code>
     <p>
-      Supported today on <strong>Linux</strong> (each launch gets a private resolver in its own
-      mount namespace) and <strong>Windows</strong> (the SYSTEM service holds one tunnel per cluster
-      and attributes each flow to the right one at <code>connect()</code>). macOS runs one cluster at
-      a time for now. See
-      <a routerLink="/how-it-works">how plug tells them apart</a>
-      and the <a routerLink="/coverage">coverage matrix</a>.
+      Works today on <strong>Linux</strong> and <strong>Windows</strong>: each launch stays isolated
+      and keeps talking to its own cluster, the same service names resolving to the right backend on
+      each side. <strong>macOS</strong> runs one cluster at a time for now. See
+      <a routerLink="/how-it-works">how plug tells them apart</a> and the
+      <a routerLink="/coverage">coverage matrix</a>.
     </p>
 
     <h3>Managing profiles</h3>

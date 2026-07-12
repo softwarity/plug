@@ -189,10 +189,10 @@ import { RouterLink } from '@angular/router';
       <li><strong>macOS</strong> shares the same design, but its daemon holds one cluster at a time for now.</li>
     </ul>
     <p>
-      One honest limit: a process <strong>detached</strong> from its launcher (via
-      <code>setsid</code>, reparented to <code>init</code>/<code>launchd</code>) can't be walked back
-      to a cluster — so plug <strong>refuses</strong> the connection rather than guess and route it to
-      the wrong one.
+      One honest limit: if a process <strong>fully detaches</strong> from the <code>plug</code> that
+      launched it — a rare case, where it re-parents to the system and the ancestry link is lost —
+      plug can no longer tell which cluster it belongs to, so it <strong>declines</strong> that
+      connection rather than risk routing it to the wrong cluster.
     </p>
 
     <h3>Built with open source</h3>

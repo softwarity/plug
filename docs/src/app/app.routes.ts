@@ -15,9 +15,15 @@ export const routes: Routes = [
     loadComponent: () => import('./pages/profiles.component').then((m) => m.ProfilesComponent),
   },
   {
-    path: 'agent',
-    loadComponent: () => import('./pages/agent.component').then((m) => m.AgentComponent),
+    path: 'swarm',
+    loadComponent: () => import('./pages/agent-swarm.component').then((m) => m.AgentSwarmComponent),
   },
+  {
+    path: 'kubernetes',
+    loadComponent: () =>
+      import('./pages/agent-kubernetes.component').then((m) => m.AgentKubernetesComponent),
+  },
+  { path: 'agent', redirectTo: 'swarm', pathMatch: 'full' },
   {
     path: 'security',
     loadComponent: () => import('./pages/security.component').then((m) => m.SecurityComponent),
