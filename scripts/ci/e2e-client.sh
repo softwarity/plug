@@ -31,27 +31,25 @@ done
 
 sudo=""; [ "$(id -u)" = 0 ] || sudo=sudo
 
-echo "=== tailscale DNS state (did --accept-dns=false apply?) ==="
-tailscale status --json 2>/dev/null | grep -iE '"MagicDNSSuffix"|"CurrentTailnet"' | head -3 || true
-scutil --dns 2>/dev/null | grep -iE "nameserver|resolver #1|domain" | head -8 || true
-
 echo "=== agent reachable via $ip ==="
 ./plug test --host "$ip" --port "$port" 2>&1 || echo "(plug test returned $?)"
 
-echo "=== BASELINE: plug selftest (in-process DNS on THIS runner) ==="
-$sudo ./plug selftest 2>&1 | grep -iE "SELFTEST-OK|198\.18|resolve|fail|error|dns" | head -12 || echo "(selftest exit $?)"
+# Probe every DNS layer UNDER plug (datapath active), to pinpoint the headless
+# single-label failure precisely:
+#   dig @198.18.0.53 httpbin      → does plug's DNS server answer the BARE name?
+#   dig @198.18.0.53 httpbin.plug → does the ".plug" strip branch answer?
+#   dscacheutil httpbin           → does macOS getaddrinfo route it to plug?
+#   curl httpbin                  → the real assertion
+echo "=== DNS probes UNDER plug (datapath active) ==="
+$sudo ./plug --host "$ip" --port "$port" bash -c '
+  echo "--- scutil --dns ---"; scutil --dns | sed -n "1,45p"
+  echo "--- dig @198.18.0.53 httpbin (bare, plug DNS direct) ---"; dig +short +time=3 +tries=1 @198.18.0.53 httpbin || true
+  echo "--- dig @198.18.0.53 httpbin.plug (suffixed) ---"; dig +short +time=3 +tries=1 @198.18.0.53 httpbin.plug || true
+  echo "--- dscacheutil -q host httpbin (getaddrinfo path) ---"; dscacheutil -q host -a name httpbin || true
+  echo "--- curl http://httpbin:8080 ---"; curl -sS -m 15 -o /dev/null -w "HTTP=%{http_code}\n" http://httpbin:8080/get || echo "curl exit $?"
+' 2>&1 | tee probe.out
 
-echo "=== ASSERTION: plug --host curl httpbin (daemon path) ==="
-out="$($sudo ./plug --host "$ip" --port "$port" \
-        curl -sS -m 25 -o /dev/null -w 'HTTP=%{http_code}' http://httpbin:8080/get 2>&1)"
-rc=$?
-echo "$out"; echo "(plug/curl exit: $rc)"
-
-echo "=== plug daemon log + resolver after ==="
-$sudo cat /var/run/plug/*.log 2>/dev/null | tail -40 || echo "(no /var/run/plug log)"
-scutil --dns 2>/dev/null | grep -iE "nameserver|resolver #1" | head -6 || true
-
-if [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'HTTP=200'; then
+if grep -q 'HTTP=200' probe.out; then
   echo "E2E-MESH-OK — httpbin reached by name over the mesh"
 else
   echo "E2E-MESH-FAIL" >&2
