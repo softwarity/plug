@@ -29,8 +29,8 @@ var embeddedKey []byte
 // version is stamped at build time via -ldflags "-X main.version=x.y.z".
 var version = "dev"
 
-const sshUser = "plug"   // tunnel user (public-key)
-const getUser = "get"    // download user (passwordless, ForceCommand)
+const sshUser = "plug" // tunnel user (public-key)
+const getUser = "get"  // download user (passwordless, ForceCommand)
 const defaultPort = "2222"
 const agentHome = "/opt/plug"
 
@@ -52,8 +52,8 @@ Usage:
 
 Options:
   -p, --profile <name>   use profile ~/.plug/<name>.conf
-  -H, --host <host>      agent host (also $PLUG_HOST)
-      --port <port>      agent SSH port (default 2222; also $PLUG_PORT)
+  -H, --host <host>      agent host
+      --port <port>      agent SSH port (default 2222)
   -h, --help             show this help
 `
 }
@@ -242,7 +242,7 @@ func launcherRun(args []string) {
 	}
 	cfg := resolveConfig(opts)
 	if cfg.host == "" {
-		fatal("no agent host: use --host, $PLUG_HOST or a profile in ~/.plug/")
+		fatal("no agent host: use --host or a profile in ~/.plug/")
 	}
 
 	remote, err := agentVersion(cfg)
@@ -276,14 +276,17 @@ func launcherRun(args []string) {
 	}
 }
 
+// coreEnv builds the environment for the privileged core re-exec. Host/port/forwards
+// travel over PLUG_CORE_* vars — a private launcher→core channel, NOT a user-facing
+// option (there is none: the cluster comes from --host or a profile).
 func coreEnv(cfg config) []string {
-	env := append(os.Environ(), "PLUG_CORE=1", "PLUG_HOST="+cfg.host, "PLUG_PORT="+cfg.port)
+	env := append(os.Environ(), "PLUG_CORE=1", "PLUG_CORE_HOST="+cfg.host, "PLUG_CORE_PORT="+cfg.port)
 	if len(cfg.forwards) > 0 {
 		var decls []string
 		for _, f := range cfg.forwards {
 			decls = append(decls, f.decl())
 		}
-		env = append(env, "PLUG_FORWARDS="+strings.Join(decls, "\n"))
+		env = append(env, "PLUG_CORE_FORWARDS="+strings.Join(decls, "\n"))
 	}
 	return env
 }
@@ -391,7 +394,7 @@ func selfUpdate(args []string) {
 	opts, _ := parseArgs(args)
 	cfg := resolveConfig(opts)
 	if cfg.host == "" {
-		fatal("no agent host: use --host, $PLUG_HOST or a profile in ~/.plug/")
+		fatal("no agent host: use --host or a profile in ~/.plug/")
 	}
 	remote, err := agentVersion(cfg)
 	if err != nil {
@@ -657,7 +660,7 @@ func resolveConfig(o options) config {
 		}
 		writeProfile(o.profile, o.host, port)
 		cfg = config{host: o.host, port: port}
-	case o.host != "" || os.Getenv("PLUG_HOST") != "":
+	case o.host != "":
 	case o.profile != "":
 		// An unknown -p profile isn't an error: offer the wizard to create it, so
 		// reaching a new cluster is just `plug -p <newname> <cmd>` (no re-install).
@@ -679,12 +682,6 @@ func resolveConfig(o options) config {
 		default:
 			cfg = loadProfile(chooseProfile(names))
 		}
-	}
-	if v := os.Getenv("PLUG_HOST"); v != "" {
-		cfg.host = v
-	}
-	if v := os.Getenv("PLUG_PORT"); v != "" {
-		cfg.port = v
 	}
 	if o.host != "" {
 		cfg.host = o.host
@@ -845,13 +842,13 @@ func openTTY(hint string) *os.File {
 
 func coreMain() {
 	cfg := config{
-		host: os.Getenv("PLUG_HOST"),
-		port: os.Getenv("PLUG_PORT"),
+		host: os.Getenv("PLUG_CORE_HOST"),
+		port: os.Getenv("PLUG_CORE_PORT"),
 	}
 	if cfg.port == "" {
 		cfg.port = defaultPort
 	}
-	if s := os.Getenv("PLUG_FORWARDS"); s != "" {
+	if s := os.Getenv("PLUG_CORE_FORWARDS"); s != "" {
 		for _, line := range strings.Split(s, "\n") {
 			if f, ok := parseForward(line); ok {
 				cfg.forwards = append(cfg.forwards, f)

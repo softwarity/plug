@@ -2,23 +2,24 @@
 # Windows installer, run from Git Bash (the assumed Windows dev shell):
 #
 #   ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-#       get@<host> install-windows | PLUG_HOST=<host> PLUG_PORT=<port> bash
+#       get@<host> install-windows | bash -s -- <host> <port>
 #
 # Bash — not PowerShell — on purpose: Git Bash is mandatory on Windows anyway, a
 # piped bash script's `exit` is reliable (a piped `powershell -Command -` script's
 # is not), and the whole flow is one shell. NO admin is needed to INSTALL; the
 # datapath SERVICE needs admin ONCE (run Git Bash as Administrator), after which
 # every `plug <cmd>` runs with no admin. The MSYS ssh that streams this script
-# can't have its Win32 command line read, so the cluster host comes from PLUG_HOST.
+# can't have its Win32 command line read, so the cluster host is passed as an
+# argument (`bash -s -- <host> [port]`), not inferred.
 set -euo pipefail
 
 info() { echo "plug: $1"; }
 die()  { echo "plug: $1" >&2; exit 1; }
 
-HOST="${PLUG_HOST:-}"
-PORT="${PLUG_PORT:-2222}"
-[ -n "$HOST" ] || die "set PLUG_HOST on the bash side of the pipe:
-  ... get@<host> install-windows | PLUG_HOST=<host> PLUG_PORT=<port> bash"
+HOST="${1:-}"
+PORT="${2:-2222}"
+[ -n "$HOST" ] || die "pass the cluster host on the bash side of the pipe:
+  ... get@<host> install-windows | bash -s -- <host> [port]"
 command -v ssh >/dev/null 2>&1 || die "ssh not found — install the Windows OpenSSH client (or use Git's ssh)"
 
 # Install dir: %LOCALAPPDATA%\Programs\plug (also the service's binPath). Keep a
