@@ -69,12 +69,31 @@ func configure(_ any, ifname, cidr, dnsIP string, log logfn) ([]string, string, 
 		log.f("tun[mac]: could not repoint system DNS (%v) — cluster names may not resolve", err)
 	}
 
+	// Also register a DOMAIN-scoped resolver for ".plug" via /etc/resolver. When the
+	// primary-service override lands INTERFACE-scoped (a headless runner, some VPN
+	// setups), macOS won't send a general getaddrinfo query to it — but it DOES use a
+	// domain-scoped resolver for a matching name. Paired with the "plug" search domain
+	// above, getaddrinfo tries "<name>.plug", which this routes to us; answerDNS strips
+	// it. Mirrors the Windows NRPT rule.
+	resolverFile := "/etc/resolver/" + searchSuffix
+	_ = os.MkdirAll("/etc/resolver", 0o755)
+	_ = os.WriteFile(resolverFile, []byte("nameserver "+dnsIP+"\n"), 0o644)
+
+	// Make mDNSResponder pick up the new resolvers and drop any stale (negative) cache.
+	flushDNS := func() {
+		_ = run("dscacheutil", "-flushcache")
+		_ = run("killall", "-HUP", "mDNSResponder")
+	}
+	flushDNS()
+
 	cleanup := func() {
+		_ = os.Remove(resolverFile)
 		if restore != "" {
 			_ = scutilSet(dnsKey, restore) // put the original DNS dict back
 		} else {
 			_ = scutilRemove(dnsKey) // there was none — drop ours
 		}
+		flushDNS()
 		delRoute()
 	}
 	return upstreams, "", cleanup, nil
