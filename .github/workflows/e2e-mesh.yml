@@ -48,6 +48,10 @@ jobs:
           oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
           tags: tag:ci
           hostname: plug-mac-${{ github.run_id }}
+          # We reach the cluster by tailnet IP (`tailscale ip`), so we don't need
+          # Tailscale's MagicDNS — and letting it repoint the macOS system resolver
+          # would fight plug's own DNS override (curl: could not resolve host).
+          args: --accept-dns=false
       - name: Reach httpbin by name through the cluster
         run: bash scripts/ci/e2e-client.sh plug-cluster-${{ github.run_id }} 2222
 
