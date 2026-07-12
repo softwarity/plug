@@ -131,7 +131,7 @@ ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@&lt;
     <p><strong>Windows</strong>, from Git Bash (the assumed Windows shell — it ships with
       <a href="https://git-scm.com/download/win" target="_blank" rel="noopener">Git for Windows</a>):</p>
     <app-code lang="bash">ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@&lt;cluster-host&gt; install-windows \
-  | PLUG_HOST=&lt;cluster-host&gt; PLUG_PORT=2222 bash</app-code>
+  | bash -s -- &lt;cluster-host&gt; 2222</app-code>
     <p>
       The installer reads the cluster address straight from <em>your</em> <code>ssh</code> command
       and saves a <a routerLink="/profiles">profile named after that host</a>, so plug is ready right

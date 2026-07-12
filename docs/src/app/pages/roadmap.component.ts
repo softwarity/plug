@@ -75,7 +75,7 @@ import { MatIconModule } from '@angular/material/icon';
       </thead>
       <tbody>
         <tr><td>Userspace-TUN data path (covers every runtime incl. Go &amp; gRPC)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
-        <tr><td>Split-horizon routing (single-label → cluster, FQDN/localhost → direct) + <code>PLUG_DIRECT</code></td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
+        <tr><td>Split-horizon routing (single-label → cluster, FQDN/localhost → direct)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
         <tr><td>Self-healing transport (SSH keepalive + transparent reconnect) + host-key pinning</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
         <tr><td>Install from cluster + launcher (per-cluster versions) + one-privilege install (setcap / setuid / service)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
         <tr><td>Profiles: wizard, <code>ls</code> / <code>rm</code> / <code>rn</code> / <code>test</code></td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>

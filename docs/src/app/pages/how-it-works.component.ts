@@ -142,8 +142,7 @@ import { RouterLink } from '@angular/router';
         <strong>Split-horizon by name shape.</strong> Single-label names (<code>my-service</code>,
         <code>rabbitmq</code>) go to the cluster; dotted FQDNs (<code>api.github.com</code>) and
         <code>localhost</code> resolve and connect <strong>directly</strong>, so your app keeps
-        normal internet access. <code>PLUG_DIRECT=&lt;cidr,host,suffix,…&gt;</code> forces extra
-        destinations direct.
+        normal internet access.
       </li>
       <li>
         <strong>Self-healing transport.</strong> A keepalive keeps the SSH tunnel warm and a drop

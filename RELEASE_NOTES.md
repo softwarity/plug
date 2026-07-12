@@ -17,12 +17,16 @@
   resolver via an **NRPT** rule, and strips the suffix back — the Tailscale/WireGuard
   mechanism. (The launcher also handles the `.exe` suffix and `wintun.dll` beside a
   downloaded version.)
-- **Windows installer is pure Git Bash.** `ssh get@<host> install-windows | PLUG_HOST=<host>
-  PLUG_PORT=<port> bash` — bash, not PowerShell: a piped bash script's `exit` is reliable
-  (a piped `powershell -Command -` was not, so a failed install used to run on with
-  misleading output). It fetches plug.exe **and wintun.dll from the agent** (no wintun.net
-  dependency, no more intermittent fetch), sets PATH + a profile, and installs the service
-  when elevated (else it tells you to re-run elevated).
+- **Windows installer is pure Git Bash.** `ssh get@<host> install-windows | bash -s -- <host> <port>`
+  — bash, not PowerShell: a piped bash script's `exit` is reliable (a piped `powershell -Command -`
+  was not, so a failed install used to run on with misleading output). The host is passed as an
+  argument (`bash -s -- <host> [port]`), since the MSYS ssh streaming the script can't have its
+  command line read. It fetches plug.exe **and wintun.dll from the agent** (no wintun.net
+  dependency, no more intermittent fetch), sets PATH + a profile, and installs the service when
+  elevated (else it tells you to re-run elevated).
+- **One way to point at a cluster.** The cluster comes from `--host`/`--port` or a profile; the
+  `$PLUG_HOST`/`$PLUG_PORT` environment fallback was removed (it duplicated the flags and muddied
+  the precedence).
 - **Windows cold-start ~15 s → ~0.8 s.** The NRPT rule goes in via the **registry** instead
   of two PowerShell starts (~3 s), the reconcile opens a cluster tunnel in ~0.3 s, and an
   idle tunnel is held for a short grace so back-to-back runs reuse it (~0.3 s). No DNS

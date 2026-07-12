@@ -57,7 +57,7 @@ Windows, from Git Bash:
 
 ```bash
 ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@<cluster-host> install-windows \
-  | PLUG_HOST=<cluster-host> PLUG_PORT=2222 bash
+  | bash -s -- <cluster-host> 2222
 ```
 
 The install prepares your machine once — it may ask for your password (or, on

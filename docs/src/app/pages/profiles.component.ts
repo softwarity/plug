@@ -50,11 +50,6 @@ port = 2222</app-code>
       <li><strong>Dotted FQDNs</strong> (<code>api.github.com</code>, a LAN host) → resolved and connected <strong>directly</strong> on your machine.</li>
       <li><code>localhost</code> and <code>127.0.0.1</code> always stay local.</li>
     </ul>
-    <p>
-      Force extras direct with <code>PLUG_DIRECT</code> — a comma-separated list of CIDRs, IPs,
-      hostnames or suffixes that must bypass the cluster (e.g. reach a service on your LAN):
-    </p>
-    <app-code lang="bash">PLUG_DIRECT=192.168.0.0/16,.corp.example.com plug npm run start:dev</app-code>
 
     <h3>Several clusters at once</h3>
     <p>
@@ -81,15 +76,13 @@ plug rm staging          # remove a profile</app-code>
       cluster is reachable before running your app.
     </p>
 
-    <h3>Bypassing profiles</h3>
-    <p>Flags and environment variables skip the profile logic entirely — handy for one-shots and CI:</p>
-    <app-code lang="bash">plug --host swarm-node.example.com --port 2222 npm run start:dev
-PLUG_HOST=swarm-node.example.com plug ./mvnw spring-boot:run</app-code>
-
-    <div class="callout">
-      Precedence, highest first: <code>--host</code>/<code>--port</code> flags →
-      <code>$PLUG_HOST</code>/<code>$PLUG_PORT</code> → the selected profile.
-    </div>
+    <h3>One-shot, without a profile</h3>
+    <p>
+      Point plug straight at a cluster with <code>--host</code> (and <code>--port</code> if it isn't
+      <code>2222</code>) — handy for a quick try or for CI. It overrides the selected profile for
+      that one run:
+    </p>
+    <app-code lang="bash">plug --host swarm-node.example.com --port 2222 npm run start:dev</app-code>
 
     <h3>Versions — the launcher model</h3>
     <p>

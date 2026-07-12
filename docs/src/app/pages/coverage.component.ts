@@ -180,7 +180,7 @@ export class CoverageComponent {
     {
       title: 'Install & privilege',
       rows: [
-        { feat: 'Install from the cluster (one-liner)', os: ['ok', 'ok', 'ok'], note: '<code>install | sh</code> · <code>install-windows | bash</code> (Git Bash, <code>PLUG_HOST=</code>)' },
+        { feat: 'Install from the cluster (one-liner)', os: ['ok', 'ok', 'ok'], note: '<code>install | sh</code> · <code>install-windows | bash -s -- &lt;host&gt;</code> (Git Bash)' },
         { feat: 'No sudo/admin to install', os: ['ok', 'ok', 'ok'], note: 'binaries + PATH; one UAC only to create the service' },
         { feat: 'One-time privilege grant at install', os: ['ok', 'ok', 'ok'], note: 'setcap · setuid helper · SCM SYSTEM service (validated on a real box)' },
         { feat: '<b>plug &lt;cmd&gt;</b> without sudo/admin', os: ['ok', 'ok', 'ok'], note: 'Windows: a non-elevated launcher starts the SYSTEM service via its ACL (proven, LIMITED token)' },
@@ -199,8 +199,8 @@ export class CoverageComponent {
         { feat: 'Works under a corporate VPN', os: ['ok', 'ok', 'warn'], note: 'macOS proven w/ GlobalProtect; Windows unproven' },
         { feat: 'Every runtime (Node/JVM/Py/Go/gRPC)', os: ['ok', 'ok', 'ok'], note: 'IP-level capture, socket never touched' },
         { feat: 'Native selftest (datapath proof)', os: ['ok', 'ok', 'ok'], note: 'green on all three in CI' },
-        { feat: 'e2e protocol matrix (8 protos × 4 langs)', os: ['ok', 'na', 'na'], note: 'Docker→Linux; mac/win via native selftest (Windows e2e planned)' },
-        { feat: 'Split-horizon (short→cluster, FQDN→direct)', os: ['ok', 'ok', 'ok'], note: '+ <code>PLUG_DIRECT</code> overrides' },
+        { feat: 'e2e protocol matrix (8 protos × 4 langs)', os: ['ok', 'ok', 'ok'], note: 'native over a Tailscale mesh — the same by-name path on Linux, macOS and Windows' },
+        { feat: 'Split-horizon (short→cluster, FQDN→direct)', os: ['ok', 'ok', 'ok'], note: 'decided by the shape of the name — no config' },
         { feat: 'Self-heal (VPN / sleep / agent restart)', os: ['ok', 'ok', 'warn'], note: 'keepalive+reconnect; Windows unproven' },
       ],
     },
@@ -228,7 +228,7 @@ export class CoverageComponent {
       title: 'Profiles & CLI',
       rows: [
         { feat: 'Profiles ~/.plug/*.conf', os: ['ok', 'ok', 'ok'], note: 'create by naming · ls · rm · rn/mv · test' },
-        { feat: '-p profile / --host / --port / env', os: ['ok', 'ok', 'ok'], note: 'env = <code>$PLUG_HOST $PLUG_PORT</code>' },
+        { feat: '-p profile / --host / --port', os: ['ok', 'ok', 'ok'], note: 'flags override the selected profile' },
         { feat: 'Launcher versions (per-cluster)', os: ['ok', 'ok', 'ok'], note: 'versions · self-update · <code>.exe</code> + wintun.dll handled on Windows' },
         { feat: 'Host-key TOFU pin', os: ['ok', 'ok', 'ok'], note: 'localhost skipped; pin chowned (macOS)' },
       ],
