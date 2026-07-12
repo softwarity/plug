@@ -55,9 +55,31 @@ jobs:
       - name: Reach httpbin by name through the cluster
         run: bash scripts/ci/e2e-client.sh plug-cluster-${{ github.run_id }} 2222
 
+  e2e-win:
+    name: e2e (Windows, by name over the mesh)
+    needs: start-cluster
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          cache: false
+      - name: Join the tailnet
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
+          tags: tag:ci
+          hostname: plug-win-${{ github.run_id }}
+          args: --accept-dns=false # reach the cluster by tailnet IP; don't let Tailscale drive DNS
+      - name: Reach httpbin by name through the cluster
+        shell: bash
+        run: bash scripts/ci/e2e-client-win.sh plug-cluster-${{ github.run_id }} 2222
+
   kill-cluster:
     name: kill cluster
-    needs: [start-cluster, e2e-mac]
+    needs: [start-cluster, e2e-mac, e2e-win]
     if: always()
     runs-on: ubuntu-latest
     steps:
