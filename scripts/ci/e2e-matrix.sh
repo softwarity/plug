@@ -20,9 +20,19 @@ LANGS="go node python java"
 PROTOS="http:httpbin:8080 postgres:postgres:5432 redis:redis:6379 mongo:mongo:27017 amqp:rabbitmq:5672 mqtt:mosquitto:1883 grpc:grpc:50051 websocket:wsserver:8090"
 
 # --- OS specifics: plug binary + privilege + python name ---
-ext=""; sudo=""; py="python3"
+ext=""; sudo=""; py="python3"; go_env=""
 case "$(uname -s)" in
-  Darwin|Linux) [ "$(id -u)" = 0 ] || sudo=sudo ;;
+  Darwin)
+    [ "$(id -u)" = 0 ] || sudo=sudo
+    # macOS only: force Go's cgo resolver for the go client. Go's default macOS
+    # resolver is a hybrid that answers some single-label lookups in pure Go,
+    # bypassing the /etc/resolver/<suffix> rule plug installs — so the go client
+    # (and only it) failed to resolve a few cluster names. node/python/java all go
+    # through getaddrinfo and pass 8/8; netdns=cgo puts the go client on that same
+    # proven path. Set via `env` on the command so it survives plug's child exec.
+    go_env="env GODEBUG=netdns=cgo"
+    ;;
+  Linux) [ "$(id -u)" = 0 ] || sudo=sudo ;;
   MINGW*|MSYS*|CYGWIN*) ext=".exe"; py="python" ;;
 esac
 
@@ -65,12 +75,17 @@ for l in $LANGS; do
   if "build_$l" >"/tmp/build-$l.log" 2>&1; then
     built="$built $l"; echo "  $l: ok"
   else
-    echo "  $l: BUILD FAILED"; tail -20 "/tmp/build-$l.log" | sed 's/^/    /'
+    echo "  $l: BUILD FAILED"
+    # Surface the real cause first — a blind `tail` often shows only the generic
+    # Maven stack-trace epilogue, not the "[ERROR] Failed to execute goal ..." line.
+    grep -iE "\[ERROR\]|BUILD FAILURE|Caused by|Exception|error:|invalid target|not supported|release version" \
+      "/tmp/build-$l.log" | head -15 | sed 's/^/    | /' || true
+    tail -15 "/tmp/build-$l.log" | sed 's/^/    /'
   fi
 done
 
 # --- the client command (under plug) per language ---
-cmd_go()     { echo "$clients/go/eclient$ext"; }
+cmd_go()     { echo "$go_env $clients/go/eclient$ext"; }
 cmd_node()   { echo "node $clients/node/client.js"; }
 cmd_python() { echo "$py $clients/python/client.py"; }
 cmd_java()   { echo "java -jar $clients/java/target/client.jar"; }

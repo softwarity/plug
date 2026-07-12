@@ -1,17 +1,23 @@
 name: e2e-mesh
 
-# Cross-OS e2e that native-Linux Docker can't give us: run plug NATIVELY on a
-# macOS/Windows runner against a REAL cluster, reaching services BY NAME. The
-# cluster can't run as Linux containers on a mac/win runner, so it runs on its
-# own Linux run (cluster.yml) and the client connects over a Tailscale mesh.
+# The e2e that native-Linux Docker can't give us: run plug NATIVELY on a
+# Linux / macOS / Windows runner against a REAL cluster, reaching services BY
+# NAME. The cluster can't run as Linux containers on a mac/win runner, so it runs
+# ONCE on its own Linux run (cluster.yml) and every client connects to it over a
+# Tailscale mesh — the SAME native path on all three OSes.
 #
-# Flow:  start-cluster (dispatches cluster.yml, keeps its run id)
-#          └─ e2e-mac (joins the mesh, asserts httpbin reachable by name)
+# Flow:  start-cluster (dispatches cluster.yml once, keeps its run id)
+#          └─ e2e  [ubuntu · macos · windows]  (join the mesh, full protocol matrix by name)
 #             └─ kill-cluster (cancels the cluster run — always)
 #
-# Dispatch-only until the Tailscale secrets exist and it's proven; then add a
-# push/schedule trigger. Needs repo secrets TAILSCALE_CLIENT_ID / TAILSCALE_CLIENT_SECRET.
+# Needs repo secrets TAILSCALE_CLIENT_ID / TAILSCALE_CLIENT_SECRET.
 on:
+  push:
+    branches: [main]
+    # Doc-only pushes don't touch the datapath — deploy-doc.yml handles those.
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
   workflow_dispatch:
 
 permissions:
@@ -31,57 +37,46 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }})" >> "$GITHUB_OUTPUT"
 
-  e2e-mac:
-    name: e2e (macOS, by name over the mesh)
+  e2e:
+    name: e2e (${{ matrix.os }}, by name over the mesh)
     needs: start-cluster
-    runs-on: macos-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 25 # a hung cell must not run the job (and the cluster) for hours
+    strategy:
+      fail-fast: false # one OS failing must not cancel the others
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
           go-version: stable
           cache: false
+      # Pin the JDK: the runners' ambient Java differs by OS (Windows shipped a
+      # JDK older than the client's `release=21`, so its build failed). Temurin 21
+      # everywhere makes the java client build the same on all three.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
       - name: Join the tailnet
         uses: tailscale/github-action@v3
         with:
           oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
           oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
           tags: tag:ci
-          hostname: plug-mac-${{ github.run_id }}
+          hostname: plug-${{ matrix.os }}-${{ github.run_id }}
           # We reach the cluster by tailnet IP (`tailscale ip`), so we don't need
-          # Tailscale's MagicDNS — and letting it repoint the macOS system resolver
-          # would fight plug's own DNS override (curl: could not resolve host).
+          # Tailscale's MagicDNS — and letting it drive the system resolver would
+          # fight plug's own DNS override.
           args: --accept-dns=false
       - name: Protocol matrix by name (native, over the mesh)
-        run: bash scripts/ci/e2e-matrix.sh plug-cluster-${{ github.run_id }} 2222
-
-  e2e-win:
-    name: e2e (Windows, by name over the mesh)
-    needs: start-cluster
-    runs-on: windows-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version: stable
-          cache: false
-      - name: Join the tailnet
-        uses: tailscale/github-action@v3
-        with:
-          oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
-          tags: tag:ci
-          hostname: plug-win-${{ github.run_id }}
-          args: --accept-dns=false # reach the cluster by tailnet IP; don't let Tailscale drive DNS
-      - name: Protocol matrix by name (native, over the mesh)
-        shell: bash
+        shell: bash # Windows too: Git Bash is the assumed Windows shell
         run: bash scripts/ci/e2e-matrix.sh plug-cluster-${{ github.run_id }} 2222
 
   kill-cluster:
     name: kill cluster
-    needs: [start-cluster, e2e-mac, e2e-win]
+    needs: [start-cluster, e2e]
     if: always()
     runs-on: ubuntu-latest
     steps:
