@@ -203,8 +203,11 @@ func scutilRemove(key string) error {
 // resolvConf is macOS's /etc/resolv.conf. getaddrinfo ignores it (it resolves via
 // SystemConfiguration), but a program with its OWN resolver — notably Go's pure-Go
 // resolver, used by CGO_ENABLED=0 static binaries, common in clusters — reads only
-// this file. macOS is single-cluster (the scutil primary-service override is already
-// machine-wide, and a 2nd cluster is refused), so a global resolv.conf is consistent.
+// this file. Pointing it at plug's DNS is machine-wide, like the scutil override —
+// which is what the PID-at-connect multicluster model wants anyway: one resolver
+// hands out fake IPs, and the owning cluster is resolved at connect() by process
+// ancestry (as on Windows). mac serves one cluster at a time only until that
+// attribution is wired on its daemon — the DNS is not what limits it.
 var resolvConf = "/etc/resolv.conf" // overridable in tests
 
 // snapshotResolv captures /etc/resolv.conf as a restorable token: "L\n<target>" for
@@ -226,7 +229,7 @@ func snapshotResolv() string {
 func writeResolv(dnsIP string) {
 	_ = os.Remove(resolvConf)
 	_ = os.WriteFile(resolvConf,
-		[]byte("# plug — cluster DNS (macOS is single-cluster)\nnameserver "+dnsIP+"\nsearch "+searchSuffix+"\n"),
+		[]byte("# plug — cluster DNS\nnameserver "+dnsIP+"\nsearch "+searchSuffix+"\n"),
 		0o644)
 }
 

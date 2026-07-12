@@ -57,11 +57,25 @@ port = 2222</app-code>
     </p>
     <app-code lang="bash">plug -p prod    npm run start   # → cluster prod
 plug -p staging npm run start   # → cluster staging, side by side</app-code>
+    <p>How plug keeps parallel clusters apart differs by OS:</p>
+    <ul>
+      <li>
+        <strong>Linux</strong> — each launch runs in its own <strong>mount namespace</strong> with a
+        private resolver, so two launches never share DNS: isolation for free.
+      </li>
+      <li>
+        <strong>Windows</strong> — the SYSTEM service holds <strong>one tunnel per cluster</strong>
+        and attributes each connection to the right one <strong>at <code>connect()</code></strong>,
+        walking the process back to the <code>plug -p</code> that launched it (PID-at-connect).
+      </li>
+      <li>
+        <strong>macOS</strong> — the <strong>same PID-at-connect design</strong> applies; until it is
+        wired on the macOS daemon, mac serves one cluster at a time (the machine-wide DNS is not the
+        limiter — it is what that model uses).
+      </li>
+    </ul>
     <p>
-      Works today on <strong>Linux</strong> and <strong>Windows</strong>: each launch stays isolated
-      and keeps talking to its own cluster, the same service names resolving to the right backend on
-      each side. <strong>macOS</strong> runs one cluster at a time for now. See
-      <a routerLink="/how-it-works">how plug tells them apart</a> and the
+      See <a routerLink="/how-it-works">how plug tells them apart</a> and the
       <a routerLink="/coverage">coverage matrix</a>.
     </p>
 
