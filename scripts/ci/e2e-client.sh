@@ -29,9 +29,22 @@ for _ in $(seq 1 60); do
 done
 [ -n "$ip" ] || { echo "cluster $peer never became reachable" >&2; exit 1; }
 
-echo "=== plug: reach httpbin BY NAME through the cluster ==="
 sudo=""; [ "$(id -u)" = 0 ] || sudo=sudo
-if $sudo ./plug --host "$ip" --port "$port" curl -sf -m 20 http://httpbin:8080/get; then
+
+# 1) Agent reachable + version? (no utun/sudo needed — just the get-user probe.)
+echo "=== plug test (agent reachable via $ip) ==="
+./plug test --host "$ip" --port "$port" 2>&1 || echo "(plug test returned $?)"
+
+# 2) The real assertion: reach httpbin BY NAME through the datapath. Verbose, so a
+# DNS miss vs a connection failure vs an HTTP error is visible in the log.
+echo "=== plug: reach httpbin BY NAME through the cluster ==="
+out="$($sudo ./plug --host "$ip" --port "$port" \
+        curl -sS -m 25 -o /dev/null -w 'HTTP=%{http_code}' http://httpbin:8080/get 2>&1)"
+rc=$?
+echo "$out"
+echo "(plug/curl exit: $rc)"
+
+if [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'HTTP=200'; then
   echo "E2E-MESH-OK — httpbin reached by name over the mesh"
 else
   echo "E2E-MESH-FAIL" >&2
