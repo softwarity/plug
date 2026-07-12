@@ -35,8 +35,7 @@ const defaultPort = "2222"
 const agentHome = "/opt/plug"
 
 // usage lists the everyday commands only — no implementation talk, and no rarely
-// needed ones (self-update: versions auto-update on connect; down: the background
-// tears itself down; both still work, just unlisted).
+// needed ones (down: the background tears itself down — still works, just unlisted).
 func usage() string {
 	return `plug — run a local command as if it were inside your cluster.
 
@@ -192,9 +191,6 @@ func main() {
 		return
 	case "test":
 		cmdTestProfile(args[1:])
-		return
-	case "self-update":
-		selfUpdate(args[1:])
 		return
 	case "uninstall":
 		uninstall(args[1:])
@@ -386,53 +382,6 @@ func listVersions() {
 	}
 	sort.Strings(names)
 	fmt.Printf("cached: %s\n", strings.Join(names, ", "))
-}
-
-// selfUpdate replaces the launcher binary itself from a cluster (rare — only
-// needed when the bootstrap protocol changes).
-func selfUpdate(args []string) {
-	opts, _ := parseArgs(args)
-	cfg := resolveConfig(opts)
-	if cfg.host == "" {
-		fatal("no agent host: use --host or a profile in ~/.plug/")
-	}
-	remote, err := agentVersion(cfg)
-	if err != nil {
-		fatal("cannot reach the agent: %v", err)
-	}
-	if remote == version {
-		info("launcher already at v%s", version)
-		return
-	}
-	self, err := os.Executable()
-	if err != nil {
-		fatal("%v", err)
-	}
-	if self, err = filepath.EvalSymlinks(self); err != nil {
-		fatal("%v", err)
-	}
-	data, err := getDownload(cfg, fmt.Sprintf("%s-%s", runtime.GOOS, runtime.GOARCH), "v"+remote)
-	if err != nil {
-		fatal("%v", err)
-	}
-	if len(data) < 1<<20 || !looksLikeBinary(data) {
-		fatal("downloaded binary looks invalid (%d bytes)", len(data))
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(self), ".plug-self-*")
-	if err != nil {
-		fatal("%v", err)
-	}
-	defer os.Remove(tmp.Name())
-	tmp.Write(data)
-	tmp.Chmod(0o755)
-	tmp.Close()
-	if err := os.Rename(tmp.Name(), self); err != nil {
-		fatal("cannot replace %s: %v", self, err)
-	}
-	// A rename installs a fresh inode that lost the macOS setuid bit — re-apply it
-	// so the helper keeps working without a sudo (no-op off macOS / when not root).
-	preserveHelperPrivilege(self)
-	info("launcher updated %s → v%s", version, remote)
 }
 
 // ---- get-user helpers (no key: passwordless ForceCommand download) ----

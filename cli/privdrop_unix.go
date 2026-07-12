@@ -117,19 +117,6 @@ func chownToUser(path string) {
 	_ = os.Chown(path, uid, gid)
 }
 
-// preserveHelperPrivilege re-applies the macOS setuid-root bit to a freshly written
-// launcher, so `plug self-update` doesn't silently disable the helper — a rename
-// installs a new inode that has lost the bit. Only on macOS, and only when we're
-// already root (the setuid helper is), so it can run without a sudo prompt and a
-// capability-based Linux install is never turned into a setuid one.
-func preserveHelperPrivilege(path string) {
-	if runtime.GOOS != "darwin" || os.Geteuid() != 0 {
-		return
-	}
-	_ = os.Chown(path, 0, 0)
-	_ = os.Chmod(path, 0o755|os.ModeSetuid)
-}
-
 func atoiOr(s string, def int) int {
 	if n, err := strconv.Atoi(s); err == nil {
 		return n

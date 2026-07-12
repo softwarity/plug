@@ -10,6 +10,4 @@ import "os/exec"
 
 func applyPrivDrop(*exec.Cmd) {}
 
-func preserveHelperPrivilege(string) {}
-
 func chownToUser(string) {}
