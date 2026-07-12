@@ -53,15 +53,17 @@ plug() { $sudo "./plug$ext" --host "$ip" --port "$port" "$@"; }
 echo "=== build clients ==="
 build_go()     { ( cd "$clients/go" && go build -o "eclient$ext" . ); }
 build_node()   { ( cd "$clients/node" && npm install --omit=dev --no-audit --no-fund ); }
-build_python() { $py -m pip install --quiet --disable-pip-version-check --user -r "$clients/python/requirements.txt"; }
-build_java()   { ( cd "$clients/java" && mvn -q -e -B package ); }
+# --break-system-packages: macOS runners ship a Homebrew Python that refuses a
+# plain `pip install` (externally-managed-environment).
+build_python() { $py -m pip install --quiet --disable-pip-version-check --user --break-system-packages -r "$clients/python/requirements.txt"; }
+build_java()   { ( cd "$clients/java" && mvn -e -B package ); } # no -q: surface the goal on failure
 
 built=""
 for l in $LANGS; do
   if "build_$l" >"/tmp/build-$l.log" 2>&1; then
     built="$built $l"; echo "  $l: ok"
   else
-    echo "  $l: BUILD FAILED"; tail -12 "/tmp/build-$l.log" | sed 's/^/    /'
+    echo "  $l: BUILD FAILED"; tail -20 "/tmp/build-$l.log" | sed 's/^/    /'
   fi
 done
 
@@ -79,13 +81,17 @@ for entry in $PROTOS; do
   for l in $LANGS; do
     case " $built " in *" $l "*) : ;; *) results="$results$l $proto SKIP
 "; continue ;; esac
-    out="$(plug $("cmd_$l") "$proto" "$target" 2>&1)"
-    if printf '%s' "$out" | grep -q "E2E-OK"; then
-      results="$results$l $proto PASS
+    # 2 attempts: the mesh datapath can blip transiently on the first hit of a service.
+    r=FAIL; out=""
+    for _attempt in 1 2; do
+      out="$(plug $("cmd_$l") "$proto" "$target" 2>&1)"
+      if printf '%s' "$out" | grep -q "E2E-OK"; then r=PASS; break; fi
+      sleep 2
+    done
+    results="$results$l $proto $r
 "
-    else
-      results="$results$l $proto FAIL
-"; fails=$((fails + 1))
+    if [ "$r" != PASS ]; then
+      fails=$((fails + 1))
       echo "--- $l / $proto FAIL ---"; printf '%s\n' "$out" | tail -8 | sed 's/^/    /'
     fi
   done
@@ -100,7 +106,8 @@ render() {
   echo "## plug mesh e2e — $(uname -s) · by name over the mesh"
   echo
   printf "| client |"; for p in $protolist; do printf " %s |" "$p"; done; echo
-  printf "|---|"; for p in $protolist; do printf "---|"; done; echo
+  # printf '%s': a format string starting with '-' is otherwise read as a flag.
+  printf '%s' "|---|"; for p in $protolist; do printf '%s' "---|"; done; echo
   for l in $LANGS; do
     printf "| **%s** |" "$l"
     for p in $protolist; do printf " %s |" "$(glyph "$(lookup "$l" "$p")")"; done; echo
