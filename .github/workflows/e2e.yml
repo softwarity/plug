@@ -18,11 +18,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Build agent image (plug + SSH agent)
-        run: docker build -f agent/Dockerfile -t softwarity/plug:e2e .
-      - name: Build client + gRPC images
-        working-directory: e2e
-        run: docker compose -f compose.yml build
+      - uses: docker/setup-buildx-action@v3
+      # One bake builds the agent image AND every client/service, with a GitHub
+      # Actions layer cache (type=gha, mode=max) on each — so unchanged deps are
+      # restored from cache instead of re-downloaded (no more Maven Central 403s,
+      # and a faster build). The clients' `FROM softwarity/plug:e2e` is wired to
+      # the freshly built `agentbase` target, so no local image is needed. See
+      # e2e/bake-ci.hcl. `load: true` puts the results in the docker store for
+      # the `docker save` below. wsserver is omitted (the matrix jobs build it).
+      - name: Build agent + client + gRPC images (cached)
+        uses: docker/bake-action@v5
+        with:
+          files: |
+            e2e/compose.yml
+            e2e/bake-ci.hcl
+          targets: |
+            agentbase
+            grpc
+            client-go
+            client-node
+            client-python
+            client-java
+          load: true
       - name: Save all built images
         run: |
           docker save softwarity/plug:e2e plug-e2e-grpc \
