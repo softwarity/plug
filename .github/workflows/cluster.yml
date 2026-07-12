@@ -6,8 +6,8 @@ name: cluster
 # under a name derived from the caller's run id, and idles until cancelled — so a
 # macOS/Windows runner on the same tailnet can reach it BY NAME through plug.
 #
-# Requires repo secrets TS_OAUTH_ID / TS_OAUTH_SECRET (a Tailscale OAuth client
-# tagged tag:ci). Dispatch-only by design.
+# Requires repo secrets TAILSCALE_CLIENT_ID / TAILSCALE_CLIENT_SECRET (a Tailscale
+# OAuth client tagged tag:ci). Dispatch-only by design.
 on:
   workflow_dispatch:
     inputs:
@@ -28,8 +28,8 @@ jobs:
       - name: Join the tailnet
         uses: tailscale/github-action@v3
         with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_ID }}
-          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
           tags: tag:ci
           hostname: plug-cluster-${{ inputs.corr }}
       - name: Serve the cluster (idle until cancelled)

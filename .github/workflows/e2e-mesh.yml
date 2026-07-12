@@ -10,7 +10,7 @@ name: e2e-mesh
 #             └─ kill-cluster (cancels the cluster run — always)
 #
 # Dispatch-only until the Tailscale secrets exist and it's proven; then add a
-# push/schedule trigger. Needs repo secrets TS_OAUTH_ID / TS_OAUTH_SECRET.
+# push/schedule trigger. Needs repo secrets TAILSCALE_CLIENT_ID / TAILSCALE_CLIENT_SECRET.
 on:
   workflow_dispatch:
 
@@ -44,8 +44,8 @@ jobs:
       - name: Join the tailnet
         uses: tailscale/github-action@v3
         with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_ID }}
-          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
           tags: tag:ci
           hostname: plug-mac-${{ github.run_id }}
       - name: Reach httpbin by name through the cluster
