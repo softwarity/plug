@@ -29,9 +29,10 @@ jobs:
       - name: Build agent + client + gRPC images (cached)
         uses: docker/bake-action@v5
         with:
+          workdir: e2e
           files: |
-            e2e/compose.yml
-            e2e/bake-ci.hcl
+            compose.yml
+            bake-ci.hcl
           targets: |
             agentbase
             grpc

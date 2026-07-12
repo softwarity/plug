@@ -1,5 +1,5 @@
-# CI-only bake overlay, merged on top of compose.yml:
-#   docker buildx bake -f e2e/compose.yml -f e2e/bake-ci.hcl <targets>
+# CI-only bake overlay, merged on top of compose.yml (run from the e2e/ dir):
+#   docker buildx bake -f compose.yml -f bake-ci.hcl <targets>
 #
 # It does two things the plain `docker compose build` can't:
 #   1. GitHub Actions layer cache (type=gha) on every image → unchanged deps are
@@ -15,7 +15,7 @@
 # image-only, no build) to avoid any target-name clash.
 
 target "agentbase" {
-  context    = "."
+  context    = ".."
   dockerfile = "agent/Dockerfile"
   tags       = ["softwarity/plug:e2e"]
   cache-from = ["type=gha,scope=agent"]
