@@ -34,26 +34,19 @@ sudo=""; [ "$(id -u)" = 0 ] || sudo=sudo
 echo "=== agent reachable via $ip ==="
 ./plug test --host "$ip" --port "$port" 2>&1 || echo "(plug test returned $?)"
 
-# Probe every DNS layer UNDER plug (datapath active), to pinpoint the headless
-# single-label failure precisely:
-#   dig @198.18.0.53 httpbin      → does plug's DNS server answer the BARE name?
-#   dig @198.18.0.53 httpbin.plug → does the ".plug" strip branch answer?
-#   dscacheutil httpbin           → does macOS getaddrinfo route it to plug?
-#   curl httpbin                  → the real assertion
-echo "=== DNS probes UNDER plug (datapath active) ==="
-$sudo ./plug --host "$ip" --port "$port" bash -c '
-  echo "--- scutil --dns ---"; scutil --dns | sed -n "1,45p"
-  echo "--- dig @198.18.0.53 httpbin (bare, plug DNS direct) ---"; dig +short +time=3 +tries=1 @198.18.0.53 httpbin || true
-  echo "--- dig @198.18.0.53 httpbin.plug (suffixed) ---"; dig +short +time=3 +tries=1 @198.18.0.53 httpbin.plug || true
-  echo "--- dscacheutil httpbin (getaddrinfo, bare) ---"; dscacheutil -q host -a name httpbin || true
-  echo "--- dscacheutil httpbin.plug (getaddrinfo, explicit suffix) ---"; dscacheutil -q host -a name httpbin.plug || true
-  echo "--- curl http://httpbin.plug:8080 (explicit suffix via getaddrinfo) ---"; curl -sS -m 15 -o /dev/null -w "HTTP-plug=%{http_code}\n" http://httpbin.plug:8080/get || echo "curl.plug exit $?"
-  echo "--- curl http://httpbin:8080 (bare, the real assertion) ---"; curl -sS -m 15 -o /dev/null -w "HTTP=%{http_code}\n" http://httpbin:8080/get || echo "curl exit $?"
-' 2>&1 | tee probe.out
-
-if grep -q 'HTTP=200' probe.out; then
+# The assertion: reach httpbin BY NAME through plug's datapath, over the mesh.
+echo "=== plug: reach httpbin BY NAME through the cluster ==="
+if $sudo ./plug --host "$ip" --port "$port" \
+      curl -sf -m 25 -o /dev/null -w 'HTTP %{http_code}\n' http://httpbin:8080/get; then
   echo "E2E-MESH-OK — httpbin reached by name over the mesh"
 else
-  echo "E2E-MESH-FAIL" >&2
+  rc=$?
+  echo "E2E-MESH-FAIL (rc $rc)" >&2
+  # Dump the DNS state under plug to make a regression diagnosable next time.
+  $sudo ./plug --host "$ip" --port "$port" bash -c '
+    scutil --dns | sed -n "1,20p"
+    dscacheutil -q host -a name httpbin
+    dig +short +time=3 +tries=1 @198.18.0.53 httpbin
+  ' 2>&1 | head -30 || true
   exit 1
 fi
