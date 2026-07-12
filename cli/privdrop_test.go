@@ -53,3 +53,23 @@ func TestResolveDropTarget(t *testing.T) {
 		})
 	}
 }
+
+func TestCapGroups(t *testing.T) {
+	many := make([]uint32, 30)
+	for i := range many {
+		many[i] = uint32(i)
+	}
+	// macOS: setgroups(2) rejects >16, so the child's exec would fail with EINVAL.
+	if got := capGroups(many, "darwin"); len(got) != 16 {
+		t.Errorf("darwin: want 16 groups, got %d", len(got))
+	}
+	// Linux allows far more — leave the list intact.
+	if got := capGroups(many, "linux"); len(got) != 30 {
+		t.Errorf("linux: want 30 groups, got %d", len(got))
+	}
+	// Under the cap: unchanged on every OS.
+	few := []uint32{20, 12, 61, 79}
+	if got := capGroups(few, "darwin"); len(got) != 4 {
+		t.Errorf("darwin under cap: want 4 groups, got %d", len(got))
+	}
+}

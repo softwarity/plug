@@ -86,7 +86,21 @@ func supplementaryGroups(uid int) []uint32 {
 			out = append(out, uint32(n))
 		}
 	}
-	return out
+	return capGroups(out, runtime.GOOS)
+}
+
+// capGroups limits the supplementary group list to what the OS's setgroups(2)
+// accepts. macOS caps it at NGROUPS_MAX = 16; passing more makes the child's exec
+// fail with EINVAL ("fork/exec …: invalid argument") — and a user in >16 groups is
+// common (a CI runner, a corporate Mac). Keep the first 16; macOS resolves the rest
+// dynamically via memberd for access checks anyway. Linux allows far more, so it is
+// left untouched.
+func capGroups(groups []uint32, goos string) []uint32 {
+	const darwinMaxGroups = 16
+	if goos == "darwin" && len(groups) > darwinMaxGroups {
+		return groups[:darwinMaxGroups]
+	}
+	return groups
 }
 
 // chownToUser gives path back to the human user when plug runs as the macOS
