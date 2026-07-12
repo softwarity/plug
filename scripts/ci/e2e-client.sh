@@ -45,8 +45,10 @@ $sudo ./plug --host "$ip" --port "$port" bash -c '
   echo "--- scutil --dns ---"; scutil --dns | sed -n "1,45p"
   echo "--- dig @198.18.0.53 httpbin (bare, plug DNS direct) ---"; dig +short +time=3 +tries=1 @198.18.0.53 httpbin || true
   echo "--- dig @198.18.0.53 httpbin.plug (suffixed) ---"; dig +short +time=3 +tries=1 @198.18.0.53 httpbin.plug || true
-  echo "--- dscacheutil -q host httpbin (getaddrinfo path) ---"; dscacheutil -q host -a name httpbin || true
-  echo "--- curl http://httpbin:8080 ---"; curl -sS -m 15 -o /dev/null -w "HTTP=%{http_code}\n" http://httpbin:8080/get || echo "curl exit $?"
+  echo "--- dscacheutil httpbin (getaddrinfo, bare) ---"; dscacheutil -q host -a name httpbin || true
+  echo "--- dscacheutil httpbin.plug (getaddrinfo, explicit suffix) ---"; dscacheutil -q host -a name httpbin.plug || true
+  echo "--- curl http://httpbin.plug:8080 (explicit suffix via getaddrinfo) ---"; curl -sS -m 15 -o /dev/null -w "HTTP-plug=%{http_code}\n" http://httpbin.plug:8080/get || echo "curl.plug exit $?"
+  echo "--- curl http://httpbin:8080 (bare, the real assertion) ---"; curl -sS -m 15 -o /dev/null -w "HTTP=%{http_code}\n" http://httpbin:8080/get || echo "curl exit $?"
 ' 2>&1 | tee probe.out
 
 if grep -q 'HTTP=200' probe.out; then
