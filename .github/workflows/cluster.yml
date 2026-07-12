@@ -34,5 +34,5 @@ jobs:
           hostname: plug-cluster-${{ inputs.corr }}
       - name: Serve the cluster (idle until cancelled)
         env:
-          PLUG_CLUSTER_TTL: "1800"
+          PLUG_CLUSTER_TTL: "1200" # backstop only — kill-cluster cancels this run when the e2e jobs finish
         run: bash scripts/ci/cluster-serve.sh
