@@ -47,7 +47,9 @@ for _ in $(seq 1 90); do
 done
 [ -n "$ip" ] || { echo "cluster $peer never became reachable" >&2; exit 1; }
 
-plug() { $sudo "./plug$ext" --host "$ip" --port "$port" "$@"; }
+# Per-cell timeout: a client with no timeout of its own must not hang the whole
+# job. perl's alarm is on every runner (incl. Git Bash) and survives exec.
+plug() { perl -e 'alarm shift @ARGV; exec @ARGV or exit 127' 45 $sudo "./plug$ext" --host "$ip" --port "$port" "$@"; }
 
 # --- build the four language clients natively ---
 echo "=== build clients ==="
