@@ -136,10 +136,11 @@ interface Hole {
     }
 
     <div class="callout">
-      <strong>Read this alongside the code.</strong> The Windows datapath (WinTUN + name resolution)
-      is proven on a real machine; the SYSTEM service that removes the per-run admin and enables
-      multicluster is written and build-validated on all three OSes but not yet runtime-validated —
-      see <a href="https://github.com/softwarity/plug/blob/main/docs/windows-service.md" target="_blank" rel="noopener">docs/windows-service.md</a>
+      <strong>Where the remaining work is.</strong> The Windows SYSTEM service — no-admin runs and
+      multicluster — is validated end-to-end on a real machine; what is left is <em>automating</em>
+      it in CI, proving it under a corporate VPN, and bringing macOS multicluster (same
+      PID-at-connect design) to the same level. See
+      <a href="https://github.com/softwarity/plug/blob/main/docs/windows-service.md" target="_blank" rel="noopener">docs/windows-service.md</a>
       and the <a routerLink="/roadmap">roadmap</a>.
     </div>
   `,
@@ -165,8 +166,8 @@ export class CoverageComponent {
     },
     {
       sev: 'warn',
-      t: 'First run after a cold start / host-key reset',
-      d: 'The very first plug after the service has torn down (or a known_hosts reset) can exceed the 12 s ready-wait while the tunnel comes up; the next run is instant. A more patient wait would smooth it.',
+      t: 'macOS multicluster',
+      d: 'Linux and Windows run several clusters at once; macOS holds one at a time today. The shared PID-at-connect design applies, but is not yet wired and validated on the macOS daemon.',
     },
     {
       sev: 'warn',
@@ -215,12 +216,12 @@ export class CoverageComponent {
     {
       title: 'Multicluster — different clusters at once',
       rows: [
-        { feat: 'Simultaneous different clusters', os: ['ok', 'ok', 'ok'], note: 'Linux mount-ns · <b>macOS + Windows validated e2e</b> (neo + llm, by name)' },
-        { feat: 'PID-at-connect attribution', os: ['na', 'ok', 'ok'], note: '<code>multiDial</code> shared; proven on 2 live clusters on macOS &amp; Windows' },
+        { feat: 'Simultaneous different clusters', os: ['ok', 'warn', 'ok'], note: 'Linux mount-ns · <b>Windows validated e2e</b> (neo + llm, by name) · macOS one at a time today' },
+        { feat: 'PID-at-connect attribution', os: ['na', 'warn', 'ok'], note: '<code>multiDial</code> shared; proven on 2 live clusters on Windows; macOS shares the code, not yet validated' },
         { feat: 'ppidOf', os: ['ok', 'ok', 'ok'], note: '/proc · ps · ToolHelp (unit-tested)', sub: true },
         { feat: 'pidForLocalPort', os: ['ok', 'ok', 'ok'], note: '/proc/net · lsof · GetExtendedTcpTable (unit-tested)', sub: true },
         { feat: 'procStart (recycle guard)', os: ['ok', 'ok', 'ok'], note: 'ps lstart · /proc stat · GetProcessTimes — rejects a reused PID', sub: true },
-        { feat: 'N-tunnel global daemon', os: ['na', 'ok', 'ok'], note: 'macOS daemon · Windows SCM service — both validated' },
+        { feat: 'N-tunnel global daemon', os: ['na', 'warn', 'ok'], note: 'Windows SCM service validated; macOS daemon holds one cluster today (N-tunnel planned)' },
       ],
     },
     {
@@ -230,7 +231,6 @@ export class CoverageComponent {
         { feat: '-p profile / --host / --port / env', os: ['ok', 'ok', 'ok'], note: 'env = <code>$PLUG_HOST $PLUG_PORT</code>' },
         { feat: 'Launcher versions (per-cluster)', os: ['ok', 'ok', 'ok'], note: 'versions · self-update · <code>.exe</code> + wintun.dll handled on Windows' },
         { feat: 'Host-key TOFU pin', os: ['ok', 'ok', 'ok'], note: 'localhost skipped; pin chowned (macOS)' },
-        { feat: 'Port-forward escape hatch (forward=)', os: ['ok', 'ok', 'ok'], note: 'rewrites an env var to a local port' },
       ],
     },
     {

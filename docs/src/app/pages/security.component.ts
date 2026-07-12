@@ -19,7 +19,7 @@ import { CodeComponent } from '../code/code.component';
     <ul>
       <li>Anyone who can reach the agent port gets <strong>network-level access</strong> to every overlay network the agent is attached to — DNS resolution included.</li>
       <li>They do <em>not</em> get shell access to your services, volumes or the Docker API: the agent relays packets, nothing else. Exposure is exactly "being on those networks".</li>
-      <li>SSH host keys are not verified (<code>StrictHostKeyChecking=no</code>): with no client secret to protect, MITM adds nothing an attacker could not already do by reaching the port.</li>
+      <li>The data tunnel <strong>pins the agent's host key on first use</strong> (<code>~/.plug/known_hosts</code>): a changed key aborts the connection — a basic MITM tripwire on top of the no-secret transport. The one-shot install/download over the <code>get</code> user skips the check (<code>StrictHostKeyChecking=no</code>), since there is no client secret to protect there.</li>
     </ul>
 
     <h3>The download user (<code>get</code>)</h3>
@@ -32,7 +32,7 @@ import { CodeComponent } from '../code/code.component';
       <li>TCP/X11 forwarding is disabled for <code>get</code>: it cannot open the network tunnel, only the <code>plug</code> user (public-key) can.</li>
       <li>Empty password is intentional and harmless here: there is nothing to protect behind it — the whole surface is "download a public binary".</li>
     </ul>
-    <app-code lang="bash">ssh -p 2222 get@&lt;host&gt; install | sh -s -- &lt;host&gt; 2222   # returns the installer
+    <app-code lang="bash">ssh -p 2222 get@&lt;host&gt; install                         # returns the installer
 ssh -p 2222 get@&lt;host&gt; cat /etc/shadow                  # ForceCommand ignores this</app-code>
 
     <h3>Where it is a fine trade-off</h3>

@@ -56,18 +56,18 @@ import { MatIconModule } from '@angular/material/icon';
     <h2>Getting started</h2>
 
     <p>
-      <strong>plug</strong> lets a process on your laptop behave as if it ran
-      <strong>inside your Docker Swarm cluster</strong>: cluster DNS names resolve, cluster services
-      are reachable. No code change, no proxy configuration in your app — you just prefix your usual
+      <strong>plug</strong> lets a process on your machine behave as if it ran
+      <strong>inside your cluster</strong>: cluster DNS names resolve, cluster services are
+      reachable. No code change, no proxy configuration in your app — you just prefix your usual
       command:
     </p>
 
-    <app-code lang="text">plug npm run start:dev   ──►   http://my-service:8080 answers, like from any container</app-code>
+    <app-code lang="text">plug npm run start:dev   ──►   http://my-service:8080 answers, like from any workload in the cluster</app-code>
 
     <div class="callout">
       <strong>Two pieces.</strong> A tiny <a routerLink="/agent">agent container</a> (Alpine + sshd)
       deployed once on the cluster — and a single static <code>plug</code> binary on each dev
-      machine. No root, no daemon; the proxy lives exactly as long as your command.
+      machine. Set up once per cluster; after that, day-to-day runs need no sudo or admin.
     </div>
 
     <h3>What you get</h3>
@@ -75,27 +75,27 @@ import { MatIconModule } from '@angular/material/icon';
       <a routerLink="/how-it-works" class="feature-card">
         <mat-icon class="feature-icon">dns</mat-icon>
         <span class="feature-title">Names, resolved cluster-side</span>
-        <span class="feature-desc">Address <code>my-service:8080</code> by name (via <code>socks5h</code>) — no <code>localhost:PORT</code> mappings.</span>
-      </a>
-      <a routerLink="/how-it-works" class="feature-card">
-        <mat-icon class="feature-icon">air</mat-icon>
-        <span class="feature-title">No root, no daemon</span>
-        <span class="feature-desc">Userspace proxies + an injected hook + env vars. Nothing global is touched on your machine.</span>
-      </a>
-      <a routerLink="/profiles" class="feature-card">
-        <mat-icon class="feature-icon">hub</mat-icon>
-        <span class="feature-title">Multi-cluster at once</span>
-        <span class="feature-desc">Run the same process against two clusters in parallel — each session is isolated.</span>
+        <span class="feature-desc">Address <code>my-service:8080</code> by its real name — no <code>localhost:PORT</code> mappings, no <code>/etc/hosts</code> edits.</span>
       </a>
       <a routerLink="/how-it-works" class="feature-card">
         <mat-icon class="feature-icon">all_inclusive</mat-icon>
-        <span class="feature-title">Any protocol, transparent</span>
-        <span class="feature-desc">An injected connect()/DNS hook routes any libc app's TCP by name — AMQP, DB, Redis, gRPC — no per-service config.</span>
+        <span class="feature-title">Every runtime, unchanged</span>
+        <span class="feature-desc">Traffic is captured at the IP layer, so your app's socket is never touched — Node, the JVM, Python, <strong>Go</strong>, curl, gRPC, DB drivers all just work.</span>
+      </a>
+      <a routerLink="/how-it-works" class="feature-card">
+        <mat-icon class="feature-icon">lock_open</mat-icon>
+        <span class="feature-title">No sudo day-to-day</span>
+        <span class="feature-desc">The privilege plug needs is granted <strong>once at install</strong>; every later <code>plug &lt;cmd&gt;</code> runs with none.</span>
+      </a>
+      <a routerLink="/profiles" class="feature-card">
+        <mat-icon class="feature-icon">hub</mat-icon>
+        <span class="feature-title">Several clusters at once</span>
+        <span class="feature-desc">Run the same process against two clusters in parallel — each session stays isolated.</span>
       </a>
       <a routerLink="/agent" class="feature-card">
-        <mat-icon class="feature-icon">memory</mat-icon>
-        <span class="feature-title">amd64 · arm64</span>
-        <span class="feature-desc">Native multi-arch agent image; CLI binaries for linux, macOS and windows.</span>
+        <mat-icon class="feature-icon">devices</mat-icon>
+        <span class="feature-title">Linux · macOS · Windows</span>
+        <span class="feature-desc">Native on all three (no WSL2 needed); a multi-arch <code>amd64</code>/<code>arm64</code> agent image.</span>
       </a>
       <a routerLink="/security" class="feature-card">
         <mat-icon class="feature-icon">shield</mat-icon>
@@ -106,8 +106,7 @@ import { MatIconModule } from '@angular/material/icon';
 
     <h3>1. Deploy the agent (once, on the cluster)</h3>
     <p>
-      Add the service to the stack you want to plug into — it joins the stack's network
-      automatically:
+      Add the service to the stack you want to reach — it joins the stack's network automatically:
     </p>
     <app-code lang="yaml"># your existing stack file
 services:
@@ -122,35 +121,31 @@ services:
 
     <h3>2. Install the CLI (each dev machine)</h3>
     <p>
-      One line, straight from the cluster — the agent embeds the binaries in the installer, which
-      picks yours with <code>uname</code>. No re-download, no GitHub, no root:
+      One line, straight from the cluster — the agent hands over the right binary. The install
+      grants plug its privilege <strong>once</strong> (a single sudo, or a single elevated step on
+      Windows) so that no later run ever needs it.
     </p>
+    <p><strong>Linux and macOS:</strong></p>
     <app-code lang="bash"># the agent regenerates its host key each start (not a secret here) — skip the check
 ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@&lt;cluster-host&gt; install | sh</app-code>
+    <p><strong>Windows</strong>, from Git Bash (the assumed Windows shell — it ships with
+      <a href="https://git-scm.com/download/win" target="_blank" rel="noopener">Git for Windows</a>):</p>
+    <app-code lang="bash">ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@&lt;cluster-host&gt; install-windows \
+  | PLUG_HOST=&lt;cluster-host&gt; PLUG_PORT=2222 bash</app-code>
     <p>
-      The cluster address isn't baked into the agent — it can't see the address you reached it on (a
-      Swarm routing mesh hides it). Instead the installer reads <code>&lt;cluster-host&gt;</code>
-      straight from <em>your</em> <code>ssh</code> command and saves a
-      <a routerLink="/profiles">profile named after that host</a>, so plug is ready right away —
-      install from a second cluster and you get a second profile to run alongside. (Saved the script
-      and ran it later, with no live <code>ssh</code>? The <a routerLink="/profiles">first run</a>
-      asks once, via a short wizard.)
-    </p>
-    <p>
-      No key, no password — a passwordless <code>get</code> user locked to a single "hand me a
-      binary" command (see <a routerLink="/security">Security model</a>). That is the whole install —
-      <strong>a single static binary, no other dependency, no root</strong>.
+      The installer reads the cluster address straight from <em>your</em> <code>ssh</code> command
+      and saves a <a routerLink="/profiles">profile named after that host</a>, so plug is ready right
+      away. Install from a second cluster and you get a second profile to run alongside. (No live
+      <code>ssh</code>? The <a routerLink="/profiles">first run</a> asks once, via a short wizard.)
     </p>
 
     <h3>3. Run your process against the cluster</h3>
     <app-code lang="bash">plug npm run start:dev</app-code>
     <p>
-      plug opens a local SOCKS5 proxy to the cluster profile the installer set up, points your
-      command's environment at it, and runs it — or asks once via a
-      <a routerLink="/profiles">short wizard</a> if no profile exists yet. In your code you address
-      services by name — <code>http://pdfbox:8080</code>, <code>mongodb:27017</code> — and they
-      resolve inside the cluster. <kbd>Ctrl-C</kbd> stops your process and closes the proxy. No sudo,
-      ever.
+      plug wires your command to the cluster and runs it. In your code you address services by
+      name — <code>http://pdfbox:8080</code>, <code>mongodb:27017</code> — and they resolve inside
+      the cluster. <kbd>Ctrl-C</kbd> stops your process; when the last one exits, your machine is
+      back exactly as it was. No sudo, no admin.
     </p>
     <p>
       plug is a small <strong>launcher</strong>: on connect it asks the agent which version it
@@ -159,19 +154,13 @@ ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@&lt;
       versions never conflict. See <a routerLink="/profiles">Profiles &amp; versions</a>.
     </p>
 
-    <h3>Compatibility</h3>
-    <ul>
-      <li>CLI: <strong>macOS</strong> and <strong>Linux</strong> natively (Windows via <strong>WSL2</strong>) — a single static binary, nothing else to install.</li>
-      <li>Cluster: <strong>Docker Swarm</strong> today — <a routerLink="/roadmap">Kubernetes is on the roadmap</a>.</li>
-      <li>Runtime-agnostic: NestJS, Spring, Quarkus, Python, curl… any <strong>libc</strong> runtime works transparently via the injected hook (Go and non-TCP use a <a routerLink="/profiles">port-forward</a>).</li>
-    </ul>
-
     <h3>Where to next</h3>
     <p>
       Read <a routerLink="/how-it-works">How it works</a> for the mechanics,
-      <a routerLink="/profiles">Profiles &amp; wizard</a> for day-to-day usage,
+      <a routerLink="/profiles">Profiles &amp; versions</a> for day-to-day usage,
       <a routerLink="/agent">Agent &amp; deployment</a> for the cluster side,
-      <a routerLink="/security">Security model</a> before deploying anywhere sensitive, and the
+      <a routerLink="/security">Security model</a> before deploying anywhere sensitive, the
+      <a routerLink="/coverage">Coverage matrix</a> for what works on which OS, and the
       <a routerLink="/roadmap">Roadmap</a> for what's coming.
     </p>
   `,

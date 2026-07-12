@@ -8,55 +8,33 @@
 [![CLI](https://img.shields.io/badge/CLI-linux%20·%20macOS%20·%20windows-blue)](https://github.com/softwarity/plug/releases)
 [![CI](https://github.com/softwarity/plug/actions/workflows/ci.yml/badge.svg)](https://github.com/softwarity/plug/actions/workflows/ci.yml)
 
-Run a local process **as if it were inside your cluster** — cluster DNS names
-resolve, cluster services are reachable, with **no code change and no proxy
-config** in your app.
+Run a local process as if it were inside your cluster: cluster service names
+resolve, and cluster services are reachable — with no code change and no proxy
+settings in your app.
 
 ```bash
 plug npm run start:dev
-# your local NestJS/Spring/Quarkus now resolves and reaches
-# http://my-service:8080 like any workload in the cluster
+# your local app now reaches http://my-service:8080 like any workload in the cluster
 ```
 
-## How it works
+Prefix any command with `plug` and it talks to the cluster by name — Node, the
+JVM, Python, Go, curl, gRPC, database drivers, anything. Stop the command and
+your machine is exactly as it was.
 
-**One mechanism: a userspace TUN, over an SSH tunnel.** plug captures the child's
-cluster traffic at the **IP layer** and splices it, by name, to a tiny agent
-running in the cluster.
+## What you get
 
-```
-┌─ your machine ─────────────────┐        ┌─ cluster ───────────────────┐
-│  plug <cmd>   (root / helper)  │        │  plug agent (alpine + sshd) │
-│   └ userspace TUN (gVisor)     │        │                             │
-│      ├ DNS answered in-stack   │──ssh───┼─→ direct-tcpip: sshd        │
-│      │  on a fake IP:53        │  :2222 │   resolves the name and     │
-│      └ splices each flow ──────┼────────┼─→ dials service:port from   │
-│  <cmd> runs unchanged;         │        │   inside the cluster        │
-│  its socket is never touched   │        │                             │
-└────────────────────────────────┘        └─────────────────────────────┘
-```
-
-- A `wireguard-go` device (`/dev/net/tun`, `utun`, WinTUN) feeds a **gVisor
-  userspace netstack**. DNS is answered **in-stack** on a dedicated fake IP
-  (`198.18.<N>.53:53`), minting a fake IP per single-label cluster name; the OS
-  routes that range into the TUN, so the child's `connect()` surfaces as a packet
-  plug reads, terminates, and splices to the SSH tunnel **by name**.
-- Because capture is at the IP layer, **the child's socket is never touched** — so
-  it covers **every runtime with no config**: Node, JVM (Spring/Quarkus/Netty),
-  Python, Ruby, PHP, curl, **Go and other statically-linked binaries, and gRPC**
-  included (the cases an `LD_PRELOAD`/proxy approach cannot do).
-- **Split-horizon by name shape**: single-label names (`my-service`, `rabbitmq`)
-  go to the cluster; dotted FQDNs (`api.github.com`) and `localhost` resolve and
-  connect **directly**, so your app keeps normal internet access.
-- **Self-healing**: the tunnel survives a VPN reconnect, a laptop sleep, or an
-  agent restart.
-
-It needs **root** (create the TUN + set routes + repoint DNS) — granted **once at
-install** so day-to-day `plug <cmd>` runs with no sudo (see below).
+- Reach cluster services by their real names, from your laptop — no port-forwards
+  to wire up, no `localhost:PORT` mappings, no `/etc/hosts` edits.
+- Works with any language or tool, unchanged — your app's sockets are never touched.
+- Runs on Linux, macOS and Windows.
+- Several clusters at once, side by side.
+- Set up once per cluster, then no sudo or admin for daily use.
 
 ## Install
 
-**On the cluster** — add the agent to your stack; it joins the stack network:
+Two pieces: a small agent in the cluster, and the `plug` CLI on each dev machine.
+
+**In the cluster** — add the agent to the stack you want to reach:
 
 ```yaml
 services:
@@ -65,44 +43,28 @@ services:
     ports: ["2222:22"]
 ```
 
-Standalone agent for several stacks: [deploy/plug-stack.yml](deploy/plug-stack.yml).
-Kubernetes: see [Kubernetes](#kubernetes) below.
+Standalone agent, or Kubernetes: see the [documentation](https://softwarity.github.io/plug/).
 
-**On each dev machine** — install straight from the cluster, one line. The agent
-serves the right binary; the installer reads the cluster address from *your* `ssh`
-command and saves a profile named after that host, so plug is ready immediately.
+**On your machine** — install straight from the cluster, in one line.
+
+Linux and macOS:
 
 ```sh
-# Linux / macOS — the agent regenerates its host key at each start (not a secret
-# in plug's model), so skip the host-key check:
 ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@<cluster-host> install | sh
 ```
 
-The install grants plug its privilege **once** so future runs need no sudo — this
-is the OS-native equivalent of the same thing:
+Windows, from Git Bash:
 
-| OS | Privilege granted at install | Day-to-day |
-|---|---|---|
-| **Linux** | `setcap cap_net_admin,cap_sys_admin,cap_net_bind_service` (one sudo) | `plug <cmd>` — no sudo |
-| **macOS** | setuid-root helper (`chown root:wheel` + `chmod u+s`, one sudo); plug starts euid 0 to hold the TUN + DNS, then **drops your command back to your user** | `plug <cmd>` — no sudo |
-| **Windows** | SYSTEM service, installed once from an elevated Git Bash (grants *Authenticated Users* the right to start it) | `plug <cmd>` — no admin |
+```bash
+ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@<cluster-host> install-windows \
+  | PLUG_HOST=<cluster-host> PLUG_PORT=2222 bash
+```
 
-On macOS the data path lives in a small **per-cluster daemon** (started on demand,
-detached): because macOS repoints DNS machine-wide, the datapath must survive each
-`plug <cmd>`. Restart your processes freely — resolution survives; the daemon
-tears down and restores your DNS 30 s after the last `plug` of the cluster exits,
-and `plug down` stops it now.
+The install prepares your machine once — it may ask for your password (or, on
+Windows, to run as Administrator) a single time — so that every later `plug` run
+needs no privilege. After that you are ready.
 
-Build from source instead: `go build -o plug ./cli`.
-
-### Versions — the launcher model
-
-plug is a small **launcher** (like `nvm`/`rustup`). On each run it asks the agent
-which version it speaks and executes *that exact version* from `~/.plug/versions/`,
-downloading it once if missing. Each cluster runs its own matching version.
-`plug versions` lists what's cached; `plug self-update` refreshes the launcher.
-
-## Usage
+## Use
 
 ```bash
 plug npm run start:dev
@@ -110,132 +72,50 @@ plug ./mvnw spring-boot:run
 plug curl http://my-service:8080/health
 ```
 
-Profiles live in `~/.plug/*.conf` and are picked automatically: no profile → a
-short wizard; one profile → used as is; several → interactive, or `-p staging`.
-Reaching a new cluster is just naming it — the profile is created on first use:
+The first run asks which cluster to use and remembers it. Reaching another
+cluster is just naming it:
 
 ```bash
-plug -p staging <command>                 # wizard on first run, then remembered
-plug -p staging -H node --port 2222        # define it non-interactively (no wizard)
-plug -p staging -H node <command>          # define it and run, in one line
-plug test -H node                          # probe an agent without saving anything
+plug -p staging <command>     # asks once, then remembered
 ```
 
-`--host`/`--port` (or `$PLUG_HOST`/`$PLUG_PORT`) target an agent directly.
-`PLUG_DIRECT=<cidr,host,suffix,…>` forces extra destinations to bypass the cluster.
+Everyday commands: `plug ls` (list clusters), `plug test` (check one is
+reachable), `plug rn` / `plug rm` (rename / remove), `plug uninstall`,
+`plug about`.
 
-CLI: `plug ls` · `plug test` · `plug rn`/`rm` · `plug versions` · `plug uninstall`
-· `plug about`. (`plug self-update` and — on macOS — `plug down` still work; they're
-just rarely needed: versions auto-update on connect, the datapath tears itself down.)
+## Several clusters at once
 
-## Multiple clusters at once
-
-- **Linux**: already supported — each launch gets a private resolver in its own
-  mount namespace, so `plug -p a <cmd>` and `plug -p b <cmd>` run side by side.
-- **Windows**: supported — the SYSTEM service holds one tunnel per cluster and
-  disambiguates each flow at `connect()` by process ancestry, so `plug -p a <cmd>`
-  and `plug -p b <cmd>` run side by side.
-- **macOS**: one active cluster at a time today; the same PID-at-connect design
-  applies (transparent, bare names) — see [docs/multicluster.md](docs/multicluster.md).
-
-## Kubernetes
-
-Deploy the agent in the **namespace of the services you want to reach**:
-
-```
-kubectl -n <your-namespace> apply -f deploy/plug-k8s.yaml
-```
-
-`deploy/plug-k8s.yaml` is a Deployment + NodePort Service (`32222` → container
-`22`). sshd resolves short service names (`myservice`) via the pod's resolver
-(CoreDNS) from inside that namespace and dials them itself over an SSH
-`direct-tcpip` channel — no subnet or CIDR to declare. Reach it two ways:
-
-- **NodePort**, on any node: `plug --host <a-node> --port 32222 <cmd>`
-- **`kubectl port-forward`** — nothing exposed on the cluster; the tunnel rides
-  the API server and is gated by its RBAC:
-
-  ```
-  kubectl -n <ns> port-forward svc/plug 2222:2222
-  plug --host localhost <cmd>
-  ```
-
-Short names only resolve within the agent's namespace — for a service elsewhere,
-use its FQDN (`myservice.othernamespace`). See [deploy/README.md](deploy/README.md).
-
-## Windows
-
-Native Windows is supported (no WSL2 needed). This guide **assumes [Git for
-Windows](https://git-scm.com/download/win) is installed** — it ships `ssh` and Git
-Bash, the assumed Windows dev shell.
-
-**1. Install — from Git Bash, run as Administrator.** Same model as unix, piped into
-`bash`. This one step needs admin **once**: it installs the data path as a Windows
-SYSTEM service, after which no run ever needs admin again. The `ssh` bundled with
-Git is an MSYS process whose Windows command line the installer can't read, so
-**pass the cluster host/port explicitly** — that also names your profile:
+Run the same process against two clusters in parallel — each stays isolated:
 
 ```bash
-# host key regenerated each start (not a secret) — skip the check, as plug does internally.
-# -n: otherwise the piped ssh waits on a stdin that never closes and hangs after streaming.
-ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    get@<cluster-host> install-windows \
-  | PLUG_HOST=<cluster-host> PLUG_PORT=2222 bash
+plug -p prod    npm run start
+plug -p staging npm run start
 ```
 
-This downloads `plug.exe` and `wintun.dll` (both from the agent) into
-`%LOCALAPPDATA%\Programs\plug`, adds it to your PATH, pre-creates a
-`~/.plug/<host>.conf` profile, and installs the **`plug` SYSTEM service**. Open a
-new Git Bash afterwards so the PATH takes effect.
+Supported today on Linux and Windows; macOS runs one cluster at a time. See the
+[coverage matrix](https://softwarity.github.io/plug/#/coverage) for what works
+where.
 
-**2. Run — no admin, from any terminal.** The data path (a WinTUN adapter + routes +
-DNS) needs privilege, but it lives in the SYSTEM service installed above — not in
-your `plug` process. Each `plug <cmd>` is a **non-elevated** launcher that starts the
-service on demand (the install granted *Authenticated Users* that right) and delegates
-the data path to it, so your command runs attached to your terminal, as you:
+## Limits
 
-```bash
-plug <your command>            # several clusters? plug -p <name> <your command>
-```
+It carries TCP reached by name. UDP, QUIC and ping are not tunnelled (most
+clients fall back to TCP), and a hard-coded IPv6 literal is not either — a
+service reached by name is always fine.
 
-Several clusters run **side by side**: the service holds one tunnel per cluster and
-attributes each flow to the right one by process ancestry at `connect()`. The service
-tears its data path down ~30 s after the last `plug` exits and restarts on the next
-run. Manage it by hand with `plug install-service` / `plug remove-service` (elevated).
+## Security
 
-## Security model — read this
+There is deliberately no authentication: anyone who can reach the agent's port
+gets network access to the cluster it is attached to. Deploy the agent only on
+clusters you trust, and never expose its port on an untrusted network. The full
+model is in the [documentation](https://softwarity.github.io/plug/#/security).
 
-**There is deliberately no authentication.** The SSH keypair is embedded in this
-repository and in every `plug` binary; it is a transport detail, not a secret.
-Anyone who can reach the agent port has full network access to the attached
-cluster networks. Only deploy the agent on clusters you already trust; never
-publish port 2222 on an untrusted network. The agent's host key is pinned on first
-use (`~/.plug/known_hosts`) — a changed key aborts the connection (a basic MITM
-tripwire on top of the no-secret transport).
+## Documentation
 
-## Limits (by design)
+Everything else — how it works, deployment on Swarm and Kubernetes, profiles and
+versions, the security model, and the per-OS coverage matrix:
 
-- **TCP only** — the SSH tunnel carries TCP, so UDP/QUIC/ping aren't tunnelled
-  (most clients fall back to TCP; HTTP/3 forced to QUIC would not).
-- **IPv6 literals** — fake IPs are IPv4; an app that connects to a hard-coded IPv6
-  isn't tunnelled (a cluster service reached **by name** is fine).
-- **Root/helper required** — the price of covering every runtime uniformly.
+**https://softwarity.github.io/plug/**
 
-## Roadmap
-
-- [x] Userspace-TUN data path (covers every runtime incl. Go & gRPC), split-horizon
-      routing, self-healing transport, host-key TOFU
-- [x] Install from the cluster + per-cluster launcher versions + one-sudo privilege
-      (setcap on Linux, setuid helper on macOS)
-- [x] macOS DNS at the IP layer (works under a corporate VPN) + persistent
-      per-cluster daemon
-- [x] Kubernetes manifest — NodePort or `kubectl port-forward`
-- [x] Windows no-admin SYSTEM service + multicluster (PID-at-connect) — see [Windows](#windows)
-- [ ] Multicluster on macOS (PID-at-connect) — [design](docs/multicluster.md)
-- [ ] IPv6 fake-pool + v6-literal tunnelling
-- [ ] Generalize the multi-protocol selftest per OS
-
-📊 [Coverage matrix](https://softwarity.github.io/plug/#/coverage) — what works on which OS (Linux · macOS · Windows), feature by feature.
-
-Distribution is **from the cluster only** (one source: the agent image) — no
-Homebrew tap or separate package channel by design.
+Build from source with `go build -o plug ./cli`. Distribution is from the cluster
+only — the agent image is the single source of the CLI, so there is no separate
+package to install or keep in sync.

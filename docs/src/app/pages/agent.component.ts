@@ -82,15 +82,17 @@ docker stack deploy -c plug-stack.yml plug</app-code>
 
     <h3>It also serves the CLI</h3>
     <p>
-      The image is multi-stage: it compiles the five CLI binaries into <code>/opt/plug/bin/</code>
-      and writes <code>/opt/plug/VERSION</code>. The <code>get</code> user serves three things and
-      nothing else — <code>version</code>, a named binary, and an <code>install</code> script with
-      the binaries <strong>embedded</strong> (it picks yours with <code>uname</code>, so the command
-      needs no host and no re-download):
+      The image is multi-stage: it compiles the CLI binaries into <code>/opt/plug/bin/</code> and
+      writes <code>/opt/plug/VERSION</code>. The <code>get</code> user serves a fixed, tiny set and
+      nothing else — the agent <code>version</code>, a named binary (<code>&lt;os&gt;-&lt;arch&gt;</code>),
+      the <code>wintun</code> driver DLL for Windows, and two installers: <code>install</code> for
+      Linux/macOS (binaries <strong>embedded</strong>, picked with <code>uname</code>) and
+      <code>install-windows</code> (a Git Bash script):
     </p>
     <app-code lang="bash"># the agent regenerates its host key each start (not a secret here), so skip the check
-ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@&lt;host&gt; install | sh   # install
-ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@&lt;host&gt; $(uname -s)-$(uname -m) > plug   # binary
+ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@&lt;host&gt; install | sh   # install (Linux/macOS)
+ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@&lt;host&gt; install-windows | PLUG_HOST=&lt;host&gt; PLUG_PORT=2222 bash   # install (Windows, Git Bash)
+ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@&lt;host&gt; $(uname -s)-$(uname -m) > plug   # just the binary
 ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@&lt;host&gt; version   # the agent version</app-code>
     <p>
       The version baked into the image (and stamped into every binary) is what the
@@ -102,7 +104,7 @@ ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@&lt;
     <ul>
       <li>Two SSH users: <code>plug</code> (public-key, runs the tunnel) and <code>get</code> (passwordless, <code>ForceCommand</code>-locked to serving a binary) — see <a routerLink="/security">Security model</a>.</li>
       <li>Host keys are generated at container start — connections use <code>StrictHostKeyChecking=no</code>, consistent with the <a routerLink="/security">no-auth model</a>.</li>
-      <li>The <code>plug</code> user has <code>AllowTcpForwarding</code> on: the CLI's SOCKS proxy and port-forwards ride SSH <code>direct-tcpip</code> channels, so <code>sshd</code> does the real dials from inside the cluster.</li>
+      <li>The <code>plug</code> user has <code>AllowTcpForwarding</code> on: the CLI splices each flow onto an SSH <code>direct-tcpip</code> channel, so <code>sshd</code> does the real dials from inside the cluster.</li>
       <li>The container logs its attached networks at startup — <code>docker service logs &lt;stack&gt;_plug</code> is your first debugging stop.</li>
     </ul>
   `,

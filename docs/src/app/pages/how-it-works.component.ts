@@ -1,80 +1,181 @@
 import { Component } from '@angular/core';
 import { RouterLink } from '@angular/router';
-import { CodeComponent } from '../code/code.component';
 
 @Component({
   selector: 'app-how-it-works',
-  imports: [CodeComponent, RouterLink],
+  imports: [RouterLink],
   preserveWhitespaces: true,
+  styles: [
+    `
+      .diagram {
+        margin: 20px 0 8px;
+        padding: 8px 4px;
+        overflow-x: auto;
+      }
+      .diagram svg {
+        display: block;
+        width: 100%;
+        min-width: 620px;
+        max-width: 900px;
+        height: auto;
+        margin: 0 auto;
+      }
+    `,
+  ],
   template: `
     <h2>How it works</h2>
 
     <p>
-      plug is a thin, opinionated orchestration of proven pieces: an SSH tunnel to a tiny agent in
-      the cluster, three interception layers on top of it (an injected
-      <strong>connect()/DNS hook</strong>, an <strong>HTTP proxy</strong>, and a
-      <strong>SOCKS5 proxy</strong>), and the child command wired to all three. No root, no TUN,
-      no daemon.
+      <strong>One mechanism: a userspace TUN, over an SSH tunnel.</strong> plug captures your
+      command's cluster traffic at the <strong>IP layer</strong> and splices it, by name, to a tiny
+      agent (Alpine + <code>sshd</code>) running in the cluster. Your app's socket is never touched,
+      and nothing but a private, reserved IP range is ever intercepted.
     </p>
 
-    <app-code lang="text">┌─ your laptop ──────────────────┐        ┌─ swarm cluster ────────────┐
-│  plug &lt;cmd&gt;                    │        │  plug agent (alpine+sshd)  │
-│   ├─ connect()/DNS hook (inj.) │        │                            │
-│   ├─ HTTP proxy   ─────────────┼──ssh───┼─→ direct-tcpip: sshd dials │
-│   ├─ SOCKS5 proxy              │  :2222 │   service:port & resolves  │
-│   └─ runs &lt;cmd&gt; → all three    │        │   names inside the cluster │
-└────────────────────────────────┘        └────────────────────────────┘</app-code>
+    <div class="diagram" role="img" aria-label="plug data path: your command connects by name, DNS is answered in-stack, the flow is spliced over an SSH tunnel, and the cluster agent dials the service from inside.">
+      <svg viewBox="0 0 900 500" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+        <defs>
+          <marker id="hiw-arw" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="#8b949e"/>
+          </marker>
+          <marker id="hiw-arwBlue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="#58a6ff"/>
+          </marker>
+          <marker id="hiw-arwGreen" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="#3fb950"/>
+          </marker>
+        </defs>
 
-    <h3>The stages</h3>
+        <text x="48" y="44" fill="#8b949e" font-size="13" letter-spacing="2" font-weight="600">YOUR MACHINE</text>
+        <rect x="40" y="58" width="404" height="404" rx="14" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+
+        <rect x="72" y="92" width="340" height="66" rx="9" fill="#21262d" stroke="#30363d" stroke-width="1.5"/>
+        <text x="92" y="122" fill="#e6edf3" font-size="15" font-weight="600" font-family="ui-monospace, 'SF Mono', Menlo, monospace">plug npm run start:dev</text>
+        <text x="92" y="142" fill="#8b949e" font-size="12.5">your process, its sockets never touched</text>
+
+        <line x1="242" y1="158" x2="242" y2="196" stroke="#8b949e" stroke-width="1.6" marker-end="url(#hiw-arw)"/>
+        <circle cx="266" cy="177" r="11" fill="#a371f7"/>
+        <text x="266" y="181" fill="#fff" font-size="12.5" font-weight="700" text-anchor="middle">1</text>
+        <text x="286" y="181" fill="#c9d1d9" font-size="12.5">connects by name</text>
+
+        <rect x="72" y="200" width="340" height="228" rx="11" fill="rgba(163,113,247,0.07)" stroke="#a371f7" stroke-width="1.5"/>
+        <text x="92" y="228" fill="#a371f7" font-size="13" font-weight="700" letter-spacing="0.5">plug — userspace data path</text>
+
+        <rect x="92" y="242" width="300" height="70" rx="8" fill="#21262d" stroke="#30363d" stroke-width="1.2"/>
+        <text x="108" y="266" fill="#e6edf3" font-size="13.5" font-weight="600">DNS answered in-stack</text>
+        <text x="108" y="286" fill="#8b949e" font-size="12">the name gets a private stand-in address,</text>
+        <text x="108" y="302" fill="#8b949e" font-size="12">which the OS routes straight into the tunnel</text>
+        <circle cx="372" cy="258" r="10" fill="#a371f7"/>
+        <text x="372" y="262" fill="#fff" font-size="11.5" font-weight="700" text-anchor="middle">2</text>
+
+        <line x1="242" y1="312" x2="242" y2="340" stroke="#8b949e" stroke-width="1.6" marker-end="url(#hiw-arw)"/>
+
+        <rect x="92" y="344" width="300" height="66" rx="8" fill="#21262d" stroke="#30363d" stroke-width="1.2"/>
+        <text x="108" y="370" fill="#e6edf3" font-size="13.5" font-weight="600">TUN + userspace network stack</text>
+        <text x="108" y="392" fill="#8b949e" font-size="12">recovers the name and splices the flow</text>
+        <circle cx="372" cy="360" r="10" fill="#a371f7"/>
+        <text x="372" y="364" fill="#fff" font-size="11.5" font-weight="700" text-anchor="middle">3</text>
+
+        <line x1="444" y1="322" x2="612" y2="322" stroke="#58a6ff" stroke-width="2.4" stroke-dasharray="8 5" marker-end="url(#hiw-arwBlue)"/>
+        <rect x="470" y="286" width="116" height="26" rx="13" fill="#161b22" stroke="#58a6ff" stroke-width="1.3"/>
+        <text x="528" y="303" fill="#58a6ff" font-size="12.5" font-weight="600" text-anchor="middle">SSH tunnel</text>
+        <text x="528" y="342" fill="#8b949e" font-size="11.5" text-anchor="middle">one flow, by name</text>
+        <text x="528" y="357" fill="#8b949e" font-size="11.5" text-anchor="middle">port 2222</text>
+
+        <text x="628" y="44" fill="#8b949e" font-size="13" letter-spacing="2" font-weight="600">CLUSTER</text>
+        <rect x="612" y="58" width="248" height="404" rx="14" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+
+        <rect x="636" y="242" width="200" height="96" rx="10" fill="rgba(88,166,255,0.07)" stroke="#58a6ff" stroke-width="1.5"/>
+        <text x="656" y="270" fill="#58a6ff" font-size="13.5" font-weight="700">plug agent (sshd)</text>
+        <text x="656" y="292" fill="#8b949e" font-size="12">resolves the name and</text>
+        <text x="656" y="308" fill="#8b949e" font-size="12">dials the service from</text>
+        <text x="656" y="324" fill="#8b949e" font-size="12">inside the cluster</text>
+        <circle cx="816" cy="258" r="10" fill="#58a6ff"/>
+        <text x="816" y="262" fill="#fff" font-size="11.5" font-weight="700" text-anchor="middle">4</text>
+
+        <line x1="736" y1="242" x2="736" y2="170" stroke="#3fb950" stroke-width="1.8" marker-end="url(#hiw-arwGreen)"/>
+
+        <rect x="648" y="104" width="176" height="60" rx="9" fill="#21262d" stroke="#3fb950" stroke-width="1.5"/>
+        <text x="736" y="130" fill="#e6edf3" font-size="14" font-weight="600" text-anchor="middle" font-family="ui-monospace, 'SF Mono', Menlo, monospace">my-service:8080</text>
+        <text x="736" y="150" fill="#8b949e" font-size="12" text-anchor="middle">a normal cluster workload</text>
+
+        <text x="48" y="490" fill="#8b949e" font-size="12">Names go to the cluster; dotted host names (api.github.com) and localhost stay on your machine.</text>
+      </svg>
+    </div>
+
+    <h3>The data path, step by step</h3>
+    <ol>
+      <li>
+        <strong>Your command connects by name.</strong> It asks for
+        <code>my-service:8080</code> exactly as it would inside the cluster — no proxy variables, no
+        rewritten URL.
+      </li>
+      <li>
+        <strong>DNS is answered in-stack.</strong> plug runs a
+        <a href="https://gvisor.dev/" target="_blank" rel="noopener">gVisor</a> userspace network
+        stack behind a TUN device (<code>/dev/net/tun</code> on Linux, <code>utun</code> on macOS,
+        WinTUN on Windows). A single-label name is handed a private stand-in IP from a reserved
+        range (<code>198.18.x.x</code>), and the OS routes that range straight into the TUN.
+      </li>
+      <li>
+        <strong>plug reads the packet and splices the flow.</strong> The <code>connect()</code>
+        surfaces as a packet in plug's stack; because plug minted the stand-in IP, it knows the real
+        name, terminates the flow, and splices it onto the single SSH tunnel — carrying the
+        <em>name</em>, not an IP.
+      </li>
+      <li>
+        <strong>The agent dials from inside.</strong> A stock <code>sshd</code> opens an SSH
+        <code>direct-tcpip</code> channel: it resolves the name with the cluster's own resolver and
+        connects to <code>service:port</code> from inside the cluster. No server code of ours.
+      </li>
+    </ol>
+
+    <h3>Why capture at the IP layer</h3>
     <ul>
       <li>
-        <strong>SSH transport.</strong> plug connects to the agent's <code>sshd</code> (embedded
-        key, in-process — no <code>ssh</code> binary needed). Every outbound flow becomes an SSH
-        <code>direct-tcpip</code> channel: <code>sshd</code> opens the real connection to
-        <code>service:port</code> from <em>inside</em> the cluster, so it resolves the name with the
-        cluster's own resolver. No server code of ours — stock <code>sshd</code>. The connection
-        <strong>self-heals</strong>: a keepalive keeps it warm and a drop (an idle NAT/VPN timeout)
-        is re-dialed transparently, so long sessions no longer need a restart. The agent's host key
-        is pinned on first use.
+        <strong>Every runtime, no config.</strong> The app's socket is never touched, so it covers
+        Node, the JVM (Spring/Quarkus/Netty), Python, Ruby, PHP, curl — and, crucially,
+        <strong>Go and other statically-linked binaries, and gRPC</strong>, the exact cases an
+        <code>LD_PRELOAD</code>/proxy approach cannot reach.
       </li>
       <li>
-        <strong>Transparent connect()/DNS hook.</strong> A tiny native library is injected into the
-        child (<code>DYLD_INSERT_LIBRARIES</code> on macOS, <code>LD_PRELOAD</code> on Linux); it
-        interposes <code>connect()</code> and <code>getaddrinfo()</code>. So <em>every</em> outbound
-        TCP connection and name lookup of a <strong>libc-based</strong> process (Node, the JVM,
-        Python, curl…) is routed through the tunnel, resolved cluster-side — which is what makes
-        raw-TCP drivers (<code>amqplib</code>, <code>pg</code>, <code>mongodb</code>,
-        <code>redis</code>, gRPC…) work with no per-service config. Routing is
-        <strong>split-horizon</strong> by name shape — single-label names (<code>pdfbox</code>) go to
-        the cluster, dotted FQDNs (<code>api.github.com</code>) and <code>localhost</code> resolve and
-        connect <em>directly</em> — with <code>PLUG_DIRECT</code> to force extra CIDRs/hosts direct.
+        <strong>Split-horizon by name shape.</strong> Single-label names (<code>my-service</code>,
+        <code>rabbitmq</code>) go to the cluster; dotted FQDNs (<code>api.github.com</code>) and
+        <code>localhost</code> resolve and connect <strong>directly</strong>, so your app keeps
+        normal internet access. <code>PLUG_DIRECT=&lt;cidr,host,suffix,…&gt;</code> forces extra
+        destinations direct.
       </li>
       <li>
-        <strong>HTTP proxy + SOCKS5 proxy.</strong> Alongside the hook, plug exports
-        <code>HTTP_PROXY</code>/<code>HTTPS_PROXY</code> (a local HTTP proxy) and
-        <code>ALL_PROXY=socks5h://…</code> + <code>JAVA_TOOL_OPTIONS=-DsocksProxyHost…</code> (a
-        local SOCKS5 proxy). These catch proxy-aware clients even where injection doesn't apply —
-        and the JVM routes <em>all</em> its sockets through <code>-DsocksProxyHost</code>. The
-        <code>h</code> in <code>socks5h</code> means the hostname is resolved cluster-side.
-      </li>
-      <li>
-        <strong>Port-forwards (fallback).</strong> For what the hook can't reach —
-        <strong>Go</strong>/statically-linked binaries (they bypass libc), non-TCP — declare a
-        per-session local port to the cluster service; plug injects its address into the child's
-        environment. See <a routerLink="/profiles">Profiles</a>.
-      </li>
-      <li>
-        <strong>Your command runs, then teardown.</strong> stdio is passed through (pipes, colors,
-        <kbd>Ctrl-C</kbd> behave normally). When it exits, the proxy and forwards close with it.
-        Nothing global was ever changed, so nothing can leak.
+        <strong>Self-healing transport.</strong> A keepalive keeps the SSH tunnel warm and a drop
+        (an idle NAT/VPN timeout, a laptop sleep, an agent restart) is re-dialed transparently, so
+        long sessions never need a restart. The agent's host key is pinned on first use.
       </li>
     </ul>
 
-    <h3>Why this design</h3>
+    <h3>The privilege, granted once</h3>
+    <p>
+      Creating the TUN, setting routes and repointing DNS needs privilege — granted
+      <strong>once at install</strong> so day-to-day <code>plug &lt;cmd&gt;</code> needs none. Each OS
+      does it the native way:
+    </p>
     <ul>
-      <li><strong>No root, no daemon, no TUN.</strong> Userspace proxies + an injected userspace library + env vars. Install is a single static binary.</li>
-      <li><strong>Multi-cluster by nature.</strong> Nothing global is touched (no system DNS, no <code>/etc/hosts</code>, no firewall), so the same process can run against several clusters at once — each session has its own proxies, hook and forward ports.</li>
-      <li><strong>Honest limits.</strong> The hook is libc-only: <strong>Go</strong>/statically-linked binaries issue the <code>connect</code> syscall directly and bypass it; non-TCP (UDP, QUIC) is untouched; on macOS, SIP-protected system binaries (<code>/usr/bin/*</code>) strip the injection. A <a routerLink="/profiles">port-forward</a> is the fallback for those. Native Windows isn't covered yet — use WSL2.</li>
+      <li>
+        <strong>Linux</strong> — file capabilities (<code>cap_net_admin</code>,
+        <code>cap_sys_admin</code>, <code>cap_net_bind_service</code>). Each launch also gets a
+        private resolver in its own mount namespace, which is what lets several clusters run side by
+        side for free.
+      </li>
+      <li>
+        <strong>macOS</strong> — a setuid-root helper holds the TUN + DNS, then drops your command
+        back to your user. Because macOS repoints DNS machine-wide, the data path lives in a small
+        per-cluster <strong>daemon</strong> that survives each run and restores your DNS ~30 s after
+        the last <code>plug</code> of that cluster exits (<code>plug down</code> stops it now).
+      </li>
+      <li>
+        <strong>Windows</strong> — the data path lives in a <strong>SYSTEM service</strong> installed
+        once (elevated); every <code>plug</code> run is a non-elevated launcher that starts it on
+        demand and delegates to it. See <a href="https://github.com/softwarity/plug/blob/main/docs/windows-service.md" target="_blank" rel="noopener">the Windows service notes</a>.
+      </li>
     </ul>
 
     <h3>Built with open source</h3>
@@ -85,18 +186,19 @@ import { CodeComponent } from '../code/code.component';
       </thead>
       <tbody>
         <tr><td><a href="https://www.openssh.com/" target="_blank" rel="noopener">OpenSSH</a></td><td>The transport: client (<code>golang.org/x/crypto/ssh</code>, in-process) and <code>sshd</code> in the agent doing the <code>direct-tcpip</code> dials</td><td>BSD</td></tr>
-        <tr><td><a href="https://go.dev/" target="_blank" rel="noopener">Go</a></td><td>The CLI — one static binary per platform, no runtime dependencies (~6&nbsp;MB)</td><td>BSD</td></tr>
+        <tr><td><a href="https://github.com/WireGuard/wireguard-go" target="_blank" rel="noopener">wireguard-go</a> + <a href="https://gvisor.dev/" target="_blank" rel="noopener">gVisor</a></td><td>The userspace TUN device and network stack that answer DNS and terminate flows in-process</td><td>MIT · Apache-2.0</td></tr>
+        <tr><td><a href="https://go.dev/" target="_blank" rel="noopener">Go</a></td><td>The CLI — one static binary per platform, no runtime dependencies</td><td>BSD</td></tr>
         <tr><td><a href="https://www.alpinelinux.org/" target="_blank" rel="noopener">Alpine Linux</a></td><td>Base of the agent image — just <code>sshd</code> + the served binaries</td><td>MIT</td></tr>
       </tbody>
     </table>
 
     <div class="callout">
       <strong>Why not mirrord / Telepresence?</strong> Both are excellent — for Kubernetes. plug
-      exists because nothing equivalent existed for <strong>Docker Swarm</strong>, and its agent is
-      simple enough (a stock <code>sshd</code>) to embed later into another host — like an API
-      gateway (see <a routerLink="/roadmap">Roadmap</a>). Full syscall-level transparency across any
-      driver, with zero config, is exactly mirrord's domain (library injection) — plug trades that
-      for zero root and native multi-cluster.
+      started because nothing equivalent existed for <strong>Docker Swarm</strong>, and now runs on
+      both. Its agent is simple enough (a stock <code>sshd</code>) to embed later into another host —
+      like an API gateway (see <a routerLink="/roadmap">Roadmap</a>) — and capturing at the IP layer
+      buys full transparency across any runtime, Go and gRPC included, for the price of one privilege
+      grant at install.
     </div>
   `,
 })

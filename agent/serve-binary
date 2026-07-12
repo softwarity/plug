@@ -98,7 +98,7 @@ case "$os-$arch" in
   linux-arm64)  emit_linux_arm64  > "$dest/plug" ;;
   darwin-amd64) emit_darwin_amd64 > "$dest/plug" ;;
   darwin-arm64) emit_darwin_arm64 > "$dest/plug" ;;
-  *) echo "plug: unsupported platform $os-$arch (on Windows, run in WSL2)" >&2; exit 1 ;;
+  *) echo "plug: unsupported platform $os-$arch (on Windows, use Git Bash: ssh get@<host> install-windows | PLUG_HOST=<host> PLUG_PORT=<port> bash)" >&2; exit 1 ;;
 esac
 chmod +x "$dest/plug"
 echo "plug: installed to $dest/plug"
@@ -152,7 +152,7 @@ fi
 echo "plug $(cat /opt/plug/VERSION) — usage over ssh:" >&2
 echo '  # host key regenerated each start (not a secret) — skip the check:' >&2
 echo '  ssh -p <port> -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@<host> install | sh   # install (linux/macOS, recommended)' >&2
-echo '  ssh -p <port> -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@<host> install-windows | powershell -NoProfile -Command -   # install (Windows)' >&2
+echo '  ssh -n -p <port> -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@<host> install-windows | PLUG_HOST=<host> PLUG_PORT=<port> bash   # install (Windows, Git Bash)' >&2
 echo '  ssh -p <port> -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@<host> $(uname -s)-$(uname -m) > plug   # just the binary' >&2
 echo '  ssh -p <port> -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@<host> version' >&2
 exit 1
