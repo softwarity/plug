@@ -15,6 +15,12 @@ func Available() bool { return true }
 // defaultTUNName: wireguard-go assigns the next free utunN when given "utun".
 const defaultTUNName = "utun"
 
+// One datapath per machine (the global daemon): a single instance slot. The OS
+// already auto-assigns the utunN device name.
+const maxInstances = 1
+
+func tunNameFor(int) string { return defaultTUNName }
+
 func checkPriv() error {
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("plug --tun needs root (create utun + set routes): run with sudo, or install the plug helper")
@@ -34,7 +40,7 @@ func checkPriv() error {
 // macOS has no mount namespace, so this repoint is global for the session
 // (privResolv is empty; the child runs directly). Phase 2 refuses a 2nd instance
 // on macOS precisely because this resolver override is machine-wide.
-func configure(_ any, ifname, cidr, dnsIP string, log logfn) ([]string, string, func(), error) {
+func configure(_ any, _ int, ifname, cidr, dnsIP string, log logfn) ([]string, string, func(), error) {
 	for _, cmd := range [][]string{
 		{"ifconfig", ifname, "inet", "10.99.99.1", "10.99.99.2", "up"},
 		{"route", "-n", "add", "-net", cidr, "-interface", ifname},

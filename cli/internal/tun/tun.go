@@ -50,8 +50,8 @@ const (
 
 // instanceNet derives instance N's routed subnet and reserved DNS address. Each
 // instance owns 198.18.<N>.0/24 (routed into its own TUN) and answers DNS on
-// 198.18.<N>.53 — so concurrent instances never overlap (Phase 2 allocates N;
-// today N is fixed at 0).
+// 198.18.<N>.53 — so concurrent instances never overlap. N is allocated by
+// claiming the first free TUN device (see startDatapathDF).
 func instanceNet(n int) (cidr, dnsIP string, base uint32) {
 	base = uint32(fakeBase) | uint32(n)<<8 // 198.18.<n>.0
 	cidr = ipStr(base) + "/24"
@@ -108,14 +108,27 @@ func startDatapathDF(df dialFunc, logf func(string, ...any)) (*Datapath, error) 
 		return nil, err
 	}
 
-	// Phase 1: a single instance, N=0. Phase 2 will allocate N per active cluster.
-	const n = 0
-	cidr, dnsIP, base := instanceNet(n)
-
-	dev, err := wgtun.CreateTUN(defaultTUNName, mtu)
+	// Allocate the instance slot N by claiming the first free TUN device: on Linux
+	// each simultaneous launch (one per cluster) gets its own plug<N> — the kernel
+	// arbitrates the name, so a taken device ("busy") just means try the next slot.
+	// The slot then derives the instance's OWN 198.18.<N>.0/24 + DNS, so concurrent
+	// clusters never overlap. macOS/Windows hold one datapath per machine
+	// (daemon / SYSTEM service): a single slot.
+	var dev wgtun.Device
+	var err error
+	n := 0
+	for ; n < maxInstances; n++ {
+		if dev, err = wgtun.CreateTUN(tunNameFor(n), mtu); err == nil {
+			break
+		}
+		if !strings.Contains(err.Error(), "busy") {
+			break // permission or driver problem — more names won't help
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("create TUN (need root/helper): %w", err)
 	}
+	cidr, dnsIP, base := instanceNet(n)
 	ifname, _ := dev.Name()
 
 	// Networking + DNS handoff (privileged, per-OS). Routes cidr into the TUN and
@@ -125,7 +138,7 @@ func startDatapathDF(df dialFunc, logf func(string, ...any)) (*Datapath, error) 
 	// the adapter DNS on Windows. Returns the child's former upstream nameservers
 	// (captured so our own dotted-name lookups don't loop) and, on Linux, the path
 	// to that private resolv.conf.
-	upstreams, privResolv, cleanup, err := configure(dev, ifname, cidr, dnsIP, log)
+	upstreams, privResolv, cleanup, err := configure(dev, n, ifname, cidr, dnsIP, log)
 	if err != nil {
 		dev.Close()
 		return nil, fmt.Errorf("configure %s: %w", ifname, err)

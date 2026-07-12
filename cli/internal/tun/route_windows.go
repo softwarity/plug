@@ -18,6 +18,12 @@ func Available() bool { return true }
 
 const defaultTUNName = "plug0"
 
+// One datapath per machine (the SYSTEM service, multiDial per flow): a single
+// instance slot.
+const maxInstances = 1
+
+func tunNameFor(int) string { return defaultTUNName }
+
 // checkPriv is a no-op here: WinTUN adapter creation fails with a clear error
 // when not elevated, which is a better signal than a hand-rolled token check.
 func checkPriv() error { return nil }
@@ -28,7 +34,7 @@ func checkPriv() error { return nil }
 // dial "unreachable"); wireguard-windows uses winipcfg for exactly this reason.
 // It assigns the adapter IP, routes the instance's /24 on-link, and sets the
 // adapter DNS to dnsIP (198.18.<N>.53).
-func configure(dev any, _, cidr, dnsIP string, log logfn) ([]string, string, func(), error) {
+func configure(dev any, _ int, _, cidr, dnsIP string, log logfn) ([]string, string, func(), error) {
 	nt, ok := dev.(*wgtun.NativeTun)
 	if !ok {
 		return nil, "", func() {}, fmt.Errorf("windows TUN: unexpected device type %T", dev)

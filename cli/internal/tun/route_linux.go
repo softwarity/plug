@@ -15,6 +15,14 @@ func Available() bool { return true }
 // defaultTUNName is the interface name we ask wireguard-go to create.
 const defaultTUNName = "plug0"
 
+// Linux runs one datapath PER LAUNCH (one per simultaneous cluster), so each
+// needs its own device AND its own 198.18.<N>.0/24. The kernel arbitrates device
+// names, so the first free plug<N> IS the instance allocator — no lock file to
+// leak; N then feeds instanceNet(N).
+const maxInstances = 8
+
+func tunNameFor(n int) string { return fmt.Sprintf("plug%d", n) }
+
 // capNetAdmin is the CAP_NET_ADMIN bit — the marker capability the install grants
 // (alongside CAP_SYS_ADMIN + CAP_NET_BIND_SERVICE) so plug runs without sudo.
 const capNetAdmin = 12
@@ -48,12 +56,15 @@ func hasEffCap(bit uint) bool {
 // pointing the resolver at us is scoped to this launch: the global
 // /etc/resolv.conf is never modified and two `plug` runs never collide. Returns
 // the child's former upstream nameservers (read before anything changes).
-func configure(_ any, ifname, cidr, dnsIP string, log logfn) ([]string, string, func(), error) {
+func configure(_ any, n int, ifname, cidr, dnsIP string, log logfn) ([]string, string, func(), error) {
 	ups := resolvNameservers()
 
+	// Per-instance link-local address (10.99.99.1, 10.99.100.1, ...): simultaneous
+	// instances must not share it, or their connected routes become ambiguous.
+	local := fmt.Sprintf("10.99.%d.1/24", 99+n)
 	for _, cmd := range [][]string{
 		{"ip", "link", "set", ifname, "up"},
-		{"ip", "addr", "add", "10.99.99.1/24", "dev", ifname},
+		{"ip", "addr", "add", local, "dev", ifname},
 		{"ip", "route", "add", cidr, "dev", ifname},
 	} {
 		if err := run(cmd[0], cmd[1:]...); err != nil {
@@ -78,7 +89,7 @@ func configure(_ any, ifname, cidr, dnsIP string, log logfn) ([]string, string, 
 
 	cleanup := func() {
 		_ = run("ip", "route", "del", cidr, "dev", ifname)
-		_ = run("ip", "addr", "del", "10.99.99.1/24", "dev", ifname)
+		_ = run("ip", "addr", "del", local, "dev", ifname)
 		if privResolv != "" {
 			_ = os.Remove(privResolv)
 		}

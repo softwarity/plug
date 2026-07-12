@@ -63,7 +63,7 @@ func SelfTest(logf func(string, ...any)) error {
 	defer dev.Close()
 	ifname, _ := dev.Name()
 
-	upstreams, privResolv, cleanup, err := configure(dev, ifname, cidr, dnsIP, log)
+	upstreams, privResolv, cleanup, err := configure(dev, 0, ifname, cidr, dnsIP, log)
 	if err != nil {
 		return fmt.Errorf("configure %s: %w", ifname, err)
 	}
