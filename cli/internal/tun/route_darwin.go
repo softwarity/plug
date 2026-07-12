@@ -53,11 +53,19 @@ func configure(_ any, ifname, cidr, dnsIP string, log logfn) ([]string, string, 
 	}
 
 	dnsKey := "State:/Network/Service/" + svc + "/DNS"
-	restore, upstreams := readDNSDict(dnsKey)
+	restore, upstreams, search := readDNSDict(dnsKey)
 
-	// Become the primary resolver: override ServerAddresses with dnsIP. Dotted
-	// names still work — answerDNS forwards them to the captured upstream.
-	if err := scutilSet(dnsKey, "d.init\nd.add ServerAddresses * "+dnsIP+"\n"); err != nil {
+	// Become the primary resolver AND advertise a ".plug" search domain (keeping the
+	// user's existing ones). Override ServerAddresses with dnsIP — dotted names still
+	// work, answerDNS forwards them to the captured upstream. The SearchDomains matter
+	// for BARE single-label names: macOS does not send an unqualified name to a
+	// resolver that has no search domain (it treats it as mDNS/.local), so on a network
+	// without one — e.g. a headless CI runner — "my-service" never reaches us. With
+	// "plug" appended, getaddrinfo also tries "my-service.plug", which lands here and
+	// answerDNS strips back to the bare name. Same mechanism as the Windows NRPT suffix.
+	searchList := append(append([]string{}, search...), searchSuffix)
+	set := "d.init\nd.add ServerAddresses * " + dnsIP + "\nd.add SearchDomains * " + strings.Join(searchList, " ") + "\n"
+	if err := scutilSet(dnsKey, set); err != nil {
 		log.f("tun[mac]: could not repoint system DNS (%v) — cluster names may not resolve", err)
 	}
 
@@ -94,10 +102,10 @@ func primaryService() (string, error) {
 // ServerAddresses — plug's upstream for dotted names. Both are empty if the key
 // is absent. It parses scutil's show output: scalars ("Key : value") and arrays
 // ("Key : <array> { N : value ... }").
-func readDNSDict(key string) (restore string, servers []string) {
+func readDNSDict(key string) (restore string, servers, search []string) {
 	out, err := scutil("show " + key + "\nquit\n")
 	if err != nil || strings.Contains(out, "No such key") {
-		return "", nil
+		return "", nil, nil
 	}
 	var b strings.Builder
 	b.WriteString("d.init\n")
@@ -111,6 +119,9 @@ func readDNSDict(key string) (restore string, servers []string) {
 		b.WriteString("d.add " + curKey + " * " + strings.Join(arr, " ") + "\n")
 		if curKey == "ServerAddresses" {
 			servers = append(servers, arr...)
+		}
+		if curKey == "SearchDomains" {
+			search = append(search, arr...)
 		}
 		curKey, arr, inArray = "", nil, false
 	}
@@ -136,7 +147,7 @@ func readDNSDict(key string) (restore string, servers []string) {
 			}
 		}
 	}
-	return b.String(), servers
+	return b.String(), servers, search
 }
 
 // scutil pipes a batch script into scutil (root; the plug core runs under sudo),
@@ -203,7 +214,7 @@ func SaveDNSBackup(key string) error {
 		return err
 	}
 	dnsKey := "State:/Network/Service/" + svc + "/DNS"
-	restore, _ := readDNSDict(dnsKey)
+	restore, _, _ := readDNSDict(dnsKey)
 	return persistDNSBackup(backupPath(key), dnsKey, restore)
 }
 
