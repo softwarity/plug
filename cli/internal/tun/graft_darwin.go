@@ -32,6 +32,13 @@ func resolvBackupPath(key string) string {
 	return filepath.Join(graftDir, ClusterHash(key)+".resolv.bak")
 }
 
+// setupBackupPath is the per-cluster snapshot of the MANUAL DNS dict
+// (Setup:/Network/Service/<svc>/DNS) — Setup: is persistent, so a crashed daemon
+// must never leave the user's manual DNS pointing at a dead resolver.
+func setupBackupPath(key string) string {
+	return filepath.Join(graftDir, ClusterHash(key)+".setup.bak")
+}
+
 // readyPath marks that the global daemon holds a LIVE tunnel for this cluster.
 func readyPath(key string) string { return filepath.Join(graftDir, ClusterHash(key)+".ready") }
 

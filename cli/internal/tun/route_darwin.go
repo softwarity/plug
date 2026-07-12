@@ -79,6 +79,29 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, log logfn) ([]string, s
 		log.f("tun[mac]: could not repoint system DNS (%v) — cluster names may not resolve", err)
 	}
 
+	// MANUALLY configured DNS servers live in Setup:/Network/Service/<svc>/DNS, and
+	// the composite resolver prefers Setup: over State: — so with manual DNS (a very
+	// common dev setup) our State: override loses its ServerAddresses and libresolv
+	// clients keep querying the user's servers → NXDOMAIN on cluster names. Go's
+	// darwin resolver IS libresolv (it ignores both /etc/resolver and resolv.conf),
+	// which is why only go clients failed while getaddrinfo languages resolved via
+	// /etc/resolver/plug. Repoint Setup: too when it defines servers (restored on
+	// teardown; crash net in SaveDNSBackup/RestoreOrphanDNS).
+	setupKey := "Setup:/Network/Service/" + svc + "/DNS"
+	setupRestore, setupServers, setupSearch := readDNSDict(setupKey)
+	setupOverridden := len(setupServers) > 0
+	var setupSet string
+	if setupOverridden {
+		list := append(append([]string{}, setupSearch...), searchSuffix)
+		setupSet = "d.init\nd.add ServerAddresses * " + dnsIP + "\nd.add SearchDomains * " + strings.Join(list, " ") + "\n"
+		if err := scutilSet(setupKey, setupSet); err != nil {
+			log.f("tun[mac]: could not repoint manual (Setup:) DNS (%v) — static-binary clients may not resolve", err)
+		}
+		if len(upstreams) == 0 {
+			upstreams = setupServers // the manual servers are the real upstream for dotted names
+		}
+	}
+
 	// Also register a DOMAIN-scoped resolver for ".plug" via /etc/resolver. When the
 	// primary-service override lands INTERFACE-scoped (a headless runner, some VPN
 	// setups), macOS won't send a general getaddrinfo query to it — but it DOES use a
@@ -120,8 +143,18 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, log logfn) ([]string, s
 			case <-stopWatch:
 				return
 			case <-t.C:
+				lost := false
 				if _, cur, _ := readDNSDict(dnsKey); len(cur) != 1 || cur[0] != dnsIP {
 					_ = scutilSet(dnsKey, set)
+					lost = true
+				}
+				if setupOverridden {
+					if _, cur, _ := readDNSDict(setupKey); len(cur) != 1 || cur[0] != dnsIP {
+						_ = scutilSet(setupKey, setupSet)
+						lost = true
+					}
+				}
+				if lost {
 					writeResolv(dnsIP)
 					_ = os.WriteFile(resolverFile, []byte("nameserver "+dnsIP+"\n"), 0o644)
 					flushDNS()
@@ -140,6 +173,9 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, log logfn) ([]string, s
 			_ = scutilSet(dnsKey, restore) // put the original DNS dict back
 		} else {
 			_ = scutilRemove(dnsKey) // there was none — drop ours
+		}
+		if setupOverridden {
+			_ = scutilSet(setupKey, setupRestore) // put the manual DNS back
 		}
 		flushDNS()
 		delRoute()
@@ -327,6 +363,12 @@ func SaveDNSBackup(key string) error {
 	if err != nil {
 		return err
 	}
+	// The MANUAL DNS dict (Setup:) is persistent — snapshot it whenever it defines
+	// servers, since configure() will override it in that case.
+	setupKey := "Setup:/Network/Service/" + svc + "/DNS"
+	if setupRestore, setupServers, _ := readDNSDict(setupKey); len(setupServers) > 0 {
+		_ = persistDNSBackup(setupBackupPath(key), setupKey, setupRestore)
+	}
 	dnsKey := "State:/Network/Service/" + svc + "/DNS"
 	restore, _, _ := readDNSDict(dnsKey)
 	return persistDNSBackup(backupPath(key), dnsKey, restore)
@@ -340,6 +382,9 @@ func RestoreOrphanDNS(key string) {
 		restoreResolv(string(b))
 		_ = os.Remove(resolvBackupPath(key))
 	}
+	if _, err := os.Stat(setupBackupPath(key)); err == nil {
+		_ = restoreDNSBackup(setupBackupPath(key)) // manual (Setup:) DNS back first
+	}
 	if _, err := os.Stat(backupPath(key)); err == nil {
 		_ = restoreDNSBackup(backupPath(key))
 	}
@@ -349,4 +394,5 @@ func RestoreOrphanDNS(key string) {
 func ClearDNSBackup(key string) {
 	_ = os.Remove(backupPath(key))
 	_ = os.Remove(resolvBackupPath(key))
+	_ = os.Remove(setupBackupPath(key))
 }
