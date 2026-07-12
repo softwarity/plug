@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Available reports whether the TUN data path can run on this OS.
@@ -38,8 +39,11 @@ func checkPriv() error {
 // want. cleanup restores the captured dict (or removes ours if there was none).
 //
 // macOS has no mount namespace, so this repoint is global for the session
-// (privResolv is empty; the child runs directly). Phase 2 refuses a 2nd instance
-// on macOS precisely because this resolver override is machine-wide.
+// (privResolv is empty; the child runs directly). Machine-wide DNS is what the
+// PID-at-connect multicluster model uses anyway — one resolver hands out fake
+// IPs and the owning cluster is resolved at connect() (see route_darwin's
+// resolvConf note); mac serves one cluster at a time only until that attribution
+// is wired on its daemon.
 func configure(_ any, _ int, ifname, cidr, dnsIP string, log logfn) ([]string, string, func(), error) {
 	for _, cmd := range [][]string{
 		{"ifconfig", ifname, "inet", "10.99.99.1", "10.99.99.2", "up"},
@@ -100,7 +104,36 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, log logfn) ([]string, s
 	}
 	flushDNS()
 
+	// Watchdog: the State: DNS dict is VOLATILE — configd re-derives it on network
+	// events (a DHCP lease renewal, a reachability change), silently replacing our
+	// override while the daemon lives. One overwrite would leave every subsequent
+	// session without cluster DNS until `plug down`. So re-assert the override
+	// whenever it goes missing — the DNS sibling of the transport's self-heal.
+	stopWatch := make(chan struct{})
+	watchDone := make(chan struct{})
+	go func() {
+		defer close(watchDone)
+		t := time.NewTicker(3 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-stopWatch:
+				return
+			case <-t.C:
+				if _, cur, _ := readDNSDict(dnsKey); len(cur) != 1 || cur[0] != dnsIP {
+					_ = scutilSet(dnsKey, set)
+					writeResolv(dnsIP)
+					_ = os.WriteFile(resolverFile, []byte("nameserver "+dnsIP+"\n"), 0o644)
+					flushDNS()
+					log.f("tun[mac]: system DNS override was replaced (configd event?) — re-asserted")
+				}
+			}
+		}
+	}()
+
 	cleanup := func() {
+		close(stopWatch)
+		<-watchDone // never re-assert after the restore below
 		restoreResolv(resolvSnap)
 		_ = os.Remove(resolverFile)
 		if restore != "" {
