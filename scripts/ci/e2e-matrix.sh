@@ -20,19 +20,20 @@ LANGS="go node python java"
 PROTOS="http:httpbin:8080 postgres:postgres:5432 redis:redis:6379 mongo:mongo:27017 amqp:rabbitmq:5672 mqtt:mosquitto:1883 grpc:grpc:50051 websocket:wsserver:8090"
 
 # --- OS specifics: plug binary + privilege + python name ---
-ext=""; sudo=""; py="python3"; go_env=""
+ext=""; sudo=""; py="python3"; linux_caps=""
 case "$(uname -s)" in
   Darwin)
     [ "$(id -u)" = 0 ] || sudo=sudo
-    # macOS only: force Go's cgo resolver for the go client. Go's default macOS
-    # resolver is a hybrid that answers some single-label lookups in pure Go,
-    # bypassing the /etc/resolver/<suffix> rule plug installs — so the go client
-    # (and only it) failed to resolve a few cluster names. node/python/java all go
-    # through getaddrinfo and pass 8/8; netdns=cgo puts the go client on that same
-    # proven path. Set via `env` on the command so it survives plug's child exec.
-    go_env="env GODEBUG=netdns=cgo"
     ;;
-  Linux) [ "$(id -u)" = 0 ] || sudo=sudo ;;
+  Linux)
+    # Grant plug its caps (like the real install) and run it AS THE USER — not via
+    # sudo. Under sudo the client child runs as root with sudo's reset PATH: the
+    # java client would then pick the runner's system JDK instead of setup-java's
+    # (UnsupportedClassVersionError) and the python client couldn't see its --user
+    # pip packages. setcap keeps the child in the user's own environment — which is
+    # also exactly how plug is really used on Linux (no day-to-day sudo).
+    [ "$(id -u)" = 0 ] || linux_caps=1
+    ;;
   MINGW*|MSYS*|CYGWIN*) ext=".exe"; py="python" ;;
 esac
 
@@ -43,6 +44,10 @@ if [ "$ext" = ".exe" ]; then
   curl -sL https://www.wintun.net/builds/wintun-0.14.1.zip -o wintun.zip
   powershell -NoProfile -Command "Expand-Archive -Path wintun.zip -DestinationPath wtun -Force"
   cp wtun/wintun/bin/amd64/wintun.dll .
+fi
+if [ -n "$linux_caps" ]; then
+  echo "=== setcap plug (run as the user, like the real install) ==="
+  sudo setcap cap_net_admin,cap_sys_admin,cap_net_bind_service+ep "./plug$ext"
 fi
 
 # --- wait for the cluster over the tailnet ---
@@ -63,7 +68,18 @@ plug() { perl -e 'alarm shift @ARGV; exec @ARGV or exit 127' 45 $sudo "./plug$ex
 
 # --- build the four language clients natively ---
 echo "=== build clients ==="
-build_go()     { ( cd "$clients/go" && go build -o "eclient$ext" . ); }
+# macOS: force the cgo resolver (getaddrinfo) into the go client. Go's default
+# resolver on mac reads /etc/resolv.conf, which macOS does NOT repoint at plug
+# (plug overrides DNS via a scoped resolver + /etc/resolver/<suffix>), so bare
+# single-label cluster names get NXDOMAIN there. getaddrinfo goes through
+# /etc/resolver and resolves — exactly like node/python/java, which pass 8/8.
+build_go() {
+  ( cd "$clients/go"
+    case "$(uname -s)" in
+      Darwin) CGO_ENABLED=1 go build -tags netcgo -o "eclient$ext" . ;;
+      *)      go build -o "eclient$ext" . ;;
+    esac )
+}
 build_node()   { ( cd "$clients/node" && npm install --omit=dev --no-audit --no-fund ); }
 # --break-system-packages: macOS runners ship a Homebrew Python that refuses a
 # plain `pip install` (externally-managed-environment).
@@ -85,7 +101,7 @@ for l in $LANGS; do
 done
 
 # --- the client command (under plug) per language ---
-cmd_go()     { echo "$go_env $clients/go/eclient$ext"; }
+cmd_go()     { echo "$clients/go/eclient$ext"; }
 cmd_node()   { echo "node $clients/node/client.js"; }
 cmd_python() { echo "$py $clients/python/client.py"; }
 cmd_java()   { echo "java -jar $clients/java/target/client.jar"; }
