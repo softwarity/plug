@@ -174,9 +174,27 @@ import { RouterLink } from '@angular/router';
       <li>
         <strong>Windows</strong> — the data path lives in a <strong>SYSTEM service</strong> installed
         once (elevated); every <code>plug</code> run is a non-elevated launcher that starts it on
-        demand and delegates to it. See <a href="https://github.com/softwarity/plug/blob/main/docs/windows-service.md" target="_blank" rel="noopener">the Windows service notes</a>.
+        demand and delegates to it, so the command itself never needs admin.
       </li>
     </ul>
+
+    <h3>Several clusters at once</h3>
+    <p>
+      Two different clusters can run side by side — <code>plug -p a</code> and
+      <code>plug -p b</code> — with the same service names resolving to the right backend each time.
+      How plug keeps them apart depends on the OS:
+    </p>
+    <ul>
+      <li><strong>Linux</strong> gives every launch a private resolver in its own mount namespace, so two launches never share DNS — isolation for free.</li>
+      <li><strong>Windows</strong> repoints the system resolver machine-wide, so the SYSTEM service holds one tunnel per cluster and disambiguates each flow <strong>at <code>connect()</code></strong>: the source port maps to the owning process, whose ancestry is walked back to the <code>plug -p x</code> that launched it — that is its cluster (PID-at-connect).</li>
+      <li><strong>macOS</strong> shares the same design, but its daemon holds one cluster at a time for now.</li>
+    </ul>
+    <p>
+      One honest limit: a process <strong>detached</strong> from its launcher (via
+      <code>setsid</code>, reparented to <code>init</code>/<code>launchd</code>) can't be walked back
+      to a cluster — so plug <strong>refuses</strong> the connection rather than guess and route it to
+      the wrong one.
+    </p>
 
     <h3>Built with open source</h3>
     <p>plug stands on the shoulders of these projects — thank you:</p>

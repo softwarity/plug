@@ -81,14 +81,14 @@
   planned "run without admin" path.
 - **Kubernetes manifest modernized.** `deploy/plug-k8s.yaml` now describes the
   actual TUN data path (not the removed SOCKS proxy), with a TCP readiness/liveness
-  probe, modest resource limits, and a `deploy/README.md`. `kubectl exec` transport
+  probe and modest resource limits. `kubectl exec` transport
   was evaluated and dropped — `kubectl port-forward` already gives a zero-exposed
   port gated by API-server RBAC.
 - **Multicluster (macOS/Windows) — design + attribution core.** The validated
   approach routes by PID **at connect** (not at DNS): one system resolver, fake IPs
   per name, and the flow attributed to a cluster by walking the connecting
   process's ancestry to its `plug -p X` launcher. The attribution core landed
-  (isolated, unit-tested, wired into no live datapath); see `docs/multicluster.md`.
+  (isolated, unit-tested, wired into no live datapath).
   Linux multicluster already works via mount namespaces.
 - **e2e coverage: WebSocket** across all four language clients (Go/Node/Python/Java).
 

@@ -67,7 +67,7 @@ plug -p staging npm run start   # → cluster staging, side by side</app-code>
       mount namespace) and <strong>Windows</strong> (the SYSTEM service holds one tunnel per cluster
       and attributes each flow to the right one at <code>connect()</code>). macOS runs one cluster at
       a time for now. See
-      <a href="https://github.com/softwarity/plug/blob/main/docs/multicluster.md" target="_blank" rel="noopener">the multicluster design</a>
+      <a routerLink="/how-it-works">how plug tells them apart</a>
       and the <a routerLink="/coverage">coverage matrix</a>.
     </p>
 

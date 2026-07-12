@@ -6,7 +6,7 @@ _État : juillet 2026._
 bout en bout** sur une vraie machine : install en Git Bash (admin une fois) → service ;
 puis `plug` **sans admin** partout (token non-élevé prouvé), multicluster concurrent
 inclus. Cold-start ramené de ~15 s à **~0,8 s**. Reste surtout l'**e2e Windows en CI**,
-quelques tests unitaires et des dettes. Archi : `docs/windows-service.md`.
+quelques tests unitaires et des dettes. Archi : page « How it works » du site (softwarity.github.io/plug).
 
 ---
 

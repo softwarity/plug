@@ -140,7 +140,7 @@ interface Hole {
       multicluster — is validated end-to-end on a real machine; what is left is <em>automating</em>
       it in CI, proving it under a corporate VPN, and bringing macOS multicluster (same
       PID-at-connect design) to the same level. See
-      <a href="https://github.com/softwarity/plug/blob/main/docs/windows-service.md" target="_blank" rel="noopener">docs/windows-service.md</a>
+      <a routerLink="/how-it-works">How it works</a>
       and the <a routerLink="/roadmap">roadmap</a>.
     </div>
   `,
