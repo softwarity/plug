@@ -44,6 +44,16 @@ func constDial(tr Dialer) dialFunc {
 // dropped for the window.
 var refusedLimiter = newLogLimiter(30 * time.Second)
 
+// connLimiter throttles the per-connection "→ target (by name)" line: the FIRST
+// flow to a target is worth seeing (proof the datapath works for that name), but
+// a chatty app opens hundreds — they drowned the child's own console output.
+var connLimiter = newLogLimiter(10 * time.Minute)
+
+// dialErrLimiter throttles per-target dial failures: a service that is down
+// while an app retries in a loop used to write one line per attempt (a real
+// 300MB daemon.log). First failure logs; repeats stay quiet for the window.
+var dialErrLimiter = newLogLimiter(30 * time.Second)
+
 type logLimiter struct {
 	mu     sync.Mutex
 	last   map[string]time.Time
@@ -132,7 +142,9 @@ func handleTCP(r *tcp.ForwarderRequest, tab *faketab, df dialFunc, log logfn) {
 	go func() {
 		up, err := dialer.DialCluster(target)
 		if err != nil {
-			log.f("tun: %s%s: %v", target, via, err)
+			if dialErrLimiter.allow(target) {
+				log.f("tun: %s%s: %v (repeats hidden 30s)", target, via, err)
+			}
 			r.Complete(true) // RST — unreachable in that cluster
 			return
 		}
@@ -144,7 +156,9 @@ func handleTCP(r *tcp.ForwarderRequest, tab *faketab, df dialFunc, log logfn) {
 			return
 		}
 		r.Complete(false) // accept — established end to end
-		log.f("tun: %s:%d → %s%s (by name)", ipStr(fake), id.LocalPort, target, via)
+		if connLimiter.allow(target) {
+			log.f("tun: %s:%d → %s%s (by name; more flows to it stay quiet)", ipStr(fake), id.LocalPort, target, via)
+		}
 		relay(gonet.NewTCPConn(&wq, ep), up)
 	}()
 }
