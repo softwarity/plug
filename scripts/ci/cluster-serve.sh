@@ -27,7 +27,8 @@ compose="docker compose -f compose.yml -f compose.cluster.yml"
 # cluster's PLUG_CLUSTER_IDENT — the multicluster assert). grpc/wsserver are built
 # (compose build); the rest are pulled images. --wait blocks on the healthchecks.
 $compose up -d --build --wait \
-  agent httpbin postgres redis mongo rabbitmq mosquitto grpc wsserver ident flaky
+  agent httpbin postgres redis mongo rabbitmq mosquitto grpc wsserver ident \
+  flaky-linux flaky-mac flaky-win
 $compose ps
 
 echo "=== cluster up — serving for ${ttl}s (or until this run is cancelled) ==="

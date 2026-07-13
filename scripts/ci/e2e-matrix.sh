@@ -223,20 +223,27 @@ fi
 
 # --- outage recovery: a service that is DOWN then COMES BACK must become
 # reachable within the SAME live session (the user report: an app keeps running
-# while its dependency restarts, and plug must pick it back up). flaky:8099
-# listens only after flaky:8098/up — the switch is flipped through plug itself.
-echo "=== outage recovery: flaky down → up inside one session ==="
+# while its dependency restarts, and plug must pick it back up). Each OS leg has
+# ITS OWN flaky instance — the cluster is shared, and the first leg's /up would
+# otherwise break the "starts down" premise for the others.
+case "$(uname -s)" in
+  Darwin) flaky=flaky-mac ;;
+  MINGW*|MSYS*|CYGWIN*) flaky=flaky-win ;;
+  *) flaky=flaky-linux ;;
+esac
+echo "=== outage recovery: $flaky down → up inside one session ==="
 outage=FAIL
 ol="$(plug_to "$ip" bash -c '
-  curl -s --max-time 6 http://flaky:8099/ >/dev/null 2>&1 && { echo "flaky answered while it should be down"; exit 1; }
-  curl -s --max-time 10 http://flaky:8098/up >/dev/null || { echo "control endpoint unreachable"; exit 1; }
+  f="$0"
+  curl -s --max-time 6 "http://$f:8099/" >/dev/null 2>&1 && { echo "flaky answered while it should be down"; exit 1; }
+  curl -s --max-time 10 "http://$f:8098/up" >/dev/null || { echo "control endpoint unreachable"; exit 1; }
   sleep 2
   for _ in 1 2 3 4 5; do
-    out=$(curl -s --max-time 6 http://flaky:8099/ 2>/dev/null) && [ "$out" = "flaky-ok" ] && { echo recovered; exit 0; }
+    out=$(curl -s --max-time 6 "http://$f:8099/" 2>/dev/null) && [ "$out" = "flaky-ok" ] && { echo recovered; exit 0; }
     sleep 2
   done
   echo "never recovered"; exit 1
-' 2>/tmp/outage.err | tr -d '\r' | tail -1)"
+' "$flaky" 2>/tmp/outage.err | tr -d '\r' | tail -1)"
 if [ "$ol" = "recovered" ]; then
   outage=PASS; echo "outage OK — the service came back and the same session reached it"
 else

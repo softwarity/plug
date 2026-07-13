@@ -18,9 +18,17 @@ services:
     command: ["-listen=:5678", "-text=${PLUG_CLUSTER_IDENT:-solo}"]
     networks: [internal]
 
-  # Outage simulator: flaky:8099 listens ONLY after GET flaky:8098/up — the e2e
-  # reproduces "service down, then it comes back" inside one live plug session,
-  # flipping the switch itself through plug (no cross-job orchestration needed).
-  flaky:
+  # Outage simulators: <name>:8099 listens ONLY after GET <name>:8098/up — the
+  # e2e reproduces "service down, then it comes back" inside one live plug
+  # session, flipping the switch itself through plug. ONE INSTANCE PER OS LEG:
+  # all three legs share this cluster, and the first one to run its outage test
+  # would otherwise leave the switch ON for the others (same image, built once).
+  flaky-linux:
+    build: { context: ., dockerfile: services/flaky/Dockerfile }
+    networks: [internal]
+  flaky-mac:
+    build: { context: ., dockerfile: services/flaky/Dockerfile }
+    networks: [internal]
+  flaky-win:
     build: { context: ., dockerfile: services/flaky/Dockerfile }
     networks: [internal]
