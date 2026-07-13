@@ -124,10 +124,11 @@ jobs:
     name: Build & publish image
     # Publish ONLY once EVERY test has passed — unit tests, the TUN selftests on
     # all three OSes, and the full mesh e2e (protocol matrix + multicluster). An
-    # image must never ship from a commit the e2e didn't bless. The e2e only runs
-    # on main, which also scopes publication to main pushes.
+    # image must never ship from a commit the e2e didn't bless. A fully green
+    # MANUAL dispatch publishes too ("a manual build is a whole build"); off-main
+    # runs never reach here anyway (the e2e only runs on main, so success() fails).
     needs: [build, selftest, e2e]
-    if: success() && github.event_name == 'push'
+    if: success()
     uses: ./.github/workflows/_docker.yml
     secrets: inherit
 
