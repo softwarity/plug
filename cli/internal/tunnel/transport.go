@@ -206,6 +206,15 @@ func channelDial(ctx context.Context, cl *ssh.Client, addr string) (net.Conn, er
 	}()
 	select {
 	case <-ctx.Done():
+		// cl.Dial may still succeed AFTER we give up — reap that late channel, or
+		// every timed-out dial leaks an open direct-tcpip channel on the shared SSH
+		// connection. During an outage those pile up and can starve the transport
+		// for good: dials then keep timing out even after the service comes back.
+		go func() {
+			if r := <-ch; r.conn != nil {
+				r.conn.Close()
+			}
+		}()
 		return nil, ctx.Err()
 	case r := <-ch:
 		return r.conn, r.err
