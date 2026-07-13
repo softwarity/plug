@@ -102,6 +102,20 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, log logfn) ([]string, s
 		}
 	}
 
+	// Write the GLOBAL DNS key too. On some setups (headless runners at least) the
+	// per-service override lands interface-SCOPED, leaving no usable DEFAULT
+	// resolver: getaddrinfo then burns a fixed ~5s per single-label lookup (mDNS
+	// detour) before falling through to the .plug scoped resolver — measured
+	// 5.03s/5.02s on the runners, which is exactly what killed every client with a
+	// 5s timeout. Global/DNS is what the composite default resolver is built from;
+	// writing it makes plug's DNS answer FIRST (~ms). Volatile like the rest of
+	// State:, watched by the watchdog, restored on teardown, crash-netted below.
+	globalDNSKey := "State:/Network/Global/DNS"
+	globalRestore, _, _ := readDNSDict(globalDNSKey)
+	if err := scutilSet(globalDNSKey, set); err != nil {
+		log.f("tun[mac]: could not set the global DNS (%v) — single-label lookups may be slow", err)
+	}
+
 	// Also register a DOMAIN-scoped resolver for ".plug" via /etc/resolver. When the
 	// primary-service override lands INTERFACE-scoped (a headless runner, some VPN
 	// setups), macOS won't send a general getaddrinfo query to it — but it DOES use a
@@ -148,6 +162,10 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, log logfn) ([]string, s
 					_ = scutilSet(dnsKey, set)
 					lost = true
 				}
+				if _, cur, _ := readDNSDict(globalDNSKey); len(cur) != 1 || cur[0] != dnsIP {
+					_ = scutilSet(globalDNSKey, set)
+					lost = true
+				}
 				if setupOverridden {
 					if _, cur, _ := readDNSDict(setupKey); len(cur) != 1 || cur[0] != dnsIP {
 						_ = scutilSet(setupKey, setupSet)
@@ -173,6 +191,11 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, log logfn) ([]string, s
 			_ = scutilSet(dnsKey, restore) // put the original DNS dict back
 		} else {
 			_ = scutilRemove(dnsKey) // there was none — drop ours
+		}
+		if globalRestore != "" {
+			_ = scutilSet(globalDNSKey, globalRestore)
+		} else {
+			_ = scutilRemove(globalDNSKey) // configd will recompose it from the services
 		}
 		if setupOverridden {
 			_ = scutilSet(setupKey, setupRestore) // put the manual DNS back
@@ -387,6 +410,9 @@ func RestoreOrphanDNS(key string) {
 	}
 	if _, err := os.Stat(backupPath(key)); err == nil {
 		_ = restoreDNSBackup(backupPath(key))
+		// Drop our Global/DNS override too — with the service dicts restored,
+		// configd recomposes the correct global from them.
+		_ = scutilRemove("State:/Network/Global/DNS")
 	}
 }
 
