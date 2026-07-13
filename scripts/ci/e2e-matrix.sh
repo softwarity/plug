@@ -182,34 +182,20 @@ expect_b="${peer_b#plug-cluster-}"
 ip_b="$(wait_cluster "$peer_b")" || { echo "cluster $peer_b never became reachable" >&2; exit 1; }
 echo "cluster B reachable at $ip_b:$port"
 
+# BOTH plugs live at once, on every OS: Linux gives each launch a private
+# resolver; Windows' SYSTEM service and macOS' global daemon each hold one
+# tunnel per cluster and attribute every flow by PID at connect. (The mac
+# daemon shares Windows' proven plumbing — docs said "one at a time", the code
+# says otherwise; this cell is the judge.)
+mc_mode="simultaneous"
 mc=PASS; a_out=""; b_out=""
-case "$(uname -s)" in
-  Darwin)
-    # macOS holds one cluster at a time today (PID-at-connect is designed but not
-    # wired on its daemon — the machine-wide DNS is not the limiter): prove A,
-    # tear the daemon down, prove B.
-    mc_mode="sequential — simultaneous lands with PID-at-connect on the daemon"
-    a_out="$(plug_to "$ip" curl -s http://ident:5678 2>/tmp/mc-a.err || true)"
-    for _ in $(seq 1 10); do
-      "$PLUG" down 2>&1 | grep -q "no plug daemon" && break
-      sleep 2
-    done
-    b_out="$(plug_to "$ip_b" curl -s http://ident:5678 2>/tmp/mc-b.err || true)"
-    ;;
-  *)
-    # Linux (a private resolver per launch) and Windows (the SYSTEM service —
-    # installed by the installer above — holds one tunnel per cluster, attributed
-    # at connect()): BOTH plugs live at once.
-    mc_mode="simultaneous"
-    : > /tmp/mc-a.out
-    plug_to "$ip" bash -c "curl -s http://ident:5678 > /tmp/mc-a.out && sleep 8" 2>/tmp/mc-a.err &
-    mc_pid=$!
-    sleep 4 # let A establish and answer while it is still alive...
-    b_out="$(plug_to "$ip_b" curl -sS http://ident:5678 2>/tmp/mc-b.err || true)" # ...then hit B DURING A
-    wait "$mc_pid" 2>/dev/null || true
-    a_out="$(cat /tmp/mc-a.out 2>/dev/null || true)"
-    ;;
-esac
+: > /tmp/mc-a.out
+plug_to "$ip" bash -c "curl -s http://ident:5678 > /tmp/mc-a.out && sleep 8" 2>/tmp/mc-a.err &
+mc_pid=$!
+sleep 4 # let A establish and answer while it is still alive...
+b_out="$(plug_to "$ip_b" curl -sS http://ident:5678 2>/tmp/mc-b.err || true)" # ...then hit B DURING A
+wait "$mc_pid" 2>/dev/null || true
+a_out="$(cat /tmp/mc-a.out 2>/dev/null || true)"
 case "$a_out" in *"$expect_a"*) : ;; *) mc=FAIL ;; esac
 case "$b_out" in *"$expect_b"*) : ;; *) mc=FAIL ;; esac
 if [ "$mc" = PASS ]; then
