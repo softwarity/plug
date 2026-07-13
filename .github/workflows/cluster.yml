@@ -31,7 +31,9 @@ jobs:
       - name: Build the agent image (this branch)
         run: |
           docker build -f agent/Dockerfile -t softwarity/plug:e2e .
-          echo "agent image built — serves plug version: $(docker run --rm softwarity/plug:e2e cat /opt/plug/VERSION)" | tee -a "$GITHUB_STEP_SUMMARY"
+          # --entrypoint: the image's entrypoint ignores its args and execs sshd in
+          # the foreground — without the override this docker run never returns.
+          echo "agent image built — serves plug version: $(docker run --rm --entrypoint cat softwarity/plug:e2e /opt/plug/VERSION)" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Join the tailnet
         uses: tailscale/github-action@v3
         with:
