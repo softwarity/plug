@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 1.4.0
+
 - **Linux: the no-sudo privilege now survives cluster version changes.** The
   launcher promotes its file capabilities into the ambient set before exec'ing a
   downloaded core (they don't cross exec on their own), and the mount-ns shim
