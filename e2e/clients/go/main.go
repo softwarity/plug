@@ -216,8 +216,12 @@ func doAMQP(target string) {
 
 func doMQTT(target string) {
 	recv := make(chan string, 1)
+	// AutoReconnect + ConnectRetry: the first flow of a session can drop while the
+	// datapath settles (seen once on the Windows service path: connect token OK,
+	// then "not Connected" at subscribe) — let paho re-dial instead of dying.
 	opts := mqtt.NewClientOptions().AddBroker("tcp://" + target).
-		SetClientID("plug-e2e-go").SetConnectTimeout(5 * time.Second)
+		SetClientID("plug-e2e-go").SetConnectTimeout(5 * time.Second).
+		SetAutoReconnect(true).SetConnectRetry(true).SetConnectRetryInterval(time.Second)
 	opts.SetDefaultPublishHandler(func(_ mqtt.Client, m mqtt.Message) {
 		select {
 		case recv <- string(m.Payload()):
@@ -233,8 +237,15 @@ func doMQTT(target string) {
 		die("mqtt connect (%s): %v", target, err)
 	}
 	defer c.Disconnect(200)
-	if t := c.Subscribe("plug/e2e", 0, nil); t.WaitTimeout(5*time.Second) && t.Error() != nil {
-		die("mqtt subscribe: %v", t.Error())
+	if err := retry(func() error {
+		if !c.IsConnectionOpen() {
+			return fmt.Errorf("not connected yet")
+		}
+		t := c.Subscribe("plug/e2e", 0, nil)
+		t.WaitTimeout(5 * time.Second)
+		return t.Error()
+	}); err != nil {
+		die("mqtt subscribe: %v", err)
 	}
 	c.Publish("plug/e2e", 0, false, "ping").WaitTimeout(5 * time.Second)
 	select {
