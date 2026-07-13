@@ -9,7 +9,14 @@ name: plug-e2e
 services:
   agent:
     image: softwarity/plug:e2e
-    networks: [edge, internal]
+    # exposed-*: the cluster names under which a runner can SERVE a local port
+    # (plug -s <name>:<cport>:<lport>) — the reverse direction. The names must
+    # resolve to the agent, whose sshd holds the remote-forward listener; one
+    # per OS leg because a port can only be bound once per agent.
+    networks:
+      edge:
+      internal:
+        aliases: [exposed-linux, exposed-mac, exposed-win]
 
   # ---- cluster services (started selectively per protocol) ----
   httpbin:

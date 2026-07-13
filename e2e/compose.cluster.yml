@@ -18,6 +18,12 @@ services:
     command: ["-listen=:5678", "-text=${PLUG_CLUSTER_IDENT:-solo}"]
     networks: [internal]
 
+  # In-cluster fetcher: GET prober:8097/fetch?url=… does the GET from inside the
+  # cluster — the expose e2e's witness that a runner-served name really answers.
+  prober:
+    build: { context: ., dockerfile: services/prober/Dockerfile }
+    networks: [internal]
+
   # Outage simulators: <name>:8099 listens ONLY after GET <name>:8098/up — the
   # e2e reproduces "service down, then it comes back" inside one live plug
   # session, flipping the switch itself through plug. ONE INSTANCE PER OS LEG:

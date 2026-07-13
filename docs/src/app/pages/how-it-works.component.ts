@@ -195,6 +195,21 @@ import { RouterLink } from '@angular/router';
       connection rather than risk routing it to the wrong cluster.
     </p>
 
+    <h3>The reverse direction</h3>
+    <p>
+      The transport carries the other way too: <code>plug -s
+      &lt;name&gt;:&lt;cluster-port&gt;:&lt;local-port&gt; &lt;cmd&gt;</code> opens a
+      <strong>dedicated SSH connection for the session</strong> and asks the agent's
+      <code>sshd</code> for a standard <strong>remote forward</strong> — the agent listens on the
+      cluster port, and every connection made by a cluster workload rides that session's connection
+      back to the local port (dedicated so the port's lifetime is exactly the session's, even where
+      the forward datapath lives in a shared daemon). The name is declared on the agent (a network alias in the stack file, a
+      Service on Kubernetes), so cluster DNS does the routing; the listener lives and dies with the
+      session, and plug verifies the whole loop at startup through the cluster's own DNS. See
+      <a routerLink="/swarm">Agent &amp; Swarm</a> and
+      <a routerLink="/kubernetes">Agent &amp; Kubernetes</a>.
+    </p>
+
     <h3>Built with open source</h3>
     <p>plug stands on the shoulders of these projects — thank you:</p>
     <table>

@@ -51,6 +51,14 @@ RUN apk add --no-cache openssh-server \
          echo '  PasswordAuthentication no'; \
          echo '  AllowTcpForwarding yes'; \
          echo '  PermitOpen any'; \
+         # expose (reverse direction): honour the CLI's 0.0.0.0 remote-forward bind
+         # so other workloads reach it via the agent's network alias — without this
+         # sshd silently binds the loopback and the exposed port answers nobody.
+         echo '  GatewayPorts clientspecified'; \
+         # detect dead tunnels server-side so their remote-forward binds free up
+         # fast enough for a reconnecting session to re-arm (~90s worst case).
+         echo '  ClientAliveInterval 30'; \
+         echo '  ClientAliveCountMax 3'; \
          echo 'Match User get'; \
          echo '  PermitEmptyPasswords yes'; \
          echo '  PasswordAuthentication yes'; \

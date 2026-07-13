@@ -139,7 +139,8 @@ interface Hole {
       <strong>How this matrix is proven.</strong> Every CI run installs plug FROM the cluster on
       all three OSes (the real one-liners and privilege grants), runs the 4-language ×
       8-protocol grid natively over a mesh, and asserts simultaneous multicluster, outage
-      recovery, env passthrough and launcher/core version compat. See
+      recovery, env passthrough, the reverse direction (a cluster workload fetches a
+      runner-served name) and launcher/core version compat. See
       <a routerLink="/how-it-works">How it works</a>
       and the <a routerLink="/roadmap">roadmap</a>.
     </div>
@@ -190,6 +191,7 @@ export class CoverageComponent {
         { feat: 'Native selftest (datapath proof)', os: ['ok', 'ok', 'ok'], note: 'green on all three in CI' },
         { feat: 'e2e protocol matrix (8 protos × 4 langs)', os: ['ok', 'ok', 'ok'], note: 'native over a Tailscale mesh — the same by-name path on Linux, macOS and Windows' },
         { feat: 'Split-horizon (short→cluster, FQDN→direct)', os: ['ok', 'ok', 'ok'], note: 'decided by the shape of the name — no config' },
+        { feat: 'Reverse: serve a local port to the cluster (<code>-s</code>)', os: ['ok', 'ok', 'ok'], note: 'sshd remote-forward behind a cluster alias — a cluster workload fetches the runner in CI, path self-verified at startup (re-arm after reconnect: local bench only, not yet CI)' },
         { feat: 'Self-heal (VPN / sleep / agent restart)', os: ['ok', 'ok', 'warn'], note: 'keepalive+reconnect; Windows unproven' },
       ],
     },
@@ -210,7 +212,7 @@ export class CoverageComponent {
         { feat: 'ppidOf', os: ['ok', 'ok', 'ok'], note: '/proc · ps · ToolHelp (unit-tested)', sub: true },
         { feat: 'pidForLocalPort', os: ['ok', 'ok', 'ok'], note: '/proc/net · lsof · GetExtendedTcpTable (unit-tested)', sub: true },
         { feat: 'procStart (recycle guard)', os: ['ok', 'ok', 'ok'], note: 'ps lstart · /proc stat · GetProcessTimes — rejects a reused PID', sub: true },
-        { feat: 'N-tunnel global daemon', os: ['na', 'warn', 'ok'], note: 'Windows SCM service validated; macOS daemon holds one cluster today (N-tunnel planned)' },
+        { feat: 'N-tunnel global daemon', os: ['na', 'ok', 'ok'], note: 'one tunnel per cluster in the daemon/service — proven simultaneously in CI (2 live clusters)' },
       ],
     },
     {

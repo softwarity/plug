@@ -88,6 +88,33 @@ ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@$
       carry a real <code>x.y.z</code>; <code>latest</code> carries <code>dev</code>.
     </p>
 
+    <h3>Serving a local service to the cluster (the reverse direction)</h3>
+    <p>
+      The session also works in reverse: <code>plug -s &lt;name&gt;:&lt;cluster-port&gt;:&lt;local-port&gt; &lt;cmd&gt;</code>
+      makes a local port reachable from inside the cluster under a cluster DNS name, for the
+      lifetime of the session. The name must resolve to the agent — declare it as a network alias
+      on the plug service in your stack file:
+    </p>
+    <app-code lang="yaml">services:
+  plug:
+    image: docker.io/softwarity/plug:latest
+    ports:
+      - "2222:22"
+    networks:
+      default:
+        aliases: [service1]   # the names devs may serve</app-code>
+    <p>
+      A dev then runs <code>plug -s service1:8081:4200 npm start</code> — any workload calling
+      <code>http://service1:8081</code> lands on their machine's <code>:4200</code>. plug verifies
+      the full path at startup: a missing alias, a too-old agent image or a competing session
+      <strong>ends the session with the remedy</strong>, never a silent no-op. The port closes with
+      the session, and one port is held by one session at a time. One caveat: if the <em>real</em>
+      <code>service1</code> is also running in the stack, Docker's DNS round-robins between it and
+      the agent — stop it (or don't deploy it) while you serve yours. (Launcher installed before
+      <code>-s</code> existed? Put <code>-s</code> after <code>-p</code>/<code>--host</code> — old
+      launchers forward trailing flags they don't know to the core.)
+    </p>
+
     <h3>Under the hood</h3>
     <ul>
       <li>Two SSH users: <code>plug</code> (public-key, runs the tunnel) and <code>get</code> (passwordless, <code>ForceCommand</code>-locked to serving a binary) — see <a routerLink="/security">Security model</a>.</li>
