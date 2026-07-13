@@ -79,8 +79,9 @@ docker stack deploy -c plug-stack.yml plug</app-code>
       <code>install-windows</code> (a Git Bash script):
     </p>
     <app-code lang="bash"># the agent regenerates its host key each start (not a secret here), so skip the check
-ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@&lt;host&gt; install | sh   # install (Linux/macOS)
-ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@&lt;host&gt; install-windows | bash -s -- &lt;host&gt; 2222   # install (Windows, Git Bash)</app-code>
+cluster=&lt;host&gt;
+ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@$cluster install | sh   # install (Linux/macOS)
+ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@$cluster install-windows | bash -s -- $cluster 2222   # install (Windows, Git Bash)</app-code>
     <p>
       The version baked into the image (and stamped into every binary) is what the
       <a routerLink="/profiles">launcher</a> asks for to run the matching version. Released images

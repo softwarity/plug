@@ -56,8 +56,9 @@ ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@<clu
 Windows, from Git Bash:
 
 ```bash
-ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@<cluster-host> install-windows \
-  | bash -s -- <cluster-host> 2222
+cluster=<cluster-host>
+ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@$cluster install-windows \
+  | bash -s -- $cluster 2222
 ```
 
 The install prepares your machine once — it may ask for your password (or, on
