@@ -2,6 +2,29 @@
 
 ## NEXT RELEASE
 
+- **Linux: the no-sudo privilege now survives cluster version changes.** The
+  launcher promotes its file capabilities into the ambient set before exec'ing a
+  downloaded core (they don't cross exec on their own), and the mount-ns shim
+  clears them again before your command runs — no privilege leaks past plug.
+  **One-time action**: launchers installed before this release lose the no-sudo
+  privilege the first time their cluster changes version — re-run the cluster
+  install once (`ssh get@<host> install | sh`).
+- **macOS: cluster DNS is now self-healing and covers every resolver path.** A
+  watchdog re-asserts plug's DNS override when macOS replaces it (DHCP renewal,
+  network change — one event used to kill name resolution until `plug down`);
+  manually configured DNS servers (Setup:) are overridden and restored too (they
+  silently eclipsed plug for libresolv clients); and Go child binaries are routed
+  to the pure-Go resolver (GODEBUG=netdns=go), killing a flat 5s-per-lookup mDNS
+  detour on networks without a usable default resolver.
+- **Linux: simultaneous clusters fixed.** Each launch now claims its own TUN
+  device slot (plug0, plug1, …) with its own fake-IP subnet — a second
+  simultaneous cluster used to die on "device or resource busy".
+- **CI now tests the real user flow, end to end.** Every run installs plug FROM
+  the cluster on all three OSes (the exact one-liners, real privilege grants),
+  runs the 4-language × 8-protocol grid natively over a mesh, asserts
+  multicluster on all three, and checks that the last PUBLISHED launcher still
+  drives this branch's core. Images publish only when everything is green.
+
 ---
 
 ## 1.3.0
