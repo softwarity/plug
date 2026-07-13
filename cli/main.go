@@ -261,6 +261,7 @@ func launcherRun(args []string) {
 		return
 	}
 	info("using cluster version v%s", remote)
+	raiseAmbientCaps() // linux: file caps don't survive exec'ing the downloaded core
 	child := exec.Command(bin, cmdArgs...)
 	child.Stdin, child.Stdout, child.Stderr = os.Stdin, os.Stdout, os.Stderr
 	child.Env = env

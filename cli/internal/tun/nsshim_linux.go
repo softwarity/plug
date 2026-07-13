@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 // NsShimMain runs inside the child's fresh mount namespace (entered via the
@@ -28,6 +30,12 @@ func NsShimMain(args []string) error {
 	if err := syscall.Mount(priv, "/etc/resolv.conf", "", syscall.MS_BIND, ""); err != nil {
 		return fmt.Errorf("bind private resolv.conf: %w", err)
 	}
+
+	// The launcher may have raised plug's capabilities into the AMBIENT set so
+	// they survive exec'ing a downloaded core (raiseAmbientCaps). The mounts above
+	// are done — drop the ambient set NOW so the USER's command below inherits no
+	// privilege from plug.
+	_ = unix.Prctl(unix.PR_CAP_AMBIENT, unix.PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0)
 
 	bin, err := exec.LookPath(cmd[0])
 	if err != nil {
