@@ -162,6 +162,23 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-b)" >> "$GITHUB_OUTPUT"
+      # The compat cell needs the LAST PUBLISHED launcher for every OS, but only
+      # this Linux job has Docker — extract all of them from the published image
+      # here and ship them to the mac/win legs as an artifact.
+      - name: Extract the latest published launchers
+        run: |
+          docker create --name pl docker.io/softwarity/plug:latest >/dev/null
+          mkdir -p latest-launchers
+          for b in plug-linux-amd64 plug-linux-arm64 plug-darwin-amd64 plug-darwin-arm64 plug-windows-amd64.exe; do
+            docker cp "pl:/opt/plug/bin/$b" "latest-launchers/$b"
+          done
+          docker rm pl >/dev/null
+          ls -la latest-launchers/
+      - uses: actions/upload-artifact@v7
+        with:
+          name: latest-launchers
+          path: latest-launchers/*
+          retention-days: 1
 
   e2e:
     name: e2e (${{ matrix.os }}, by name over the mesh)
@@ -192,15 +209,18 @@ jobs:
           tags: tag:ci
           hostname: plug-${{ matrix.os }}-${{ github.run_id }}
           args: --accept-dns=false # reach the cluster by tailnet IP; don't let Tailscale drive DNS
+      - uses: actions/download-artifact@v7 # the last published launchers, for the compat cell
+        with:
+          name: latest-launchers
+          path: latest-launchers
       - name: Install from the cluster + protocol matrix + multicluster
         shell: bash # Windows too: Git Bash is the assumed Windows shell
         run: bash scripts/ci/e2e-matrix.sh plug-cluster-${{ github.run_id }}-a plug-cluster-${{ github.run_id }}-b 2222
-      # The launcher-model contract: a user's OLD installed launcher (the last
-      # published image) must still drive THIS branch's core — the inter-version
-      # env channel the normal e2e can never exercise (it runs launcher == core).
-      # One leg is enough: the channel is identical on all three OSes.
+      # The launcher-model contract on EVERY OS: a user's OLD installed launcher
+      # (the last published image) must still drive THIS branch's core — the
+      # inter-version channel the normal e2e can never exercise (launcher == core).
       - name: Launcher compat — latest published launcher, this branch's core
-        if: matrix.os == 'ubuntu-latest'
+        shell: bash
         run: bash scripts/ci/compat-launcher.sh plug-cluster-${{ github.run_id }}-a 2222
 
   kill-cluster:
