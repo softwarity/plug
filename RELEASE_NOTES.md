@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 1.3.0
+
 - **Windows: no-admin data path, validated end-to-end on a real machine.** The Windows
   data path (WinTUN + routes + DNS) now lives in a **SYSTEM service** — the SCM
   counterpart of the macOS daemon. Install it once from an **elevated Git Bash**; after
