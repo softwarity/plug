@@ -69,9 +69,9 @@ plug -p staging npm run start   # → cluster staging, side by side</app-code>
         walking the process back to the <code>plug -p</code> that launched it (PID-at-connect).
       </li>
       <li>
-        <strong>macOS</strong> — the <strong>same PID-at-connect design</strong> applies; until it is
-        wired on the macOS daemon, mac serves one cluster at a time (the machine-wide DNS is not the
-        limiter — it is what that model uses).
+        <strong>macOS</strong> — the <strong>same PID-at-connect design</strong> as Windows: the global
+        daemon holds one tunnel per cluster and routes each flow to the right one at
+        <code>connect()</code> (proven simultaneously in CI).
       </li>
     </ul>
     <p>

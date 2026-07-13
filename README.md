@@ -92,9 +92,9 @@ plug -p prod    npm run start
 plug -p staging npm run start
 ```
 
-Supported today on Linux and Windows; macOS runs one cluster at a time. See the
-[coverage matrix](https://softwarity.github.io/plug/#/coverage) for what works
-where.
+Supported on all three OSes — proven simultaneously in CI on Linux, macOS and
+Windows. See the [coverage matrix](https://softwarity.github.io/plug/#/coverage)
+for the details.
 
 ## Limits
 

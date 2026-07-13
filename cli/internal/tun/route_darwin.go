@@ -42,8 +42,7 @@ func checkPriv() error {
 // (privResolv is empty; the child runs directly). Machine-wide DNS is what the
 // PID-at-connect multicluster model uses anyway — one resolver hands out fake
 // IPs and the owning cluster is resolved at connect() (see route_darwin's
-// resolvConf note); mac serves one cluster at a time only until that attribution
-// is wired on its daemon.
+// resolvConf note) — proven simultaneously in CI.
 func configure(_ any, _ int, ifname, cidr, dnsIP string, log logfn) ([]string, string, func(), error) {
 	for _, cmd := range [][]string{
 		{"ifconfig", ifname, "inet", "10.99.99.1", "10.99.99.2", "up"},
@@ -313,8 +312,7 @@ func scutilRemove(key string) error {
 // this file. Pointing it at plug's DNS is machine-wide, like the scutil override —
 // which is what the PID-at-connect multicluster model wants anyway: one resolver
 // hands out fake IPs, and the owning cluster is resolved at connect() by process
-// ancestry (as on Windows). mac serves one cluster at a time only until that
-// attribution is wired on its daemon — the DNS is not what limits it.
+// ancestry (as on Windows) — proven simultaneously in CI.
 var resolvConf = "/etc/resolv.conf" // overridable in tests
 
 // snapshotResolv captures /etc/resolv.conf as a restorable token: "L\n<target>" for

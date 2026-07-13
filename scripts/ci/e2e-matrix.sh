@@ -7,8 +7,8 @@
 # that installed plug against each cluster service BY NAME over the Tailscale
 # mesh, and the grid is rendered. Finally the MULTICLUSTER assert: two clusters
 # are up (A and B, each serving its own id on http://ident:5678), and the SAME
-# name must reach the RIGHT backend through each plug — simultaneously on
-# Linux/Windows, sequentially on macOS (until PID-at-connect lands on its daemon).
+# name must reach the RIGHT backend through each plug — SIMULTANEOUSLY, on all
+# three OSes.
 #
 #   e2e-matrix.sh <cluster-a-tailnet-name> <cluster-b-tailnet-name> [port]
 #
@@ -184,9 +184,8 @@ echo "cluster B reachable at $ip_b:$port"
 
 # BOTH plugs live at once, on every OS: Linux gives each launch a private
 # resolver; Windows' SYSTEM service and macOS' global daemon each hold one
-# tunnel per cluster and attribute every flow by PID at connect. (The mac
-# daemon shares Windows' proven plumbing — docs said "one at a time", the code
-# says otherwise; this cell is the judge.)
+# tunnel per cluster and attribute every flow by PID at connect — the same
+# assert on all three, every run.
 mc_mode="simultaneous"
 mc=PASS; a_out=""; b_out=""
 : > /tmp/mc-a.out

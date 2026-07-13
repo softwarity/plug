@@ -79,7 +79,7 @@ interface Hole {
       What works where, and where the holes are — features × OS. One process run
       <strong>as if it were inside the cluster</strong>, via a userspace TUN over an SSH tunnel.
     </p>
-    <p class="snap">snapshot {{ snapshot }} · Windows validated end-to-end on a real box: no-admin service + multicluster</p>
+    <p class="snap">snapshot {{ snapshot }} · every claim below is re-proven by CI on each push (install → grid → multicluster, 3 OSes)</p>
 
     <div class="legend">
       <span><i class="dot d-ok">✓</i> works (proven at runtime)</span>
@@ -136,17 +136,17 @@ interface Hole {
     }
 
     <div class="callout">
-      <strong>Where the remaining work is.</strong> The Windows SYSTEM service — no-admin runs and
-      multicluster — is validated end-to-end on a real machine; what is left is <em>automating</em>
-      it in CI, proving it under a corporate VPN, and bringing macOS multicluster (same
-      PID-at-connect design) to the same level. See
+      <strong>How this matrix is proven.</strong> Every CI run installs plug FROM the cluster on
+      all three OSes (the real one-liners and privilege grants), runs the 4-language ×
+      8-protocol grid natively over a mesh, and asserts simultaneous multicluster, outage
+      recovery, env passthrough and launcher/core version compat. See
       <a routerLink="/how-it-works">How it works</a>
       and the <a routerLink="/roadmap">roadmap</a>.
     </div>
   `,
 })
 export class CoverageComponent {
-  protected readonly snapshot = '2026-07-11';
+  protected readonly snapshot = '2026-07-13';
   protected readonly os = ['Linux', 'macOS', 'Windows'];
 
   protected glyph(s: St): string {
@@ -156,18 +156,13 @@ export class CoverageComponent {
   protected readonly holes: Hole[] = [
     {
       sev: 'warn',
-      t: 'Windows e2e in CI',
-      d: 'The full Windows path — Git Bash install, no-admin service, multicluster, name resolution — is validated by hand on a real box; automate it on a self-hosted (WSL2) or mesh-connected runner.',
-    },
-    {
-      sev: 'warn',
       t: 'Windows under a corporate VPN + self-heal',
-      d: 'A plain cluster is proven end-to-end on Windows (datapath, DNS, no-admin, multicluster). Corporate-VPN behaviour and VPN/sleep self-heal there are still unproven.',
+      d: 'Everything else on Windows is proven in CI (install, grid, multicluster, outage recovery). Corporate-VPN behaviour and VPN/sleep self-heal there are still unproven.',
     },
     {
       sev: 'warn',
-      t: 'macOS multicluster',
-      d: 'Linux and Windows run several clusters at once; macOS holds one at a time today. The shared PID-at-connect design applies, but is not yet wired and validated on the macOS daemon.',
+      t: 'Long-lived sessions & load',
+      d: 'Every CI session lives seconds with one connection at a time. Hours-long sessions, high connection counts, big transfers and laptop sleep/wake are not yet exercised.',
     },
   ];
 
@@ -210,8 +205,8 @@ export class CoverageComponent {
     {
       title: 'Multicluster — different clusters at once',
       rows: [
-        { feat: 'Simultaneous different clusters', os: ['ok', 'warn', 'ok'], note: 'Linux mount-ns · <b>Windows validated e2e</b> (neo + llm, by name) · macOS one at a time today' },
-        { feat: 'PID-at-connect attribution', os: ['na', 'warn', 'ok'], note: '<code>multiDial</code> shared; proven on 2 live clusters on Windows; macOS shares the code, not yet validated' },
+        { feat: 'Simultaneous different clusters', os: ['ok', 'ok', 'ok'], note: 'proven simultaneously in CI on all three — mount-ns · daemon · SYSTEM service' },
+        { feat: 'PID-at-connect attribution', os: ['na', 'ok', 'ok'], note: '<code>multiDial</code> shared — proven in CI on macOS and Windows (2 live clusters, same name, right backend)' },
         { feat: 'ppidOf', os: ['ok', 'ok', 'ok'], note: '/proc · ps · ToolHelp (unit-tested)', sub: true },
         { feat: 'pidForLocalPort', os: ['ok', 'ok', 'ok'], note: '/proc/net · lsof · GetExtendedTcpTable (unit-tested)', sub: true },
         { feat: 'procStart (recycle guard)', os: ['ok', 'ok', 'ok'], note: 'ps lstart · /proc stat · GetProcessTimes — rejects a reused PID', sub: true },

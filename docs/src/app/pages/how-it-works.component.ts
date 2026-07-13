@@ -186,7 +186,7 @@ import { RouterLink } from '@angular/router';
     <ul>
       <li><strong>Linux</strong> gives every launch a private resolver in its own mount namespace, so two launches never share DNS — isolation for free.</li>
       <li><strong>Windows</strong> repoints the system resolver machine-wide, so the SYSTEM service holds one tunnel per cluster and disambiguates each flow <strong>at <code>connect()</code></strong>: the source port maps to the owning process, whose ancestry is walked back to the <code>plug -p x</code> that launched it — that is its cluster (PID-at-connect).</li>
-      <li><strong>macOS</strong> shares the same design, but its daemon holds one cluster at a time for now.</li>
+      <li><strong>macOS</strong> — the global daemon holds one tunnel per cluster and attributes each flow by PID at connect, like Windows (proven simultaneously in CI).</li>
     </ul>
     <p>
       One honest limit: if a process <strong>fully detaches</strong> from the <code>plug</code> that

@@ -16,6 +16,11 @@
   silently eclipsed plug for libresolv clients); and Go child binaries are routed
   to the pure-Go resolver (GODEBUG=netdns=go), killing a flat 5s-per-lookup mDNS
   detour on networks without a usable default resolver.
+- **macOS: simultaneous multicluster is real (and now proven).** The global
+  daemon already held one tunnel per active cluster with PID-at-connect
+  attribution; docs claimed "one cluster at a time" — the CI multicluster cell
+  now proves two live clusters simultaneously on macOS (same name, right
+  backend), like Linux and Windows.
 - **Linux: simultaneous clusters fixed.** Each launch now claims its own TUN
   device slot (plug0, plug1, …) with its own fake-IP subnet — a second
   simultaneous cluster used to die on "device or resource busy".
