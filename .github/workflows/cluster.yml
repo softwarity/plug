@@ -21,22 +21,41 @@ permissions:
   contents: read
 
 jobs:
-  cluster:
-    # One job on purpose: the image must be built on the SAME runner that serves
-    # it (a second job would land on a fresh runner without the image).
-    name: build the agent image (this branch) → serve the cluster
+  # THE image under test: the agent is built from this branch FIRST, as its own
+  # pipeline stage — it then serves both the cluster services and the plug
+  # installer/binaries that every OS leg installs from. Two jobs mean two
+  # runners, so the image travels as an artifact (docker save → docker load).
+  build-agent:
+    name: build the agent image (this branch)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      # THE image under test: the agent is built HERE, from this branch, before
-      # anything joins the mesh — it then serves both the cluster services and
-      # the plug installer/binaries that every OS leg installs from.
-      - name: Build the agent image (this branch)
+      - name: Build
         run: |
           docker build -f agent/Dockerfile -t softwarity/plug:e2e .
           # --entrypoint: the image's entrypoint ignores its args and execs sshd in
           # the foreground — without the override this docker run never returns.
           echo "agent image built — serves plug version: $(docker run --rm --entrypoint cat softwarity/plug:e2e /opt/plug/VERSION)" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Save the image for the serve job
+        run: docker save softwarity/plug:e2e | gzip > /tmp/agent-image.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: agent-image
+          path: /tmp/agent-image.tar.gz
+          retention-days: 1
+
+  serve:
+    name: serve the cluster
+    needs: build-agent
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v7
+        with:
+          name: agent-image
+          path: /tmp
+      - name: Load the agent image
+        run: gunzip -c /tmp/agent-image.tar.gz | docker load
       - name: Join the tailnet
         uses: tailscale/github-action@v3
         with:

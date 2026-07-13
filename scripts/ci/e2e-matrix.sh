@@ -33,9 +33,11 @@ esac
 SSH_OPTS="-p $port -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o BatchMode=yes"
 
 # --- wait for a cluster over the tailnet (echoes its IP once its agent answers) ---
+# 140×3s ≈ 7min: the cluster run now builds the agent image in its own job and
+# ships it to the serve job as an artifact before anything joins the mesh.
 wait_cluster() {
   wc_ip=""
-  for _ in $(seq 1 90); do
+  for _ in $(seq 1 140); do
     wc_ip="$(tailscale ip -4 "$1" 2>/dev/null | head -1 || true)"
     if [ -n "$wc_ip" ] && ssh -n $SSH_OPTS "get@$wc_ip" version >/dev/null 2>&1; then
       echo "$wc_ip"; return 0
