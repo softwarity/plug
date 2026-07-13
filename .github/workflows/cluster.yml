@@ -22,6 +22,9 @@ permissions:
 
 jobs:
   cluster:
+    # One job on purpose: the image must be built on the SAME runner that serves
+    # it (a second job would land on a fresh runner without the image).
+    name: build the agent image (this branch) → serve the cluster
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
