@@ -24,7 +24,20 @@ docker cp -q plug-latest:/opt/plug/bin/plug-linux-amd64 ./plug-latest-launcher
 docker rm plug-latest >/dev/null
 chmod +x ./plug-latest-launcher
 sudo setcap cap_net_admin,cap_sys_admin,cap_net_bind_service+ep ./plug-latest-launcher
-echo "latest launcher: v$(./plug-latest-launcher version)"
+lver="$(./plug-latest-launcher version)"
+echo "latest launcher: v$lver"
+
+# The privilege hand-off (ambient caps) ships IN the launcher, so a published
+# launcher that predates that fix can never pass this cell — and the image
+# gating would deadlock (red run → no publish → latest stays pre-fix forever).
+# Arm the cell only once `latest` contains the fix; launchers installed before
+# it need one re-install (release-noted), which no future commit can avoid.
+ambient_fix=0e8c6195a899418a70f5c8cd61efbfbfb0beeac2
+lrev="${lver##*+}" # "dev+<rev>" → <rev>
+if [ "$lrev" = "$lver" ] || ! git merge-base --is-ancestor "$ambient_fix" "$lrev" 2>/dev/null; then
+  echo "latest launcher ($lver) predates the ambient-caps fix — compat cell arms itself on the next publish"
+  exit 0
+fi
 
 echo "=== old launcher → this branch's cluster (probe, download the new core, run) ==="
 out="$(perl -e 'alarm 90; exec @ARGV or exit 127' ./plug-latest-launcher --host "$ip" --port "$port" curl -s http://httpbin:8080/get 2>&1 || true)"

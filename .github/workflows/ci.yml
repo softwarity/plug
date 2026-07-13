@@ -173,6 +173,8 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # the compat cell decides by ANCESTRY (launcher rev vs fix commit)
       - uses: actions/setup-go@v6
         with:
           go-version: stable
