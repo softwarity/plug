@@ -134,17 +134,14 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, log logfn) ([]string, s
 	resolvSnap := snapshotResolv()
 	writeResolv(dnsIP)
 
-	// Qualify single-label names IMMEDIATELY. Without a usable DEFAULT resolver
-	// (headless runners at least), mDNSResponder tries a bare "my-service" over
-	// mDNS (.local) FIRST and only falls through to the ".plug" search domain
-	// after that timeout — a fixed ~5s per lookup (measured 5.02s±0.01 while
-	// plug's own DNS answered in 25ms), which ate every client with a 5s timeout.
-	// AlwaysAppendSearchDomains is Apple's switch for exactly this: search-domain
-	// qualification before the mDNS detour. Since the ".plug" search already
-	// resolves every single-label today, only the ORDER changes — the 5s goes
-	// away. Snapshot + restore around the session; crash net in SaveDNSBackup.
-	mdnsPrev := mdnsAppendSearchRead()
-	mdnsAppendSearchSet()
+	// Known limit, accepted: without a usable DEFAULT resolver (headless runners
+	// at least), mDNSResponder tries a bare "my-service" over mDNS (.local) FIRST
+	// and only falls to the ".plug" search domain after a fixed ~5s (measured
+	// 5.02s±0.01 while plug's own DNS answered in 25ms). Fighting that inside
+	// mDNSResponder failed three ways (Global/DNS write, resolv.conf, and the
+	// AlwaysAppendSearchDomains pref — measured inoperative), so Go children are
+	// instead routed to the pure-Go resolver via GODEBUG (see goResolverEnv);
+	// getaddrinfo clients absorb the one-time stall with their own retries.
 
 	// Make mDNSResponder pick up the new resolvers and drop any stale (negative) cache.
 	flushDNS := func() {
@@ -212,44 +209,10 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, log logfn) ([]string, s
 		if setupOverridden {
 			_ = scutilSet(setupKey, setupRestore) // put the manual DNS back
 		}
-		mdnsAppendSearchRestore(mdnsPrev)
 		flushDNS()
 		delRoute()
 	}
 	return upstreams, "", cleanup, nil
-}
-
-// mdnsPlist is mDNSResponder's system preferences domain (root-writable; the
-// datapath runs as root). Overridable in tests.
-var mdnsPlist = "/Library/Preferences/com.apple.mDNSResponder.plist"
-
-// mdnsAppendSearchRead returns the current AlwaysAppendSearchDomains value:
-// "absent" when the key isn't set (the default), else "1"/"0".
-func mdnsAppendSearchRead() string {
-	out, err := exec.Command("defaults", "read", mdnsPlist, "AlwaysAppendSearchDomains").Output()
-	if err != nil {
-		return "absent"
-	}
-	return strings.TrimSpace(string(out))
-}
-
-// mdnsAppendSearchSet turns AlwaysAppendSearchDomains on (effective after the
-// mDNSResponder HUP that flushDNS sends).
-func mdnsAppendSearchSet() {
-	_ = run("defaults", "write", mdnsPlist, "AlwaysAppendSearchDomains", "-bool", "YES")
-}
-
-// mdnsAppendSearchRestore puts the pre-session value back: delete when it was
-// absent, rewrite otherwise. The caller HUPs mDNSResponder right after.
-func mdnsAppendSearchRestore(prev string) {
-	switch prev {
-	case "absent":
-		_ = run("defaults", "delete", mdnsPlist, "AlwaysAppendSearchDomains")
-	case "1":
-		_ = run("defaults", "write", mdnsPlist, "AlwaysAppendSearchDomains", "-bool", "YES")
-	default:
-		_ = run("defaults", "write", mdnsPlist, "AlwaysAppendSearchDomains", "-bool", "NO")
-	}
 }
 
 // primaryService returns the id of the primary network service — the one whose
@@ -438,8 +401,6 @@ func SaveDNSBackup(key string) error {
 	if setupRestore, setupServers, _ := readDNSDict(setupKey); len(setupServers) > 0 {
 		_ = persistDNSBackup(setupBackupPath(key), setupKey, setupRestore)
 	}
-	// mDNSResponder's AlwaysAppendSearchDomains is a persistent preference too.
-	_ = os.WriteFile(mdnsBackupPath(key), []byte(mdnsAppendSearchRead()), 0o644)
 	dnsKey := "State:/Network/Service/" + svc + "/DNS"
 	restore, _, _ := readDNSDict(dnsKey)
 	return persistDNSBackup(backupPath(key), dnsKey, restore)
@@ -462,11 +423,6 @@ func RestoreOrphanDNS(key string) {
 		// configd recomposes the correct global from them.
 		_ = scutilRemove("State:/Network/Global/DNS")
 	}
-	if b, err := os.ReadFile(mdnsBackupPath(key)); err == nil {
-		mdnsAppendSearchRestore(strings.TrimSpace(string(b)))
-		_ = run("killall", "-HUP", "mDNSResponder")
-		_ = os.Remove(mdnsBackupPath(key))
-	}
 }
 
 // ClearDNSBackup drops the backup after a clean shutdown (cleanup already restored the DNS).
@@ -474,5 +430,4 @@ func ClearDNSBackup(key string) {
 	_ = os.Remove(backupPath(key))
 	_ = os.Remove(resolvBackupPath(key))
 	_ = os.Remove(setupBackupPath(key))
-	_ = os.Remove(mdnsBackupPath(key))
 }

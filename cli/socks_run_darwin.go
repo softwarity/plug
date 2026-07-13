@@ -4,6 +4,7 @@ package main
 
 import (
 	"os"
+	"strings"
 	"time"
 
 	"github.com/softwarity/plug/cli/internal/tun"
@@ -33,7 +34,29 @@ func coreRun(cfg config, cmdArgs []string) int {
 		}
 	}
 	waitClusterReady(key)
-	return runChildEnv(cmdArgs, nil)
+	return runChildEnv(cmdArgs, goResolverEnv())
+}
+
+// goResolverEnv is the child environment with GODEBUG=netdns=go appended. macOS
+// only: on a network without a usable default resolver, getaddrinfo stalls a
+// flat ~5s per single-label lookup (mDNSResponder tries .local before the search
+// domain — measured 5.02s while plug's own DNS answered in 20ms), which killed
+// every Go client with a 5s timeout. Go's PURE resolver reads the
+// /etc/resolv.conf plug writes and answered in ~0.2s in the same session — so
+// put Go children on that proven path. Non-Go children ignore GODEBUG entirely;
+// an explicit user netdns choice is preserved.
+func goResolverEnv() []string {
+	env := os.Environ()
+	for i, kv := range env {
+		if v, ok := strings.CutPrefix(kv, "GODEBUG="); ok {
+			if strings.Contains(v, "netdns=") {
+				return env // the user already chose a resolver — keep it
+			}
+			env[i] = kv + ",netdns=go"
+			return env
+		}
+	}
+	return append(env, "GODEBUG=netdns=go")
 }
 
 // waitClusterReady blocks until the daemon has opened OUR cluster's tunnel (its
