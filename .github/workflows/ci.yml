@@ -189,7 +189,7 @@ jobs:
           tags: tag:ci
           hostname: plug-${{ matrix.os }}-${{ github.run_id }}
           args: --accept-dns=false # reach the cluster by tailnet IP; don't let Tailscale drive DNS
-      - name: Protocol matrix + multicluster (native, over the mesh)
+      - name: Install from the cluster + protocol matrix + multicluster
         shell: bash # Windows too: Git Bash is the assumed Windows shell
         run: bash scripts/ci/e2e-matrix.sh plug-cluster-${{ github.run_id }}-a plug-cluster-${{ github.run_id }}-b 2222
 

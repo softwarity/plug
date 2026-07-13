@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # Full protocol matrix, run NATIVELY on this runner (Linux, macOS, or Windows via
-# Git Bash): build plug + the four language clients, then run each client UNDER
-# plug against each cluster service BY NAME over the Tailscale mesh, and render a
-# PASS/FAIL grid. Then the MULTICLUSTER assert: two clusters are up (A and B, each
-# serving its own id on http://ident:5678), and the SAME name must reach the RIGHT
-# backend through each plug — simultaneously on Linux/Windows, sequentially on
-# macOS (until PID-at-connect lands on its daemon).
+# Git Bash) — starting with the REAL user flow: plug is INSTALLED FROM THE
+# CLUSTER (`install | sh` / `install-windows | bash -s --`), which grants its
+# privilege the real way (setcap / setuid helper / SYSTEM service) — no sudo
+# anywhere in this harness after that. Then every language client runs UNDER
+# that installed plug against each cluster service BY NAME over the Tailscale
+# mesh, and the grid is rendered. Finally the MULTICLUSTER assert: two clusters
+# are up (A and B, each serving its own id on http://ident:5678), and the SAME
+# name must reach the RIGHT backend through each plug — simultaneously on
+# Linux/Windows, sequentially on macOS (until PID-at-connect lands on its daemon).
 #
 #   e2e-matrix.sh <cluster-a-tailnet-name> <cluster-b-tailnet-name> [port]
 #
@@ -16,49 +19,25 @@ peer_b="${2:?usage: e2e-matrix.sh <cluster-a> <cluster-b> [port]}"
 port="${3:-2222}"
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 clients="$root/e2e/clients"
-cd "$root/cli"
+cd "$root"
 
 LANGS="go node python java"
 # proto:host:port — the by-name target for each service (matches e2e/matrix.sh).
 PROTOS="http:httpbin:8080 postgres:postgres:5432 redis:redis:6379 mongo:mongo:27017 amqp:rabbitmq:5672 mqtt:mosquitto:1883 grpc:grpc:50051 websocket:wsserver:8090"
 
-# --- OS specifics: plug binary + privilege + python name ---
-ext=""; sudo=""; py="python3"; linux_caps=""
+# --- OS specifics ---
+ext=""; py="python3"
 case "$(uname -s)" in
-  Darwin)
-    [ "$(id -u)" = 0 ] || sudo=sudo
-    ;;
-  Linux)
-    # Grant plug its caps (like the real install) and run it AS THE USER — not via
-    # sudo. Under sudo the client child runs as root with sudo's reset PATH: the
-    # java client would then pick the runner's system JDK instead of setup-java's
-    # (UnsupportedClassVersionError) and the python client couldn't see its --user
-    # pip packages. setcap keeps the child in the user's own environment — which is
-    # also exactly how plug is really used on Linux (no day-to-day sudo).
-    [ "$(id -u)" = 0 ] || linux_caps=1
-    ;;
   MINGW*|MSYS*|CYGWIN*) ext=".exe"; py="python" ;;
 esac
+SSH_OPTS="-p $port -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o BatchMode=yes"
 
-echo "=== build plug$ext ==="
-go build -o "plug$ext" .
-if [ "$ext" = ".exe" ]; then
-  echo "=== fetch wintun.dll ==="
-  curl -sL https://www.wintun.net/builds/wintun-0.14.1.zip -o wintun.zip
-  powershell -NoProfile -Command "Expand-Archive -Path wintun.zip -DestinationPath wtun -Force"
-  cp wtun/wintun/bin/amd64/wintun.dll .
-fi
-if [ -n "$linux_caps" ]; then
-  echo "=== setcap plug (run as the user, like the real install) ==="
-  sudo setcap cap_net_admin,cap_sys_admin,cap_net_bind_service+ep "./plug$ext"
-fi
-
-# --- wait for a cluster over the tailnet (echoes its IP once plug reaches it) ---
+# --- wait for a cluster over the tailnet (echoes its IP once its agent answers) ---
 wait_cluster() {
   wc_ip=""
   for _ in $(seq 1 90); do
     wc_ip="$(tailscale ip -4 "$1" 2>/dev/null | head -1 || true)"
-    if [ -n "$wc_ip" ] && "./plug$ext" test --host "$wc_ip" --port "$port" >/dev/null 2>&1; then
+    if [ -n "$wc_ip" ] && ssh -n $SSH_OPTS "get@$wc_ip" version >/dev/null 2>&1; then
       echo "$wc_ip"; return 0
     fi
     wc_ip=""; sleep 3
@@ -70,9 +49,33 @@ echo "=== wait for cluster A ($peer:$port) ==="
 ip="$(wait_cluster "$peer")" || { echo "cluster $peer never became reachable" >&2; exit 1; }
 echo "cluster A reachable at $ip:$port"
 
+# --- install plug FROM the cluster: the exact one-liner a user runs ---
+# The agent (built from THIS branch) serves the installer and the binaries; the
+# installer grants the privilege (sudo setcap on Linux, sudo setuid helper on
+# macOS, SCM service on the elevated Windows runner). Everything after this line
+# runs plug exactly as a user does — no sudo.
+echo "=== install plug from the cluster (real user flow) ==="
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    ssh -n $SSH_OPTS "get@$ip" install-windows | bash -s -- "$ip" "$port" || { echo "windows install failed" >&2; exit 1; }
+    PLUG="$(cygpath "$LOCALAPPDATA")/Programs/plug/plug.exe"
+    ;;
+  *)
+    # No -n: the unix installer reads the cluster host off this live ssh command.
+    ssh $SSH_OPTS "get@$ip" install </dev/null | sh || { echo "install failed" >&2; exit 1; }
+    PLUG=""
+    for c in "$(command -v plug 2>/dev/null || true)" "$HOME/.local/bin/plug" /usr/local/bin/plug; do
+      [ -n "$c" ] && [ -x "$c" ] && PLUG="$c" && break
+    done
+    ;;
+esac
+[ -n "$PLUG" ] && [ -x "$PLUG" ] || { echo "plug not found after install" >&2; exit 1; }
+echo "installed: $PLUG"
+"$PLUG" test --host "$ip" --port "$port" || { echo "installed plug cannot reach cluster A" >&2; exit 1; }
+
 # Per-cell timeout: a client with no timeout of its own must not hang the whole
 # job. perl's alarm is on every runner (incl. Git Bash) and survives exec.
-plug_to() { to="$1"; shift; perl -e 'alarm shift @ARGV; exec @ARGV or exit 127' 45 $sudo "./plug$ext" --host "$to" --port "$port" "$@"; }
+plug_to() { to="$1"; shift; perl -e 'alarm shift @ARGV; exec @ARGV or exit 127' 45 "$PLUG" --host "$to" --port "$port" "$@"; }
 plug()    { plug_to "$ip" "$@"; }
 
 # --- build the four language clients natively ---
@@ -173,21 +176,16 @@ case "$(uname -s)" in
     mc_mode="sequential — simultaneous lands with PID-at-connect on the daemon"
     a_out="$(plug_to "$ip" curl -s http://ident:5678 2>/tmp/mc-a.err || true)"
     for _ in $(seq 1 10); do
-      $sudo "./plug$ext" down 2>&1 | grep -q "no plug daemon" && break
+      "$PLUG" down 2>&1 | grep -q "no plug daemon" && break
       sleep 2
     done
     b_out="$(plug_to "$ip_b" curl -s http://ident:5678 2>/tmp/mc-b.err || true)"
     ;;
   *)
-    # Linux (a private resolver per launch) and Windows (the SYSTEM service holds
-    # one tunnel per cluster, attributed at connect()): BOTH plugs live at once.
+    # Linux (a private resolver per launch) and Windows (the SYSTEM service —
+    # installed by the installer above — holds one tunnel per cluster, attributed
+    # at connect()): BOTH plugs live at once.
     mc_mode="simultaneous"
-    if [ "$ext" = ".exe" ]; then
-      # The Windows multicluster path IS the SYSTEM service — install it now (the
-      # runner is elevated), after the single-cluster grid ran the direct path.
-      echo "--- install the datapath service (the Windows multicluster path) ---"
-      "./plug$ext" install-service || echo "install-service failed — staying on the direct path"
-    fi
     : > /tmp/mc-a.out
     plug_to "$ip" bash -c "curl -s http://ident:5678 > /tmp/mc-a.out && sleep 8" 2>/tmp/mc-a.err &
     mc_pid=$!
