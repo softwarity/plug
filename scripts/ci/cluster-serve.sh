@@ -13,8 +13,12 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 ttl="${PLUG_CLUSTER_TTL:-1800}"
 
-echo "=== build agent image ==="
-docker build -f "$root/agent/Dockerfile" -t softwarity/plug:e2e "$root"
+# The agent image is built by the workflow's dedicated "Build the agent image"
+# step (visible in the pipeline) — this script only serves it.
+docker image inspect softwarity/plug:e2e >/dev/null 2>&1 || {
+  echo "softwarity/plug:e2e missing — run the 'Build the agent image' step first" >&2
+  exit 1
+}
 
 echo "=== up agent + all services ==="
 cd "$root/e2e"

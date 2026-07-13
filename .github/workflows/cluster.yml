@@ -25,6 +25,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      # THE image under test: the agent is built HERE, from this branch, before
+      # anything joins the mesh — it then serves both the cluster services and
+      # the plug installer/binaries that every OS leg installs from.
+      - name: Build the agent image (this branch)
+        run: |
+          docker build -f agent/Dockerfile -t softwarity/plug:e2e .
+          echo "agent image built — serves plug version: $(docker run --rm softwarity/plug:e2e cat /opt/plug/VERSION)" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Join the tailnet
         uses: tailscale/github-action@v3
         with:
