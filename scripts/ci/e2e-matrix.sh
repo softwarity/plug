@@ -75,6 +75,19 @@ esac
 echo "installed: $PLUG"
 "$PLUG" test --host "$ip" --port "$port" || { echo "installed plug cannot reach cluster A" >&2; exit 1; }
 
+# --- env passthrough: the child must see the caller's environment (a user's
+# `FOO=bar plug npm start` / dotenv workflow depends on env AND cwd surviving
+# plug's launcher → core → shim chain untouched) ---
+echo "=== env passthrough ==="
+env_res=FAIL
+ev="$(PLUG_E2E_CANARY=canary-42 perl -e 'alarm 45; exec @ARGV or exit 127' "$PLUG" --host "$ip" --port "$port" \
+  bash -c 'echo "$PLUG_E2E_CANARY"' 2>/dev/null | tr -d '\r' | tail -1)"
+if [ "$ev" = "canary-42" ]; then
+  env_res=PASS; echo "env OK — the child sees the caller's variables"
+else
+  fails=$((fails + 1)); echo "--- env FAIL — child saw '${ev:-<nothing>}' (want canary-42)"
+fi
+
 # Per-cell timeout: a client with no timeout of its own must not hang the whole
 # job. perl's alarm is on every runner (incl. Git Bash) and survives exec.
 plug_to() { to="$1"; shift; perl -e 'alarm shift @ARGV; exec @ARGV or exit 127' 45 "$PLUG" --host "$to" --port "$port" "$@"; }
@@ -208,6 +221,29 @@ else
   echo "    --- plug-B stderr ---"; tail -8 /tmp/mc-b.err 2>/dev/null | sed 's/^/    /'
 fi
 
+# --- outage recovery: a service that is DOWN then COMES BACK must become
+# reachable within the SAME live session (the user report: an app keeps running
+# while its dependency restarts, and plug must pick it back up). flaky:8099
+# listens only after flaky:8098/up — the switch is flipped through plug itself.
+echo "=== outage recovery: flaky down → up inside one session ==="
+outage=FAIL
+ol="$(plug_to "$ip" bash -c '
+  curl -s --max-time 6 http://flaky:8099/ >/dev/null 2>&1 && { echo "flaky answered while it should be down"; exit 1; }
+  curl -s --max-time 10 http://flaky:8098/up >/dev/null || { echo "control endpoint unreachable"; exit 1; }
+  sleep 2
+  for _ in 1 2 3 4 5; do
+    out=$(curl -s --max-time 6 http://flaky:8099/ 2>/dev/null) && [ "$out" = "flaky-ok" ] && { echo recovered; exit 0; }
+    sleep 2
+  done
+  echo "never recovered"; exit 1
+' 2>/tmp/outage.err | tr -d '\r' | tail -1)"
+if [ "$ol" = "recovered" ]; then
+  outage=PASS; echo "outage OK — the service came back and the same session reached it"
+else
+  fails=$((fails + 1))
+  echo "--- outage FAIL — $ol"; tail -8 /tmp/outage.err 2>/dev/null | sed 's/^/    /'
+fi
+
 # --- render the grid ---
 lookup() { printf '%s\n' "$results" | awk -v a="$1" -v b="$2" '$1==a && $2==b {print $3}'; }
 glyph()  { case "$1" in PASS) printf "✅" ;; FAIL) printf "❌" ;; SKIP) printf "·" ;; *) printf "?" ;; esac; }
@@ -229,6 +265,8 @@ render() {
   else
     echo "**multicluster** ❌ ($mc_mode) — A said \`${a_out:-nothing}\` (want \`$expect_a\`) · B said \`${b_out:-nothing}\` (want \`$expect_b\`)"
   fi
+  echo
+  echo "**env passthrough** $(glyph "$env_res") · **outage recovery** $(glyph "$outage")"
 }
 render | tee -a "${GITHUB_STEP_SUMMARY:-/dev/stderr}"
 

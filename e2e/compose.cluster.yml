@@ -17,3 +17,10 @@ services:
     image: hashicorp/http-echo
     command: ["-listen=:5678", "-text=${PLUG_CLUSTER_IDENT:-solo}"]
     networks: [internal]
+
+  # Outage simulator: flaky:8099 listens ONLY after GET flaky:8098/up — the e2e
+  # reproduces "service down, then it comes back" inside one live plug session,
+  # flipping the switch itself through plug (no cross-job orchestration needed).
+  flaky:
+    build: { context: ., dockerfile: services/flaky/Dockerfile }
+    networks: [internal]
