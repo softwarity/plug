@@ -129,12 +129,27 @@ for entry in $PROTOS; do
       # resolver config looks like and which resolver path Go actually takes
       # (GODEBUG=netdns=2 logs the choice), so the run itself carries the diagnosis.
       if [ "$l" = go ] && [ "$(uname -s)" = Darwin ]; then
-        # Config looked right and Go picks the cgo order, yet SOME names time out
-        # while others resolve — so ask plug's DNS DIRECTLY (dig) for a failing
-        # name vs a passing one, plus the same via the system default, to split
-        # "answerDNS doesn't reply for this name" from "this client's query path".
-        echo "    --- go/mac DNS diagnosis (inside a live session) ---"
-        plug bash -c "echo '--- dig $proto-target direct @198.18.0.53 ---'; dig +time=3 +tries=1 +short ${target%%:*} @198.18.0.53; echo '--- dig httpbin direct @198.18.0.53 ---'; dig +time=3 +tries=1 +short httpbin @198.18.0.53; echo '--- dig ${target%%:*} system default ---'; dig +time=3 +tries=1 +short ${target%%:*}; echo '--- retry under GODEBUG=netdns=2 (12s cap) ---'; GODEBUG=netdns=2 perl -e 'alarm 12; exec @ARGV' '$clients/go/eclient$ext' '$proto' '$target'" 2>&1 | head -40 | sed 's/^/    diag| /'
+        # The failing go cells are exactly the 5s-timeout clients, so TIME each
+        # link of the chain inside a live session: getaddrinfo (dscacheutil), the
+        # in-stack DNS directly (dig), the mesh RTT (tailscale ping), then the
+        # client under BOTH resolver paths — netdns=go (pure Go → resolv.conf →
+        # in-stack, no libinfo) vs the default cgo path. Whichever leg carries
+        # the >5s is the culprit; no more guessing.
+        echo "    --- go/mac TIMED diagnosis (inside a live session) ---"
+        host_only=${target%%:*}
+        plug bash -c "
+          TIMEFORMAT='    [%Rs]'
+          echo '--- timed: dscacheutil $host_only (getaddrinfo path) ---'
+          time dscacheutil -q host -a name $host_only
+          echo '--- timed: dig $host_only.plug @198.18.0.53 (in-stack direct) ---'
+          time dig +time=4 +tries=1 +short $host_only.plug @198.18.0.53
+          echo '--- timed: tailscale ping (mesh RTT) ---'
+          time tailscale ping -c 2 $peer
+          echo '--- timed: client, FORCED pure-Go resolver (resolv.conf path) ---'
+          time env GODEBUG=netdns=go+1 perl -e 'alarm 15; exec @ARGV' $clients/go/eclient$ext $proto $target
+          echo '--- timed: client, default cgo resolver ---'
+          time env GODEBUG=netdns=2 perl -e 'alarm 15; exec @ARGV' $clients/go/eclient$ext $proto $target
+        " 2>&1 | head -60 | sed 's/^/    diag| /'
       fi
     fi
   done
