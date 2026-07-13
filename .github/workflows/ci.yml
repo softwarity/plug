@@ -192,6 +192,13 @@ jobs:
       - name: Install from the cluster + protocol matrix + multicluster
         shell: bash # Windows too: Git Bash is the assumed Windows shell
         run: bash scripts/ci/e2e-matrix.sh plug-cluster-${{ github.run_id }}-a plug-cluster-${{ github.run_id }}-b 2222
+      # The launcher-model contract: a user's OLD installed launcher (the last
+      # published image) must still drive THIS branch's core — the inter-version
+      # env channel the normal e2e can never exercise (it runs launcher == core).
+      # One leg is enough: the channel is identical on all three OSes.
+      - name: Launcher compat — latest published launcher, this branch's core
+        if: matrix.os == 'ubuntu-latest'
+        run: bash scripts/ci/compat-launcher.sh plug-cluster-${{ github.run_id }}-a 2222
 
   kill-cluster:
     name: kill clusters
