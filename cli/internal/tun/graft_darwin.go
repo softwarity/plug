@@ -39,6 +39,12 @@ func setupBackupPath(key string) string {
 	return filepath.Join(graftDir, ClusterHash(key)+".setup.bak")
 }
 
+// mdnsBackupPath is the per-cluster snapshot of mDNSResponder's
+// AlwaysAppendSearchDomains preference (persistent — same crash-net rationale).
+func mdnsBackupPath(key string) string {
+	return filepath.Join(graftDir, ClusterHash(key)+".mdns.bak")
+}
+
 // readyPath marks that the global daemon holds a LIVE tunnel for this cluster.
 func readyPath(key string) string { return filepath.Join(graftDir, ClusterHash(key)+".ready") }
 

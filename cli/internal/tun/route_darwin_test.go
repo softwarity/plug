@@ -91,3 +91,28 @@ func TestDNSBackupRoundTrip(t *testing.T) {
 		t.Fatalf("empty round-trip: key=%q restore=%q err=%v", k2, r2, err)
 	}
 }
+
+// TestMdnsAppendSearchRoundTrip exercises the AlwaysAppendSearchDomains
+// snapshot/set/restore on a THROWAWAY plist — never the system one.
+func TestMdnsAppendSearchRoundTrip(t *testing.T) {
+	orig := mdnsPlist
+	t.Cleanup(func() { mdnsPlist = orig })
+	mdnsPlist = filepath.Join(t.TempDir(), "mdns-test.plist")
+
+	if got := mdnsAppendSearchRead(); got != "absent" {
+		t.Fatalf("fresh plist: got %q want absent", got)
+	}
+	mdnsAppendSearchSet()
+	if got := mdnsAppendSearchRead(); got != "1" {
+		t.Fatalf("after set: got %q want 1", got)
+	}
+	mdnsAppendSearchRestore("absent")
+	if got := mdnsAppendSearchRead(); got != "absent" {
+		t.Fatalf("after restore(absent): got %q want absent", got)
+	}
+	mdnsAppendSearchRestore("0")
+	if got := mdnsAppendSearchRead(); got != "0" {
+		t.Fatalf("after restore(0): got %q want 0", got)
+	}
+	mdnsAppendSearchRestore("absent")
+}
