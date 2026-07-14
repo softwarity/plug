@@ -34,7 +34,7 @@ RUN apk add --no-cache curl unzip && \
     curl -fsSL "https://www.wintun.net/builds/wintun-${WINTUN_VERSION}.zip" -o /tmp/wintun.zip && \
     unzip -j /tmp/wintun.zip 'wintun/bin/amd64/wintun.dll' -d /out
 
-FROM alpine:3.21
+FROM alpine:3.24
 
 # openssh only: the CLI tunnels via SSH direct-tcpip, sshd resolves cluster
 # names and forwards connections itself — no other server-side tooling needed.
