@@ -41,38 +41,6 @@ func dialTunnel(cfg config) (*tunnel.Transport, error) {
 	return tr, err
 }
 
-// startExposes arms the session's -s mappings (the reverse direction) on a
-// DEDICATED transport, so the listeners' lifetime is exactly this session's —
-// even on macOS/Windows where the forward datapath lives in a shared daemon.
-// Each mapping is verified end-to-end once (through the cluster's own DNS), so
-// a missing alias, a too-old agent image, or a competing instance fails loud at
-// startup instead of silently never receiving traffic. Returns the transport
-// teardown (a no-op when nothing is exposed).
-func startExposes(cfg config) (func(), error) {
-	if len(cfg.exposes) == 0 {
-		return func() {}, nil
-	}
-	tr, err := dialTunnel(cfg)
-	if err != nil {
-		return nil, err
-	}
-	for _, spec := range cfg.exposes {
-		ex, err := tr.Expose(spec)
-		if err != nil {
-			tr.Close()
-			return nil, err
-		}
-		// -s was asked for explicitly: an unproven path fails the session, with
-		// the remedy — never a silent no-op (fix the cluster side, run again).
-		if verr := ex.Verify(); verr != nil {
-			tr.Close()
-			return nil, verr
-		}
-		info("serving %s (path verified through the cluster)", spec)
-	}
-	return func() { tr.Close() }, nil
-}
-
 // isLoopback reports whether host is the local machine (no network to intercept).
 func isLoopback(host string) bool {
 	switch host {

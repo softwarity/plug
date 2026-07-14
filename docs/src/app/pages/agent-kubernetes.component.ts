@@ -44,32 +44,6 @@ kubectl -n my-namespace port-forward svc/plug 2222:2222</app-code>
       <a routerLink="/security">Security model</a>.
     </div>
 
-    <h3>Serving a local service to the cluster (the reverse direction)</h3>
-    <p>
-      <code>plug -s &lt;name&gt;:&lt;cluster-port&gt;:&lt;local-port&gt; &lt;cmd&gt;</code> makes a
-      local port reachable from inside the cluster under a cluster DNS name, for the lifetime of
-      the session. On Kubernetes the name is a <strong>Service selecting the agent pod</strong> —
-      the k8s equivalent of the Swarm network alias:
-    </p>
-    <app-code lang="yaml">apiVersion: v1
-kind: Service
-metadata:
-  name: service1          # the name workloads will call
-spec:
-  selector: {{ '{' }} app: plug {{ '}' }}  # …and it lands on the agent
-  ports:
-    - port: 8081
-      targetPort: 8081</app-code>
-    <p>
-      A dev then runs <code>plug -s service1:8081:4200 npm start</code> — pods calling
-      <code>http://service1:8081</code> land on their machine's <code>:4200</code>. plug verifies
-      the full path at startup; the port closes with the session. One difference from Swarm: a
-      Service name is unique, so there is no DNS round-robin ambiguity — if the real
-      <code>service1</code> is deployed, its Service already owns the name; repoint it
-      (<code>selector: app: plug</code>) or remove it while you serve yours. The rest behaves like
-      Swarm — see <a routerLink="/swarm">Agent &amp; Swarm</a>.
-    </p>
-
     <p>
       The image, tags, how it also serves the CLI, and the under-the-hood notes are identical on
       every platform — see <a routerLink="/swarm">Agent &amp; Swarm</a> for those.

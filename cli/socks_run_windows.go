@@ -42,14 +42,6 @@ func coreRunViaService(cfg config, cmdArgs []string) int {
 		}
 	}
 	waitClusterReady(key)
-	// The reverse direction is per-session, not per-cluster: it rides its own
-	// transport in THIS process, not the SYSTEM service — Ctrl-C closes the port.
-	stopExposes, err := startExposes(cfg)
-	if err != nil {
-		info("expose: %v", err)
-		return 1
-	}
-	defer stopExposes()
 	return runChildEnv(cmdArgs, nil)
 }
 
@@ -62,12 +54,6 @@ func coreRunInProcess(cfg config, cmdArgs []string) int {
 		return 1
 	}
 	defer tr.Close()
-	stopExposes, err := startExposes(cfg)
-	if err != nil {
-		info("expose: %v", err)
-		return 1
-	}
-	defer stopExposes()
 	info("tunnel ready — running your command")
 	code, rerr := tun.Run(tr, cmdArgs, info)
 	if rerr != nil {

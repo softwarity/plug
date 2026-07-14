@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/softwarity/plug/cli/internal/tun"
-	"github.com/softwarity/plug/cli/internal/tunnel"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -54,12 +53,6 @@ Options:
   -p, --profile <name>   use profile ~/.plug/<name>.conf
   -H, --host <host>      agent host
       --port <port>      agent SSH port (default 2222)
-  -s, --serve <name>:<cluster-port>:<local-port>
-                         serve a local port to the cluster: workloads reaching
-                         <name>:<cluster-port> land on 127.0.0.1:<local-port>
-                         for this session (repeatable, placed after the other
-                         options; the name must be declared on the agent —
-                         network alias, or Service on Kubernetes)
   -h, --help             show this help
 `
 }
@@ -85,52 +78,6 @@ type config struct {
 	host     string
 	port     string
 	forwards []forwardSpec
-	exposes  []tunnel.ExposeSpec
-}
-
-// parseExpose parses one -s value, <name>:<cluster-port>:<local-port> — the
-// reverse direction (see tunnel/expose.go).
-func parseExpose(s string) (tunnel.ExposeSpec, error) {
-	parts := strings.Split(s, ":")
-	if len(parts) != 3 || parts[0] == "" {
-		return tunnel.ExposeSpec{}, fmt.Errorf("-s wants <name>:<cluster-port>:<local-port>, got %q", s)
-	}
-	for _, p := range parts[1:] {
-		n, err := strconv.Atoi(p)
-		if err != nil || n < 1 || n > 65535 {
-			return tunnel.ExposeSpec{}, fmt.Errorf("-s %s: %q is not a valid port", s, p)
-		}
-	}
-	return tunnel.ExposeSpec{Name: parts[0], ClusterPort: parts[1], LocalPort: parts[2]}, nil
-}
-
-// attachExposes parses the raw -s values for an in-process core run — the
-// grammar here IS this binary's grammar, so failing now is legitimate. (The
-// exec path forwards them raw instead: the downloaded core owns the grammar.)
-func attachExposes(cfg *config, raw []string) {
-	for _, r := range raw {
-		spec, err := parseExpose(r)
-		if err != nil {
-			fatal("%v", err)
-		}
-		cfg.exposes = append(cfg.exposes, spec)
-	}
-}
-
-// stripLeadingExposes pops the -s/--serve pairs a launcher left at the head of
-// the core's argv (see launcherRun) and parses them — an old launcher forwards
-// them there without understanding them.
-func stripLeadingExposes(args []string) ([]tunnel.ExposeSpec, []string, error) {
-	var specs []tunnel.ExposeSpec
-	for len(args) >= 2 && (args[0] == "-s" || args[0] == "--serve") {
-		spec, err := parseExpose(args[1])
-		if err != nil {
-			return nil, nil, err
-		}
-		specs = append(specs, spec)
-		args = args[2:]
-	}
-	return specs, args, nil
 }
 
 // forwardSpec declares a local port-forward for a raw-TCP service whose driver
@@ -189,7 +136,6 @@ type options struct {
 	profile string
 	host    string
 	port    string
-	exposes []string // raw -s values; validated once, re-prefixed on the core exec
 }
 
 func main() {
@@ -274,9 +220,6 @@ func launcherRun(args []string) {
 		// `plug -p <name>` with no command creates (or reconfigures) that profile.
 		// With -H/--port too it's written non-interactively (scriptable); otherwise
 		// the wizard asks. Bare `plug` with no -p still just shows usage.
-		if len(opts.exposes) > 0 {
-			fatal("-s serves a local port for the lifetime of a session — give plug a command to run")
-		}
 		if opts.profile != "" {
 			name := opts.profile
 			if opts.host != "" {
@@ -307,7 +250,6 @@ func launcherRun(args []string) {
 
 	// Same version as this launcher (or the agent is unversioned): run in-process.
 	if remote == version || remote == "" {
-		attachExposes(&cfg, opts.exposes)
 		runCore(cfg, cmdArgs)
 		return
 	}
@@ -315,21 +257,11 @@ func launcherRun(args []string) {
 	bin, err := ensureVersion(remote, cfg)
 	if err != nil {
 		info("cannot fetch v%s (%v) — falling back to this launcher (v%s)", remote, err, version)
-		attachExposes(&cfg, opts.exposes)
 		runCore(cfg, cmdArgs)
 		return
 	}
 	info("using cluster version v%s", remote)
 	raiseAmbientCaps() // linux: file caps don't survive exec'ing the downloaded core
-	// -s mappings cross the exec RAW, as leading argv: the downloaded core owns
-	// the grammar (validation included) — this launcher must not veto values a
-	// newer core understands. coreMain strips them back. An old launcher doesn't
-	// know -s and already forwards them in cmdArgs untouched — same wire format
-	// both ways; an old core fails loudly on "-s" instead of silently not
-	// exposing.
-	for i := len(opts.exposes) - 1; i >= 0; i-- {
-		cmdArgs = append([]string{"-s", opts.exposes[i]}, cmdArgs...)
-	}
 	child := exec.Command(bin, cmdArgs...)
 	child.Stdin, child.Stdout, child.Stderr = os.Stdin, os.Stdout, os.Stderr
 	child.Env = env
@@ -668,8 +600,6 @@ func parseArgs(args []string) (options, []string) {
 			o.host = flagValue(args, &i)
 		case "--port":
 			o.port = flagValue(args, &i)
-		case "-s", "--serve":
-			o.exposes = append(o.exposes, flagValue(args, &i))
 		default:
 			return o, args[i:]
 		}
@@ -893,11 +823,7 @@ func coreMain() {
 			}
 		}
 	}
-	specs, cmdArgs, err := stripLeadingExposes(os.Args[1:])
-	if err != nil {
-		fatal("%v", err)
-	}
-	cfg.exposes = specs
+	cmdArgs := os.Args[1:]
 	if len(cmdArgs) == 0 {
 		fatal("core: no command")
 	}

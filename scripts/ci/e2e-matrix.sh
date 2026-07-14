@@ -79,7 +79,6 @@ echo "installed: $PLUG"
 # `FOO=bar plug npm start` / dotenv workflow depends on env AND cwd surviving
 # plug's launcher → core → shim chain untouched) ---
 echo "=== env passthrough ==="
-fails=0 # initialized BEFORE the first cell that increments it (set -u)
 env_res=FAIL
 ev="$(PLUG_E2E_CANARY=canary-42 perl -e 'alarm 45; exec @ARGV or exit 127' "$PLUG" --host "$ip" --port "$port" \
   bash -c 'echo "$PLUG_E2E_CANARY"' 2>/dev/null | tr -d '\r' | tail -1)"
@@ -125,7 +124,7 @@ cmd_java()   { echo "java -jar $clients/java/target/client.jar"; }
 
 # --- run the matrix ---
 echo "=== matrix: each client UNDER plug → service by name ==="
-results=""
+results=""; fails=0
 for entry in $PROTOS; do
   proto="${entry%%:*}"; target="${entry#*:}"
   for l in $LANGS; do
@@ -237,41 +236,6 @@ else
   echo "--- outage FAIL — $ol"; tail -8 /tmp/outage.err 2>/dev/null | sed 's/^/    /'
 fi
 
-# --- expose (the reverse direction): serve a runner-local port under a cluster
-# name (plug -s) and have a plain cluster workload (prober) fetch it — proving
-# cluster DNS name → agent alias → sshd remote-forward → this session's tunnel →
-# the runner's local service. ONE NAME+PORT PER OS LEG: the legs share the
-# agent, and a port can only be bound once on it.
-case "$(uname -s)" in
-  Darwin) exname=exposed-mac; exposeport=18082 ;;
-  MINGW*|MSYS*|CYGWIN*) exname=exposed-win; exposeport=18083 ;;
-  *) exname=exposed-linux; exposeport=18081 ;;
-esac
-echo "=== expose: $exname:$exposeport → this runner's :18086 ==="
-expose=FAIL
-if ( cd "$root/e2e/echo-local" && go build -o "$root/echo-local$ext" . ); then
-  "$PLUG" --host "$ip" --port "$port" -s "$exname:$exposeport:18086" \
-    "$root/echo-local$ext" -addr 127.0.0.1:18086 -text "expose-ok-$exname" >/tmp/expose.out 2>&1 &
-  expose_pid=$!
-  sleep 8 # arm + end-to-end verify (the session logs "path verified" into expose.out)
-  for _ in 1 2 3; do
-    eo="$(plug curl -s --max-time 10 "http://prober:8097/fetch?url=http://$exname:$exposeport/" 2>/tmp/expose-probe.err | tr -d '\r' | tail -1)"
-    [ "$eo" = "expose-ok-$exname" ] && break
-    sleep 3
-  done
-  if [ "$eo" = "expose-ok-$exname" ]; then
-    expose=PASS; echo "expose OK — a cluster workload reached this runner's local service by name"
-  else
-    fails=$((fails + 1))
-    echo "--- expose FAIL — prober said '${eo:-nothing}' (want expose-ok-$exname)"
-    echo "    --- expose session output ---"; tail -12 /tmp/expose.out 2>/dev/null | sed 's/^/    /'
-    tail -6 /tmp/expose-probe.err 2>/dev/null | sed 's/^/    /'
-  fi
-  kill $expose_pid 2>/dev/null; wait $expose_pid 2>/dev/null
-else
-  fails=$((fails + 1)); echo "--- expose FAIL — echo-local did not build"
-fi
-
 # --- render the grid ---
 lookup() { printf '%s\n' "$results" | awk -v a="$1" -v b="$2" '$1==a && $2==b {print $3}'; }
 glyph()  { case "$1" in PASS) printf "✅" ;; FAIL) printf "❌" ;; SKIP) printf "·" ;; *) printf "?" ;; esac; }
@@ -294,7 +258,7 @@ render() {
     echo "**multicluster** ❌ ($mc_mode) — A said \`${a_out:-nothing}\` (want \`$expect_a\`) · B said \`${b_out:-nothing}\` (want \`$expect_b\`)"
   fi
   echo
-  echo "**env passthrough** $(glyph "$env_res") · **outage recovery** $(glyph "$outage") · **expose (cluster→local)** $(glyph "$expose")"
+  echo "**env passthrough** $(glyph "$env_res") · **outage recovery** $(glyph "$outage")"
 }
 render | tee -a "${GITHUB_STEP_SUMMARY:-/dev/stderr}"
 

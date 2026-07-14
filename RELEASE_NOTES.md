@@ -2,21 +2,6 @@
 
 ## NEXT RELEASE
 
-- **New: serve a local service to the cluster (the reverse direction).**
-  `plug -s <name>:<cluster-port>:<local-port> <cmd>` makes a local port
-  reachable from inside the cluster under a cluster DNS name, for the lifetime
-  of the session — declare the name on the agent (a network alias in the stack
-  file, a Service on Kubernetes) and every workload calling
-  `<name>:<cluster-port>` lands on your machine. The full path is verified at
-  startup — a missing alias, a too-old agent image or a competing session
-  **ends the session with the remedy**, never a silent no-op — and the port
-  closes with the session. The mapping is designed to re-arm after a transport
-  reconnect (proven on a local bench, not yet in CI). Needs an agent image from
-  this release (`GatewayPorts`); e2e-proven on all three OSes — a cluster
-  workload fetches a runner-served name in every CI run. With a launcher
-  installed before this release, put `-s` after `-p`/`--host` (old launchers
-  forward trailing flags they don't know to the core).
-
 ---
 
 ## 1.4.0

@@ -19,7 +19,6 @@ import { CodeComponent } from '../code/code.component';
     <ul>
       <li>Anyone who can reach the agent port gets <strong>network-level access</strong> to every overlay network the agent is attached to — DNS resolution included.</li>
       <li>They do <em>not</em> get shell access to your services, volumes or the Docker API: the agent relays packets, nothing else. Exposure is exactly "being on those networks".</li>
-      <li>The reverse direction (<code>-s</code>, serving a local port to the cluster) opens exactly <strong>one local port</strong> to cluster workloads, for the session's lifetime — never general access to the dev machine. Note the boundary honestly: the listener is a port <strong>on the agent</strong>, so any workload that can reach the agent can reach it (the declared alias/Service is the intended path, not an ACL).</li>
       <li>The data tunnel <strong>pins the agent's host key on first use</strong> (<code>~/.plug/known_hosts</code>): a changed key aborts the connection — a basic MITM tripwire on top of the no-secret transport. The one-shot install/download over the <code>get</code> user skips the check (<code>StrictHostKeyChecking=no</code>), since there is no client secret to protect there.</li>
     </ul>
 

@@ -97,21 +97,6 @@ Supported on all three OSes — proven simultaneously in CI on Linux, macOS and
 Windows. See the [coverage matrix](https://softwarity.github.io/plug/#/coverage)
 for the details.
 
-## Serve a local service to the cluster
-
-The session also works in reverse: `-s` makes a local port reachable from
-inside the cluster, under a cluster DNS name, for the lifetime of the session.
-
-```bash
-plug -s service1:8081:4200 npm run start:dev
-```
-
-Any workload calling `http://service1:8081` inside the cluster now lands on
-your machine's `:4200`. The name must be declared on the agent (a network alias
-in your stack file, a Service on Kubernetes — see the docs). plug verifies the
-full path at startup so a missing alias fails loud, and the port closes with
-the session.
-
 ## Limits
 
 It carries TCP reached by name. UDP, QUIC and ping are not tunnelled (most
