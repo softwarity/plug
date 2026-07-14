@@ -16,6 +16,13 @@ func coreRun(cfg config, cmdArgs []string) int {
 	}
 	defer tr.Close()
 
+	stopExposes, err := startExposes(cfg)
+	if err != nil {
+		info("expose: %v", err)
+		return 1
+	}
+	defer stopExposes()
+
 	info("tunnel ready — running your command")
 	code, rerr := tun.Run(tr, cmdArgs, info)
 	if rerr != nil {

@@ -26,6 +26,11 @@ RUN mkdir -p /out/bin && \
     done && \
     printf '%s' "$V" > /out/VERSION
 
+# The agent-side helper: ForceCommand of the tunnel user (the -s provisioning
+# verbs + the signpost relay + boot gc). Static, tiny, stdlib-only.
+COPY agent/helper/ /src/helper/
+RUN CGO_ENABLED=0 go build -C /src/helper -trimpath -ldflags "-s -w" -o /out/plug-agent .
+
 # WinTUN driver DLL, fetched once at build so the agent serves it to the Windows
 # installer (the installer pulls it from us — no run-time dependency on wintun.net,
 # and no more intermittent fetch).
@@ -51,6 +56,18 @@ RUN apk add --no-cache openssh-server \
          echo '  PasswordAuthentication no'; \
          echo '  AllowTcpForwarding yes'; \
          echo '  PermitOpen any'; \
+         # the tunnel user's whole exec surface is the -s helper: serve-name /
+         # unserve-name, no shell (direct-tcpip and remote forwards are channels,
+         # not sessions — ForceCommand does not touch them)
+         echo '  ForceCommand /usr/local/bin/plug-agent'; \
+         # expose (reverse direction): honour the CLI's 0.0.0.0 remote-forward bind
+         # so other workloads reach it via the agent's network alias — without this
+         # sshd silently binds the loopback and the exposed port answers nobody.
+         echo '  GatewayPorts clientspecified'; \
+         # detect dead tunnels server-side so their remote-forward binds free up
+         # fast enough for a reconnecting session to re-arm (~90s worst case).
+         echo '  ClientAliveInterval 30'; \
+         echo '  ClientAliveCountMax 3'; \
          echo 'Match User get'; \
          echo '  PermitEmptyPasswords yes'; \
          echo '  PasswordAuthentication yes'; \
@@ -66,6 +83,11 @@ COPY --chmod=755 agent/serve-binary /usr/local/bin/serve-binary
 COPY --chmod=755 agent/entrypoint.sh /entrypoint.sh
 COPY --from=build /out/bin/ /opt/plug/bin/
 COPY --from=build /out/VERSION /opt/plug/VERSION
+# setuid root: the helper runs as the `plug` SSH user but needs the docker
+# sock / the pod's SA token. Its whole reachable surface is the ForceCommand
+# dispatch — two verbs, DNS-label-validated args, no shell (same pattern as the
+# CLI's macOS setuid helper).
+COPY --from=build --chmod=4755 /out/plug-agent /usr/local/bin/plug-agent
 # The WinTUN DLL (served on the `wintun` verb) and the Git Bash installer (served
 # on `install-windows`). MUST come AFTER the COPYs above: a COPY that is the FIRST
 # to create /opt/plug would apply its mode to the directory itself, dropping the +x

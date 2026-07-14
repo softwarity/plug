@@ -17,10 +17,16 @@ services:
     image: docker.io/softwarity/plug:latest
     ports:
       - "2222:22"
+    volumes:
+      # Optional — only to serve a local port back to the cluster (plug -s).
+      # On Swarm the signpost is a service, so the agent must run on a manager.
+      - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - app_net
     deploy:
-      replicas: 1
+      replicas: 1   # a single agent task — the signpost relays to its VIP
+      placement:
+        constraints: [node.role == manager]   # so it can create signpost services (plug -s)
 
 networks:
   app_net:

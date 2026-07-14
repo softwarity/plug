@@ -2,12 +2,13 @@
 #
 #   kubectl -n <your-namespace> apply -f plug-k8s.yaml
 #
-# Deploy it in the SAME namespace as the services you want to reach: the agent's
-# sshd resolves short names (myservice) via the pod's resolver (CoreDNS) from
-# inside that namespace and opens the connection itself, over an SSH direct-tcpip
-# channel. No subnet, no CIDR — resolution happens by name, in-cluster.
-# Cross-namespace? Use the FQDN in your code (myservice.othernamespace, or the
-# full myservice.othernamespace.svc.cluster.local).
+# One file, one command — the agent AND the reverse direction's dynamic name
+# provisioning (plug -s). Deploy it in the SAME namespace as the services you
+# want to reach: the agent's sshd resolves short names (myservice) via the pod's
+# resolver (CoreDNS) from inside that namespace and opens the connection itself,
+# over an SSH direct-tcpip channel. No subnet, no CIDR — resolution happens by
+# name, in-cluster. Cross-namespace? Use the FQDN in your code
+# (myservice.othernamespace, or myservice.othernamespace.svc.cluster.local).
 #
 # How the data path works (for context): the `plug` CLI captures the child
 # process's cluster traffic at the IP layer with a userspace TUN (gVisor
@@ -16,6 +17,21 @@
 # the cluster. There is no SOCKS proxy and no server-side code of ours: just
 # stock openssh forwarding. Trusted dev clusters only — the transport has no
 # authentication by design (see the repo's security model).
+#
+# The reverse direction (plug -s <name>:<cport>:<lport>) has the agent CREATE
+# and DELETE a Service pointing that name at itself, per session — no name
+# pre-declared, no redeploy. That is what the ServiceAccount + Role + RoleBinding
+# below grant: DELIBERATELY MINIMAL and namespace-scoped — manage Services, and
+# nothing else. The agent can make a name in ITS namespace point at itself; it
+# cannot touch pods, secrets, other namespaces, or the cluster. A name served
+# this way is a port on the agent, reachable by whatever can reach the agent —
+# consistent with plug's trusted-dev-cluster model. Deploy accordingly.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: plug
+  labels: { app: plug }
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -29,6 +45,7 @@ spec:
     metadata:
       labels: { app: plug }
     spec:
+      serviceAccountName: plug
       # sshd must start as root: it writes host keys at boot (ssh-keygen -A),
       # binds the privileged port 22, and privilege-separates by forking to the
       # unprivileged `plug`/`get` users per session. So we do NOT force
@@ -72,7 +89,32 @@ spec:
       port: 2222
       targetPort: 22
       nodePort: 32222
-# Reach it two ways:
+---
+# The reverse direction's grant: Services only, this namespace only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: plug-serve-names
+  labels: { app: plug }
+rules:
+  # Exactly what serve-name / unserve-name / boot-gc need — Services only.
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: plug-serve-names
+  labels: { app: plug }
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: plug-serve-names
+subjects:
+  - kind: ServiceAccount
+    name: plug
+# Reach the agent two ways:
 #   • NodePort:  plug --host <a-node> --port 32222 <cmd>
 #   • No exposed port — kubectl port-forward (gated by the API-server RBAC),
 #     then plug on localhost:

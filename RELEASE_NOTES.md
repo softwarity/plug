@@ -2,6 +2,39 @@
 
 ## NEXT RELEASE
 
+- **New: serve a local service to the cluster (the reverse direction).**
+  `plug -s <name>:<cluster-port>:<local-port> <cmd>` makes a local port
+  reachable from inside the cluster under a cluster DNS name, for the lifetime
+  of the session — every workload calling `<name>:<cluster-port>` lands on your
+  machine, with **no name pre-declared and no stack redeploy**. The agent
+  provisions the name on the fly: a *signpost* carrying the DNS alias — a
+  **container** on Docker/Compose, a **Swarm service** when the agent runs as a
+  Swarm service (so it joins the stack overlay whether or not it's `attachable`
+  — no network change; the agent just runs on a manager node), or a **Service**
+  selecting the agent pod on Kubernetes (Services-only RBAC) — socket/RBAC
+  **opt-in**, created on `-s`, removed when the session ends, swept on agent
+  restart. Bench-proven on a single-node Swarm with a non-attachable overlay
+  (the common stack default). Without the opt-in the agent answers *static*
+  and the name must be a pre-declared alias/Service, exactly as before. The full
+  path is verified at startup — a missing name, a too-old agent image or a
+  competing session **ends the session with the remedy**, never a silent no-op —
+  and the port closes with the session. The reverse mapping re-arms after a
+  transport reconnect (local bench). Needs an agent image from this release; the
+  agent-side helper is the tunnel user's `ForceCommand` (`serve-name` /
+  `unserve-name` only, no shell). e2e-proven on all three OSes with the **Docker
+  backend** — every CI run serves a name **declared nowhere**, then proves it two
+  ways: a cluster workload fetches it, AND an external caller POSTs to a
+  **published cluster gateway** that calls the name and round-trips a correlation
+  id — and the full request path (root and a deep path) — back to the runner's
+  local service (the API-gateway use case, HTTP). The Kubernetes backend is
+  coded but not yet runtime-tested.
+  Security:
+  the Docker socket is root on the host — enable dynamic provisioning only on a
+  trusted cluster; the Kubernetes grant is tight (Services only, namespace
+  scoped). With a launcher installed before this release, put `-s` after
+  `-p`/`--host` (old launchers forward trailing flags they don't know to the
+  core).
+
 ---
 
 ## 1.4.0

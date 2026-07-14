@@ -93,6 +93,12 @@ HEAD
   done
 
   cat <<'TAIL'
+# A previous install may have left plug as a setuid-root helper (macOS) or a
+# root-owned cap binary (Linux): we own the DIRECTORY, so unlink it first (a `>`
+# redirect can't overwrite a root file in place — "Permission denied" — and can't
+# replace a running one either). rm on the dir entry always works; the new file
+# is written fresh under our uid.
+rm -f "$dest/plug" 2>/dev/null || true
 case "$os-$arch" in
   linux-amd64)  emit_linux_amd64  > "$dest/plug" ;;
   linux-arm64)  emit_linux_arm64  > "$dest/plug" ;;

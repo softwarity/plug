@@ -113,9 +113,22 @@ services:
   plug:
     image: docker.io/softwarity/plug:latest
     ports:
-      - "2222:22"</app-code>
+      - "2222:22"
+    # optional — only to serve a local port back to the cluster (plug -s)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    # Swarm only, for -s: the signpost is a service, so run the agent on a
+    # manager (any single-node swarm node IS a manager) as a single replica.
+    # Ignored by plain Compose.
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
     <p>
-      See <a routerLink="/swarm">Agent &amp; Swarm</a> for the standalone variant, or
+      The socket line is <strong>opt-in</strong>: without it, plug still does the forward
+      direction (<code>plug &lt;cmd&gt;</code> reaching cluster services). You only need it to
+      <a routerLink="/swarm">serve a local port back to the cluster</a> with <code>-s</code>. See
+      <a routerLink="/swarm">Agent &amp; Swarm</a> for the standalone variant, or
       <a routerLink="/kubernetes">Agent &amp; Kubernetes</a> for the cluster.
     </p>
 

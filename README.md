@@ -41,7 +41,21 @@ services:
   plug:
     image: docker.io/softwarity/plug:latest
     ports: ["2222:22"]
+    # optional — only to serve a local port back to the cluster (plug -s), see below
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    # Swarm only, for -s: the signpost is a service, so run the agent on a
+    # manager (any single-node swarm node IS a manager) as a single replica.
+    # Ignored by plain Compose.
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
 ```
+
+The socket line is **opt-in**: leave it out and plug still does the forward
+direction (`plug <cmd>` reaching cluster services). You only need it to serve a
+local port *to* the cluster — see [below](#serve-a-local-service-to-the-cluster).
 
 Standalone agent, or Kubernetes: see the [documentation](https://softwarity.github.io/plug/).
 
@@ -96,6 +110,44 @@ plug -p staging npm run start
 Supported on all three OSes — proven simultaneously in CI on Linux, macOS and
 Windows. See the [coverage matrix](https://softwarity.github.io/plug/#/coverage)
 for the details.
+
+## Serve a local service to the cluster
+
+The session also works in reverse: `-s` makes a local port reachable from
+inside the cluster, under a cluster DNS name, for the lifetime of the session.
+
+```bash
+plug -s service1:8081:4200 npm run start:dev
+```
+
+Any workload calling `http://service1:8081` inside the cluster now lands on
+your machine's `:4200` — **no name pre-declared, no redeploy**. The agent
+creates the name on the fly, which it does per engine:
+
+- **Docker / Compose** — mount the Docker socket on the agent (opt-in). Each
+  `-s` spins up a tiny *signpost* container carrying the DNS alias, removed with
+  the session.
+- **Swarm** — same socket; the signpost is a Swarm *service*, which joins the
+  stack's overlay whether or not it is `attachable`, so **no network change**.
+  The agent just needs to run on a **manager** node (to create services).
+- **Kubernetes** — the bundled [manifest](deploy/plug-k8s.yaml) already grants a
+  Services-only RBAC role, so `-s` creates and deletes the backing Service itself.
+- **Neither** — the agent answers *static*: pre-declare the name (a network
+  alias, a Service) and `-s` works the same, minus the auto-provisioning.
+
+```yaml
+services:
+  plug:
+    image: docker.io/softwarity/plug:latest
+    ports: ["2222:22"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock   # opt-in: dynamic -s names
+```
+
+The Docker socket is root on the host — mount it only on a cluster you trust
+(the same trust plug's no-auth transport already assumes). plug verifies the
+full path at startup so a missing name fails loud, and the port closes with the
+session.
 
 ## Limits
 

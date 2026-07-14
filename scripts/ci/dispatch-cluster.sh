@@ -9,8 +9,9 @@
 set -euo pipefail
 corr="${1:?usage: dispatch-cluster.sh <corr-id>}"
 
-# Trigger it; keep gh's chatter off stdout (stdout must carry only the id).
-gh workflow run cluster.yml -f corr="$corr" >&2
+# Trigger it ON THIS RUN'S REF (a branch run must get a cluster built from its
+# own branch); keep gh's chatter off stdout (stdout must carry only the id).
+gh workflow run cluster.yml -r "${GITHUB_REF_NAME:-main}" -f corr="$corr" >&2
 
 echo "waiting for the cluster run (cluster-for-$corr) to appear..." >&2
 for _ in $(seq 1 20); do

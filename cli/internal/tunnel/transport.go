@@ -298,6 +298,30 @@ func (t *Transport) Forward(ctx context.Context, listenAddr, target string, logf
 	return ln.Addr().String(), nil
 }
 
+// Exec runs one agent-side command over an SSH session and returns the first
+// line of its combined output. Used by the -s provisioning verbs (serve-name /
+// unserve-name): the agent's ForceCommand answers the one-line protocol; an
+// OLD agent image runs the command through /bin/sh instead and answers
+// "sh: serve-name: not found" — the caller treats anything off-protocol as
+// "static", so the verb degrades cleanly across versions.
+func (t *Transport) Exec(cmd string) (string, error) {
+	cl := t.current()
+	if cl == nil {
+		var err error
+		if cl, err = t.reconnectFrom(nil); err != nil {
+			return "", err
+		}
+	}
+	s, err := cl.NewSession()
+	if err != nil {
+		return "", err
+	}
+	defer s.Close()
+	out, _ := s.CombinedOutput(cmd)
+	line := strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
+	return line, nil
+}
+
 // Close tears down the transport (and every channel on it) and stops the
 // keepalive.
 func (t *Transport) Close() error {
@@ -334,8 +358,17 @@ func tofuHostKey(path, addr string, note func(string, ...any)) ssh.HostKeyCallba
 				if f[1] == enc {
 					return nil // known and matches
 				}
-				return fmt.Errorf("agent host key for %s changed (possible interception); "+
-					"if you trust it, remove the %s line from %s", addr, addr, path)
+				// The agent regenerates its host key on EVERY start (ssh-keygen -A),
+				// so a changed key is the NORMAL case after a cluster/agent restart,
+				// not an attack — plug's model is a trusted dev cluster, and the
+				// install already connects with StrictHostKeyChecking=no. Blocking
+				// here just forced the user to hand-edit known_hosts after each
+				// restart, which trained them to ignore the warning. Re-pin instead
+				// and note it: the note is the informative tripwire (a key change on a
+				// host you did NOT restart still deserves a glance), without the chore.
+				note("agent host key for %s changed (agent restart?) — re-pinned", addr)
+				repin(path, addr, enc)
+				return nil
 			}
 		}
 		// First sight — pin it.
@@ -347,4 +380,25 @@ func tofuHostKey(path, addr string, note func(string, ...any)) ssh.HostKeyCallba
 		note("pinned agent host key (%s)", ssh.FingerprintSHA256(key))
 		return nil
 	}
+}
+
+// repin rewrites path with enc as the pinned key for addr, dropping any stale
+// line for that addr (and blank lines). Best-effort: a failed rewrite just means
+// the next connect re-pins again.
+func repin(path, addr, enc string) {
+	data, _ := os.ReadFile(path)
+	var b strings.Builder
+	for _, line := range strings.Split(string(data), "\n") {
+		t := strings.TrimSpace(line)
+		if t == "" {
+			continue
+		}
+		if f := strings.SplitN(t, " ", 2); len(f) == 2 && f[0] == addr {
+			continue // drop the old pin for this addr
+		}
+		b.WriteString(t)
+		b.WriteByte('\n')
+	}
+	b.WriteString(addr + " " + enc + "\n")
+	_ = os.WriteFile(path, []byte(b.String()), 0o600)
 }

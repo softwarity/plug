@@ -125,10 +125,14 @@ jobs:
     # Publish ONLY once EVERY test has passed — unit tests, the TUN selftests on
     # all three OSes, and the full mesh e2e (protocol matrix + multicluster). An
     # image must never ship from a commit the e2e didn't bless. A fully green
-    # MANUAL dispatch publishes too ("a manual build is a whole build"); off-main
-    # runs never reach here anyway (the e2e only runs on main, so success() fails).
+    # MANUAL dispatch publishes too ("a manual build is a whole build").
+    # main publishes `latest` (+ the `main` tag); ANY OTHER branch publishes ONLY
+    # its own `:<branch>` tag (metadata-action tags by ref and gates `latest` to
+    # is_default_branch) — a throwaway image to test that branch on a real
+    # cluster, never latest. Off PRs (secrets). Delete stale branch tags from
+    # Docker Hub after merge.
     needs: [build, selftest, e2e]
-    if: success()
+    if: success() && github.event_name != 'pull_request'
     uses: ./.github/workflows/_docker.yml
     secrets: inherit
 
@@ -136,12 +140,13 @@ jobs:
   # against a REAL cluster, reaching services BY NAME over a Tailscale mesh (the
   # cluster can't be Linux containers on a mac/win runner, so it runs ONCE on its
   # own Linux run — cluster.yml — and every client joins it). Part of CI, not a
-  # separate workflow; gated to main and run only after the unit tests pass, since
-  # it's heavy and needs the Tailscale secrets. Needs TAILSCALE_CLIENT_ID/SECRET.
+  # separate workflow; runs on EVERY branch push (so any branch gets its full
+  # mesh-blessed image), after the unit tests pass. Off PRs — it's heavy and
+  # needs the Tailscale/Docker secrets, absent on fork PRs. Needs TAILSCALE_CLIENT_ID/SECRET.
   start-cluster:
     name: start clusters
     needs: test
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       actions: write # dispatch the cluster runs

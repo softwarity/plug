@@ -79,6 +79,7 @@ echo "installed: $PLUG"
 # `FOO=bar plug npm start` / dotenv workflow depends on env AND cwd surviving
 # plug's launcher → core → shim chain untouched) ---
 echo "=== env passthrough ==="
+fails=0 # initialized BEFORE the first cell that increments it (set -u)
 env_res=FAIL
 ev="$(PLUG_E2E_CANARY=canary-42 perl -e 'alarm 45; exec @ARGV or exit 127' "$PLUG" --host "$ip" --port "$port" \
   bash -c 'echo "$PLUG_E2E_CANARY"' 2>/dev/null | tr -d '\r' | tail -1)"
@@ -124,7 +125,7 @@ cmd_java()   { echo "java -jar $clients/java/target/client.jar"; }
 
 # --- run the matrix ---
 echo "=== matrix: each client UNDER plug → service by name ==="
-results=""; fails=0
+results=""
 for entry in $PROTOS; do
   proto="${entry%%:*}"; target="${entry#*:}"
   for l in $LANGS; do
@@ -236,6 +237,98 @@ else
   echo "--- outage FAIL — $ol"; tail -8 /tmp/outage.err 2>/dev/null | sed 's/^/    /'
 fi
 
+# --- expose (the reverse direction): serve a runner-local port under a cluster
+# name (plug -s) and have a plain cluster workload (prober) fetch it — proving
+# cluster DNS name → agent alias → sshd remote-forward → this session's tunnel →
+# the runner's local service. ONE NAME+PORT PER OS LEG: the legs share the
+# agent, and a port can only be bound once on it.
+case "$(uname -s)" in
+  Darwin) exname=exposed-mac; exposeport=18082 ;;
+  MINGW*|MSYS*|CYGWIN*) exname=exposed-win; exposeport=18083 ;;
+  *) exname=exposed-linux; exposeport=18081 ;;
+esac
+echo "=== expose: $exname:$exposeport → this runner's :18086 ==="
+expose=FAIL
+if ( cd "$root/e2e/echo-local" && go build -o "$root/echo-local$ext" . ); then
+  "$PLUG" --host "$ip" --port "$port" -s "$exname:$exposeport:18086" \
+    "$root/echo-local$ext" -addr 127.0.0.1:18086 -text "expose-ok-$exname" >/tmp/expose.out 2>&1 &
+  expose_pid=$!
+  sleep 8 # arm + end-to-end verify (the session logs "path verified" into expose.out)
+  for _ in 1 2 3; do
+    eo="$(plug curl -s --max-time 10 "http://prober:8097/fetch?url=http://$exname:$exposeport/" 2>/tmp/expose-probe.err | tr -d '\r' | tail -1)"
+    [ "$eo" = "expose-ok-$exname" ] && break
+    sleep 3
+  done
+  if [ "$eo" = "expose-ok-$exname" ]; then
+    expose=PASS; echo "expose OK — a cluster workload reached this runner's local service by name"
+  else
+    fails=$((fails + 1))
+    echo "--- expose FAIL — prober said '${eo:-nothing}' (want expose-ok-$exname)"
+    echo "    --- expose session output ---"; tail -12 /tmp/expose.out 2>/dev/null | sed 's/^/    /'
+    tail -6 /tmp/expose-probe.err 2>/dev/null | sed 's/^/    /'
+  fi
+  kill $expose_pid 2>/dev/null; wait $expose_pid 2>/dev/null
+else
+  fails=$((fails + 1)); echo "--- expose FAIL — echo-local did not build"
+fi
+
+# --- gateway callback (reverse direction, driven from OUTSIDE the cluster):
+# serve a local sink under a cluster name, then have an EXTERNAL caller POST to
+# the cluster's PUBLISHED gateway. The gateway calls the name INSIDE the cluster,
+# which lands on our sink, which answers "<path> <id>" back up through the
+# gateway to us. The POST goes STRAIGHT to the published gateway port (NOT
+# through plug), so this proves the downward path + the gateway, not the upward
+# tunnel. Two calls on the SAME session: one at the root ("/"), one at a deep
+# path — proving both the id AND the full request path travel the tunnel intact.
+# Per-OS name so the shared cluster's legs don't collide.
+case "$(uname -s)" in
+  Darwin) gwname=gwsink-mac; gwcport=18092 ;;
+  MINGW*|MSYS*|CYGWIN*) gwname=gwsink-win; gwcport=18093 ;;
+  *) gwname=gwsink-linux; gwcport=18091 ;;
+esac
+gwlocal=18096
+echo "=== gateway callback: external POST → gateway → $gwname → our sink :$gwlocal ==="
+gw=FAIL       # root call: {service,port,id}
+gwpath=FAIL   # deep-path call: {service,port,path,id}
+# gw_call <expected> <json-body> — POST to the published gateway, retry a few
+# times (the dynamic name needs a beat to exist), echo PASS/FAIL.
+gw_call() {
+  gc_want="$1"; gc_body="$2"; gc_out=""
+  for _ in 1 2 3; do
+    gc_out="$(curl -s --max-time 10 -X POST "http://$ip:18090/call" \
+      -H 'content-type: application/json' -d "$gc_body" 2>>/tmp/gw-post.err | tr -d '\r' | tail -1)"
+    [ "$gc_out" = "$gc_want" ] && { echo PASS; return; }
+    sleep 3
+  done
+  echo "FAIL|$gc_out"
+}
+if ( cd "$root/e2e/sink" && go build -o "$root/sink$ext" . ); then
+  "$PLUG" --host "$ip" --port "$port" -s "$gwname:$gwcport:$gwlocal" \
+    "$root/sink$ext" -addr "127.0.0.1:$gwlocal" >/tmp/gw.out 2>&1 &
+  gw_pid=$!
+  sleep 8 # arm + provision the name + verify
+  # 1) root call — sink answers "/ <id>"
+  gwnonce="cb-$gwname-$RANDOM"
+  r="$(gw_call "/ $gwnonce" "{\"service\":\"$gwname\",\"port\":\"$gwcport\",\"id\":\"$gwnonce\"}")"
+  if [ "$r" = PASS ]; then
+    gw=PASS; echo "gateway OK — external POST reached our sink at / (id round-tripped)"
+  else
+    fails=$((fails + 1)); echo "--- gateway FAIL — got '${r#FAIL|}' (want '/ $gwnonce')"
+  fi
+  # 2) deep-path call — sink answers "/hook/<n> <id>", proving the path travelled too
+  gwpnonce="cbp-$gwname-$RANDOM"; gwpath_seg="hook/$gwpnonce"
+  r="$(gw_call "/$gwpath_seg $gwpnonce" "{\"service\":\"$gwname\",\"port\":\"$gwcport\",\"path\":\"$gwpath_seg\",\"id\":\"$gwpnonce\"}")"
+  if [ "$r" = PASS ]; then
+    gwpath=PASS; echo "gateway path OK — the full path /$gwpath_seg reached our sink intact"
+  else
+    fails=$((fails + 1)); echo "--- gateway path FAIL — got '${r#FAIL|}' (want '/$gwpath_seg $gwpnonce')"
+  fi
+  [ "$gw" = PASS ] && [ "$gwpath" = PASS ] || { echo "    --- sink session ---"; tail -12 /tmp/gw.out 2>/dev/null | sed 's/^/    /'; tail -6 /tmp/gw-post.err 2>/dev/null | sed 's/^/    /'; }
+  kill $gw_pid 2>/dev/null; wait $gw_pid 2>/dev/null
+else
+  fails=$((fails + 2)); echo "--- gateway FAIL — sink did not build"
+fi
+
 # --- render the grid ---
 lookup() { printf '%s\n' "$results" | awk -v a="$1" -v b="$2" '$1==a && $2==b {print $3}'; }
 glyph()  { case "$1" in PASS) printf "✅" ;; FAIL) printf "❌" ;; SKIP) printf "·" ;; *) printf "?" ;; esac; }
@@ -258,7 +351,7 @@ render() {
     echo "**multicluster** ❌ ($mc_mode) — A said \`${a_out:-nothing}\` (want \`$expect_a\`) · B said \`${b_out:-nothing}\` (want \`$expect_b\`)"
   fi
   echo
-  echo "**env passthrough** $(glyph "$env_res") · **outage recovery** $(glyph "$outage")"
+  echo "**env passthrough** $(glyph "$env_res") · **outage recovery** $(glyph "$outage") · **expose (cluster→local)** $(glyph "$expose") · **gateway callback** $(glyph "$gw") · **gateway path** $(glyph "$gwpath")"
 }
 render | tee -a "${GITHUB_STEP_SUMMARY:-/dev/stderr}"
 

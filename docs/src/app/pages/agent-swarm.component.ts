@@ -88,6 +88,52 @@ ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@$
       carry a real <code>x.y.z</code>; <code>latest</code> carries <code>dev</code>.
     </p>
 
+    <h3>Serving a local service to the cluster (the reverse direction)</h3>
+    <p>
+      The session also works in reverse: <code>plug -s &lt;name&gt;:&lt;cluster-port&gt;:&lt;local-port&gt; &lt;cmd&gt;</code>
+      makes a local port reachable from inside the cluster under a cluster DNS name, for the
+      lifetime of the session. A dev runs <code>plug -s service1:8081:4200 npm start</code> and any
+      workload calling <code>http://service1:8081</code> lands on their machine's <code>:4200</code>
+      — <strong>no name pre-declared, no redeploy</strong>. When the session ends the name is gone.
+    </p>
+    <p>
+      For that the agent needs to create the DNS name on the fly, which means the Docker socket.
+      It is <strong>opt-in</strong> — mount it on the plug service:
+    </p>
+    <app-code lang="yaml">services:
+  plug:
+    image: docker.io/softwarity/plug:latest
+    ports:
+      - "2222:22"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock   # opt-in: dynamic -s names</app-code>
+    <p>
+      With the socket, plug creates the name when the session starts and removes it when the
+      session ends — nothing to pre-declare. Without it, use a name you declared yourself (a network
+      alias on the plug service). Either way, if the name can't be reached plug stops with the
+      reason — never a silent no-op — and one name is served by one session at a time.
+    </p>
+    <p>
+      On <strong>Swarm</strong>, run the agent on a manager node as a single replica. Your existing
+      network needs no change (a non-attachable overlay is fine):
+    </p>
+    <app-code lang="yaml">services:
+  plug:
+    # …
+    deploy:
+      replicas: 1                              # required for plug -s
+      placement:
+        constraints: [node.role == manager]   # required for plug -s (a single-node swarm is one)</app-code>
+    <div class="callout">
+      <strong>The socket is root on the host.</strong> Mount it only on a cluster you trust (the same
+      trust plug's no-auth transport already assumes). Too much? Skip it and declare the name
+      yourself as a static alias.
+    </div>
+    <p>
+      Installed a launcher before <code>-s</code> existed? Put <code>-s</code> after
+      <code>-p</code>/<code>--host</code> — older launchers pass flags they don't know to the core.
+    </p>
+
     <h3>Under the hood</h3>
     <ul>
       <li>Two SSH users: <code>plug</code> (public-key, runs the tunnel) and <code>get</code> (passwordless, <code>ForceCommand</code>-locked to serving a binary) — see <a routerLink="/security">Security model</a>.</li>

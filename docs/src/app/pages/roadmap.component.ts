@@ -84,6 +84,7 @@ import { MatIconModule } from '@angular/material/icon';
         <tr><td>Windows no-admin SYSTEM service + multicluster (PID-at-connect)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
         <tr><td>Multicluster on Linux (per-launch mount namespaces)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
         <tr><td>Multicluster on macOS (same PID-at-connect design)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
+        <tr><td>Reverse direction: serve a local port to the cluster under a cluster name (<code>-s</code>), name provisioned dynamically (docker-sock / k8s-RBAC, opt-in)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
         <tr><td><code>kubectl exec</code> transport (no exposed port)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
         <tr><td>Gateway hosting the tunnel + install surface</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
         <tr><td>IPv6 fake-pool + v6-literal tunnelling (overlays are IPv4 today)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>

@@ -68,8 +68,20 @@ if [ "$(uname -s)" = Linux ]; then
 fi
 
 echo "=== old launcher → this branch's cluster (probe, download the new core, run) ==="
-out="$(perl -e 'alarm 90; exec @ARGV or exit 127' $pre "$L" --host "$ip" --port "$port" curl -s http://httpbin:8080/get 2>&1 || true)"
-printf '%s\n' "$out" | tail -8 | sed 's/^/    /'
+# curl -sS: keep the body quiet but SHOW errors — a silent DNS/route failure is
+# undiagnosable from the transcript. --max-time separates timeouts from refusals.
+# Retry the whole run a few times: on Windows the SYSTEM service has just been
+# started by this launcher, and the FIRST flow can land before its tunnel is
+# warm ("curl: (52) Empty reply from server"); a couple of seconds later it is
+# up. Same self-heal spirit as every other cell in the harness, which all retry.
+out=""
+for attempt in 1 2 3 4; do
+  out="$(perl -e 'alarm 90; exec @ARGV or exit 127' $pre "$L" --host "$ip" --port "$port" curl -sS --max-time 25 http://httpbin:8080/get 2>&1 || true)"
+  printf '%s' "$out" | grep -q '"url"' && break
+  echo "  compat attempt $attempt not ready yet: $(printf '%s' "$out" | tr -d '\r' | tail -1)"
+  sleep 4
+done
+printf '%s\n' "$out" | tail -14 | sed 's/^/    /'
 if ! printf '%s' "$out" | grep -q '"url"'; then
   echo "COMPAT FAIL — the latest launcher could not run this branch's core against the cluster" >&2
   exit 1

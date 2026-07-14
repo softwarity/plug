@@ -44,6 +44,27 @@ kubectl -n my-namespace port-forward svc/plug 2222:2222</app-code>
       <a routerLink="/security">Security model</a>.
     </div>
 
+    <h3>Serving a local service to the cluster (the reverse direction)</h3>
+    <p>
+      <code>plug -s &lt;name&gt;:&lt;cluster-port&gt;:&lt;local-port&gt; &lt;cmd&gt;</code> makes a
+      local port reachable from inside the cluster under a cluster DNS name, for the lifetime of
+      the session — <strong>no name pre-declared, no redeploy</strong>. On Kubernetes the name is a
+      <strong>Service selecting the agent pod</strong>, and the agent creates and deletes it itself
+      per session. The manifest above already grants exactly what that needs — a small,
+      namespace-scoped RBAC role (manage Services, nothing else); it is part of the one deploy, so
+      <code>-s</code> works out of the box.
+    </p>
+    <p>
+      A dev runs <code>plug -s service1:8081:4200 npm start</code> — pods calling
+      <code>http://service1:8081</code> land on their machine's <code>:4200</code>, and the Service
+      is gone when the session ends (leftovers from a crashed session are swept on agent restart).
+      plug verifies the full path at startup; the port closes with the session. A Service name is
+      unique, so unlike Swarm there is no DNS round-robin — if the real <code>service1</code> is
+      deployed it already owns the name, so remove it while you serve yours. The
+      <a href="https://github.com/softwarity/plug/blob/main/deploy/plug-k8s.yaml" target="_blank" rel="noopener">manifest</a>
+      and the <a routerLink="/security">security model</a> spell out exactly what the grant allows.
+    </p>
+
     <p>
       The image, tags, how it also serves the CLI, and the under-the-hood notes are identical on
       every platform — see <a routerLink="/swarm">Agent &amp; Swarm</a> for those.

@@ -139,14 +139,16 @@ interface Hole {
       <strong>How this matrix is proven.</strong> Every CI run installs plug FROM the cluster on
       all three OSes (the real one-liners and privilege grants), runs the 4-language ×
       8-protocol grid natively over a mesh, and asserts simultaneous multicluster, outage
-      recovery, env passthrough and launcher/core version compat. See
+      recovery, env passthrough, the reverse direction (a cluster workload — and an
+      external caller through a published gateway — reaches a runner-served name) and
+      launcher/core version compat. See
       <a routerLink="/how-it-works">How it works</a>
       and the <a routerLink="/roadmap">roadmap</a>.
     </div>
   `,
 })
 export class CoverageComponent {
-  protected readonly snapshot = '2026-07-13';
+  protected readonly snapshot = '2026-07-14';
   protected readonly os = ['Linux', 'macOS', 'Windows'];
 
   protected glyph(s: St): string {
@@ -190,6 +192,9 @@ export class CoverageComponent {
         { feat: 'Native selftest (datapath proof)', os: ['ok', 'ok', 'ok'], note: 'green on all three in CI' },
         { feat: 'e2e protocol matrix (8 protos × 4 langs)', os: ['ok', 'ok', 'ok'], note: 'native over a Tailscale mesh — the same by-name path on Linux, macOS and Windows' },
         { feat: 'Split-horizon (short→cluster, FQDN→direct)', os: ['ok', 'ok', 'ok'], note: 'decided by the shape of the name — no config' },
+        { feat: 'Reverse: serve a local port to the cluster (<code>-s</code>)', os: ['ok', 'ok', 'ok'], note: 'sshd remote-forward — a cluster workload fetches the runner in CI, path self-verified at startup (re-arm after reconnect: local bench only)' },
+        { feat: 'Reverse: external caller → published gateway → runner (HTTP)', os: ['ok', 'ok', 'ok'], note: 'a POST to a PUBLISHED cluster gateway calls a <code>-s</code> name that lands on the runner\'s local sink; the correlation id AND the full request path round-trip back (root and a deep path) — the API-gateway use case, proven from outside the cluster' },
+        { feat: '<code>-s</code> name provisioned dynamically (no redeploy)', os: ['ok', 'ok', 'ok'], note: 'docker-sock signpost (opt-in) — CI serves a name declared nowhere, from a linux/mac/win client; created &amp; torn down per session, swept on agent restart. k8s-Service backend (opt-in RBAC): coded, not yet runtime-tested. Else static alias fallback' },
         { feat: 'Self-heal (VPN / sleep / agent restart)', os: ['ok', 'ok', 'warn'], note: 'keepalive+reconnect; Windows unproven' },
       ],
     },
@@ -210,7 +215,7 @@ export class CoverageComponent {
         { feat: 'ppidOf', os: ['ok', 'ok', 'ok'], note: '/proc · ps · ToolHelp (unit-tested)', sub: true },
         { feat: 'pidForLocalPort', os: ['ok', 'ok', 'ok'], note: '/proc/net · lsof · GetExtendedTcpTable (unit-tested)', sub: true },
         { feat: 'procStart (recycle guard)', os: ['ok', 'ok', 'ok'], note: 'ps lstart · /proc stat · GetProcessTimes — rejects a reused PID', sub: true },
-        { feat: 'N-tunnel global daemon', os: ['na', 'warn', 'ok'], note: 'Windows SCM service validated; macOS daemon holds one cluster today (N-tunnel planned)' },
+        { feat: 'N-tunnel global daemon', os: ['na', 'ok', 'ok'], note: 'one tunnel per cluster in the daemon/service — proven simultaneously in CI (2 live clusters)' },
       ],
     },
     {
