@@ -123,7 +123,7 @@ services:
     deploy:
       replicas: 1
       placement:
-        constraints: [node.role == manager]
+        constraints: [node.role == manager]</app-code>
     <p>
       The socket line is <strong>required</strong> on Docker, Compose and Swarm: it is how the agent
       creates your <a routerLink="/swarm"><code>-s</code> name</a>. It is root on the host, so mount
