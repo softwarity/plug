@@ -1,58 +1,83 @@
 # plug — TODO / plan de travail
 
-_État : juillet 2026._
+_État : 15 juillet 2026 — post-2.0.0._
 
-**Contexte.** Le **service SYSTEM Windows** (sans-admin + multicluster) est **validé de
-bout en bout** sur une vraie machine : install en Git Bash (admin une fois) → service ;
-puis `plug` **sans admin** partout (token non-élevé prouvé), multicluster concurrent
-inclus. Cold-start ramené de ~15 s à **~0,8 s**. Reste surtout l'**e2e Windows en CI**,
-quelques tests unitaires et des dettes. Archi : page « How it works » du site (softwarity.github.io/plug).
+**Contexte.** La **2.0.0** est publiée. Elle apporte le **sens retour** : `plug -s
+name:cluster-port:local-port` publie ton process dans le cluster sous un nom
+(remote-forward sshd, connexion SSH dédiée à la session), le nom est
+**provisionné à la volée** (signpost Docker via le socket, service Swarm sur
+overlay non-attachable, Service k8s via un rôle RBAC Services-only), et **`-s`
+est devenu obligatoire** — une seule forme d'invocation. La **détection de
+collision** refuse un nom déjà pris (message précis par backend). Le transport
+**s'auto-répare** : keepalive borné qui tue une connexion zombie (sleep / VPN /
+proxy Docker Desktop) puis reconnecte et **re-provisionne** le nom. Licence
+passée en **AGPL-3.0**. Windows est désormais une **jambe e2e complète en CI**
+(mesh Tailscale, natif, sans WSL2) — tout l'ancien chantier « verrouiller
+Windows » est bouclé.
+
+CI par push, 3 OS : install-depuis-cluster → grille 4 langages × 8 protocoles →
+multicluster simultané → outage recovery → env passthrough → `-s` → gateway
+callback → collision → compat launcher/core.
 
 ---
 
-## 🟡 Verrouiller Windows en CI — le principal reste
-e2e **« tout Windows-container »** sur runner hébergé (`windows-latest`, Windows
-containers, **sans WSL2**) — fige **install + service + résolution par nom (getaddrinfo)** :
-- [ ] Image agent `servercore` + OpenSSH Server (`Dockerfile.windows`, aligné `ltsc2022`)
-- [ ] Petite image HTTP WinCtr (nginx/servercore) comme service cible
-- [ ] Workflow `windows-latest` : install (Git Bash) → `install-service` → `plug curl` → assert **200**
-- [ ] Prouver le **sans-admin** avec un token restreint (comme le test manuel `schtasks /rl LIMITED`)
+## 🟡 Combler les trous « banc → CI » (le principal reste)
+Comportements **prouvés au runtime en local**, pas encore rejoués en CI :
+- [ ] **Self-heal en CI** : le keepalive tue le zombie puis reconnecte + re-provisionne — banc seulement ; Windows non prouvé. Cellule e2e : couper le chemin (sleep / agent restart), asserter la reprise.
+- [ ] **Re-arm `-s` après reconnexion** en CI (aujourd'hui banc local).
+- [ ] **Backend k8s Service pour `-s`** : codé, pas encore testé au runtime (RBAC Services-only) → cellule e2e k8s.
+- [ ] **Swarm en CI** : agent sur overlay non-attachable — banc seulement (seul Compose est en CI).
+- [ ] **Kubernetes NodePort / `kubectl port-forward`** : banc seulement.
+- [ ] **Windows sous VPN d'entreprise** : non prouvé (macOS OK avec GlobalProtect).
+- [ ] **Sessions longues & charge** : heures, gros transferts, nombreuses connexions, sleep/wake — non exercés.
 
-Complément CI hébergé, sans Docker :
-- [ ] Étendre `plug selftest` Windows : résolution **par nom via `getaddrinfo`** + service
-      _(le selftest actuel court-circuite getaddrinfo → il n'aurait pas vu le bug mono-label)_
+## 🟣 UDP par nom (relais de datagrammes) — 2.1.0
+Le tunnel ne porte que du TCP (SSH `direct-tcpip` = stream-only). Le client capte
+**déjà** l'UDP (protocole enregistré, `gonet.NewUDPConn` utilisé pour le DNS) et
+le **droppe** hors DNS (`cli/internal/tun/netstack.go:170-171`). Plan :
+- [ ] **Drop-loud d'abord** (petit fix, tout de suite) : logguer (rate-limité) « udp `<name>:<port>` non tunnelé » au lieu de jeter en silence — fin du hang sans diagnostic (flaggé MAJEUR dans `audit.md`).
+- [ ] **Client** : remplacer le drop par un forwarder UDP — `tab.lookup` → nom, `df(srcPort)` → cluster (réutilise l'attribution TCP), ouvrir un canal vers l'agent, **framing longueur-préfixée** des datagrammes.
+- [ ] **Agent** : sous-commande `plug-agent udp-relay <name> <port>` (invoquée en session SSH comme `serve-name`) → résout via le resolver cluster, `net.DialUDP`, relaie les datagrammes framés dans les deux sens.
+- [ ] **Cycle de vie** : flux synthétique par `(srcport, dst)` + **idle-timeout** pour reaper canal + relais (UDP sans-connexion).
+- [ ] **Négo de version** : vieil agent → « udp-relay not found » → dégrader proprement en drop-loud (comme serve-name).
+- [ ] **e2e ×3 OS** : DNS-sur-UDP vers un CoreDNS + un echo UDP (type StatsD) ; MàJ coverage (ligne UDP `✕` → `!`/`✓`) + roadmap.
 
-## 🟢 e2e complet Windows (la grille) — sur self-hosted
-- [ ] Runner **self-hosted** = PC Windows + Docker Desktop/WSL2 (nested-virt dispo)
-- [ ] Réutiliser l'**agent Linux existant** + les services Linux (pas de WinCtr à maintenir)
-- [ ] Grille langages × protocoles **native Windows** : Go/Node/Python/Java × httpbin/pg/redis/mongo/amqp/mqtt/grpc/ws
+Limite assumée : datagrammes → stream fiable/ordonné (HOL blocking, latence). OK
+pour DNS / StatsD / syslog / requête-réponse ; pas pour média temps-réel. QUIC =
+UDP → porté mais QUIC-over-TCP est pathologique (les clients retombent en TCP de
+toute façon).
 
-## 🔵 Tests unitaires des découvertes + dédup
-- [ ] `answerDNS` : strip `.plug` → mint le nom nu (fix DNS mono-label)
-- [ ] `ensureVersion` : suffixe `.exe` sur Windows · `ensureWintunBeside` : copie de `wintun.dll`
-- [ ] `DialContext` : un rejet de canal (`*ssh.OpenChannelError`) ne reconnecte pas (fix multi-session)
-- [ ] `setSystemNRPT`/`clearSystemNRPT` : round-trip registre `DnsPolicyConfig`
-- [x] `walkToCluster` : recyclage PID (`TestWalkToClusterRecycledPID`)
-- [ ] **Factoriser** `registry_windows`/`graft_windows` avec les `_darwin` (dédup) — dupliqués
-      volontairement pour ne pas risquer le mac validé ; à unifier maintenant que Windows est validé
+## 🔵 Transport & intégration (roadmap)
+- [ ] **IPv6** : fake-pool v6 + tunneling des littéraux v6 (fakes IPv4 aujourd'hui ; service par nom déjà OK).
+- [ ] **Transport `kubectl exec`** : tunnel via `kubectl exec` sur un pod nu — zéro port exposé, accès gouverné par le kubeconfig RBAC (adoucit le compromis no-auth).
+- [ ] **Gateway hôte du tunnel** : la gateway (Java) déjà déployée héberge l'endpoint et l'active dynamiquement — son auth devant. Fin de l'agent dédié.
 
 ## ⚪ Dettes / plus tard
-- [ ] Version service vs launcher : rafraîchir le binaire du service au bump (ou auto)
-- [ ] Retirer les directives compose obsolètes (`PLUG_HOOK_DEBUG`, `seccomp:unconfined`, `SYS_PTRACE`)
-- [ ] IPv6 : fake-pool + tunneling des littéraux v6 (roadmap)
-- [ ] Généraliser le selftest multi-protocole par OS (roadmap)
-- [ ] **macOS multicluster** : mécanisme PID-at-connect partagé et prouvé sur Windows → le valider aussi sur mac
+- [ ] **Tests unitaires** (comportements déjà prouvés en e2e, faible priorité) : `answerDNS` strip `.plug` → mint du nom nu ; round-trip registre NRPT (`setSystemNRPT` / `clearSystemNRPT`) ; `DialContext` — un rejet de canal (`*ssh.OpenChannelError`) ne reconnecte pas ; `ensureVersion` (`.exe`) / `ensureWintunBeside`.
+- [ ] **Factoriser** `registry_windows` / `graft_windows` avec les `_darwin` (dupliqués volontairement le temps de valider Windows — à unifier maintenant).
+- [ ] **Version service vs launcher** : rafraîchir le binaire du service au bump (ou auto).
+- [ ] Retirer les directives compose obsolètes (`PLUG_HOOK_DEBUG`, `seccomp:unconfined`, `SYS_PTRACE`) si encore présentes.
+- [ ] Nettoyage post-2.0.0 : tag Docker Hub `plug-bidi` (branche de dev) à supprimer.
 
 ---
 
-## ✅ Acquis (juillet 2026)
-- [x] **Service SYSTEM Windows validé de bout en bout** : install Git Bash (admin) → service ; `plug` sans admin (token non-élevé), multicluster concurrent
-- [x] **Installeur Git Bash pur** (`install.sh` ; `PLUG_HOST` ; `-n` contre le hang ssh) ; l'agent **sert `wintun.dll`** (plus de dépendance wintun.net)
-- [x] **Cold-start ~15 s → ~0,8 s** (NRPT en registre, tunnel ouvert en ~0,3 s, grâce de 20 s par cluster)
-- [x] **Multi-session concurrente** corrigée — un rejet de canal ne reconnecte plus (cross-OS)
-- [x] **version/download via `crypto/ssh`** sur Windows (fini le gel du binaire ssh sur pipe)
-- [x] **Host-key reset accessible** : known_hosts dans `%ProgramData%\plug` (user-writable) + message clair
-- [x] Datapath Windows validé en réel (WinTUN + netstack + DNS `.plug`/NRPT + splice par nom)
-- [x] Durcissement attribution PID contre le recyclage (mac/linux/windows)
-- [x] README + coverage matrix à jour (Windows validé de bout en bout)
-- [x] Multicluster macOS validé en réel ; multicluster Linux (mount namespaces)
+## ✅ Acquis
+
+### 2.0.0 (juillet 2026)
+- [x] **Sens retour `-s`** : remote-forward sshd, connexion SSH dédiée à la session, port fermé avec la session — e2e ×3 OS
+- [x] **Provisionnement dynamique du nom** : signpost Docker (socket), service Swarm sur overlay non-attachable, Service k8s (RBAC Services-only) ; fallback alias statique
+- [x] **Gateway callback** : appelant externe → gateway publiée → nom `-s` → sink local du runner (id + chemin complet round-trip) — le cas API-gateway, prouvé depuis l'extérieur
+- [x] **`-s` obligatoire** (breaking) : une seule forme d'invocation ; validation du nom côté client (label RFC 1035)
+- [x] **Détection de collision** : nom déjà pris refusé, message précis par backend (`docker rm -f` / `docker service rm` / `kubectl delete`) ; scoping réseau du check Swarm ; fix alias-null (`/containers/json` n'a pas les alias → inspect)
+- [x] **Self-heal keepalive** : `pingOK` borné, `dropDead` du zombie, `PLUG_KEEPALIVE_SECS` ; re-provision sur reconnexion (`OnRearm`)
+- [x] **Version floor** : refus de `-s` contre un agent < 2.0.0 (`coreMajor`)
+- [x] **AGPL-3.0** : `LICENSE` racine, badges, section README + contact commercial, `THIRD_PARTY_LICENSES.md`
+- [x] **Doc** : About (schéma bidirectionnel + comparatif objectif mirrord/Telepresence), how-it-works bidirectionnel, Getting started allégé
+- [x] **CI e2e par famille** (pass/fail visible par étape) ; compat launcher passe `-s`
+
+### Antérieur (1.x)
+- [x] **Windows** : service SYSTEM sans-admin + multicluster (PID-at-connect) ; **jambe e2e complète en CI** (mesh, natif, sans WSL2) ; cold-start ~15 s → ~0,8 s
+- [x] **Multicluster prouvé en CI sur les 3 OS** (mount-ns Linux · daemon macOS · service Windows), macOS simultané inclus
+- [x] Datapath userspace-TUN (tout runtime, Go & gRPC), split-horizon, DNS in-stack sous VPN
+- [x] Install depuis le cluster + launcher (versions par cluster) + privilège une seule fois (setcap / setuid / service)
+- [x] Grille e2e 8 protocoles × 4 langages, native sur les 3 OS

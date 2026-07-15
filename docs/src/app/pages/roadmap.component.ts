@@ -44,6 +44,21 @@ import { MatIconModule } from '@angular/material/icon';
       <a routerLink="/security">no-auth trade-off</a>).
     </p>
 
+    <h3>UDP by name</h3>
+    <p>
+      The tunnel carries <strong>TCP only</strong> — SSH's <code>direct-tcpip</code> is stream-only,
+      so UDP to a cluster service is not forwarded today (DNS is the exception, answered in-stack;
+      see <a routerLink="/how-it-works">How it works</a>). Planned: a <strong>datagram relay</strong>.
+      The agent gains a small <code>udp-relay</code> helper — invoked over SSH exactly like the
+      <code>-s</code> provisioning — while plug frames datagrams over a channel and pumps them both
+      ways, reusing the same by-name lookup and per-cluster attribution as TCP. The trade-off is
+      honest: datagrams then ride a reliable, ordered stream (with head-of-line blocking), which fits
+      DNS-over-UDP, StatsD, syslog and request/response UDP, but not real-time media. QUIC and HTTP/3
+      (UDP-based) would stop being silently dropped — though most clients already fall back to TCP.
+      Landing first, on its own: cluster UDP that is dropped today fails <em>silently</em> (it looks
+      like a hang) — plug will <strong>log</strong> it instead, so it fails loud.
+    </p>
+
     <h3>API-gateway integration</h3>
     <p>
       The end game: no dedicated agent at all. The (Java) API gateway already deployed in the
@@ -88,6 +103,7 @@ import { MatIconModule } from '@angular/material/icon';
         <tr><td><code>kubectl exec</code> transport (no exposed port)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
         <tr><td>Gateway hosting the tunnel + install surface</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
         <tr><td>IPv6 fake-pool + v6-literal tunnelling (overlays are IPv4 today)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
+        <tr><td>UDP by name — framed datagram relay over the tunnel (TCP-only today)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
         <tr><td>Native protocol e2e on every OS (8 protocols × 4 languages, by name over a mesh)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
       </tbody>
     </table>
