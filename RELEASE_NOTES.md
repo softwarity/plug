@@ -1,6 +1,6 @@
 # Release Notes
 
-## 2.0.0
+## NEXT RELEASE
 
 ### Breaking changes
 
