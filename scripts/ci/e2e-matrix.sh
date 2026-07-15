@@ -75,13 +75,26 @@ esac
 echo "installed: $PLUG"
 "$PLUG" test --host "$ip" --port "$port" || { echo "installed plug cannot reach cluster A" >&2; exit 1; }
 
+# -s is mandatory: every `plug <cmd>` names itself in the cluster. The UPWARD
+# cells serve nothing, so they publish a throwaway name. ONE name+port per OS
+# leg — the three legs share cluster A's agent and a remote-forward port binds
+# once on it; the helper force-replaces a same-named signpost, so reusing the
+# leg's name across its sequential cells is safe. The local port is a dummy: the
+# startup self-test loops the nonce back inside the session, no listener needed.
+case "$(uname -s)" in
+  Darwin)               leg=mac;   sport=18072 ;;
+  MINGW*|MSYS*|CYGWIN*) leg=win;   sport=18073 ;;
+  *)                    leg=linux; sport=18071 ;;
+esac
+serve="-s ${leg}_run:${sport}:9"
+
 # --- env passthrough: the child must see the caller's environment (a user's
 # `FOO=bar plug npm start` / dotenv workflow depends on env AND cwd surviving
 # plug's launcher → core → shim chain untouched) ---
 echo "=== env passthrough ==="
 fails=0 # initialized BEFORE the first cell that increments it (set -u)
 env_res=FAIL
-ev="$(PLUG_E2E_CANARY=canary-42 perl -e 'alarm 45; exec @ARGV or exit 127' "$PLUG" --host "$ip" --port "$port" \
+ev="$(PLUG_E2E_CANARY=canary-42 perl -e 'alarm 45; exec @ARGV or exit 127' "$PLUG" --host "$ip" --port "$port" $serve \
   bash -c 'echo "$PLUG_E2E_CANARY"' 2>/dev/null | tr -d '\r' | tail -1)"
 if [ "$ev" = "canary-42" ]; then
   env_res=PASS; echo "env OK — the child sees the caller's variables"
@@ -91,7 +104,7 @@ fi
 
 # Per-cell timeout: a client with no timeout of its own must not hang the whole
 # job. perl's alarm is on every runner (incl. Git Bash) and survives exec.
-plug_to() { to="$1"; shift; perl -e 'alarm shift @ARGV; exec @ARGV or exit 127' 45 "$PLUG" --host "$to" --port "$port" "$@"; }
+plug_to() { to="$1"; shift; perl -e 'alarm shift @ARGV; exec @ARGV or exit 127' 45 "$PLUG" --host "$to" --port "$port" $serve "$@"; }
 plug()    { plug_to "$ip" "$@"; }
 
 # --- build the four language clients natively ---

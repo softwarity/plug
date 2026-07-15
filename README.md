@@ -8,16 +8,17 @@
 [![CLI](https://img.shields.io/badge/CLI-linux%20·%20macOS%20·%20windows-blue)](https://github.com/softwarity/plug/releases)
 [![CI](https://github.com/softwarity/plug/actions/workflows/ci.yml/badge.svg)](https://github.com/softwarity/plug/actions/workflows/ci.yml)
 
-Run a local process as if it were inside your cluster: cluster service names
-resolve, and cluster services are reachable — with no code change and no proxy
-settings in your app.
+Run a local process as a member of your cluster: it resolves cluster service
+names, reaches cluster services, and is itself reachable in the cluster under a
+name — with no code change and no proxy settings in your app.
 
 ```bash
-plug npm run start:dev
-# your local app now reaches http://my-service:8080 like any workload in the cluster
+plug -s my-app:8080:3000 npm run start:dev
+# reaches cluster services by name — and is itself reachable in the cluster
+# as my-app:8080, forwarded to its local :3000
 ```
 
-Prefix any command with `plug` and it talks to the cluster by name — Node, the
+Prefix any command with `plug` and it joins the cluster by name — Node, the
 JVM, Python, Go, curl, gRPC, database drivers, anything. Stop the command and
 your machine is exactly as it was.
 
@@ -25,6 +26,8 @@ your machine is exactly as it was.
 
 - Reach cluster services by their real names, from your laptop — no port-forwards
   to wire up, no `localhost:PORT` mappings, no `/etc/hosts` edits.
+- Be reachable in the cluster under your own name — workloads call `my-app:8080`
+  and land on your local process, for the life of the session.
 - Works with any language or tool, unchanged — your app's sockets are never touched.
 - Runs on Linux, macOS and Windows.
 - Several clusters at once, side by side.
@@ -41,7 +44,7 @@ services:
   plug:
     image: docker.io/softwarity/plug:latest
     ports: ["2222:22"]
-    # optional — only to serve a local port back to the cluster (plug -s), see below
+    # optional — lets the agent create your -s name on the fly, see below
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     # Swarm only, for -s: the signpost is a service, so run the agent on a
@@ -53,9 +56,9 @@ services:
         constraints: [node.role == manager]
 ```
 
-The socket line is **opt-in**: leave it out and plug still does the forward
-direction (`plug <cmd>` reaching cluster services). You only need it to serve a
-local port *to* the cluster — see [below](#serve-a-local-service-to-the-cluster).
+The socket line is **opt-in**: it lets the agent create your `-s` name on the
+fly. Leave it out and you pre-declare the name yourself (a network alias, or a
+Service on Kubernetes) — see [below](#the-name-in-the-cluster).
 
 Standalone agent, or Kubernetes: see the [documentation](https://softwarity.github.io/plug/).
 
@@ -82,16 +85,18 @@ needs no privilege. After that you are ready.
 ## Use
 
 ```bash
-plug npm run start:dev
-plug ./mvnw spring-boot:run
-plug curl http://my-service:8080/health
+plug -s my-app:8080:3000 npm run start:dev
+plug -s my-api:8080:8080 ./mvnw spring-boot:run
 ```
 
-The first run asks which cluster to use and remembers it. Reaching another
-cluster is just naming it:
+`-s name:cluster-port:local-port` is the name your process answers to in the
+cluster; the same session reaches cluster services by name in return. It is
+**required**: in a cluster a running process is a service, and a service has a
+name — so name yours, even when nothing calls it back yet. The first run asks
+which cluster to use and remembers it. Reaching another cluster is just naming it:
 
 ```bash
-plug -p staging <command>     # asks once, then remembered
+plug -p staging -s my-app:8080:3000 npm run start:dev   # asks once, then remembered
 ```
 
 Everyday commands: `plug ls` (list clusters), `plug test` (check one is
@@ -103,26 +108,21 @@ reachable), `plug rn` / `plug rm` (rename / remove), `plug uninstall`,
 Run the same process against two clusters in parallel — each stays isolated:
 
 ```bash
-plug -p prod    npm run start
-plug -p staging npm run start
+plug -p prod    -s my-app:8080:3000 npm run start
+plug -p staging -s my-app:8080:3000 npm run start
 ```
 
 Supported on all three OSes — proven simultaneously in CI on Linux, macOS and
 Windows. See the [coverage matrix](https://softwarity.github.io/plug/#/coverage)
 for the details.
 
-## Serve a local service to the cluster
+## The name in the cluster
 
-The session also works in reverse: `-s` makes a local port reachable from
-inside the cluster, under a cluster DNS name, for the lifetime of the session.
-
-```bash
-plug -s service1:8081:4200 npm run start:dev
-```
-
-Any workload calling `http://service1:8081` inside the cluster now lands on
-your machine's `:4200` — **no name pre-declared, no redeploy**. The agent
-creates the name on the fly, which it does per engine:
+`-s name:cluster-port:local-port` publishes `name` in the cluster and forwards
+`name:cluster-port` to your machine's `local-port`, for the lifetime of the
+session — **no name pre-declared, no redeploy**. Any workload calling
+`http://name:cluster-port` lands on your process. The agent creates the name on
+the fly, which it does per engine:
 
 - **Docker / Compose** — mount the Docker socket on the agent (opt-in). Each
   `-s` spins up a tiny *signpost* container carrying the DNS alias, removed with

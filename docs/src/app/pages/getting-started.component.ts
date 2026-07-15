@@ -114,7 +114,7 @@ services:
     image: docker.io/softwarity/plug:latest
     ports:
       - "2222:22"
-    # optional — only to serve a local port back to the cluster (plug -s)
+    # optional — lets the agent create your -s name on the fly
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     # Swarm only, for -s: the signpost is a service, so run the agent on a
@@ -125,9 +125,9 @@ services:
       placement:
         constraints: [node.role == manager]
     <p>
-      The socket line is <strong>opt-in</strong>: without it, plug still does the forward
-      direction (<code>plug &lt;cmd&gt;</code> reaching cluster services). You only need it to
-      <a routerLink="/swarm">serve a local port back to the cluster</a> with <code>-s</code>. See
+      The socket line is <strong>opt-in</strong>: it lets the agent create your
+      <a routerLink="/swarm"><code>-s</code> name</a> on the fly. Without it, you pre-declare the
+      name yourself (a network alias, or a Service on Kubernetes). See
       <a routerLink="/swarm">Agent &amp; Swarm</a> for the standalone variant, or
       <a routerLink="/kubernetes">Agent &amp; Kubernetes</a> for the cluster.
     </p>
@@ -154,12 +154,13 @@ ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@$
     </p>
 
     <h3>3. Run your process against the cluster</h3>
-    <app-code lang="bash">plug npm run start:dev</app-code>
+    <app-code lang="bash">plug -s my-app:8080:3000 npm run start:dev</app-code>
     <p>
-      plug wires your command to the cluster and runs it. In your code you address services by
-      name — <code>http://pdfbox:8080</code>, <code>mongodb:27017</code> — and they resolve inside
-      the cluster. <kbd>Ctrl-C</kbd> stops your process; when the last one exits, your machine is
-      back exactly as it was. No sudo, no admin.
+      plug runs your command as a named member of the cluster: it answers to
+      <code>my-app:8080</code> (forwarded to its local <code>:3000</code>), and in your code you
+      address cluster services by name — <code>http://pdfbox:8080</code>, <code>mongodb:27017</code>
+      — which resolve inside the cluster. <kbd>Ctrl-C</kbd> stops your process; when the last one
+      exits, your machine is back exactly as it was. No sudo, no admin.
     </p>
     <p>
       plug is a small <strong>launcher</strong>: on connect it asks the agent which version it

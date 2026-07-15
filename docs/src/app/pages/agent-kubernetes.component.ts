@@ -44,10 +44,10 @@ kubectl -n my-namespace port-forward svc/plug 2222:2222</app-code>
       <a routerLink="/security">Security model</a>.
     </div>
 
-    <h3>Serving a local service to the cluster (the reverse direction)</h3>
+    <h3>The name in the cluster</h3>
     <p>
-      <code>plug -s &lt;name&gt;:&lt;cluster-port&gt;:&lt;local-port&gt; &lt;cmd&gt;</code> makes a
-      local port reachable from inside the cluster under a cluster DNS name, for the lifetime of
+      <code>plug -s &lt;name&gt;:&lt;cluster-port&gt;:&lt;local-port&gt; &lt;cmd&gt;</code> publishes the
+      process in the cluster under a DNS name, for the lifetime of
       the session — <strong>no name pre-declared, no redeploy</strong>. On Kubernetes the name is a
       <strong>Service selecting the agent pod</strong>, and the agent creates and deletes it itself
       per session. The manifest above already grants exactly what that needs — a small,

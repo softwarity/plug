@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	_ "embed"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -38,10 +39,13 @@ const agentHome = "/opt/plug"
 // usage lists the everyday commands only — no implementation talk, and no rarely
 // needed ones (down: the background tears itself down — still works, just unlisted).
 func usage() string {
-	return `plug — run a local command as if it were inside your cluster.
+	return `plug — run a local command as a member of your cluster.
 
 Usage:
-  plug [options] <command> [args...]   run <command> wired to the cluster
+  plug [-p profile] -s <name>:<cluster-port>:<local-port> <command> [args...]
+                                       run <command> as a named member of the
+                                       cluster — it answers to <name>, and
+                                       reaches cluster services by name in return
   plug ls                              list profiles
   plug test [profile]                  check an agent is reachable
   plug rn <old> <new>                  rename a profile (alias: mv)
@@ -55,27 +59,29 @@ Options:
   -H, --host <host>      agent host
       --port <port>      agent SSH port (default 2222)
   -s, --serve <name>:<cluster-port>:<local-port>
-                         serve a local port to the cluster: workloads reaching
-                         <name>:<cluster-port> land on 127.0.0.1:<local-port>
-                         for this session (repeatable, placed after the other
-                         options; the name must be declared on the agent —
-                         network alias, or Service on Kubernetes)
+                         publish this process in the cluster as <name>: workloads
+                         reaching <name>:<cluster-port> land on 127.0.0.1:<local-port>
+                         for this session. The agent creates the name on the fly
+                         (Docker socket / Kubernetes RBAC), or you pre-declare it.
+                         Repeatable; place after the other options.
   -h, --help             show this help
 `
 }
 
 // cmdAbout explains the concept in a few lines — the "why", not the plumbing.
 func cmdAbout() {
-	fmt.Print(`plug runs your local command as if it ran inside your cluster: cluster service
-names resolve, and their services are reachable — no code change, no proxy config.
+	fmt.Print(`plug runs your local command as a member of your cluster: cluster service names
+resolve, its services are reachable, and your process is itself reachable in the
+cluster under a name — no code change, no proxy config.
 
 Set it up once per cluster (the install grants the privilege plug needs), then:
 
-  plug <your command>            e.g.  plug npm run start:dev
+  plug -s my-app:8080:3000 npm run start:dev
 
+Your process now reaches cluster services by name and answers at my-app:8080.
 Several clusters? Just name one with -p — plug creates the profile on first run:
 
-  plug -p staging <command>
+  plug -p staging -s my-app:8080:3000 npm run start:dev
 
 Docs: https://softwarity.github.io/plug/
 `)
@@ -264,6 +270,21 @@ func main() {
 	launcherRun(args)
 }
 
+// serveRequired enforces the one invocation shape: a command joins the cluster
+// AS a named member, so -s <name>:<cluster-port>:<local-port> is mandatory —
+// even when nothing calls back (name it anyway; most of the time something
+// will, and it keeps a single form to learn). Subcommands never reach here:
+// main() dispatches ls/test/about/… before launcherRun.
+func serveRequired(exposes []string) error {
+	if len(exposes) == 0 {
+		return errors.New("name your process in the cluster:\n" +
+			"  plug [-p profile] -s <name>:<cluster-port>:<local-port> <command> [args...]\n" +
+			"-s is required: a running process in a cluster is a service, and a service has a name —\n" +
+			"so name it, even when nothing calls it back.")
+	}
+	return nil
+}
+
 // ---- launcher ----
 
 // launcherRun resolves the cluster, learns its version, and executes the
@@ -292,6 +313,9 @@ func launcherRun(args []string) {
 			return
 		}
 		fatal("no command given\n\n" + usage())
+	}
+	if err := serveRequired(opts.exposes); err != nil {
+		fatal("%s\n\n%s", err, usage())
 	}
 	cfg := resolveConfig(opts)
 	if cfg.host == "" {
