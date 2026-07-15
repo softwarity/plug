@@ -494,13 +494,33 @@ func containerHasAlias(id, name string, mine map[string]bool) bool {
 // GET /services lists the WHOLE cluster from a manager, so it also catches a
 // real service whose tasks run on other nodes (which nameTaken's container scan
 // cannot see). Serving on top would shadow it in DNS.
-func swarmNameTaken(name string) bool {
+func swarmNameTaken(name string, self selfInfo) bool {
+	// Scope to networks WE are on: a service on an overlay we don't share doesn't
+	// resolve for our workloads, so serving `name` on our overlay would not shadow
+	// it (the container path already scopes this way). `mine` holds our overlays'
+	// names AND ids — a service spec's Network Target may be either. If an id
+	// lookup fails we can't scope reliably, so fall back to the old cluster-wide
+	// check (over-refuse safely) rather than risk missing a real collision.
+	mine := map[string]bool{}
+	scoped := true
+	for _, n := range self.overlayNets() {
+		mine[n] = true
+		var ni struct {
+			Id string `json:"Id"`
+		}
+		if _, err := dockerAPI("GET", "/networks/"+n, nil, &ni); err == nil && ni.Id != "" {
+			mine[ni.Id] = true
+		} else {
+			scoped = false
+		}
+	}
 	var list []struct {
 		Spec struct {
 			Name         string            `json:"Name"`
 			Labels       map[string]string `json:"Labels"`
 			TaskTemplate struct {
 				Networks []struct {
+					Target  string   `json:"Target"`
 					Aliases []string `json:"Aliases"`
 				} `json:"Networks"`
 			} `json:"TaskTemplate"`
@@ -513,6 +533,20 @@ func swarmNameTaken(name string) bool {
 		if s.Spec.Labels["plug.signpost"] == "1" {
 			continue // our own signpost services don't count
 		}
+		shared := !scoped // if we couldn't resolve our net ids, assume shared (safe)
+		if scoped {
+			for _, n := range s.Spec.TaskTemplate.Networks {
+				if mine[n.Target] {
+					shared = true
+					break
+				}
+			}
+		}
+		if !shared {
+			continue // no shared network — it can't shadow our name
+		}
+		// The service's own name resolves on every network it's attached to, and
+		// an alias resolves on its network — either collides once a network is shared.
 		if s.Spec.Name == name {
 			return true
 		}
@@ -605,14 +639,17 @@ func swarmServe(name, port string, self selfInfo) {
 	if r := serviceReplicas(self.service); r > 1 {
 		answer("error: the plug agent has %d replicas — plug -s needs a single replica (scale the plug service to 1)", r)
 	}
+	if serviceIsGlobal(self.service) {
+		answer("error: the plug agent runs in GLOBAL mode — plug -s needs a single replica (deploy it as mode: replicated, replicas: 1)")
+	}
 	nets := self.overlayNets()
 	if len(nets) == 0 {
 		answer("static") // agent only on ingress/bridge — nothing to publish an alias on
 	}
 	// A real service with this name (anywhere in the cluster) must keep it: the
 	// container-scan nameTaken can't see Swarm services, so check them explicitly.
-	if swarmNameTaken(name) {
-		answer("error: %q is a service in the cluster — it owns the name. Remove it to serve yours: docker service rm %q (scaling to 0 keeps the name).", name, name)
+	if swarmNameTaken(name, self) {
+		answer("error: %q is a service on your overlay — it owns the name. Remove it to serve yours: docker service rm %q (scaling to 0 keeps the name).", name, name)
 	}
 	// Replace a leftover signpost service for this name (idempotent).
 	_, _ = dockerAPI("DELETE", "/services/"+signpostName(name), nil, nil)
@@ -755,6 +792,24 @@ func serviceReplicas(name string) int {
 		return 1
 	}
 	return s.Spec.Mode.Replicated.Replicas
+}
+
+// serviceIsGlobal reports whether a Swarm service runs in GLOBAL mode (one task
+// per node). serviceReplicas can't see that (global has no Replicated block, so
+// it reads as 1), yet the VIP then spreads across nodes and the session's single
+// remote-forward task is missed intermittently — so -s must refuse it too.
+func serviceIsGlobal(name string) bool {
+	var s struct {
+		Spec struct {
+			Mode struct {
+				Global *struct{} `json:"Global"`
+			} `json:"Mode"`
+		} `json:"Spec"`
+	}
+	if _, err := dockerAPI("GET", "/services/"+name, nil, &s); err != nil {
+		return false
+	}
+	return s.Spec.Mode.Global != nil
 }
 
 func urlEscape(s string) string {

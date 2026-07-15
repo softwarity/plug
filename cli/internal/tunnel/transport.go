@@ -156,6 +156,21 @@ func (t *Transport) reconnectFrom(stale *ssh.Client) (*ssh.Client, error) {
 	return nc, nil
 }
 
+// dropDead closes a client the keepalive confirmed dead and clears it if it is
+// still the current one. Closing unblocks the hung SendRequest and errors every
+// channel/listener riding it (so the -s serve loops re-arm); clearing it means a
+// failed re-dial won't leave callers using the zombie.
+func (t *Transport) dropDead(cl *ssh.Client) {
+	t.mu.Lock()
+	if t.client == cl {
+		t.client = nil
+	}
+	t.mu.Unlock()
+	if cl != nil {
+		cl.Close()
+	}
+}
+
 // DialContext opens a connection to addr from inside the cluster via a
 // direct-tcpip channel. A dead transport is re-dialed once and the open
 // retried, so an idle-dropped connection self-heals without restarting plug.
@@ -271,7 +286,13 @@ func (t *Transport) keepalive() {
 				continue // tolerate one transient miss
 			}
 			misses = 0
-			if _, rerr := t.reconnectFrom(cl); rerr != nil {
+			// Confirmed dead: close the zombie NOW (unblocks the hung ping and
+			// every channel/listener on it) and clear it — so if the re-dial
+			// below fails, the next tick sees a nil client and stops pinging the
+			// zombie, instead of leaking a goroutine every tick for the whole
+			// outage. Then re-dial fresh.
+			t.dropDead(cl)
+			if _, rerr := t.reconnectFrom(nil); rerr != nil {
 				t.note("keepalive: agent unreachable (%v)", rerr)
 			}
 		}

@@ -331,7 +331,14 @@ func launcherRun(args []string) {
 		fatal("no command given\n\n" + usage())
 	}
 	if err := serveRequired(opts.exposes); err != nil {
-		fatal("%s\n\n%s", err, usage())
+		hint := ""
+		if hasServeFlag(cmdArgs) {
+			// A -s after the command word was passed TO the command (plug stops
+			// parsing its own flags at the first operand) — the likely mistake.
+			hint = "\n\nnote: a -s AFTER the command goes to the command; plug's -s must come BEFORE it:\n" +
+				"  plug -s <name>:<cluster-port>:<local-port> " + strings.Join(cmdArgs, " ")
+		}
+		fatal("%s%s\n\n%s", err, hint, usage())
 	}
 	cfg := resolveConfig(opts)
 	if cfg.host == "" {
@@ -387,6 +394,17 @@ func launcherRun(args []string) {
 		}
 		fatal("running v%s: %v", remote, err)
 	}
+}
+
+// hasServeFlag reports whether a -s / --serve token appears among the command's
+// args — used to give a precise hint when -s was placed after the command.
+func hasServeFlag(args []string) bool {
+	for _, a := range args {
+		if a == "-s" || a == "--serve" || strings.HasPrefix(a, "--serve=") {
+			return true
+		}
+	}
+	return false
 }
 
 // coreMajor parses the leading major version from an agent version string, or

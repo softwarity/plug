@@ -101,6 +101,12 @@ jobs:
         with:
           go-version: stable
           cache: false
+      # The agent helper is its own module — vet/build/test it here (the e2e only
+      # compiled it into the cluster image; nothing caught a vet issue or ran its
+      # unit tests).
+      - name: Vet & test the agent helper
+        working-directory: agent/helper
+        run: go vet ./... && go build ./... && go test ./...
       - name: Cross-compile
         working-directory: cli
         env:
