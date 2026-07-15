@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -96,10 +97,19 @@ type config struct {
 
 // parseExpose parses one -s value, <name>:<cluster-port>:<local-port> — the
 // reverse direction (see tunnel/expose.go).
+// exposeName is the RFC 1035 label both agent backends accept (leading letter,
+// so the name is a valid Kubernetes Service too). Mirrored here so a bad -s name
+// fails instantly, before connecting, with the same rule the agent enforces.
+var exposeName = regexp.MustCompile(`^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
 func parseExpose(s string) (tunnel.ExposeSpec, error) {
 	parts := strings.Split(s, ":")
 	if len(parts) != 3 || parts[0] == "" {
 		return tunnel.ExposeSpec{}, fmt.Errorf("-s wants <name>:<cluster-port>:<local-port>, got %q", s)
+	}
+	if !exposeName.MatchString(parts[0]) {
+		return tunnel.ExposeSpec{}, fmt.Errorf("-s %s: %q is not a valid name — a cluster DNS name is a "+
+			"lowercase letter then letters, digits or hyphens (max 63), e.g. my-app", s, parts[0])
 	}
 	for _, p := range parts[1:] {
 		n, err := strconv.Atoi(p)
@@ -271,9 +281,10 @@ func main() {
 }
 
 // serveRequired enforces the one invocation shape: a command joins the cluster
-// AS a named member, so -s <name>:<cluster-port>:<local-port> is mandatory —
-// even when nothing calls back (name it anyway; most of the time something
-// will, and it keeps a single form to learn). Subcommands never reach here:
+// AS a named member, so at least one VALID -s <name>:<cluster-port>:<local-port>
+// is mandatory — even when nothing calls back (name it anyway; most of the time
+// something will, and it keeps a single form to learn). Run before connecting,
+// so a missing or malformed -s fails instantly. Subcommands never reach here:
 // main() dispatches ls/test/about/… before launcherRun.
 func serveRequired(exposes []string) error {
 	if len(exposes) == 0 {
@@ -281,6 +292,11 @@ func serveRequired(exposes []string) error {
 			"  plug [-p profile] -s <name>:<cluster-port>:<local-port> <command> [args...]\n" +
 			"-s is required: a running process in a cluster is a service, and a service has a name —\n" +
 			"so name it, even when nothing calls it back.")
+	}
+	for _, r := range exposes {
+		if _, err := parseExpose(r); err != nil {
+			return err
+		}
 	}
 	return nil
 }
