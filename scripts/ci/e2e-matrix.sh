@@ -342,6 +342,19 @@ else
   fails=$((fails + 2)); echo "--- gateway FAIL — sink did not build"
 fi
 
+# --- collision: a name a real cluster service already owns must be REFUSED.
+# httpbin is a live service here, so `plug -s httpbin` has to fail loud — the
+# guard that stops a dev from shadowing a name in use. The command never runs
+# (plug bails at provisioning), so its exact form is irrelevant. ---
+echo "=== collision: plug -s httpbin (a real cluster service) must be refused ==="
+collision=FAIL
+co="$("$PLUG" --host "$ip" --port "$port" -s httpbin:9998:9 curl --version 2>&1 || true)"
+if printf '%s' "$co" | grep -qiE "owns the name|already resolves|is a service in the cluster|answered by something else"; then
+  collision=PASS; echo "collision OK — plug refused to shadow the real httpbin"
+else
+  fails=$((fails + 1)); echo "--- collision FAIL — plug did not refuse; got:"; printf '%s\n' "$co" | tail -5 | sed 's/^/    /'
+fi
+
 # --- render the grid ---
 lookup() { printf '%s\n' "$results" | awk -v a="$1" -v b="$2" '$1==a && $2==b {print $3}'; }
 glyph()  { case "$1" in PASS) printf "✅" ;; FAIL) printf "❌" ;; SKIP) printf "·" ;; *) printf "?" ;; esac; }
@@ -364,7 +377,7 @@ render() {
     echo "**multicluster** ❌ ($mc_mode) — A said \`${a_out:-nothing}\` (want \`$expect_a\`) · B said \`${b_out:-nothing}\` (want \`$expect_b\`)"
   fi
   echo
-  echo "**env passthrough** $(glyph "$env_res") · **outage recovery** $(glyph "$outage") · **expose (cluster→local)** $(glyph "$expose") · **gateway callback** $(glyph "$gw") · **gateway path** $(glyph "$gwpath")"
+  echo "**env passthrough** $(glyph "$env_res") · **outage recovery** $(glyph "$outage") · **expose (cluster→local)** $(glyph "$expose") · **gateway callback** $(glyph "$gw") · **gateway path** $(glyph "$gwpath") · **collision refused** $(glyph "$collision")"
 }
 render | tee -a "${GITHUB_STEP_SUMMARY:-/dev/stderr}"
 

@@ -518,7 +518,7 @@ func containerServe(name, port string, self selfInfo) {
 		answer("static")
 	}
 	if nameTaken(name, nets) {
-		answer("error: %q already resolves to a container in the cluster — the real service owns the name; stop it while you serve yours", name)
+		answer("error: %q already resolves to a container in the cluster — it owns the name. Remove it to serve yours (docker rm -f, or scale it to 0).", name)
 	}
 	// Replace a leftover signpost for this name (a crashed session's, or a
 	// re-run): rm -f is idempotent.
@@ -575,7 +575,7 @@ func swarmServe(name, port string, self selfInfo) {
 	// A real service with this name (anywhere in the cluster) must keep it: the
 	// container-scan nameTaken can't see Swarm services, so check them explicitly.
 	if swarmNameTaken(name) {
-		answer("error: %q is a service in the cluster — the real service owns the name; stop it while you serve yours", name)
+		answer("error: %q is a service in the cluster — it owns the name. Remove it to serve yours: docker service rm %q (scaling to 0 keeps the name).", name, name)
 	}
 	// Replace a leftover signpost service for this name (idempotent).
 	_, _ = dockerAPI("DELETE", "/services/"+signpostName(name), nil, nil)
@@ -817,7 +817,7 @@ func k8sServe(name, port string) {
 		}
 		_, gerr := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/services/"+name, nil, &existing)
 		if gerr != nil || existing.Metadata.Labels[k8sManaged] != "plug" {
-			answer("error: the Service %q already exists and is not plug's — the real service owns the name", name)
+			answer("error: the Service %q already exists and is not plug's — it owns the name. Remove it to serve yours: kubectl delete service %q (scaling the workload keeps the Service).", name, name)
 		}
 		// It's ours: replace it. If the re-create fails, say SO — do not fall
 		// through to the "not plug's" lie (the name is now deleted; report the
