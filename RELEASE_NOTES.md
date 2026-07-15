@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.0.0
+
 ### Breaking changes
 
 - **`-s` is now mandatory when you run a command.** A running process in a cluster
