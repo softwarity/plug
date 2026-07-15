@@ -175,3 +175,9 @@ versions, the security model, and the per-OS coverage matrix:
 Build from source with `go build -o plug ./cli`. Distribution is from the cluster
 only — the agent image is the single source of the CLI, so there is no separate
 package to install or keep in sync.
+
+## License
+
+plug is [AGPL-3.0](LICENSE) — free to use and self-host. Building it into a
+**closed or hosted commercial product**? A commercial license is available —
+contact **[francois@hhdev.fr](mailto:francois@hhdev.fr)**.
