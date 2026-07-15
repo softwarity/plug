@@ -51,6 +51,22 @@ Security: the Docker socket is root on the host — enable dynamic provisioning
 only on a trusted cluster; the Kubernetes grant is tight (Services only, namespace
 scoped).
 
+### Known limitations
+
+- **Multi-node Swarm is unproven.** The Swarm-service backend is bench-tested on a
+  single node only; `-s` relays to the agent's service VIP, which assumes the
+  session's remote-forward lives on the one agent task. Run the agent as
+  `replicas: 1` on a manager (global mode is refused for the same reason).
+- **One agent per node.** The boot-time GC that sweeps a restarted agent's own
+  orphaned signposts can, on a worker running *two* distinct plug agents, remove
+  the other agent's live signpost. The shipped deploy pins the agent to a manager,
+  so this needs a deliberate misconfiguration.
+- **`-s` input mistakes fail loud, not silently:** two `-s` on the same
+  cluster-port report "already exposed by another session?"; a duplicate name
+  double-provisions. Both surface at startup.
+- During an outage the transport's reconnect can briefly (≤ ~15 s, one dial
+  timeout) stall other calls on that transport; already-open channels keep flowing.
+
 ---
 
 ## 1.4.0
