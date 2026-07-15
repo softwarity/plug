@@ -181,3 +181,6 @@ package to install or keep in sync.
 plug is [AGPL-3.0](LICENSE) — free to use and self-host. Building it into a
 **closed or hosted commercial product**? A commercial license is available —
 contact **[francois@hhdev.fr](mailto:francois@hhdev.fr)**.
+
+Third-party components (all AGPL-compatible) are listed in
+[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
