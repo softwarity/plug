@@ -50,7 +50,7 @@ import { RouterLink } from '@angular/router';
         <rect x="40" y="58" width="404" height="404" rx="14" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
 
         <rect x="72" y="92" width="340" height="66" rx="9" fill="#21262d" stroke="#30363d" stroke-width="1.5"/>
-        <text x="92" y="122" fill="#e6edf3" font-size="15" font-weight="600" font-family="ui-monospace, 'SF Mono', Menlo, monospace">plug npm run start:dev</text>
+        <text x="92" y="122" fill="#e6edf3" font-size="13" font-weight="600" font-family="ui-monospace, 'SF Mono', Menlo, monospace">plug -s my-app:8080:3000 npm start</text>
         <text x="92" y="142" fill="#8b949e" font-size="12.5">your process, its sockets never touched</text>
 
         <line x1="242" y1="158" x2="242" y2="196" stroke="#8b949e" stroke-width="1.6" marker-end="url(#hiw-arw)"/>

@@ -11,7 +11,7 @@ import { CodeComponent } from '../code/code.component';
 
     <p>
       A profile is one cluster: a plain file in <code>~/.plug/&lt;name&gt;.conf</code>. plug picks
-      the profile automatically so the daily command stays just <code>plug &lt;your command&gt;</code>.
+      the profile automatically, so your daily command carries no <code>-p</code>.
     </p>
 
     <h3>Automatic selection</h3>
@@ -27,7 +27,7 @@ import { CodeComponent } from '../code/code.component';
       <li><strong>Several profiles</strong> → interactive numbered choice — or skip the question with <code>-p &lt;name&gt;</code>.</li>
     </ul>
 
-    <app-code lang="text">$ plug npm run start:dev
+    <app-code lang="text">$ plug -s my-app:8080:3000 npm run start:dev
 [plug] no profile in /Users/you/.plug — let's create one
 profile name [default]:
 cluster host: swarm-node.example.com
@@ -55,8 +55,8 @@ port = 2222</app-code>
     <p>
       Run the same process against two clusters in parallel — each stays isolated:
     </p>
-    <app-code lang="bash">plug -p prod    npm run start   # → cluster prod
-plug -p staging npm run start   # → cluster staging, side by side</app-code>
+    <app-code lang="bash">plug -p prod    -s my-app:8080:3000 npm run start   # → cluster prod
+plug -p staging -s my-app:8080:3000 npm run start   # → cluster staging, side by side</app-code>
     <p>How plug keeps parallel clusters apart differs by OS:</p>
     <ul>
       <li>
@@ -95,7 +95,7 @@ plug rm staging          # remove a profile</app-code>
       <code>2222</code>) — handy for a quick try or for CI. It overrides the selected profile for
       that one run:
     </p>
-    <app-code lang="bash">plug --host swarm-node.example.com --port 2222 npm run start:dev</app-code>
+    <app-code lang="bash">plug --host swarm-node.example.com --port 2222 -s my-app:8080:3000 npm run start:dev</app-code>
 
     <h3>Versions — the launcher model</h3>
     <p>

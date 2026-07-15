@@ -79,7 +79,7 @@ interface Hole {
       What works where, and where the holes are — features × OS. One process run
       <strong>as if it were inside the cluster</strong>, via a userspace TUN over an SSH tunnel.
     </p>
-    <p class="snap">snapshot {{ snapshot }} · every claim below is re-proven by CI on each push (install → grid → multicluster, 3 OSes)</p>
+    <p class="snap">snapshot {{ snapshot }} · CI re-proves the install → grid → multicluster → reverse path on every push (3 OSes); rows noted <em>bench</em> are runtime-proven locally, not yet in CI</p>
 
     <div class="legend">
       <span><i class="dot d-ok">✓</i> works (proven at runtime)</span>
@@ -148,7 +148,7 @@ interface Hole {
   `,
 })
 export class CoverageComponent {
-  protected readonly snapshot = '2026-07-14';
+  protected readonly snapshot = '2026-07-15';
   protected readonly os = ['Linux', 'macOS', 'Windows'];
 
   protected glyph(s: St): string {
@@ -195,7 +195,7 @@ export class CoverageComponent {
         { feat: 'Reverse: serve a local port to the cluster (<code>-s</code>)', os: ['ok', 'ok', 'ok'], note: 'sshd remote-forward — a cluster workload fetches the runner in CI, path self-verified at startup (re-arm after reconnect: local bench only)' },
         { feat: 'Reverse: external caller → published gateway → runner (HTTP)', os: ['ok', 'ok', 'ok'], note: 'a POST to a PUBLISHED cluster gateway calls a <code>-s</code> name that lands on the runner\'s local sink; the correlation id AND the full request path round-trip back (root and a deep path) — the API-gateway use case, proven from outside the cluster' },
         { feat: '<code>-s</code> name provisioned dynamically (no redeploy)', os: ['ok', 'ok', 'ok'], note: 'docker-sock signpost (required) — CI serves a name declared nowhere, from a linux/mac/win client; created &amp; torn down per session, swept on agent restart. k8s-Service backend (Services-only RBAC): coded, not yet runtime-tested. Else static alias fallback' },
-        { feat: 'Self-heal (VPN / sleep / agent restart)', os: ['ok', 'ok', 'warn'], note: 'keepalive+reconnect; Windows unproven' },
+        { feat: 'Self-heal (VPN / sleep / agent restart)', os: ['ok', 'ok', 'warn'], note: 'keepalive times out a zombie connection then reconnects &amp; re-provisions; <em>bench, not CI</em>; Windows unproven' },
       ],
     },
     {
@@ -231,9 +231,9 @@ export class CoverageComponent {
       title: 'Agent deployment',
       flat: true,
       rows: [
-        { feat: 'Docker Compose / Swarm', st: 'ok', note: 'agent image joins the stack network' },
-        { feat: 'Kubernetes — NodePort', st: 'ok', note: '<code>deploy/plug-k8s.yaml</code>, --port 32222' },
-        { feat: 'Kubernetes — kubectl port-forward', st: 'ok', note: 'zero exposed port, API-server RBAC' },
+        { feat: 'Docker Compose / Swarm', st: 'ok', note: 'agent image joins the stack network — Compose in CI, Swarm <em>bench, not CI</em>' },
+        { feat: 'Kubernetes — NodePort', st: 'warn', note: '<code>deploy/plug-k8s.yaml</code>, --port 32222 — <em>bench, not CI</em>' },
+        { feat: 'Kubernetes — kubectl port-forward', st: 'warn', note: 'zero exposed port, API-server RBAC — <em>bench, not CI</em>' },
         { feat: 'Cross-namespace', st: 'ok', note: 'via FQDN <code>svc.othernamespace</code>' },
       ],
     },

@@ -62,7 +62,7 @@ import { MatIconModule } from '@angular/material/icon';
       command:
     </p>
 
-    <app-code lang="text">plug npm run start:dev   ──►   http://my-service:8080 answers, like from any workload in the cluster</app-code>
+    <app-code lang="text">plug -s my-app:8080:3000 npm run start:dev   ──►   http://my-service:8080 answers, like from any workload in the cluster</app-code>
 
     <div class="callout">
       <strong>Two pieces.</strong> A tiny <a routerLink="/swarm">agent container</a> (Alpine + sshd)
