@@ -418,12 +418,11 @@ func nameTaken(name string, nets []string) bool {
 		mine[n] = true
 	}
 	var list []struct {
-		Names           []string `json:"Names"`
+		Id              string            `json:"Id"`
+		Names           []string          `json:"Names"`
 		Labels          map[string]string `json:"Labels"`
 		NetworkSettings struct {
-			Networks map[string]struct {
-				Aliases []string `json:"Aliases"`
-			} `json:"Networks"`
+			Networks map[string]struct{} `json:"Networks"`
 		} `json:"NetworkSettings"`
 	}
 	if _, err := dockerAPI("GET", "/containers/json", nil, &list); err != nil {
@@ -438,14 +437,52 @@ func nameTaken(name string, nets []string) bool {
 				return true
 			}
 		}
-		for net, ep := range c.NetworkSettings.Networks {
-			if !mine[net] {
-				continue
+		// The network alias is how a Compose service is reached by name — but
+		// /containers/json returns its aliases as null (Docker only fills them
+		// in on inspect), so a real service reached by its service-name alias
+		// would slip through here. Inspect the candidates that share a network
+		// with us to read the aliases reliably.
+		onMine := false
+		for net := range c.NetworkSettings.Networks {
+			if mine[net] {
+				onMine = true
+				break
 			}
-			for _, a := range ep.Aliases {
-				if a == name {
-					return true
-				}
+		}
+		if onMine && containerHasAlias(c.Id, name, mine) {
+			return true
+		}
+	}
+	return false
+}
+
+// containerHasAlias reports whether the container answers to name on one of our
+// networks — read from inspect, where the aliases (and DNSNames) are populated,
+// unlike the container list.
+func containerHasAlias(id, name string, mine map[string]bool) bool {
+	var insp struct {
+		NetworkSettings struct {
+			Networks map[string]struct {
+				Aliases  []string `json:"Aliases"`
+				DNSNames []string `json:"DNSNames"`
+			} `json:"Networks"`
+		} `json:"NetworkSettings"`
+	}
+	if _, err := dockerAPI("GET", "/containers/"+id+"/json", nil, &insp); err != nil {
+		return false
+	}
+	for net, ep := range insp.NetworkSettings.Networks {
+		if !mine[net] {
+			continue
+		}
+		for _, a := range ep.Aliases {
+			if a == name {
+				return true
+			}
+		}
+		for _, d := range ep.DNSNames {
+			if d == name {
+				return true
 			}
 		}
 	}
