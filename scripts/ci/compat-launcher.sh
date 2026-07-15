@@ -67,6 +67,23 @@ if [ "$(uname -s)" = Linux ]; then
   fi
 fi
 
+# -s became mandatory on `latest` (a running process is a named cluster member),
+# and the launcher validates the name. Pass a throwaway -s ONLY if this latest
+# launcher understands it (>= 99adcf5, where -s landed): a pre-`-s` launcher would
+# reject the flag, a mandatory-s one requires it. Same ancestry gate as the
+# ambient-caps one above. One name+port per OS leg — the legs share the agent.
+serve_support=99adcf51c145bbfa7dc3974e134a1bf6593640a0
+cserve=""
+lrev="${lver##*+}" # "dev+<rev>" → <rev>
+if [ "$lrev" != "$lver" ] && git merge-base --is-ancestor "$serve_support" "$lrev" 2>/dev/null; then
+  case "$(uname -s)" in
+    Darwin)               cserve="-s compat-mac:18077:9" ;;
+    MINGW*|MSYS*|CYGWIN*) cserve="-s compat-win:18078:9" ;;
+    *)                    cserve="-s compat-linux:18076:9" ;;
+  esac
+  echo "latest launcher understands -s → naming this session $cserve"
+fi
+
 echo "=== old launcher → this branch's cluster (probe, download the new core, run) ==="
 # curl -sS: keep the body quiet but SHOW errors — a silent DNS/route failure is
 # undiagnosable from the transcript. --max-time separates timeouts from refusals.
@@ -76,7 +93,7 @@ echo "=== old launcher → this branch's cluster (probe, download the new core, 
 # up. Same self-heal spirit as every other cell in the harness, which all retry.
 out=""
 for attempt in 1 2 3 4; do
-  out="$(perl -e 'alarm 90; exec @ARGV or exit 127' $pre "$L" --host "$ip" --port "$port" curl -sS --max-time 25 http://httpbin:8080/get 2>&1 || true)"
+  out="$(perl -e 'alarm 90; exec @ARGV or exit 127' $pre "$L" --host "$ip" --port "$port" $cserve curl -sS --max-time 25 http://httpbin:8080/get 2>&1 || true)"
   printf '%s' "$out" | grep -q '"url"' && break
   echo "  compat attempt $attempt not ready yet: $(printf '%s' "$out" | tr -d '\r' | tail -1)"
   sleep 4

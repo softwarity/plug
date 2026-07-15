@@ -190,6 +190,9 @@ jobs:
     needs: start-cluster
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25 # a hung cell must not run the job (and the cluster) for hours
+    env:
+      A: plug-cluster-${{ github.run_id }}-a
+      B: plug-cluster-${{ github.run_id }}-b
     strategy:
       fail-fast: false # one OS failing must not cancel the others
       matrix:
@@ -218,15 +221,47 @@ jobs:
         with:
           name: latest-launchers
           path: latest-launchers
-      - name: Install from the cluster + protocol matrix + multicluster
-        shell: bash # Windows too: Git Bash is the assumed Windows shell
-        run: bash scripts/ci/e2e-matrix.sh plug-cluster-${{ github.run_id }}-a plug-cluster-${{ github.run_id }}-b 2222
-      # The launcher-model contract on EVERY OS: a user's OLD installed launcher
-      # (the last published image) must still drive THIS branch's core — the
-      # inter-version channel the normal e2e can never exercise (launcher == core).
-      - name: Launcher compat — latest published launcher, this branch's core
+      # One family per step so each shows its own green/red in the run view. The
+      # setup step installs plug FROM the cluster + builds the clients and records
+      # the shared state ($RUNNER_TEMP) the family steps read back. Families run
+      # with `if: always()` so one failing never hides the others (Git Bash on
+      # Windows too). The compat step closes the set: the last published launcher
+      # must still drive THIS branch's core (the inter-version channel).
+      - name: Setup — install plug from the cluster + build clients
         shell: bash
-        run: bash scripts/ci/compat-launcher.sh plug-cluster-${{ github.run_id }}-a 2222
+        run: bash scripts/ci/e2e-matrix.sh setup "$A" "$B" 2222
+      - name: Env passthrough
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh env "$A" "$B" 2222
+      - name: Protocol matrix (4 langs × 8 protocols)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh matrix "$A" "$B" 2222
+      - name: Multicluster (simultaneous)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh multicluster "$A" "$B" 2222
+      - name: Outage recovery
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh outage "$A" "$B" 2222
+      - name: Expose — serve a local port to the cluster (-s)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh expose "$A" "$B" 2222
+      - name: Gateway callback (external → published gateway → sink)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh gateway "$A" "$B" 2222
+      - name: Collision — a name already taken is refused
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh collision "$A" "$B" 2222
+      - name: Launcher compat — latest published launcher, this branch's core
+        if: always()
+        shell: bash
+        run: bash scripts/ci/compat-launcher.sh "$A" 2222
 
   kill-cluster:
     name: kill clusters
