@@ -98,7 +98,7 @@ ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@$
     </p>
     <p>
       For that the agent needs to create the DNS name on the fly, which means the Docker socket.
-      It is <strong>opt-in</strong> — mount it on the plug service:
+      It is <strong>required</strong> — mount it on the plug service:
     </p>
     <app-code lang="yaml">services:
   plug:
@@ -106,7 +106,7 @@ ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@$
     ports:
       - "2222:22"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock   # opt-in: dynamic -s names</app-code>
+      - /var/run/docker.sock:/var/run/docker.sock   # required: the agent creates your -s name</app-code>
     <p>
       With the socket, plug creates the name when the session starts and removes it when the
       session ends — nothing to pre-declare. Without it, use a name you declared yourself (a network

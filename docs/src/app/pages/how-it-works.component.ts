@@ -205,9 +205,9 @@ import { RouterLink } from '@angular/router';
       back to the local port (dedicated so the port's lifetime is exactly the session's, even where
       the forward datapath lives in a shared daemon). The cluster <em>name</em> that points at that
       port is provisioned by the agent on the fly — a signpost container carrying the DNS alias
-      (Docker, socket opt-in), or a Service selecting the agent pod (Kubernetes, RBAC opt-in) —
-      created on <code>-s</code>, removed when the session ends, with no stack redeploy. Without the
-      opt-in the name is a pre-declared alias instead. See
+      (Docker, via the socket), or a Service selecting the agent pod (Kubernetes, via a Services-only
+      role) — created on <code>-s</code>, removed when the session ends, with no stack redeploy. Without
+      the socket the name is a pre-declared alias instead. See
       <a routerLink="/swarm">Agent &amp; Swarm</a> and
       <a routerLink="/kubernetes">Agent &amp; Kubernetes</a>. The name is declared on the agent (a network alias in the stack file, a
       Service on Kubernetes), so cluster DNS does the routing; the listener lives and dies with the

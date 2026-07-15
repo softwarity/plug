@@ -114,7 +114,7 @@ services:
     image: docker.io/softwarity/plug:latest
     ports:
       - "2222:22"
-    # optional — lets the agent create your -s name on the fly
+    # required — the agent creates your -s name through it
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     # Swarm only, for -s: the signpost is a service, so run the agent on a
@@ -125,9 +125,9 @@ services:
       placement:
         constraints: [node.role == manager]
     <p>
-      The socket line is <strong>opt-in</strong>: it lets the agent create your
-      <a routerLink="/swarm"><code>-s</code> name</a> on the fly. Without it, you pre-declare the
-      name yourself (a network alias, or a Service on Kubernetes). See
+      The socket line is <strong>required</strong> on Docker, Compose and Swarm: it is how the agent
+      creates your <a routerLink="/swarm"><code>-s</code> name</a>. It is root on the host, so mount
+      it only on a cluster you trust. Kubernetes needs no socket — a Services-only RBAC role instead. See
       <a routerLink="/swarm">Agent &amp; Swarm</a> for the standalone variant, or
       <a routerLink="/kubernetes">Agent &amp; Kubernetes</a> for the cluster.
     </p>

@@ -9,12 +9,11 @@ services:
   agent:
     ports:
       - "2222:22"
-    # The docker.sock opt-in: with it, a session's -s provisions its cluster
-    # name DYNAMICALLY (the agent spawns a signpost container carrying the DNS
-    # alias — no pre-declared aliases, no stack redeploy). The expose e2e cell
-    # exercises exactly that: the exposed-<os> names exist nowhere in these
-    # files. Without the sock the agent answers "static" and -s falls back to
-    # pre-declared aliases.
+    # The docker.sock is REQUIRED for -s: with it, a session's -s provisions its
+    # cluster name DYNAMICALLY (the agent spawns a signpost container carrying the
+    # DNS alias — no pre-declared aliases, no stack redeploy). The expose e2e cell
+    # exercises exactly that: the exposed-<os> names exist nowhere in these files.
+    # Without the sock the agent falls back to "static" (pre-declared aliases).
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
 

@@ -44,7 +44,7 @@ services:
   plug:
     image: docker.io/softwarity/plug:latest
     ports: ["2222:22"]
-    # optional — lets the agent create your -s name on the fly, see below
+    # required — the agent creates your -s name through it (see below)
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     # Swarm only, for -s: the signpost is a service, so run the agent on a
@@ -56,9 +56,11 @@ services:
         constraints: [node.role == manager]
 ```
 
-The socket line is **opt-in**: it lets the agent create your `-s` name on the
-fly. Leave it out and you pre-declare the name yourself (a network alias, or a
-Service on Kubernetes) — see [below](#the-name-in-the-cluster).
+The socket line is **required** on Docker, Compose and Swarm: it is how the
+agent creates your `-s` name. It is root on the host, so mount it only on a
+cluster you trust — the trust plug's no-auth transport already assumes.
+Kubernetes needs no socket: the bundled manifest grants a Services-only RBAC
+role instead — see [below](#the-name-in-the-cluster).
 
 Standalone agent, or Kubernetes: see the [documentation](https://softwarity.github.io/plug/).
 
@@ -124,16 +126,17 @@ session — **no name pre-declared, no redeploy**. Any workload calling
 `http://name:cluster-port` lands on your process. The agent creates the name on
 the fly, which it does per engine:
 
-- **Docker / Compose** — mount the Docker socket on the agent (opt-in). Each
+- **Docker / Compose** — mount the Docker socket on the agent (required). Each
   `-s` spins up a tiny *signpost* container carrying the DNS alias, removed with
   the session.
 - **Swarm** — same socket; the signpost is a Swarm *service*, which joins the
   stack's overlay whether or not it is `attachable`, so **no network change**.
   The agent just needs to run on a **manager** node (to create services).
-- **Kubernetes** — the bundled [manifest](deploy/plug-k8s.yaml) already grants a
-  Services-only RBAC role, so `-s` creates and deletes the backing Service itself.
-- **Neither** — the agent answers *static*: pre-declare the name (a network
-  alias, a Service) and `-s` works the same, minus the auto-provisioning.
+- **Kubernetes** — no socket: the bundled [manifest](deploy/plug-k8s.yaml) grants
+  a Services-only RBAC role, so `-s` creates and deletes the backing Service itself.
+- **No socket** — the agent falls back to *static*: you pre-declare the name
+  yourself (a network alias, a Service). It works, but you lose the on-the-fly
+  provisioning — so mount the socket.
 
 ```yaml
 services:
@@ -141,7 +144,7 @@ services:
     image: docker.io/softwarity/plug:latest
     ports: ["2222:22"]
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock   # opt-in: dynamic -s names
+      - /var/run/docker.sock:/var/run/docker.sock   # required: the agent creates your -s name
 ```
 
 The Docker socket is root on the host — mount it only on a cluster you trust

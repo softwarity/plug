@@ -194,7 +194,7 @@ export class CoverageComponent {
         { feat: 'Split-horizon (short→cluster, FQDN→direct)', os: ['ok', 'ok', 'ok'], note: 'decided by the shape of the name — no config' },
         { feat: 'Reverse: serve a local port to the cluster (<code>-s</code>)', os: ['ok', 'ok', 'ok'], note: 'sshd remote-forward — a cluster workload fetches the runner in CI, path self-verified at startup (re-arm after reconnect: local bench only)' },
         { feat: 'Reverse: external caller → published gateway → runner (HTTP)', os: ['ok', 'ok', 'ok'], note: 'a POST to a PUBLISHED cluster gateway calls a <code>-s</code> name that lands on the runner\'s local sink; the correlation id AND the full request path round-trip back (root and a deep path) — the API-gateway use case, proven from outside the cluster' },
-        { feat: '<code>-s</code> name provisioned dynamically (no redeploy)', os: ['ok', 'ok', 'ok'], note: 'docker-sock signpost (opt-in) — CI serves a name declared nowhere, from a linux/mac/win client; created &amp; torn down per session, swept on agent restart. k8s-Service backend (opt-in RBAC): coded, not yet runtime-tested. Else static alias fallback' },
+        { feat: '<code>-s</code> name provisioned dynamically (no redeploy)', os: ['ok', 'ok', 'ok'], note: 'docker-sock signpost (required) — CI serves a name declared nowhere, from a linux/mac/win client; created &amp; torn down per session, swept on agent restart. k8s-Service backend (Services-only RBAC): coded, not yet runtime-tested. Else static alias fallback' },
         { feat: 'Self-heal (VPN / sleep / agent restart)', os: ['ok', 'ok', 'warn'], note: 'keepalive+reconnect; Windows unproven' },
       ],
     },

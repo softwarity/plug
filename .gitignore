@@ -3,3 +3,4 @@ bin/
 # e2e client binaries built locally (the CI builds its own on each runner)
 e2e/clients/go/eclient
 e2e/clients/go/eclient.exe
+agent/helper/plug-agent
