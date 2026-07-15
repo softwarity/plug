@@ -352,6 +352,14 @@ func launcherRun(args []string) {
 		return
 	}
 
+	// -s is a 2.0.0 feature. A released agent from before it (major < 2) dictates
+	// a core that would exec "-s" as the command — an opaque exit 127. Refuse with
+	// the remedy instead. (dev/unversioned agents parse as -1 and are assumed new.)
+	if maj := coreMajor(remote); len(opts.exposes) > 0 && maj >= 0 && maj < 2 {
+		fatal("the cluster agent reports v%s, which predates -s (needs plug ≥ 2.0.0).\n"+
+			"Upgrade the agent (redeploy the softwarity/plug image), then run again.", remote)
+	}
+
 	bin, err := ensureVersion(remote, cfg)
 	if err != nil {
 		info("cannot fetch v%s (%v) — falling back to this launcher (v%s)", remote, err, version)
@@ -379,6 +387,21 @@ func launcherRun(args []string) {
 		}
 		fatal("running v%s: %v", remote, err)
 	}
+}
+
+// coreMajor parses the leading major version from an agent version string, or
+// -1 when it is not a released semver ("dev+<rev>", "", …) — those are assumed
+// to be recent builds that understand -s.
+func coreMajor(v string) int {
+	i := strings.IndexByte(v, '.')
+	if i <= 0 {
+		return -1
+	}
+	n, err := strconv.Atoi(v[:i])
+	if err != nil {
+		return -1
+	}
+	return n
 }
 
 // coreEnv builds the environment for the privileged core re-exec. Host/port/forwards

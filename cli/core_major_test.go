@@ -1,0 +1,20 @@
+package main
+
+import "testing"
+
+func TestCoreMajor(t *testing.T) {
+	cases := map[string]int{
+		"1.9.3":     1, // released, predates -s → refused when -s is set
+		"2.0.0":     2,
+		"10.2.1":    10,
+		"dev+abc123": -1, // dev build → assumed recent
+		"":          -1,
+		"garbage":   -1,
+		".5":        -1,
+	}
+	for v, want := range cases {
+		if got := coreMajor(v); got != want {
+			t.Errorf("coreMajor(%q) = %d, want %d", v, got, want)
+		}
+	}
+}

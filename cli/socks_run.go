@@ -120,6 +120,21 @@ func startExposes(cfg config) (func(), error) {
 			return fail(verr)
 		}
 		info("serving %s (%s name, path verified through the cluster)", spec, mode)
+		if mode == "dynamic" {
+			// After a reconnect, a restarted agent has GC'd the signpost — re-run
+			// serve-name and re-verify, so the name isn't silently dead while the
+			// forward reports re-armed. (Static names are pre-declared; no hook.)
+			ex.OnRearm(func() error {
+				m, err := tr.Exec("serve-name " + spec.Name + " " + spec.ClusterPort)
+				if err != nil {
+					return err
+				}
+				if strings.HasPrefix(m, "error:") {
+					return fmt.Errorf("agent: %s", strings.TrimSpace(strings.TrimPrefix(m, "error:")))
+				}
+				return ex.Verify()
+			})
+		}
 	}
 	return func() {
 		// Drop the dynamic names BEFORE the transport goes: a signpost/Service

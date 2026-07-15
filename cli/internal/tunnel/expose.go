@@ -50,7 +50,19 @@ type Exposed struct {
 	// so steady-state accepts pay zero overhead.
 	nonce atomic.Pointer[[]byte]
 	hit   chan struct{}
+
+	// rearmHook re-provisions a DYNAMIC name after a reconnect: rearm re-binds
+	// only the sshd forward, but a restarted agent GC's the signpost, so the
+	// name must be re-created (and re-verified). nil for static names. Set once
+	// before serve() starts re-arming, so no lock is needed.
+	rearmHook func() error
 }
+
+// OnRearm registers a hook run after every reconnect re-binds the forward — used
+// to re-provision a dynamic name a restarted agent may have swept. Must be set
+// before the first reconnect (right after Expose), which the single-threaded
+// startExposes guarantees.
+func (e *Exposed) OnRearm(hook func() error) { e.rearmHook = hook }
 
 // Expose arms spec on the transport: it binds 0.0.0.0:<ClusterPort> agent-side
 // and relays every connection to 127.0.0.1:<LocalPort>. The first bind failure
@@ -98,6 +110,18 @@ func (e *Exposed) serve(ln net.Listener, cl *ssh.Client) {
 		var err error
 		if ln, cl, err = e.rearm(cl); err != nil {
 			return
+		}
+		// The sshd forward is re-bound; but if the agent restarted it GC'd the
+		// dynamic signpost, so re-provision the name and re-verify. Run it in the
+		// background: the Accept loop above must be live to catch Verify's nonce.
+		if e.rearmHook != nil {
+			go func() {
+				if err := e.rearmHook(); err != nil {
+					e.t.note("expose %s: re-provision after reconnect FAILED (%v) — the name may be unreachable", e.spec, err)
+				} else {
+					e.t.note("expose %s: name re-provisioned and re-verified after reconnect", e.spec)
+				}
+			}()
 		}
 	}
 }
@@ -223,11 +247,18 @@ func (e *Exposed) Verify() error {
 	if _, err := rand.Read(nonce); err != nil {
 		return nil // can't verify, don't block the session on it
 	}
+	// Drain a late hit from a PRIOR attempt: its buffered token would otherwise
+	// satisfy this attempt's select without our nonce ever arriving (false pass).
+	select {
+	case <-e.hit:
+	default:
+	}
 	e.nonce.Store(&nonce)
-	// Disarm a beat AFTER returning: a nonce still in flight past our timeout
-	// must be recognized and dropped, not forwarded to the local service as
-	// real traffic.
-	defer time.AfterFunc(2*time.Second, func() { e.nonce.Store(nil) })
+	// Disarm a beat AFTER returning, but ONLY if it is still OUR nonce: a prior
+	// attempt's timer must not wipe a live retry's nonce (which would relay the
+	// retry's nonce into the local service and time the check out). A nonce still
+	// in flight past our timeout is recognized and dropped, not forwarded.
+	defer time.AfterFunc(2*time.Second, func() { e.nonce.CompareAndSwap(&nonce, nil) })
 
 	conn, err := e.t.DialCluster(net.JoinHostPort(e.spec.Name, e.spec.ClusterPort))
 	if err != nil {
