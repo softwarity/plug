@@ -86,7 +86,7 @@ case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) leg=win;   sport=18073 ;;
   *)                    leg=linux; sport=18071 ;;
 esac
-serve="-s ${leg}_run:${sport}:9"
+serve="-s run-${leg}:${sport}:9"   # hyphen only — an underscore is not a valid DNS label
 
 # --- env passthrough: the child must see the caller's environment (a user's
 # `FOO=bar plug npm start` / dotenv workflow depends on env AND cwd surviving
