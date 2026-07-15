@@ -32,74 +32,47 @@ import { RouterLink } from '@angular/router';
       and nothing but a private, reserved IP range is ever intercepted.
     </p>
 
-    <div class="diagram" role="img" aria-label="plug data path: your command connects by name, DNS is answered in-stack, the flow is spliced over an SSH tunnel, and the cluster agent dials the service from inside.">
-      <svg viewBox="0 0 900 500" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+    <div class="diagram" role="img" aria-label="plug's datapath runs both ways over one SSH connection: outbound, your process reaches cluster services by name; inbound, a name you serve with -s is reachable from inside the cluster.">
+      <svg viewBox="0 0 820 400" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, Segoe UI, Roboto, sans-serif">
         <defs>
-          <marker id="hiw-arw" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-            <path d="M0 0 L10 5 L0 10 z" fill="#8b949e"/>
-          </marker>
-          <marker id="hiw-arwBlue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-            <path d="M0 0 L10 5 L0 10 z" fill="#58a6ff"/>
-          </marker>
-          <marker id="hiw-arwGreen" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-            <path d="M0 0 L10 5 L0 10 z" fill="#3fb950"/>
-          </marker>
+          <marker id="hiw-out" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#a371f7" /></marker>
+          <marker id="hiw-in" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#3fb950" /></marker>
         </defs>
+        <rect x="2" y="2" width="816" height="396" rx="16" fill="#0d1117" stroke="#30363d" stroke-width="1.5" />
 
-        <text x="48" y="44" fill="#8b949e" font-size="13" letter-spacing="2" font-weight="600">YOUR MACHINE</text>
-        <rect x="40" y="58" width="404" height="404" rx="14" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+        <rect x="30" y="70" width="234" height="264" rx="12" fill="#0e141b" stroke="#30363d" />
+        <text x="50" y="98" font-size="12" letter-spacing="2" fill="#8b949e" font-weight="700">YOUR MACHINE</text>
+        <rect x="50" y="150" width="194" height="104" rx="9" fill="#21262d" stroke="#30363d" />
+        <text x="147" y="182" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="14" fill="#e6edf3" font-weight="600">your process</text>
+        <text x="147" y="203" text-anchor="middle" font-size="11" fill="#8b949e">npm run start:dev</text>
+        <text x="147" y="234" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="10" fill="#6e7681">plug -s service1:80:3000</text>
 
-        <rect x="72" y="92" width="340" height="66" rx="9" fill="#21262d" stroke="#30363d" stroke-width="1.5"/>
-        <text x="92" y="122" fill="#e6edf3" font-size="13" font-weight="600" font-family="ui-monospace, 'SF Mono', Menlo, monospace">plug -s my-app:8080:3000 npm start</text>
-        <text x="92" y="142" fill="#8b949e" font-size="12.5">your process, its sockets never touched</text>
+        <rect x="286" y="150" width="248" height="104" rx="10" fill="#0e141b" stroke="#30363d" />
+        <text x="410" y="140" text-anchor="middle" font-size="10.5" fill="#8b949e">one SSH connection · userspace TUN · DNS by name</text>
 
-        <line x1="242" y1="158" x2="242" y2="196" stroke="#8b949e" stroke-width="1.6" marker-end="url(#hiw-arw)"/>
-        <circle cx="266" cy="177" r="11" fill="#a371f7"/>
-        <text x="266" y="181" fill="#fff" font-size="12.5" font-weight="700" text-anchor="middle">1</text>
-        <text x="286" y="181" fill="#c9d1d9" font-size="12.5">connects by name</text>
+        <rect x="556" y="70" width="234" height="264" rx="12" fill="#0e141b" stroke="#30363d" />
+        <text x="576" y="98" font-size="12" letter-spacing="2" fill="#8b949e" font-weight="700">THE CLUSTER</text>
+        <ellipse cx="628" cy="168" rx="30" ry="9" fill="#161b22" stroke="#30363d" />
+        <path d="M598 168 V204 a30 9 0 0 0 60 0 V168" fill="#161b22" stroke="#30363d" />
+        <ellipse cx="628" cy="168" rx="30" ry="9" fill="#161b22" stroke="#30363d" />
+        <text x="628" y="192" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#e6edf3" font-weight="600">db</text>
+        <rect x="690" y="150" width="84" height="40" rx="7" fill="#161b22" stroke="#a371f7" stroke-width="1.3" />
+        <text x="732" y="175" text-anchor="middle" font-size="11" fill="#e6edf3">sshd</text>
+        <rect x="596" y="228" width="150" height="34" rx="7" fill="#161b22" stroke="#30363d" stroke-dasharray="4 3" />
+        <text x="671" y="250" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#3fb950">service1</text>
 
-        <rect x="72" y="200" width="340" height="228" rx="11" fill="rgba(163,113,247,0.07)" stroke="#a371f7" stroke-width="1.5"/>
-        <text x="92" y="228" fill="#a371f7" font-size="13" font-weight="700" letter-spacing="0.5">plug — userspace data path</text>
+        <line x1="244" y1="176" x2="596" y2="176" stroke="#a371f7" stroke-width="2.3" marker-end="url(#hiw-out)" />
+        <text x="410" y="169" text-anchor="middle" font-size="10.5" fill="#a371f7" font-weight="600">outbound — reach db by name</text>
+        <text x="360" y="199" text-anchor="middle" font-size="9.5" fill="#6e7681">name → fake IP → SSH channel → sshd dials db</text>
 
-        <rect x="92" y="242" width="300" height="70" rx="8" fill="#21262d" stroke="#30363d" stroke-width="1.2"/>
-        <text x="108" y="266" fill="#e6edf3" font-size="13.5" font-weight="600">DNS answered in-stack</text>
-        <text x="108" y="286" fill="#8b949e" font-size="12">the name gets a private stand-in address,</text>
-        <text x="108" y="302" fill="#8b949e" font-size="12">which the OS routes straight into the tunnel</text>
-        <circle cx="372" cy="258" r="10" fill="#a371f7"/>
-        <text x="372" y="262" fill="#fff" font-size="11.5" font-weight="700" text-anchor="middle">2</text>
+        <line x1="596" y1="228" x2="244" y2="228" stroke="#3fb950" stroke-width="2.3" marker-end="url(#hiw-in)" />
+        <text x="410" y="245" text-anchor="middle" font-size="10.5" fill="#3fb950" font-weight="600">inbound — -s publishes service1</text>
+        <text x="410" y="286" text-anchor="middle" font-size="9.5" fill="#6e7681">a cluster workload hits service1 → sshd remote-forward → your local :3000</text>
 
-        <line x1="242" y1="312" x2="242" y2="340" stroke="#8b949e" stroke-width="1.6" marker-end="url(#hiw-arw)"/>
-
-        <rect x="92" y="344" width="300" height="66" rx="8" fill="#21262d" stroke="#30363d" stroke-width="1.2"/>
-        <text x="108" y="370" fill="#e6edf3" font-size="13.5" font-weight="600">TUN + userspace network stack</text>
-        <text x="108" y="392" fill="#8b949e" font-size="12">recovers the name and splices the flow</text>
-        <circle cx="372" cy="360" r="10" fill="#a371f7"/>
-        <text x="372" y="364" fill="#fff" font-size="11.5" font-weight="700" text-anchor="middle">3</text>
-
-        <line x1="444" y1="322" x2="612" y2="322" stroke="#58a6ff" stroke-width="2.4" stroke-dasharray="8 5" marker-end="url(#hiw-arwBlue)"/>
-        <rect x="470" y="286" width="116" height="26" rx="13" fill="#161b22" stroke="#58a6ff" stroke-width="1.3"/>
-        <text x="528" y="303" fill="#58a6ff" font-size="12.5" font-weight="600" text-anchor="middle">SSH tunnel</text>
-        <text x="528" y="342" fill="#8b949e" font-size="11.5" text-anchor="middle">one flow, by name</text>
-        <text x="528" y="357" fill="#8b949e" font-size="11.5" text-anchor="middle">port 2222</text>
-
-        <text x="628" y="44" fill="#8b949e" font-size="13" letter-spacing="2" font-weight="600">CLUSTER</text>
-        <rect x="612" y="58" width="248" height="404" rx="14" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
-
-        <rect x="636" y="242" width="200" height="96" rx="10" fill="rgba(88,166,255,0.07)" stroke="#58a6ff" stroke-width="1.5"/>
-        <text x="656" y="270" fill="#58a6ff" font-size="13.5" font-weight="700">plug agent (sshd)</text>
-        <text x="656" y="292" fill="#8b949e" font-size="12">resolves the name and</text>
-        <text x="656" y="308" fill="#8b949e" font-size="12">dials the service from</text>
-        <text x="656" y="324" fill="#8b949e" font-size="12">inside the cluster</text>
-        <circle cx="816" cy="258" r="10" fill="#58a6ff"/>
-        <text x="816" y="262" fill="#fff" font-size="11.5" font-weight="700" text-anchor="middle">4</text>
-
-        <line x1="736" y1="242" x2="736" y2="170" stroke="#3fb950" stroke-width="1.8" marker-end="url(#hiw-arwGreen)"/>
-
-        <rect x="648" y="104" width="176" height="60" rx="9" fill="#21262d" stroke="#3fb950" stroke-width="1.5"/>
-        <text x="736" y="130" fill="#e6edf3" font-size="14" font-weight="600" text-anchor="middle" font-family="ui-monospace, 'SF Mono', Menlo, monospace">my-service:8080</text>
-        <text x="736" y="150" fill="#8b949e" font-size="12" text-anchor="middle">a normal cluster workload</text>
-
-        <text x="48" y="490" fill="#8b949e" font-size="12">Names go to the cluster; dotted host names (api.github.com) and localhost stay on your machine.</text>
+        <line x1="70" y1="360" x2="100" y2="360" stroke="#a371f7" stroke-width="2.6" />
+        <text x="108" y="364" font-size="11.5" fill="#8b949e">outbound — SSH direct-tcpip (sshd opens the real connection)</text>
+        <line x1="500" y1="360" x2="530" y2="360" stroke="#3fb950" stroke-width="2.6" />
+        <text x="538" y="364" font-size="11.5" fill="#8b949e">inbound — sshd remote-forward (-s)</text>
       </svg>
     </div>
 
@@ -201,18 +174,15 @@ import { RouterLink } from '@angular/router';
       &lt;name&gt;:&lt;cluster-port&gt;:&lt;local-port&gt; &lt;cmd&gt;</code> opens a
       <strong>dedicated SSH connection for the session</strong> and asks the agent's
       <code>sshd</code> for a standard <strong>remote forward</strong> — the agent listens on the
-      cluster port, and every connection made by a cluster workload rides that session's connection
-      back to the local port (dedicated so the port's lifetime is exactly the session's, even where
-      the forward datapath lives in a shared daemon). The cluster <em>name</em> that points at that
-      port is provisioned by the agent on the fly — a signpost container carrying the DNS alias
-      (Docker, via the socket), or a Service selecting the agent pod (Kubernetes, via a Services-only
-      role) — created on <code>-s</code>, removed when the session ends, with no stack redeploy. Without
-      the socket the name is a pre-declared alias instead. See
-      <a routerLink="/swarm">Agent &amp; Swarm</a> and
-      <a routerLink="/kubernetes">Agent &amp; Kubernetes</a>. The name is declared on the agent (a network alias in the stack file, a
-      Service on Kubernetes), so cluster DNS does the routing; the listener lives and dies with the
-      session, and plug verifies the whole loop at startup through the cluster's own DNS. See
-      <a routerLink="/swarm">Agent &amp; Swarm</a> and
+      cluster port, and every connection a cluster workload makes rides that connection back to your
+      local port (dedicated, so the port's lifetime is exactly the session's, even where the forward
+      datapath lives in a shared daemon). The cluster <em>name</em> that points at it is
+      <strong>provisioned by the agent on the fly</strong>: a signpost container carrying the DNS
+      alias (Docker, via the socket) or a Service selecting the agent pod (Kubernetes, via a
+      Services-only role) — created on <code>-s</code>, removed when the session ends, and
+      re-provisioned automatically after a reconnect, with no stack redeploy. plug verifies the whole
+      loop at startup through the cluster's own DNS, and refuses a name a real service already owns.
+      See <a routerLink="/swarm">Agent &amp; Swarm</a> and
       <a routerLink="/kubernetes">Agent &amp; Kubernetes</a>.
     </p>
 
