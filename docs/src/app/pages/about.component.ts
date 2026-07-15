@@ -341,10 +341,13 @@ import { MatIconModule } from '@angular/material/icon';
       </table>
     </div>
     <p class="cmp-note">
-      <strong>Honest take:</strong> on Kubernetes, with a team sharing one cluster, mirrord and
-      Telepresence have richer, RBAC-authenticated workflows — with a paid team tier for it. plug
-      wins when you're on Docker / Compose / Swarm, want zero cost and one small agent, and your
-      cluster is trusted enough to skip auth.
+      <strong>Why plug:</strong> it brings the cluster onto your own machine — you build your service
+      exactly as if it lived inside the stack, calling the others by their real names and answering
+      to its own name when they call back, with no code change. And, above all,
+      <strong>it works the same everywhere</strong>: Docker, Compose, Swarm <em>and</em> Kubernetes,
+      on Linux, macOS and Windows — where mirrord and Telepresence stop at Kubernetes. Fully open
+      source, no paid tier, just one tiny agent — and because it captures at the IP layer, every
+      runtime works unchanged, Go and gRPC included.
     </p>
 
     <p class="cta">

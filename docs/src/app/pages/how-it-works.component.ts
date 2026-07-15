@@ -199,15 +199,6 @@ import { RouterLink } from '@angular/router';
         <tr><td><a href="https://www.alpinelinux.org/" target="_blank" rel="noopener">Alpine Linux</a></td><td>Base of the agent image — just <code>sshd</code> + the served binaries</td><td>MIT</td></tr>
       </tbody>
     </table>
-
-    <div class="callout">
-      <strong>Why not mirrord / Telepresence?</strong> Both are excellent — for Kubernetes. plug
-      started because nothing equivalent existed for <strong>Docker Swarm</strong>, and now runs on
-      both. Its agent is simple enough (a stock <code>sshd</code>) to embed later into another host —
-      like an API gateway (see <a routerLink="/roadmap">Roadmap</a>) — and capturing at the IP layer
-      buys full transparency across any runtime, Go and gRPC included, for the price of one privilege
-      grant at install.
-    </div>
   `,
 })
 export class HowItWorksComponent {}
