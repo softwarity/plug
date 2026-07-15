@@ -4,6 +4,10 @@ export const routes: Routes = [
   {
     path: '',
     pathMatch: 'full',
+    loadComponent: () => import('./pages/about.component').then((m) => m.AboutComponent),
+  },
+  {
+    path: 'getting-started',
     loadComponent: () => import('./pages/getting-started.component').then((m) => m.GettingStartedComponent),
   },
   {

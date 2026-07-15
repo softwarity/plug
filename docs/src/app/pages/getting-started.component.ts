@@ -56,53 +56,10 @@ import { MatIconModule } from '@angular/material/icon';
     <h2>Getting started</h2>
 
     <p>
-      <strong>plug</strong> lets a process on your machine behave as if it ran
-      <strong>inside your cluster</strong>: cluster DNS names resolve, cluster services are
-      reachable. No code change, no proxy configuration in your app — you just prefix your usual
-      command:
+      Two pieces: a small <a routerLink="/swarm">agent</a> on the cluster, and the
+      <code>plug</code> CLI on each dev machine. Set up once per cluster — after that, day-to-day
+      runs need no sudo or admin. New here? See <a routerLink="/">what plug does</a> first.
     </p>
-
-    <app-code lang="text">plug -s my-app:8080:3000 npm run start:dev   ──►   http://my-service:8080 answers, like from any workload in the cluster</app-code>
-
-    <div class="callout">
-      <strong>Two pieces.</strong> A tiny <a routerLink="/swarm">agent container</a> (Alpine + sshd)
-      deployed once on the cluster — and a single static <code>plug</code> binary on each dev
-      machine. Set up once per cluster; after that, day-to-day runs need no sudo or admin.
-    </div>
-
-    <h3>What you get</h3>
-    <section class="features">
-      <a routerLink="/how-it-works" class="feature-card">
-        <mat-icon class="feature-icon">dns</mat-icon>
-        <span class="feature-title">Names, resolved cluster-side</span>
-        <span class="feature-desc">Address <code>my-service:8080</code> by its real name — no <code>localhost:PORT</code> mappings, no <code>/etc/hosts</code> edits.</span>
-      </a>
-      <a routerLink="/how-it-works" class="feature-card">
-        <mat-icon class="feature-icon">all_inclusive</mat-icon>
-        <span class="feature-title">Every runtime, unchanged</span>
-        <span class="feature-desc">Traffic is captured at the IP layer, so your app's socket is never touched — Node, the JVM, Python, <strong>Go</strong>, curl, gRPC, DB drivers all just work.</span>
-      </a>
-      <a routerLink="/how-it-works" class="feature-card">
-        <mat-icon class="feature-icon">lock_open</mat-icon>
-        <span class="feature-title">No sudo day-to-day</span>
-        <span class="feature-desc">The privilege plug needs is granted <strong>once at install</strong>; every later <code>plug &lt;cmd&gt;</code> runs with none.</span>
-      </a>
-      <a routerLink="/profiles" class="feature-card">
-        <mat-icon class="feature-icon">hub</mat-icon>
-        <span class="feature-title">Several clusters at once</span>
-        <span class="feature-desc">Run the same process against two clusters in parallel — each session stays isolated.</span>
-      </a>
-      <a routerLink="/swarm" class="feature-card">
-        <mat-icon class="feature-icon">devices</mat-icon>
-        <span class="feature-title">Linux · macOS · Windows</span>
-        <span class="feature-desc">Native on all three (no WSL2 needed); a multi-arch <code>amd64</code>/<code>arm64</code> agent image.</span>
-      </a>
-      <a routerLink="/security" class="feature-card">
-        <mat-icon class="feature-icon">shield</mat-icon>
-        <span class="feature-title">Honest security model</span>
-        <span class="feature-desc">Deliberately auth-less, for trusted dev clusters — read the model before deploying.</span>
-      </a>
-    </section>
 
     <h3>1. Deploy the agent (once, on the cluster)</h3>
     <p>
