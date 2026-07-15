@@ -18,6 +18,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -30,9 +31,11 @@ import (
 const clusterResolver = "127.0.0.11:53"
 
 const (
-	keepaliveEvery = 30 * time.Second // keep NAT/LB/VPN paths warm; detect death
-	dialTimeout    = 15 * time.Second // initial TCP+SSH handshake to the agent
-	channelTimeout = 10 * time.Second // bound a single direct-tcpip channel open
+	keepaliveEvery   = 15 * time.Second // ping cadence: keep NAT/LB/VPN paths warm, detect death
+	keepaliveTimeout = 8 * time.Second  // a reply slower than this means the path is DEAD, not slow
+	keepaliveMisses  = 2                // consecutive misses before reconnecting (tolerate one blip)
+	dialTimeout      = 15 * time.Second // initial TCP+SSH handshake to the agent
+	channelTimeout   = 10 * time.Second // bound a single direct-tcpip channel open
 )
 
 // Logf is where the data paths report progress; set by the caller.
@@ -229,12 +232,27 @@ func (t *Transport) DialCluster(addr string) (net.Conn, error) {
 	return t.DialContext(ctx, "tcp", addr)
 }
 
-// keepalive keeps the single SSH connection warm (so idle NAT/LB/VPN paths do
-// not silently drop it) and detects a dead connection quickly, reconnecting
-// proactively so the next request is instant.
+// keepalive keeps the single SSH connection warm and, crucially, detects a
+// DEAD-BUT-OPEN connection. After a laptop sleep — or a Docker Desktop VM that
+// suspends the agent behind its localhost:2222 proxy — the socket can stay
+// ESTABLISHED while nothing crosses it end to end. A plain SendRequest then
+// BLOCKS FOREVER on a reply that never comes, wedging the keepalive and leaving
+// the tunnel a zombie (the bug this fixes). So each ping is bounded by
+// keepaliveTimeout; a hung reply is a miss, and keepaliveMisses in a row
+// triggers a reconnect — which re-dials the upward path AND re-arms every -s
+// forward riding this transport (their Accept() unblocks when the stale client
+// closes). One miss is tolerated so a brief blip causes no needless reconnect.
+// PLUG_KEEPALIVE_SECS overrides the cadence for the rare exotic link.
 func (t *Transport) keepalive() {
-	tk := time.NewTicker(keepaliveEvery)
+	every := keepaliveEvery
+	if s := os.Getenv("PLUG_KEEPALIVE_SECS"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			every = time.Duration(n) * time.Second
+		}
+	}
+	tk := time.NewTicker(every)
 	defer tk.Stop()
+	misses := 0
 	for {
 		select {
 		case <-t.done:
@@ -242,14 +260,46 @@ func (t *Transport) keepalive() {
 		case <-tk.C:
 			cl := t.current()
 			if cl == nil {
+				misses = 0
 				continue
 			}
-			if _, _, err := cl.SendRequest("keepalive@openssh.com", true, nil); err != nil {
-				if _, rerr := t.reconnectFrom(cl); rerr != nil {
-					t.note("keepalive: agent unreachable (%v)", rerr)
-				}
+			if pingOK(cl, keepaliveTimeout) {
+				misses = 0
+				continue
+			}
+			if misses++; misses < keepaliveMisses {
+				continue // tolerate one transient miss
+			}
+			misses = 0
+			if _, rerr := t.reconnectFrom(cl); rerr != nil {
+				t.note("keepalive: agent unreachable (%v)", rerr)
 			}
 		}
+	}
+}
+
+// pinger is the slice of *ssh.Client keepalive needs — an interface so the
+// timeout logic is unit-testable without a live sshd.
+type pinger interface {
+	SendRequest(name string, wantReply bool, payload []byte) (bool, []byte, error)
+}
+
+// pingOK sends one keepalive and waits at most timeout for the reply. The
+// SendRequest runs in its own goroutine: x/crypto/ssh gives no way to cancel it,
+// so on a zombie connection it blocks until the connection is finally closed
+// (the reconnect does that). The buffered channel lets that goroutine deliver
+// its late result and exit without leaking.
+func pingOK(p pinger, timeout time.Duration) bool {
+	res := make(chan error, 1)
+	go func() {
+		_, _, err := p.SendRequest("keepalive@openssh.com", true, nil)
+		res <- err
+	}()
+	select {
+	case err := <-res:
+		return err == nil
+	case <-time.After(timeout):
+		return false // reply hung — the path is dead
 	}
 }
 
