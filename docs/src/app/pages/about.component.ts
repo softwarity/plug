@@ -331,7 +331,7 @@ import { MatIconModule } from '@angular/material/icon';
         <tbody>
           <tr><td>Targets</td><td>Docker · Compose · Swarm · Kubernetes</td><td>Kubernetes</td><td>Kubernetes / OpenShift</td></tr>
           <tr><td>Mechanism</td><td>userspace TUN over SSH, by name</td><td>mirrors a remote pod's traffic / env / files into your process</td><td>in-cluster traffic-manager + intercepts</td></tr>
-          <tr><td>Both directions</td><td>reach by name + be reachable (<code>-s</code>)</td><td>steal / mirror incoming + outbound context</td><td>intercept incoming + outbound</td></tr>
+          <tr><td>Both directions</td><td>reach by name + be reachable by name</td><td>steal / mirror incoming + outbound context</td><td>intercept incoming + outbound</td></tr>
           <tr><td>Any runtime, no code change</td><td>✓ (IP layer)</td><td>✓</td><td>✓</td></tr>
           <tr><td>Cluster-side</td><td>one agent container</td><td>none (uses your kubeconfig)</td><td>traffic-manager install</td></tr>
           <tr><td>Auth</td><td>none — trusted dev cluster</td><td>your kubeconfig / RBAC</td><td>your kubeconfig / RBAC</td></tr>

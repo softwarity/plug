@@ -8,6 +8,11 @@ on:
     paths:
       - 'docs/**'
       - '.github/workflows/deploy-doc.yml'
+  # A release changes no docs/** file, so redeploy on it too — that regenerates
+  # assets/version.json (the pinned image tag shown in the deploy snippets) from
+  # the new tag.
+  release:
+    types: [published]
   workflow_dispatch:
 
 # Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
@@ -31,6 +36,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # need the tags so gen-version.mjs can resolve the latest release
 
       - name: Setup Node.js
         uses: actions/setup-node@v6

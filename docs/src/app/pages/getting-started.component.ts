@@ -1,11 +1,12 @@
 import { Component } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { CodeComponent } from '../code/code.component';
+import { FileComponent } from '../file/file.component';
 import { MatIconModule } from '@angular/material/icon';
 
 @Component({
   selector: 'app-getting-started',
-  imports: [CodeComponent, RouterLink, MatIconModule],
+  imports: [CodeComponent, FileComponent, RouterLink, MatIconModule],
   styles: [
     `
       .features {
@@ -65,28 +66,13 @@ import { MatIconModule } from '@angular/material/icon';
     <p>
       Add the service to the stack you want to reach — it joins the stack's network automatically:
     </p>
-    <app-code lang="yaml"># your existing stack file
-services:
-  plug:
-    image: docker.io/softwarity/plug:latest
-    ports:
-      - "2222:22"
-    # required — the agent creates your -s name through it
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    # Swarm only, for -s: the signpost is a service, so run the agent on a
-    # manager (any single-node swarm node IS a manager) as a single replica.
-    # Ignored by plain Compose.
-    deploy:
-      replicas: 1
-      placement:
-        constraints: [node.role == manager]</app-code>
+    <app-file src="assets/plug-service.yml" download="plug-service.yml" [initial]="'opened'" [preview]="16" />
     <p>
       The socket line is <strong>required</strong> on Docker, Compose and Swarm: it is how the agent
       creates your <a routerLink="/swarm"><code>-s</code> name</a>. It is root on the host, so mount
       it only on a cluster you trust. Kubernetes needs no socket — a Services-only RBAC role instead. See
-      <a routerLink="/swarm">Agent &amp; Swarm</a> for the standalone variant, or
-      <a routerLink="/kubernetes">Agent &amp; Kubernetes</a> for the cluster.
+      <a routerLink="/swarm">Swarm</a> for the standalone variant, or
+      <a routerLink="/kubernetes">Kubernetes</a> for the cluster.
     </p>
 
     <h3>2. Install the CLI (each dev machine)</h3>
@@ -130,7 +116,7 @@ ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@$
     <p>
       Read <a routerLink="/how-it-works">How it works</a> for the mechanics,
       <a routerLink="/profiles">Profiles &amp; versions</a> for day-to-day usage,
-      <a routerLink="/swarm">Agent &amp; Swarm</a> for the cluster side,
+      <a routerLink="/swarm">Swarm</a> for the cluster side,
       <a routerLink="/security">Security model</a> before deploying anywhere sensitive, the
       <a routerLink="/coverage">Coverage matrix</a> for what works on which OS, and the
       <a routerLink="/roadmap">Roadmap</a> for what's coming.

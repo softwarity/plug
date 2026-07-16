@@ -182,8 +182,8 @@ import { RouterLink } from '@angular/router';
       Services-only role) — created on <code>-s</code>, removed when the session ends, and
       re-provisioned automatically after a reconnect, with no stack redeploy. plug verifies the whole
       loop at startup through the cluster's own DNS, and refuses a name a real service already owns.
-      See <a routerLink="/swarm">Agent &amp; Swarm</a> and
-      <a routerLink="/kubernetes">Agent &amp; Kubernetes</a>.
+      See <a routerLink="/swarm">Swarm</a> and
+      <a routerLink="/kubernetes">Kubernetes</a>.
     </p>
 
     <h3>Built with open source</h3>

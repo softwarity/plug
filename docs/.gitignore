@@ -3,5 +3,10 @@
 /dist
 /out-tsc
 /.angular
+# generated at build by scripts/gen-version.mjs (latest tag + pinned deploy manifests)
+/src/assets/version.json
+/src/assets/plug-stack.yml
+/src/assets/plug-k8s.yaml
+/src/assets/plug-service.yml
 *.log
 .DS_Store

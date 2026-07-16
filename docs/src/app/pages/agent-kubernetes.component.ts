@@ -1,12 +1,13 @@
 import { Component } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { CodeComponent } from '../code/code.component';
+import { FileComponent } from '../file/file.component';
 
 @Component({
   selector: 'app-agent-kubernetes',
-  imports: [CodeComponent, RouterLink],
+  imports: [CodeComponent, RouterLink, FileComponent],
   template: `
-    <h2>Agent &amp; Kubernetes</h2>
+    <h2>Kubernetes</h2>
 
     <p>
       The <a routerLink="/swarm">same agent image</a> runs on Kubernetes — a small Alpine +
@@ -21,6 +22,8 @@ import { CodeComponent } from '../code/code.component';
       CIDR is needed — the agent's <code>sshd</code> resolves service names via CoreDNS from inside
       the cluster, exactly like on Swarm.
     </p>
+    <p>The full manifest — copy it or download <code>plug-k8s.yaml</code>, then apply:</p>
+    <app-file src="assets/plug-k8s.yaml" download="plug-k8s.yaml" [preview]="14" [maxLines]="22" />
     <app-code lang="bash">kubectl -n my-namespace apply -f plug-k8s.yaml</app-code>
 
     <h3>Reaching it</h3>
@@ -67,7 +70,7 @@ kubectl -n my-namespace port-forward svc/plug 2222:2222</app-code>
 
     <p>
       The image, tags, how it also serves the CLI, and the under-the-hood notes are identical on
-      every platform — see <a routerLink="/swarm">Agent &amp; Swarm</a> for those.
+      every platform — see <a routerLink="/swarm">Swarm</a> for those.
     </p>
   `,
 })

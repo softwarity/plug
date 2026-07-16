@@ -1,12 +1,13 @@
 import { Component } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { CodeComponent } from '../code/code.component';
+import { FileComponent } from '../file/file.component';
 
 @Component({
   selector: 'app-agent-swarm',
-  imports: [CodeComponent, RouterLink],
+  imports: [CodeComponent, RouterLink, FileComponent],
   template: `
-    <h2>Agent &amp; Swarm</h2>
+    <h2>Swarm</h2>
 
     <p>
       The agent is deliberately boring: a small Alpine image running just <code>sshd</code>. No
@@ -20,14 +21,7 @@ import { CodeComponent } from '../code/code.component';
       The simplest deployment is no deployment at all: add the service to the stack you want to
       plug into. It joins that stack's network automatically — nothing else to declare:
     </p>
-    <app-code lang="yaml"># your existing docker-compose / stack file
-services:
-  plug:
-    image: docker.io/softwarity/plug:latest
-    ports:
-      - "2222:22"
-
-  # ... your services ...</app-code>
+    <app-file src="assets/plug-service.yml" download="plug-service.yml" [initial]="'opened'" [preview]="16" />
 
     <h3>Standalone — one agent for several stacks</h3>
     <p>
@@ -38,6 +32,7 @@ services:
     <app-code lang="bash">curl -fsSLO https://raw.githubusercontent.com/softwarity/plug/main/deploy/plug-stack.yml
 # edit the networks: section, then:
 docker stack deploy -c plug-stack.yml plug</app-code>
+    <app-file src="assets/plug-stack.yml" download="plug-stack.yml" [preview]="12" [initial]="'opened'" />
 
     <div class="callout">
       <strong>The networks are the contract.</strong> plug can only reach services on networks the
@@ -60,7 +55,7 @@ docker stack deploy -c plug-stack.yml plug</app-code>
       </thead>
       <tbody>
         <tr><td><code>latest</code></td><td>Last build of <code>main</code></td></tr>
-        <tr><td><code>x.y.z</code> / <code>x.y</code></td><td>Released versions (created by the Release workflow, matching the GitHub Release of the CLI)</td></tr>
+        <tr><td><code>x.y.z</code> / <code>x.y</code> / <code>x</code></td><td>Released versions (created by the Release workflow, matching the GitHub Release of the CLI)</td></tr>
       </tbody>
     </table>
     <p>
@@ -97,33 +92,17 @@ ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@$
       — <strong>no name pre-declared, no redeploy</strong>. When the session ends the name is gone.
     </p>
     <p>
-      For that the agent needs to create the DNS name on the fly, which means the Docker socket.
-      It is <strong>required</strong> — mount it on the plug service:
-    </p>
-    <app-code lang="yaml">services:
-  plug:
-    image: docker.io/softwarity/plug:latest
-    ports:
-      - "2222:22"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock   # required: the agent creates your -s name</app-code>
-    <p>
-      With the socket, plug creates the name when the session starts and removes it when the
-      session ends — nothing to pre-declare. Without it, use a name you declared yourself (a network
-      alias on the plug service). Either way, if the name can't be reached plug stops with the
-      reason — never a silent no-op — and one name is served by one session at a time.
+      For that the agent needs to create the DNS name on the fly, which means the Docker socket —
+      already in the snippet above, and <strong>required</strong>. With it, plug creates the name
+      when the session starts and removes it when the session ends — nothing to pre-declare.
+      Without it, use a name you declared yourself (a network alias on the plug service). Either
+      way, if the name can't be reached plug stops with the reason — never a silent no-op — and one
+      name is served by one session at a time.
     </p>
     <p>
-      On <strong>Swarm</strong>, run the agent on a manager node as a single replica. Your existing
-      network needs no change (a non-attachable overlay is fine):
+      On <strong>Swarm</strong>, run the agent on a manager node as a single replica — also already
+      set above. Your existing network needs no change (a non-attachable overlay is fine).
     </p>
-    <app-code lang="yaml">services:
-  plug:
-    # …
-    deploy:
-      replicas: 1                              # required for plug -s
-      placement:
-        constraints: [node.role == manager]   # required for plug -s (a single-node swarm is one)</app-code>
     <div class="callout">
       <strong>The socket is root on the host.</strong> Mount it only on a cluster you trust (the same
       trust plug's no-auth transport already assumes). Too much? Skip it and declare the name
