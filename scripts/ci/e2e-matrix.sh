@@ -345,20 +345,23 @@ do_gateway() {
 # takeover: -s --takeover on a name a REAL deployed service owns must PARK it
 # (container stopped, traffic lands on our local process) and RESTORE it when
 # the session ends. Target = this leg's own tko-<leg> service (parking a shared
-# one would break the other legs). The prober is the in-cluster witness: what
-# does http://tko-<leg>:8085/ answer, before, during, after.
+# one would break the other legs) on this leg's own PORT (the -s remote-forward
+# binds that port on the agent globally, and the legs run concurrently — a
+# shared port made the second leg's forward be denied by sshd). The prober is
+# the in-cluster witness: what does http://tko-<leg>:<port>/ answer — before,
+# during, after.
 do_takeover() {
-  local tname
+  local tname tport
   case "$(uname -s)" in
-    Darwin)               tname=tko-mac ;;
-    MINGW*|MSYS*|CYGWIN*) tname=tko-win ;;
-    *)                    tname=tko-linux ;;
+    Darwin)               tname=tko-mac   tport=8086 ;;
+    MINGW*|MSYS*|CYGWIN*) tname=tko-win   tport=8087 ;;
+    *)                    tname=tko-linux tport=8085 ;;
   esac
   echo "=== takeover: park the deployed $tname, serve ours, restore ==="
   if ! ( cd "$root/e2e/echo-local" && go build -o "$root/echo-local$ext" . ); then
     echo "--- takeover FAIL — echo-local did not build"; sum "**takeover (park+restore)** ❌ (build)"; return 1
   fi
-  probe() { plug curl -s --max-time 10 "http://prober:8097/fetch?url=http://$tname:8085/" 2>/dev/null | tr -d '\r' | tail -1; }
+  probe() { plug curl -s --max-time 10 "http://prober:8097/fetch?url=http://$tname:$tport/" 2>/dev/null | tr -d '\r' | tail -1; }
 
   # Baseline: the deployed service answers through the cluster.
   local r=""
@@ -370,7 +373,7 @@ do_takeover() {
 
   # Without --takeover the taken name must still be refused, with the hint.
   local co
-  co="$("$PLUG" --host "$ip" --port "$port" -s "$tname:8085:9" curl --version 2>&1 || true)"
+  co="$("$PLUG" --host "$ip" --port "$port" -s "$tname:$tport:9" curl --version 2>&1 || true)"
   if ! printf '%s' "$co" | grep -q "Re-run with --takeover"; then
     echo "--- takeover FAIL — the collision refusal lost its --takeover hint; got:"
     printf '%s\n' "$co" | tail -3 | sed 's/^/    /'
@@ -381,7 +384,7 @@ do_takeover() {
   # echo's -ttl ends the session NATURALLY (child exits → plug tears down and
   # restores) — a `kill` on Windows/Git Bash is a TerminateProcess that would
   # skip the teardown, and the restore is exactly what this cell asserts.
-  "$PLUG" --host "$ip" --port "$port" -s "$tname:8085:18096" --takeover \
+  "$PLUG" --host "$ip" --port "$port" -s "$tname:$tport:18096" --takeover \
     "$root/echo-local$ext" -addr 127.0.0.1:18096 -text "local-$tname" -ttl 50s >/tmp/takeover.out 2>&1 &
   local tko_pid=$! during=""
   sleep 8 # arm + park + end-to-end verify

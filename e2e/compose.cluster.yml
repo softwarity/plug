@@ -61,15 +61,18 @@ services:
   # stopped for the session) and expects back afterwards. ONE PER OS LEG — the
   # legs share this cluster, and parking a shared service (httpbin…) would break
   # the other legs mid-run. Same echo image as ident: distinctive fixed answer.
+  # One cluster PORT per leg too (8085/8086/8087): the -s remote-forward binds
+  # that port on the AGENT, globally — two legs on the same port would collide
+  # (sshd denies the second tcpip-forward) since the legs run concurrently.
   tko-linux:
     image: hashicorp/http-echo
     command: ["-listen=:8085", "-text=deployed-tko-linux"]
     networks: [internal]
   tko-mac:
     image: hashicorp/http-echo
-    command: ["-listen=:8085", "-text=deployed-tko-mac"]
+    command: ["-listen=:8086", "-text=deployed-tko-mac"]
     networks: [internal]
   tko-win:
     image: hashicorp/http-echo
-    command: ["-listen=:8085", "-text=deployed-tko-win"]
+    command: ["-listen=:8087", "-text=deployed-tko-win"]
     networks: [internal]
