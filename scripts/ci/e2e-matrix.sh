@@ -377,13 +377,16 @@ do_takeover() {
     sum "**takeover (park+restore)** ❌ — hint"; return 1
   fi
 
-  # Take it over: our local echo must now answer the SAME in-cluster URL.
+  # Take it over: our local echo must now answer the SAME in-cluster URL. The
+  # echo's -ttl ends the session NATURALLY (child exits → plug tears down and
+  # restores) — a `kill` on Windows/Git Bash is a TerminateProcess that would
+  # skip the teardown, and the restore is exactly what this cell asserts.
   "$PLUG" --host "$ip" --port "$port" -s "$tname:8085:18096" --takeover \
-    "$root/echo-local$ext" -addr 127.0.0.1:18096 -text "local-$tname" >/tmp/takeover.out 2>&1 &
+    "$root/echo-local$ext" -addr 127.0.0.1:18096 -text "local-$tname" -ttl 50s >/tmp/takeover.out 2>&1 &
   local tko_pid=$! during=""
   sleep 8 # arm + park + end-to-end verify
   for _ in 1 2 3; do during="$(probe)"; [ "$during" = "local-$tname" ] && break; sleep 3; done
-  kill $tko_pid 2>/dev/null; wait $tko_pid 2>/dev/null
+  wait $tko_pid 2>/dev/null # the -ttl fires and the session tears down cleanly
 
   # Session over: the deployed service must be back (its container restarts).
   local after=""
