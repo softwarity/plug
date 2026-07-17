@@ -72,15 +72,19 @@ func startExposes(cfg config) (func(), error) {
 		tr.Close()
 		return nil, err
 	}
-	// The serve-name verb, with the 2.1 takeover extension when asked: a deployed
-	// workload owning the name is parked for the session instead of refused.
-	verb := func(spec tunnel.ExposeSpec) string {
+	// The serve-name verb. Taking over a deployed workload owning the name is
+	// the DEFAULT (parked for the session, restored on exit), so the takeover
+	// extension is always sent. A pre-2.1 agent rejects the 4-field form with
+	// its usage line — fall back to the bare verb once, which restores that
+	// agent's own behaviour (refuse a taken name, serve otherwise).
+	verb := func(spec tunnel.ExposeSpec, takeover bool) string {
 		v := "serve-name " + spec.Name + " " + spec.ClusterPort
-		if cfg.takeover {
+		if takeover {
 			v += " takeover"
 		}
 		return v
 	}
+	oldAgent := false // set when the fallback fires — remembered for OnRearm too
 	for _, spec := range cfg.exposes {
 		ex, err := tr.Expose(spec)
 		if err != nil {
@@ -90,17 +94,19 @@ func startExposes(cfg config) (func(), error) {
 		// k8s Service — whatever the deployment opted into). "static" means no
 		// dynamic backend (or an agent from before the verb): the pre-declared
 		// alias must carry the name, and Verify will tell.
-		reply, err := tr.Exec(verb(spec))
+		reply, err := tr.Exec(verb(spec, !oldAgent))
 		if err != nil {
 			return fail(err)
 		}
+		if !oldAgent && strings.Contains(reply, "usage: serve-name") {
+			oldAgent = true
+			info("the agent predates takeover (< 2.1) — a name a deployed workload owns would be refused, not parked")
+			if reply, err = tr.Exec(verb(spec, false)); err != nil {
+				return fail(err)
+			}
+		}
 		if strings.HasPrefix(reply, "error:") {
 			msg := strings.TrimSpace(strings.TrimPrefix(reply, "error:"))
-			if cfg.takeover && strings.Contains(msg, "usage: serve-name") {
-				// A pre-2.1 agent rejects the 4-field form with its usage line —
-				// name the actual problem instead of echoing it.
-				return fail(fmt.Errorf("%s: the agent predates --takeover — upgrade the softwarity/plug image (≥ 2.1), then run again", spec.Name))
-			}
 			return fail(fmt.Errorf("%s: agent: %s", spec.Name, msg))
 		}
 		// "dynamic" may carry the "parked" note: a deployed workload was parked
@@ -153,7 +159,7 @@ func startExposes(cfg config) (func(), error) {
 			// (or silently back on the deployed version) while the forward reports
 			// re-armed. (Static names are pre-declared; no hook.)
 			ex.OnRearm(func() error {
-				m, err := tr.Exec(verb(spec))
+				m, err := tr.Exec(verb(spec, !oldAgent))
 				if err != nil {
 					return err
 				}

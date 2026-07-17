@@ -101,11 +101,12 @@ ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@$
     </p>
     <p>
       The name already belongs to a <strong>deployed</strong> service — the very one you are
-      developing? Add <code>--takeover</code>: plug <strong>parks</strong> it for the session (its
-      containers are stopped; on Swarm the service is scaled to 0) and <strong>restores it when the
-      session ends</strong> — replica count included, and even across an agent restart. Your local
-      process answers the name in its place; afterwards the cluster is exactly as it was. Without
-      the flag, a taken name is refused, as before. (Callers holding a cached DNS answer — the JVM
+      developing? plug <strong>takes it over</strong>: the deployed workload is parked for the
+      session (its containers are stopped; on Swarm the service is scaled to 0) and
+      <strong>restored when the session ends</strong> — replica count included, and even across an
+      agent restart. Your local process answers the name in its place; afterwards the cluster is
+      exactly as it was. A name held by <em>another live plug session</em> is still refused —
+      takeover applies to deployed workloads only. (Callers holding a cached DNS answer — the JVM
       caches ~30&thinsp;s — may see a few connection errors right at the switch.)
     </p>
     <p>

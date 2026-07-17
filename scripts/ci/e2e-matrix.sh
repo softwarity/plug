@@ -342,14 +342,14 @@ do_gateway() {
   [ "$gw" = PASS ] && [ "$gwpath" = PASS ]
 }
 
-# takeover: -s --takeover on a name a REAL deployed service owns must PARK it
-# (container stopped, traffic lands on our local process) and RESTORE it when
-# the session ends. Target = this leg's own tko-<leg> service (parking a shared
-# one would break the other legs) on this leg's own PORT (the -s remote-forward
-# binds that port on the agent globally, and the legs run concurrently — a
-# shared port made the second leg's forward be denied by sshd). The prober is
-# the in-cluster witness: what does http://tko-<leg>:<port>/ answer — before,
-# during, after.
+# takeover: -s on a name a REAL deployed service owns PARKS it BY DEFAULT
+# (container stopped, traffic lands on our local process) and RESTORES it when
+# the session ends — no flag. Target = this leg's own tko-<leg> service
+# (parking a shared one would break the other legs) on this leg's own PORT
+# (the -s remote-forward binds that port on the agent globally, and the legs
+# run concurrently — a shared port made the second leg's forward be denied by
+# sshd). The prober is the in-cluster witness: what does
+# http://tko-<leg>:<port>/ answer — before, during, after.
 do_takeover() {
   local tname tport
   case "$(uname -s)" in
@@ -371,20 +371,12 @@ do_takeover() {
     sum "**takeover (park+restore)** ❌ — baseline"; return 1
   fi
 
-  # Without --takeover the taken name must still be refused, with the hint.
-  local co
-  co="$("$PLUG" --host "$ip" --port "$port" -s "$tname:$tport:9" curl --version 2>&1 || true)"
-  if ! printf '%s' "$co" | grep -q "Re-run with --takeover"; then
-    echo "--- takeover FAIL — the collision refusal lost its --takeover hint; got:"
-    printf '%s\n' "$co" | tail -3 | sed 's/^/    /'
-    sum "**takeover (park+restore)** ❌ — hint"; return 1
-  fi
-
-  # Take it over: our local echo must now answer the SAME in-cluster URL. The
-  # echo's -ttl ends the session NATURALLY (child exits → plug tears down and
-  # restores) — a `kill` on Windows/Git Bash is a TerminateProcess that would
-  # skip the teardown, and the restore is exactly what this cell asserts.
-  "$PLUG" --host "$ip" --port "$port" -s "$tname:$tport:18096" --takeover \
+  # Take it over — the DEFAULT, no flag: our local echo must now answer the
+  # SAME in-cluster URL. The echo's -ttl ends the session NATURALLY (child
+  # exits → plug tears down and restores) — a `kill` on Windows/Git Bash is a
+  # TerminateProcess that would skip the teardown, and the restore is exactly
+  # what this cell asserts.
+  "$PLUG" --host "$ip" --port "$port" -s "$tname:$tport:18096" \
     "$root/echo-local$ext" -addr 127.0.0.1:18096 -text "local-$tname" -ttl 50s >/tmp/takeover.out 2>&1 &
   local tko_pid=$! during=""
   sleep 8 # arm + park + end-to-end verify
@@ -404,18 +396,41 @@ do_takeover() {
   sum "**takeover (park+restore)** ❌ — during \`${during:-nothing}\` · after \`${after:-nothing}\`"; return 1
 }
 
-# collision: a name a real cluster service already owns must be REFUSED. httpbin
-# is a live service here, so `plug -s httpbin` has to fail loud — the guard that
-# stops a dev from shadowing a name in use. The command never runs (plug bails at
-# provisioning), so its exact form is irrelevant.
+# collision: a name ANOTHER live plug session already serves must be REFUSED —
+# the guard the takeover default deliberately keeps (takeover parks DEPLOYED
+# workloads only, never another dev's session). A deployed name is no longer
+# refused (it is parked — do_takeover proves that), so the cell holds a session
+# of its own open and asserts a second one on the same name bounces. Name and
+# cluster port are per-leg (the legs run concurrently on the shared cluster).
 do_collision() {
-  echo "=== collision: plug -s httpbin (a real cluster service) must be refused ==="
-  local co
-  co="$("$PLUG" --host "$ip" --port "$port" -s httpbin:9998:9 curl --version 2>&1 || true)"
-  if printf '%s' "$co" | grep -qiE "owns the name|already resolves|is a service in the cluster|answered by something else"; then
-    echo "collision OK — plug refused to shadow the real httpbin"; sum "**collision refused** ✅"; return 0
+  local cname cport
+  case "$(uname -s)" in
+    Darwin)               cname=col-mac   cport=18085 ;;
+    MINGW*|MSYS*|CYGWIN*) cname=col-win   cport=18086 ;;
+    *)                    cname=col-linux cport=18084 ;;
+  esac
+  echo "=== collision: a second -s on $cname (held by a live session) must be refused ==="
+  if ! ( cd "$root/e2e/echo-local" && go build -o "$root/echo-local$ext" . ); then
+    echo "--- collision FAIL — echo-local did not build"; sum "**collision refused** ❌ (build)"; return 1
   fi
-  echo "--- collision FAIL — plug did not refuse; got:"; printf '%s\n' "$co" | tail -5 | sed 's/^/    /'
+  # Session A holds the name for ~35s (natural end via -ttl — see do_takeover
+  # for why kill is not an option on Windows).
+  "$PLUG" --host "$ip" --port "$port" -s "$cname:$cport:18098" \
+    "$root/echo-local$ext" -addr 127.0.0.1:18098 -text "col-a" -ttl 35s >/tmp/collision-a.out 2>&1 &
+  local a_pid=$!
+  sleep 8 # arm + verify
+  # Session B, same name, while A lives: must bounce (the agent-side port is
+  # held by A's remote-forward; the signpost also answers to A).
+  local co
+  co="$("$PLUG" --host "$ip" --port "$port" -s "$cname:$cport:9" curl --version 2>&1 || true)"
+  wait $a_pid 2>/dev/null
+  if printf '%s' "$co" | grep -qiE "another session|denied by peer|already"; then
+    echo "collision OK — the second session on $cname was refused while the first held it"
+    sum "**collision refused** ✅"; return 0
+  fi
+  echo "--- collision FAIL — the second -s on $cname was not refused; got:"
+  printf '%s\n' "$co" | tail -5 | sed 's/^/    /'
+  echo "    --- session A output ---"; tail -6 /tmp/collision-a.out 2>/dev/null | sed 's/^/    /'
   sum "**collision refused** ❌"; return 1
 }
 

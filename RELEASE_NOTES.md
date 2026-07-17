@@ -14,12 +14,14 @@ the overridden keys **quietly** when the effective config (Global/Setup and the
 resolver files) still points at plug, and coalesces real flushes to at most one
 per 30 s. `daemon.log` lines are now timestamped.
 
-### New: `--takeover` — develop a service that is already deployed
+### New: takeover by default — develop a service that is already deployed
 
 The name of a `-s` mapping often belongs to the very service you are developing,
 already deployed in the stack — until now plug refused it and asked you to remove
-the service by hand. With `--takeover`, plug **parks** the deployed workload for
-the session and **restores it when the session ends**:
+the service by hand. Now plug **parks** the deployed workload for the session and
+**restores it when the session ends** — by default, no flag: `plug -s service1…`
+already states the intent (the same default as Telepresence's intercept and
+mirrord's steal). `--takeover`, the pre-release opt-in, is accepted as a no-op.
 
 - **Docker / Compose** — the containers answering the name are stopped, and
   restarted afterwards.
@@ -39,13 +41,16 @@ name). The signpost is created *before* the workload is parked, so the name
 keeps resolving throughout — a no-record gap would leak lookups to the upstream
 resolver (bench-proven on the embedded DNS).
 
-Without the flag, a taken name is refused as before — the message now names the
-owning workload and suggests `--takeover`. Needs an agent image from this
-release (an older agent gets a precise "upgrade the agent" message). Callers
-holding a cached DNS answer (JVM ~30 s) may see brief connection errors at the
-switch. Proven in CI on Compose (park → traffic lands locally → restore) and on
-the bench for Swarm (scale 0 → back to 2 replicas) including agent-crash
-recovery; the k8s backend is coded but not yet runtime-tested.
+A name held by **another live plug session** is still refused — takeover
+applies to deployed workloads only, never to another dev's session. Against an
+older agent (2.0.x) the CLI falls back to that agent's own behaviour (a taken
+name is refused, with an upgrade hint). Callers holding a cached DNS answer
+(JVM ~30 s) may see brief connection errors at the switch. On Kubernetes the
+pods keep running — only the name is rerouted — so a parked k8s workload still
+consumes queues. Proven in CI on Compose (park → traffic lands locally →
+restore, on all three OSes) and on the bench for Swarm (scale 0 → back to 2
+replicas) including agent-crash recovery; the k8s backend is coded but not yet
+runtime-tested.
 
 ---
 

@@ -64,11 +64,11 @@ Options:
                          reaching <name>:<cluster-port> land on 127.0.0.1:<local-port>
                          for this session. The agent creates the name on the fly
                          (Docker socket / Kubernetes RBAC), or you pre-declare it.
+                         If a deployed workload already owns the name, it is
+                         parked for the session (containers stopped, Swarm
+                         service scaled to 0, k8s Service repointed) and
+                         restored when the session ends.
                          Repeatable; place after the other options.
-      --takeover         if a deployed workload already owns a -s name, park it
-                         for the session (containers stopped, Swarm service
-                         scaled to 0, k8s Service repointed) and restore it when
-                         the session ends — instead of refusing the name.
   -h, --help             show this help
 `
 }
@@ -97,7 +97,6 @@ type config struct {
 	port     string
 	forwards []forwardSpec
 	exposes  []tunnel.ExposeSpec
-	takeover bool // see options.takeover
 }
 
 // parseExpose parses one -s value, <name>:<cluster-port>:<local-port> — the
@@ -138,26 +137,26 @@ func attachExposes(cfg *config, raw []string) {
 	}
 }
 
-// stripLeadingExposes pops the -s/--serve pairs (and a --takeover) a launcher
-// left at the head of the core's argv (see launcherRun) and parses them — an
-// old launcher forwards them there without understanding them.
-func stripLeadingExposes(args []string) ([]tunnel.ExposeSpec, bool, []string, error) {
+// stripLeadingExposes pops the -s/--serve pairs a launcher left at the head of
+// the core's argv (see launcherRun) and parses them — an old launcher forwards
+// them there without understanding them. A --takeover is consumed and ignored:
+// it was the 2.1 pre-release opt-in and is the default now (a 2.1-era launcher
+// may still prefix it).
+func stripLeadingExposes(args []string) ([]tunnel.ExposeSpec, []string, error) {
 	var specs []tunnel.ExposeSpec
-	takeover := false
 	for {
 		switch {
 		case len(args) >= 1 && args[0] == "--takeover":
-			takeover = true
 			args = args[1:]
 		case len(args) >= 2 && (args[0] == "-s" || args[0] == "--serve"):
 			spec, err := parseExpose(args[1])
 			if err != nil {
-				return nil, false, nil, err
+				return nil, nil, err
 			}
 			specs = append(specs, spec)
 			args = args[2:]
 		default:
-			return specs, takeover, args, nil
+			return specs, args, nil
 		}
 	}
 }
@@ -219,7 +218,6 @@ type options struct {
 	host     string
 	port     string
 	exposes  []string // raw -s values; validated once, re-prefixed on the core exec
-	takeover bool     // -s may park a deployed workload owning the name (restored on exit)
 }
 
 func main() {
@@ -355,7 +353,6 @@ func launcherRun(args []string) {
 		fatal("%s%s\n\n%s", err, hint, usage())
 	}
 	cfg := resolveConfig(opts)
-	cfg.takeover = opts.takeover
 	if cfg.host == "" {
 		fatal("no agent host: use --host or a profile in ~/.plug/")
 	}
@@ -381,13 +378,6 @@ func launcherRun(args []string) {
 		fatal("the cluster agent reports v%s, which predates -s (needs plug ≥ 2.0.0).\n"+
 			"Upgrade the agent (redeploy the softwarity/plug image), then run again.", remote)
 	}
-	// --takeover is a 2.1.0 feature: a 2.0.x core would exec "--takeover" as the
-	// command (127), and a 2.0.x agent doesn't know the serve-name extension.
-	if opts.takeover && coreMajor(remote) == 2 && coreMinor(remote) == 0 {
-		fatal("the cluster agent reports v%s, which predates --takeover (needs plug ≥ 2.1.0).\n"+
-			"Upgrade the agent (redeploy the softwarity/plug image), then run again.", remote)
-	}
-
 	bin, err := ensureVersion(remote, cfg)
 	if err != nil {
 		info("cannot fetch v%s (%v) — falling back to this launcher (v%s)", remote, err, version)
@@ -405,9 +395,6 @@ func launcherRun(args []string) {
 	// exposing.
 	for i := len(opts.exposes) - 1; i >= 0; i-- {
 		cmdArgs = append([]string{"-s", opts.exposes[i]}, cmdArgs...)
-	}
-	if opts.takeover {
-		cmdArgs = append([]string{"--takeover"}, cmdArgs...)
 	}
 	child := exec.Command(bin, cmdArgs...)
 	child.Stdin, child.Stdout, child.Stderr = os.Stdin, os.Stdout, os.Stderr
@@ -790,7 +777,8 @@ func parseArgs(args []string) (options, []string) {
 		case "-s", "--serve":
 			o.exposes = append(o.exposes, flagValue(args, &i))
 		case "--takeover":
-			o.takeover = true
+			// The 2.1 pre-release opt-in — taking over is the default now.
+			// Accepted as a no-op so a week-old script keeps working.
 		default:
 			return o, args[i:]
 		}
@@ -1014,12 +1002,11 @@ func coreMain() {
 			}
 		}
 	}
-	specs, takeover, cmdArgs, err := stripLeadingExposes(os.Args[1:])
+	specs, cmdArgs, err := stripLeadingExposes(os.Args[1:])
 	if err != nil {
 		fatal("%v", err)
 	}
 	cfg.exposes = specs
-	cfg.takeover = takeover
 	if len(cmdArgs) == 0 {
 		fatal("core: no command")
 	}

@@ -680,7 +680,9 @@ func containerServe(name, port string, self selfInfo, takeover bool) {
 	}
 	owners := nameOwners(name, nets)
 	if len(owners) > 0 && !takeover {
-		answer("error: %q already resolves to a container in the cluster — it owns the name. Re-run with --takeover to park it for this session (restored on exit), or remove it (docker rm -f %s).", name, owners[0].name)
+		// Only a pre-2.1 CLI sends the takeover-less verb — current ones always
+		// take over. Word the remedy for that audience: upgrade, or clear the name.
+		answer("error: %q already resolves to a container in the cluster — it owns the name. Upgrade plug (≥ 2.1 takes it over for the session automatically), or remove it (docker rm -f %s).", name, owners[0].name)
 	}
 
 	receipt := make([]string, 0, len(owners))
@@ -800,7 +802,7 @@ func swarmServe(name, port string, self selfInfo, takeover bool) {
 	own := swarmNameOwner(name, self)
 	if own != nil {
 		if !takeover {
-			answer("error: %q is a service on your overlay — it owns the name. Re-run with --takeover to park it (scaled to 0) for this session, restored on exit — or remove it: docker service rm %s.", name, own.name)
+			answer("error: %q is a service on your overlay — it owns the name. Upgrade plug (≥ 2.1 parks it for the session automatically), or remove it: docker service rm %s.", name, own.name)
 		}
 		if own.global {
 			answer("error: %q runs in GLOBAL mode — plug cannot park it (no replica count to restore). Remove it instead: docker service rm %s.", own.name, own.name)
@@ -1195,7 +1197,7 @@ func k8sServe(name, port string, takeover bool) {
 				}
 				answer("dynamic parked")
 			}
-			answer("error: the Service %q already exists and is not plug's — it owns the name. Re-run with --takeover to repoint it to your session (restored on exit), or remove it: kubectl delete service %s.", name, name)
+			answer("error: the Service %q already exists and is not plug's — it owns the name. Upgrade plug (≥ 2.1 repoints it to your session automatically), or remove it: kubectl delete service %s.", name, name)
 		}
 		// It's ours: replace it. If the re-create fails, say SO — do not fall
 		// through to the "not plug's" lie (the name is now deleted; report the

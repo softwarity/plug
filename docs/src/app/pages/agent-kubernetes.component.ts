@@ -63,10 +63,11 @@ kubectl -n my-namespace port-forward svc/plug 2222:2222</app-code>
       is gone when the session ends (leftovers from a crashed session are swept on agent restart).
       plug verifies the full path at startup; the port closes with the session. A Service name is
       unique, so unlike Swarm there is no DNS round-robin — if the real <code>service1</code> is
-      deployed it already owns the name. Add <code>--takeover</code> and plug <strong>parks</strong>
-      it for the session: the existing Service is repointed at the agent (its original selector and
-      ports saved in an annotation on the Service itself) and <strong>restored when the session
-      ends</strong> — even across an agent restart. Without the flag, the taken name is refused. The
+      deployed it already owns the name, and plug <strong>takes it over</strong>: the existing
+      Service is repointed at the agent (its original selector and ports saved in an annotation on
+      the Service itself) and <strong>restored when the session ends</strong> — even across an
+      agent restart. Note the pods themselves keep running (only the name is rerouted) — a parked
+      k8s workload still consumes queues and runs its crons. The
       <a href="https://github.com/softwarity/plug/blob/main/deploy/plug-k8s.yaml" target="_blank" rel="noopener">manifest</a>
       and the <a routerLink="/security">security model</a> spell out exactly what the grant allows.
     </p>

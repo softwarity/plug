@@ -55,33 +55,35 @@ func TestParseArgsServe(t *testing.T) {
 }
 
 func TestStripLeadingExposes(t *testing.T) {
-	specs, takeover, rest, err := stripLeadingExposes([]string{"-s", "a:1:2", "--serve", "b:3:4", "npm", "start"})
-	if err != nil || len(specs) != 2 || specs[0].Name != "a" || specs[1].Name != "b" || takeover {
-		t.Fatalf("specs = %+v, takeover = %v, err = %v", specs, takeover, err)
+	specs, rest, err := stripLeadingExposes([]string{"-s", "a:1:2", "--serve", "b:3:4", "npm", "start"})
+	if err != nil || len(specs) != 2 || specs[0].Name != "a" || specs[1].Name != "b" {
+		t.Fatalf("specs = %+v, err = %v", specs, err)
 	}
 	if !reflect.DeepEqual(rest, []string{"npm", "start"}) {
 		t.Fatalf("rest = %v", rest)
 	}
 
-	// --takeover travels the same head-of-argv channel, in any order around -s.
-	specs, takeover, rest, err = stripLeadingExposes([]string{"--takeover", "-s", "a:1:2", "npm", "start"})
-	if err != nil || len(specs) != 1 || !takeover || !reflect.DeepEqual(rest, []string{"npm", "start"}) {
-		t.Fatalf("specs = %+v takeover = %v rest = %v err = %v", specs, takeover, rest, err)
+	// A 2.1-era launcher may still prefix --takeover (the pre-release opt-in,
+	// the default now): it is consumed as a no-op, in any order around -s —
+	// it must never leak into the command.
+	specs, rest, err = stripLeadingExposes([]string{"--takeover", "-s", "a:1:2", "npm", "start"})
+	if err != nil || len(specs) != 1 || !reflect.DeepEqual(rest, []string{"npm", "start"}) {
+		t.Fatalf("specs = %+v rest = %v err = %v", specs, rest, err)
 	}
-	specs, takeover, rest, err = stripLeadingExposes([]string{"-s", "a:1:2", "--takeover", "npm", "start"})
-	if err != nil || len(specs) != 1 || !takeover || !reflect.DeepEqual(rest, []string{"npm", "start"}) {
-		t.Fatalf("specs = %+v takeover = %v rest = %v err = %v", specs, takeover, rest, err)
+	specs, rest, err = stripLeadingExposes([]string{"-s", "a:1:2", "--takeover", "npm", "start"})
+	if err != nil || len(specs) != 1 || !reflect.DeepEqual(rest, []string{"npm", "start"}) {
+		t.Fatalf("specs = %+v rest = %v err = %v", specs, rest, err)
 	}
 
 	// No -s at the head: everything is the command (the normal case) — a
 	// --takeover INSIDE the command belongs to the command.
-	specs, takeover, rest, err = stripLeadingExposes([]string{"npm", "start", "-s", "--takeover"})
-	if err != nil || specs != nil || takeover || !reflect.DeepEqual(rest, []string{"npm", "start", "-s", "--takeover"}) {
-		t.Fatalf("specs = %v takeover = %v rest = %v err = %v", specs, takeover, rest, err)
+	specs, rest, err = stripLeadingExposes([]string{"npm", "start", "-s", "--takeover"})
+	if err != nil || specs != nil || !reflect.DeepEqual(rest, []string{"npm", "start", "-s", "--takeover"}) {
+		t.Fatalf("specs = %v rest = %v err = %v", specs, rest, err)
 	}
 
 	// Invalid value fails loud — never silently swallowed into the command.
-	if _, _, _, err = stripLeadingExposes([]string{"-s", "garbage", "npm"}); err == nil {
+	if _, _, err = stripLeadingExposes([]string{"-s", "garbage", "npm"}); err == nil {
 		t.Fatal("invalid -s value should fail")
 	}
 }

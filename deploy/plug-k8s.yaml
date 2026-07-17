@@ -98,8 +98,8 @@ metadata:
   labels: { app: plug }
 rules:
   # Exactly what serve-name / unserve-name / boot-gc need — Services only.
-  # update/patch: the --takeover mode repoints an existing Service at the agent
-  # for the session (original selector/ports saved in an annotation, restored).
+  # update/patch: the takeover repoints an existing Service at the agent for
+  # the session (original selector/ports saved in an annotation, restored).
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["get", "list", "create", "delete", "update", "patch"]
