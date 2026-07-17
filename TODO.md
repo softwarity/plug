@@ -1,6 +1,6 @@
 # plug — TODO / plan de travail
 
-_État : 15 juillet 2026 — post-2.0.0._
+_État : 17 juillet 2026 — post-2.0.0, takeover implémenté (→ 2.1.0)._
 
 **Contexte.** La **2.0.0** est publiée. Elle apporte le **sens retour** : `plug -s
 name:cluster-port:local-port` publie ton process dans le cluster sous un nom
@@ -23,6 +23,8 @@ callback → collision → compat launcher/core.
 
 ## 🟡 Combler les trous « banc → CI » (le principal reste)
 Comportements **prouvés au runtime en local**, pas encore rejoués en CI :
+- [ ] **Takeover Swarm en CI** (banc M5 ✅ : scale-0 → trafic local → scale-back au replica count) ; **takeover k8s** : codé, jamais exécuté au runtime → banc k8s.
+- [ ] **Takeover : boot-gc + re-park au reconnect en CI** (banc M5 ✅ : agent kill → gc restaure → rearm re-parque → restore final).
 - [ ] **Self-heal en CI** : le keepalive tue le zombie puis reconnecte + re-provisionne — banc seulement ; Windows non prouvé. Cellule e2e : couper le chemin (sleep / agent restart), asserter la reprise.
 - [ ] **Re-arm `-s` après reconnexion** en CI (aujourd'hui banc local).
 - [ ] **Backend k8s Service pour `-s`** : codé, pas encore testé au runtime (RBAC Services-only) → cellule e2e k8s.
@@ -62,6 +64,9 @@ toute façon).
 ---
 
 ## ✅ Acquis
+
+### Post-2.0.0 → 2.1.0 (17 juillet 2026)
+- [x] **`--takeover`** : un nom `-s` tenu par le service déployé est **parqué** pour la session et **restauré** à la fin — conteneurs stoppés (Compose, **e2e CI**), service Swarm scalé 0 → replica count d'origine (**banc M5**), Service k8s re-pointé via annotation-reçu (codé). Reçu de parking sur le signpost → restore par unserve / **boot-gc** (crash agent) / **re-park au reconnect** (banc M5 ✅). Signpost créé AVANT le park (pas de trou DNS — fuite upstream prouvée au banc). Refus inchangé sans le flag (message + hint) ; dégradation propre vieil agent ; RBAC k8s +update/patch ; cellule e2e `takeover` ×3 OS + services `tko-<leg>` dédiés.
 
 ### 2.0.0 (juillet 2026)
 - [x] **Sens retour `-s`** : remote-forward sshd, connexion SSH dédiée à la session, port fermé avec la session — e2e ×3 OS

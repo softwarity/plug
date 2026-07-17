@@ -152,6 +152,13 @@ The Docker socket is root on the host — mount it only on a cluster you trust
 full path at startup so a missing name fails loud, and the port closes with the
 session.
 
+Developing a service that is **already deployed** in the stack? Its name is
+taken — add `--takeover` and plug **parks** the deployed workload for the
+session (containers stopped, Swarm service scaled to 0, Kubernetes Service
+repointed) and **restores it when the session ends**, replica count included,
+even across an agent restart. Your local process answers the name in its
+place; afterwards the cluster is exactly as it was.
+
 ## Limits
 
 It carries TCP reached by name. UDP, QUIC and ping are not tunnelled (most

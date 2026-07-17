@@ -72,6 +72,15 @@ func startExposes(cfg config) (func(), error) {
 		tr.Close()
 		return nil, err
 	}
+	// The serve-name verb, with the 2.1 takeover extension when asked: a deployed
+	// workload owning the name is parked for the session instead of refused.
+	verb := func(spec tunnel.ExposeSpec) string {
+		v := "serve-name " + spec.Name + " " + spec.ClusterPort
+		if cfg.takeover {
+			v += " takeover"
+		}
+		return v
+	}
 	for _, spec := range cfg.exposes {
 		ex, err := tr.Expose(spec)
 		if err != nil {
@@ -81,19 +90,36 @@ func startExposes(cfg config) (func(), error) {
 		// k8s Service — whatever the deployment opted into). "static" means no
 		// dynamic backend (or an agent from before the verb): the pre-declared
 		// alias must carry the name, and Verify will tell.
-		mode, err := tr.Exec("serve-name " + spec.Name + " " + spec.ClusterPort)
+		reply, err := tr.Exec(verb(spec))
 		if err != nil {
 			return fail(err)
 		}
-		if strings.HasPrefix(mode, "error:") {
-			return fail(fmt.Errorf("%s: agent: %s", spec.Name, strings.TrimSpace(strings.TrimPrefix(mode, "error:"))))
+		if strings.HasPrefix(reply, "error:") {
+			msg := strings.TrimSpace(strings.TrimPrefix(reply, "error:"))
+			if cfg.takeover && strings.Contains(msg, "usage: serve-name") {
+				// A pre-2.1 agent rejects the 4-field form with its usage line —
+				// name the actual problem instead of echoing it.
+				return fail(fmt.Errorf("%s: the agent predates --takeover — upgrade the softwarity/plug image (≥ 2.1), then run again", spec.Name))
+			}
+			return fail(fmt.Errorf("%s: agent: %s", spec.Name, msg))
 		}
+		// "dynamic" may carry the "parked" note: a deployed workload was parked
+		// (stopped / scaled to 0 / repointed) and will be restored on teardown.
+		fields := strings.Fields(reply)
+		mode := ""
+		if len(fields) > 0 {
+			mode = fields[0]
+		}
+		parked := len(fields) > 1 && fields[1] == "parked"
 		if mode != "dynamic" {
 			mode = "static"
 		} else {
 			// Provisioned — register for cleanup BEFORE Verify, so a Verify
 			// failure below still tears the name down.
 			dynamic = append(dynamic, spec.Name)
+		}
+		if parked {
+			info("took over %s — the deployed workload is parked for this session (restored on exit)", spec.Name)
 		}
 		// -s was asked for explicitly: an unproven path fails the session, with
 		// the remedy — never a silent no-op (fix the cluster side, run again).
@@ -121,11 +147,13 @@ func startExposes(cfg config) (func(), error) {
 		}
 		info("serving %s (%s name, path verified through the cluster)", spec, mode)
 		if mode == "dynamic" {
-			// After a reconnect, a restarted agent has GC'd the signpost — re-run
-			// serve-name and re-verify, so the name isn't silently dead while the
-			// forward reports re-armed. (Static names are pre-declared; no hook.)
+			// After a reconnect, a restarted agent has GC'd the signpost — AND, on
+			// a takeover, restored the parked workload — so re-run the SAME verb
+			// (re-park included) and re-verify: the name must not be silently dead
+			// (or silently back on the deployed version) while the forward reports
+			// re-armed. (Static names are pre-declared; no hook.)
 			ex.OnRearm(func() error {
-				m, err := tr.Exec("serve-name " + spec.Name + " " + spec.ClusterPort)
+				m, err := tr.Exec(verb(spec))
 				if err != nil {
 					return err
 				}

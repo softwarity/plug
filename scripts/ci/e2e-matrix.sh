@@ -7,7 +7,7 @@
 # NAME over the Tailscale mesh.
 #
 #   e2e-matrix.sh <phase> <cluster-a> <cluster-b> [port]
-#   phases: setup env matrix multicluster outage expose gateway collision
+#   phases: setup env matrix multicluster outage expose gateway takeover collision
 #
 # `setup` installs plug + builds the clients and records the shared state
 # ($RUNNER_TEMP/plug-e2e-env) the other phases read back — they run as separate
@@ -342,6 +342,62 @@ do_gateway() {
   [ "$gw" = PASS ] && [ "$gwpath" = PASS ]
 }
 
+# takeover: -s --takeover on a name a REAL deployed service owns must PARK it
+# (container stopped, traffic lands on our local process) and RESTORE it when
+# the session ends. Target = this leg's own tko-<leg> service (parking a shared
+# one would break the other legs). The prober is the in-cluster witness: what
+# does http://tko-<leg>:8085/ answer, before, during, after.
+do_takeover() {
+  local tname
+  case "$(uname -s)" in
+    Darwin)               tname=tko-mac ;;
+    MINGW*|MSYS*|CYGWIN*) tname=tko-win ;;
+    *)                    tname=tko-linux ;;
+  esac
+  echo "=== takeover: park the deployed $tname, serve ours, restore ==="
+  if ! ( cd "$root/e2e/echo-local" && go build -o "$root/echo-local$ext" . ); then
+    echo "--- takeover FAIL — echo-local did not build"; sum "**takeover (park+restore)** ❌ (build)"; return 1
+  fi
+  probe() { plug curl -s --max-time 10 "http://prober:8097/fetch?url=http://$tname:8085/" 2>/dev/null | tr -d '\r' | tail -1; }
+
+  # Baseline: the deployed service answers through the cluster.
+  local r=""
+  for _ in 1 2 3; do r="$(probe)"; [ "$r" = "deployed-$tname" ] && break; sleep 3; done
+  if [ "$r" != "deployed-$tname" ]; then
+    echo "--- takeover FAIL — baseline: prober said '${r:-nothing}' (want deployed-$tname)"
+    sum "**takeover (park+restore)** ❌ — baseline"; return 1
+  fi
+
+  # Without --takeover the taken name must still be refused, with the hint.
+  local co
+  co="$("$PLUG" --host "$ip" --port "$port" -s "$tname:8085:9" curl --version 2>&1 || true)"
+  if ! printf '%s' "$co" | grep -q "Re-run with --takeover"; then
+    echo "--- takeover FAIL — the collision refusal lost its --takeover hint; got:"
+    printf '%s\n' "$co" | tail -3 | sed 's/^/    /'
+    sum "**takeover (park+restore)** ❌ — hint"; return 1
+  fi
+
+  # Take it over: our local echo must now answer the SAME in-cluster URL.
+  "$PLUG" --host "$ip" --port "$port" -s "$tname:8085:18096" --takeover \
+    "$root/echo-local$ext" -addr 127.0.0.1:18096 -text "local-$tname" >/tmp/takeover.out 2>&1 &
+  local tko_pid=$! during=""
+  sleep 8 # arm + park + end-to-end verify
+  for _ in 1 2 3; do during="$(probe)"; [ "$during" = "local-$tname" ] && break; sleep 3; done
+  kill $tko_pid 2>/dev/null; wait $tko_pid 2>/dev/null
+
+  # Session over: the deployed service must be back (its container restarts).
+  local after=""
+  for _ in 1 2 3 4 5; do after="$(probe)"; [ "$after" = "deployed-$tname" ] && break; sleep 3; done
+
+  if [ "$during" = "local-$tname" ] && [ "$after" = "deployed-$tname" ]; then
+    echo "takeover OK — parked (answers came to us), then restored (deployed answers again)"
+    sum "**takeover (park+restore)** ✅"; return 0
+  fi
+  echo "--- takeover FAIL — during='$during' (want local-$tname) after='$after' (want deployed-$tname)"
+  echo "    --- takeover session output ---"; tail -12 /tmp/takeover.out 2>/dev/null | sed 's/^/    /'
+  sum "**takeover (park+restore)** ❌ — during \`${during:-nothing}\` · after \`${after:-nothing}\`"; return 1
+}
+
 # collision: a name a real cluster service already owns must be REFUSED. httpbin
 # is a live service here, so `plug -s httpbin` has to fail loud — the guard that
 # stops a dev from shadowing a name in use. The command never runs (plug bails at
@@ -372,6 +428,7 @@ case "$phase" in
   outage)       do_outage ;;
   expose)       do_expose ;;
   gateway)      do_gateway ;;
+  takeover)     do_takeover ;;
   collision)    do_collision ;;
-  *) echo "unknown phase: $phase (want setup|env|matrix|multicluster|outage|expose|gateway|collision)" >&2; exit 2 ;;
+  *) echo "unknown phase: $phase (want setup|env|matrix|multicluster|outage|expose|gateway|takeover|collision)" >&2; exit 2 ;;
 esac

@@ -2,6 +2,39 @@
 
 ## NEXT RELEASE
 
+### New: `--takeover` — develop a service that is already deployed
+
+The name of a `-s` mapping often belongs to the very service you are developing,
+already deployed in the stack — until now plug refused it and asked you to remove
+the service by hand. With `--takeover`, plug **parks** the deployed workload for
+the session and **restores it when the session ends**:
+
+- **Docker / Compose** — the containers answering the name are stopped, and
+  restarted afterwards.
+- **Swarm** — the service is scaled to 0, and scaled back **to its original
+  replica count**. A stack's `<stack>_<svc>` service is recognized by its short
+  alias; a foreign alias (a service whose own name is unrelated) is refused.
+- **Kubernetes** — the existing Service is repointed at the agent (selector +
+  ports), the originals saved **in an annotation on the Service itself**, and
+  re-patched back afterwards. The bundled RBAC role gains `update`/`patch` on
+  Services (still namespace-scoped, Services only).
+
+The parking receipt rides the signpost's labels (or the k8s annotation), so the
+restore survives anything: session end, `unserve-name`, **agent crash** (the
+boot gc restores parked workloads before sweeping orphaned signposts), and a
+transport reconnect **re-parks** (the same self-heal that re-provisions the
+name). The signpost is created *before* the workload is parked, so the name
+keeps resolving throughout — a no-record gap would leak lookups to the upstream
+resolver (bench-proven on the embedded DNS).
+
+Without the flag, a taken name is refused as before — the message now names the
+owning workload and suggests `--takeover`. Needs an agent image from this
+release (an older agent gets a precise "upgrade the agent" message). Callers
+holding a cached DNS answer (JVM ~30 s) may see brief connection errors at the
+switch. Proven in CI on Compose (park → traffic lands locally → restore) and on
+the bench for Swarm (scale 0 → back to 2 replicas) including agent-crash
+recovery; the k8s backend is coded but not yet runtime-tested.
+
 ---
 
 ## 2.0.0

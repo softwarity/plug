@@ -56,3 +56,20 @@ services:
   flaky-win:
     build: { context: ., dockerfile: services/flaky/Dockerfile }
     networks: [internal]
+
+  # Takeover targets: REAL deployed services the takeover e2e parks (container
+  # stopped for the session) and expects back afterwards. ONE PER OS LEG — the
+  # legs share this cluster, and parking a shared service (httpbin…) would break
+  # the other legs mid-run. Same echo image as ident: distinctive fixed answer.
+  tko-linux:
+    image: hashicorp/http-echo
+    command: ["-listen=:8085", "-text=deployed-tko-linux"]
+    networks: [internal]
+  tko-mac:
+    image: hashicorp/http-echo
+    command: ["-listen=:8085", "-text=deployed-tko-mac"]
+    networks: [internal]
+  tko-win:
+    image: hashicorp/http-echo
+    command: ["-listen=:8085", "-text=deployed-tko-win"]
+    networks: [internal]

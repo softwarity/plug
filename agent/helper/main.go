@@ -15,9 +15,16 @@
 //
 // Verbs (via SSH_ORIGINAL_COMMAND):
 //
-//	serve-name <name> <port>   provision name:port → this agent. One line out:
-//	                           "dynamic" | "static" | "error: …"
-//	unserve-name <name>        drop it ("ok" | "static" | "error: …")
+//	serve-name <name> <port> [takeover]
+//	                           provision name:port → this agent. One line out:
+//	                           "dynamic" | "dynamic parked" | "static" | "error: …"
+//	                           With `takeover`, a REAL workload owning the name is
+//	                           parked for the session (containers stopped, Swarm
+//	                           service scaled to 0, k8s Service repointed) — the
+//	                           parking receipt rides the signpost's labels (or a
+//	                           k8s annotation), and unserve-name/gc restore it.
+//	unserve-name <name>        drop it, restoring anything parked
+//	                           ("ok" | "static" | "error: …")
 //
 // Direct argv modes (not reachable over SSH):
 //
@@ -86,8 +93,12 @@ func dispatch(cmd []string) {
 	}
 	switch cmd[0] {
 	case "serve-name":
-		if len(cmd) != 3 {
-			answer("error: usage: serve-name <name> <port>")
+		// The optional trailing `takeover` is the 2.1 extension; a pre-2.1 agent
+		// answers "error: usage: …" to the 4-field form, which the CLI turns into
+		// a precise "upgrade the agent" message — the degradation contract.
+		takeover := len(cmd) == 4 && cmd[3] == "takeover"
+		if len(cmd) != 3 && !takeover {
+			answer("error: usage: serve-name <name> <port> [takeover]")
 		}
 		name, port := cmd[1], cmd[2]
 		if !nameRe.MatchString(name) {
@@ -96,7 +107,7 @@ func dispatch(cmd []string) {
 		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
 			answer("error: %q is not a valid port", port)
 		}
-		serveName(name, port)
+		serveName(name, port, takeover)
 	case "unserve-name":
 		if len(cmd) != 2 || !nameRe.MatchString(cmd[1]) {
 			answer("error: usage: unserve-name <name>")
@@ -107,12 +118,12 @@ func dispatch(cmd []string) {
 	}
 }
 
-func serveName(name, port string) {
+func serveName(name, port string, takeover bool) {
 	if k8sAvailable() {
-		k8sServe(name, port)
+		k8sServe(name, port, takeover)
 	}
 	if dockerAvailable() {
-		dockerServe(name, port)
+		dockerServe(name, port, takeover)
 	}
 	answer("static")
 }
@@ -229,7 +240,9 @@ func dockerAPI(method, path string, body any, out any) (int, error) {
 		}
 	}
 	if resp.StatusCode >= 300 {
-		var e struct{ Message string `json:"message"` }
+		var e struct {
+			Message string `json:"message"`
+		}
 		_ = json.Unmarshal(data, &e)
 		return resp.StatusCode, fmt.Errorf("%s", firstNonEmpty(e.Message, strings.TrimSpace(string(data)), resp.Status))
 	}
@@ -301,8 +314,8 @@ type netRef struct {
 }
 
 type selfInfo struct {
-	name    string   // agent container/task name — relay target for the container backend
-	service string   // agent's Swarm service name (empty off Swarm) — relay target for the service backend
+	name    string // agent container/task name — relay target for the container backend
+	service string // agent's Swarm service name (empty off Swarm) — relay target for the service backend
 	image   string
 	nets    []netRef // application networks (overlay/bridge), minus ingress/host/none
 }
@@ -408,11 +421,27 @@ func swarmManager() bool {
 
 func signpostName(name string) string { return "plug-sp-" + name }
 
-// nameTaken reports whether name already resolves to a NON-signpost container
-// on one of the given networks — i.e. the real service is deployed. Serving on
-// top of it would only add the signpost to DNS round-robin (silent
-// interception), so both backends refuse it (k8s refuses via the 409 path).
-func nameTaken(name string, nets []string) bool {
+// Parking receipts — how a takeover is undone. The signpost created for the
+// session carries, in its labels, exactly what was parked; unserve-name and the
+// boot gc read it back and restore. Labels are immutable, so the receipt is
+// written at signpost creation, before anything is parked.
+const (
+	parkedContainersLabel = "plug.parked.containers" // comma-joined container ids to restart
+	parkedServiceLabel    = "plug.parked.service"    // Swarm service to scale back
+	parkedReplicasLabel   = "plug.parked.replicas"   // …to this replica count
+)
+
+// owner is one RUNNING non-signpost container that answers to a name.
+type owner struct {
+	id   string
+	name string // primary container name, for messages
+}
+
+// nameOwners returns the RUNNING NON-signpost containers name already resolves
+// to on one of the given networks — i.e. the real service is deployed. Serving
+// on top of one would only add the signpost to DNS round-robin (silent
+// interception), so the caller either refuses or — takeover — parks them.
+func nameOwners(name string, nets []string) []owner {
 	mine := map[string]bool{}
 	for _, n := range nets {
 		mine[n] = true
@@ -426,15 +455,22 @@ func nameTaken(name string, nets []string) bool {
 		} `json:"NetworkSettings"`
 	}
 	if _, err := dockerAPI("GET", "/containers/json", nil, &list); err != nil {
-		return false // can't tell — let Verify be the backstop
+		return nil // can't tell — let Verify be the backstop
 	}
+	var owners []owner
 	for _, c := range list {
 		if c.Labels["plug.signpost"] == "1" {
 			continue // our own signposts don't count
 		}
+		primary := c.Id[:12]
+		if len(c.Names) > 0 {
+			primary = strings.TrimPrefix(c.Names[0], "/")
+		}
+		named := false
 		for _, nm := range c.Names {
 			if strings.TrimPrefix(nm, "/") == name {
-				return true
+				named = true
+				break
 			}
 		}
 		// The network alias is how a Compose service is reached by name — but
@@ -442,18 +478,21 @@ func nameTaken(name string, nets []string) bool {
 		// in on inspect), so a real service reached by its service-name alias
 		// would slip through here. Inspect the candidates that share a network
 		// with us to read the aliases reliably.
-		onMine := false
-		for net := range c.NetworkSettings.Networks {
-			if mine[net] {
-				onMine = true
-				break
+		if !named {
+			onMine := false
+			for net := range c.NetworkSettings.Networks {
+				if mine[net] {
+					onMine = true
+					break
+				}
 			}
+			named = onMine && containerHasAlias(c.Id, name, mine)
 		}
-		if onMine && containerHasAlias(c.Id, name, mine) {
-			return true
+		if named {
+			owners = append(owners, owner{id: c.Id, name: primary})
 		}
 	}
-	return false
+	return owners
 }
 
 // containerHasAlias reports whether the container answers to name on one of our
@@ -489,12 +528,22 @@ func containerHasAlias(id, name string, mine map[string]bool) bool {
 	return false
 }
 
-// swarmNameTaken reports whether a NON-signpost Swarm service already owns name
-// — by its service name (the cluster-wide resolvable name) or a network alias.
-// GET /services lists the WHOLE cluster from a manager, so it also catches a
-// real service whose tasks run on other nodes (which nameTaken's container scan
-// cannot see). Serving on top would shadow it in DNS.
-func swarmNameTaken(name string, self selfInfo) bool {
+// swarmOwner describes the NON-signpost Swarm service that owns a name — the
+// facts the takeover needs to park it (or to refuse precisely).
+type swarmOwner struct {
+	id       string
+	name     string // the service's own Spec.Name
+	replicas int
+	global   bool
+	viaAlias bool // owns the name as a network ALIAS, not as its service name
+}
+
+// swarmNameOwner returns the NON-signpost Swarm service that already owns name
+// — by its service name (the cluster-wide resolvable name) or a network alias —
+// or nil. GET /services lists the WHOLE cluster from a manager, so it also
+// catches a real service whose tasks run on other nodes (which nameOwners'
+// container scan cannot see). Serving on top would shadow it in DNS.
+func swarmNameOwner(name string, self selfInfo) *swarmOwner {
 	// Scope to networks WE are on: a service on an overlay we don't share doesn't
 	// resolve for our workloads, so serving `name` on our overlay would not shadow
 	// it (the container path already scopes this way). `mine` holds our overlays'
@@ -515,9 +564,16 @@ func swarmNameTaken(name string, self selfInfo) bool {
 		}
 	}
 	var list []struct {
+		ID   string `json:"ID"`
 		Spec struct {
-			Name         string            `json:"Name"`
-			Labels       map[string]string `json:"Labels"`
+			Name   string            `json:"Name"`
+			Labels map[string]string `json:"Labels"`
+			Mode   struct {
+				Replicated struct {
+					Replicas int `json:"Replicas"`
+				} `json:"Replicated"`
+				Global *struct{} `json:"Global"`
+			} `json:"Mode"`
 			TaskTemplate struct {
 				Networks []struct {
 					Target  string   `json:"Target"`
@@ -527,7 +583,7 @@ func swarmNameTaken(name string, self selfInfo) bool {
 		} `json:"Spec"`
 	}
 	if _, err := dockerAPI("GET", "/services", nil, &list); err != nil {
-		return false // can't tell — Verify is the backstop
+		return nil // can't tell — Verify is the backstop
 	}
 	for _, s := range list {
 		if s.Spec.Labels["plug.signpost"] == "1" {
@@ -547,18 +603,46 @@ func swarmNameTaken(name string, self selfInfo) bool {
 		}
 		// The service's own name resolves on every network it's attached to, and
 		// an alias resolves on its network — either collides once a network is shared.
-		if s.Spec.Name == name {
-			return true
-		}
-		for _, n := range s.Spec.TaskTemplate.Networks {
-			for _, a := range n.Aliases {
-				if a == name {
-					return true
+		owns, viaAlias := s.Spec.Name == name, false
+		if !owns {
+			for _, n := range s.Spec.TaskTemplate.Networks {
+				for _, a := range n.Aliases {
+					if a == name {
+						owns, viaAlias = true, true
+						break
+					}
 				}
 			}
 		}
+		if owns {
+			return &swarmOwner{
+				id:       s.ID,
+				name:     s.Spec.Name,
+				replicas: s.Spec.Mode.Replicated.Replicas,
+				global:   s.Spec.Mode.Global != nil,
+				viaAlias: viaAlias,
+			}
+		}
 	}
-	return false
+	return nil
+}
+
+// scaleService sets a Swarm service's replica count, round-tripping the full
+// Spec (the update API replaces the whole Spec — a partial one would strip
+// fields) at the version the read returned.
+func scaleService(idOrName string, replicas int) error {
+	var s struct {
+		Version struct {
+			Index int `json:"Index"`
+		} `json:"Version"`
+		Spec map[string]any `json:"Spec"`
+	}
+	if _, err := dockerAPI("GET", "/services/"+idOrName, nil, &s); err != nil {
+		return err
+	}
+	s.Spec["Mode"] = map[string]any{"Replicated": map[string]any{"Replicas": replicas}}
+	_, err := dockerAPI("POST", "/services/"+idOrName+"/update?version="+strconv.Itoa(s.Version.Index), s.Spec, nil)
+	return err
 }
 
 // dockerServe picks the signpost shape. The agent runs as a Swarm SERVICE (it
@@ -566,20 +650,20 @@ func swarmNameTaken(name string, self selfInfo) bool {
 // signpost is a SERVICE, which joins the stack's overlay whether or not it is
 // attachable. Otherwise (Compose, plain `docker run`, or a non-manager) it is a
 // standalone CONTAINER, which needs a bridge or an attachable overlay.
-func dockerServe(name, port string) {
+func dockerServe(name, port string, takeover bool) {
 	self, err := dockerSelf()
 	if err != nil {
 		answer("error: %v", err)
 	}
 	if self.service != "" && swarmManager() {
-		swarmServe(name, port, self)
+		swarmServe(name, port, self, takeover)
 	}
-	containerServe(name, port, self)
+	containerServe(name, port, self, takeover)
 }
 
 // containerServe runs the signpost as a standalone container — needs a network
 // it can actually join (a bridge, or an attachable overlay).
-func containerServe(name, port string, self selfInfo) {
+func containerServe(name, port string, self selfInfo, takeover bool) {
 	nets := self.attachableNets()
 	if len(nets) == 0 {
 		// Nothing a standalone container can join (only bridge/host, or a
@@ -588,13 +672,21 @@ func containerServe(name, port string, self selfInfo) {
 		// precisely if it's absent.
 		answer("static")
 	}
-	if nameTaken(name, nets) {
-		answer("error: %q already resolves to a container in the cluster — it owns the name. Remove it to serve yours (docker rm -f, or scale it to 0).", name)
+	// A leftover signpost (a crashed session's, or a re-run) may carry a parking
+	// receipt: restore it FIRST, then re-detect. One restore path — the takeover
+	// below re-parks with a fresh receipt; no label merging across sessions.
+	if err := restoreContainerParked(name); err != nil {
+		answer("error: restoring what the previous %s session parked: %v", name, err)
 	}
-	// Replace a leftover signpost for this name (a crashed session's, or a
-	// re-run): rm -f is idempotent.
-	_, _ = dockerAPI("DELETE", "/containers/"+signpostName(name)+"?force=1", nil, nil)
+	owners := nameOwners(name, nets)
+	if len(owners) > 0 && !takeover {
+		answer("error: %q already resolves to a container in the cluster — it owns the name. Re-run with --takeover to park it for this session (restored on exit), or remove it (docker rm -f %s).", name, owners[0].name)
+	}
 
+	receipt := make([]string, 0, len(owners))
+	for _, o := range owners {
+		receipt = append(receipt, o.id)
+	}
 	endpoints := map[string]any{}
 	for _, n := range nets {
 		endpoints[n] = map[string]any{"Aliases": []string{name}}
@@ -605,11 +697,14 @@ func containerServe(name, port string, self selfInfo) {
 		"Labels": map[string]string{
 			"plug.signpost":       "1",
 			"plug.signpost.owner": self.owner(),
+			parkedContainersLabel: strings.Join(receipt, ","),
 		},
 		"HostConfig":       map[string]any{"NetworkMode": nets[0]},
 		"NetworkingConfig": map[string]any{"EndpointsConfig": map[string]any{nets[0]: endpoints[nets[0]]}},
 	}
-	var created struct{ Id string `json:"Id"` }
+	var created struct {
+		Id string `json:"Id"`
+	}
 	if _, err := dockerAPI("POST", "/containers/create?name="+signpostName(name), body, &created); err != nil {
 		answer("error: creating the %s signpost: %v", name, err)
 	}
@@ -626,13 +721,61 @@ func containerServe(name, port string, self selfInfo) {
 		_, _ = dockerAPI("DELETE", "/containers/"+created.Id+"?force=1", nil, nil)
 		answer("error: starting the %s signpost: %v", name, err)
 	}
+	// Park AFTER the signpost is live: a brief both-in-DNS overlap is benign
+	// round-robin, whereas a no-record gap would leak the lookup to the upstream
+	// resolver (bench-proven on Swarm's embedded DNS).
+	for i, o := range owners {
+		if _, err := dockerAPI("POST", "/containers/"+o.id+"/stop?t=10", nil, nil); err != nil {
+			for _, r := range owners[:i] { // roll the partial park back
+				_, _ = dockerAPI("POST", "/containers/"+r.id+"/start", nil, nil)
+			}
+			_, _ = dockerAPI("DELETE", "/containers/"+created.Id+"?force=1", nil, nil)
+			answer("error: parking %q (stopping %s): %v", name, o.name, err)
+		}
+	}
+	if len(owners) > 0 {
+		answer("dynamic parked")
+	}
 	answer("dynamic")
+}
+
+// restoreContainerParked restarts whatever a previous session's signpost parked
+// (its receipt label), then removes that signpost. No signpost → nothing to do.
+// Restore-then-delete keeps the name resolving throughout: the real containers
+// come back while the signpost still answers, then the signpost goes.
+func restoreContainerParked(name string) error {
+	var insp struct {
+		Config struct {
+			Labels map[string]string `json:"Labels"`
+		} `json:"Config"`
+	}
+	if code, err := dockerAPI("GET", "/containers/"+signpostName(name)+"/json", nil, &insp); err != nil {
+		if code == 404 {
+			return nil
+		}
+		return err
+	}
+	restartParkedContainers(insp.Config.Labels[parkedContainersLabel])
+	if code, err := dockerAPI("DELETE", "/containers/"+signpostName(name)+"?force=1", nil, nil); err != nil && code != 404 {
+		return err
+	}
+	return nil
+}
+
+// restartParkedContainers starts every id in a receipt, best-effort: a container
+// that was removed meanwhile (404) or is already running (304) is fine.
+func restartParkedContainers(receipt string) {
+	for _, id := range strings.Split(receipt, ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			_, _ = dockerAPI("POST", "/containers/"+id+"/start", nil, nil)
+		}
+	}
 }
 
 // swarmServe runs the signpost as a Swarm SERVICE. A service joins the stack's
 // overlay whether or not it is `attachable` — the whole reason this backend
 // exists — and carries the alias there, relaying to the agent's service VIP.
-func swarmServe(name, port string, self selfInfo) {
+func swarmServe(name, port string, self selfInfo, takeover bool) {
 	// -s relays to the agent's service VIP, and the session's remote-forward
 	// lives on ONE task — so >1 replica makes the VIP miss it intermittently.
 	// Refuse loudly rather than ship a silent flaky path.
@@ -646,24 +789,46 @@ func swarmServe(name, port string, self selfInfo) {
 	if len(nets) == 0 {
 		answer("static") // agent only on ingress/bridge — nothing to publish an alias on
 	}
-	// A real service with this name (anywhere in the cluster) must keep it: the
-	// container-scan nameTaken can't see Swarm services, so check them explicitly.
-	if swarmNameTaken(name, self) {
-		answer("error: %q is a service on your overlay — it owns the name. Remove it to serve yours: docker service rm %q (scaling to 0 keeps the name).", name, name)
+	// A leftover signpost service (a crashed session's, or a re-run) may carry a
+	// parking receipt: restore it FIRST, then re-detect — one restore path, and
+	// the takeover below re-parks with a fresh receipt.
+	if err := restoreServiceParked(name); err != nil {
+		answer("error: restoring what the previous %s session parked: %v", name, err)
 	}
-	// Replace a leftover signpost service for this name (idempotent).
-	_, _ = dockerAPI("DELETE", "/services/"+signpostName(name), nil, nil)
+	// A real service with this name (anywhere in the cluster) must keep it: the
+	// container-scan nameOwners can't see Swarm services, so check them explicitly.
+	own := swarmNameOwner(name, self)
+	if own != nil {
+		if !takeover {
+			answer("error: %q is a service on your overlay — it owns the name. Re-run with --takeover to park it (scaled to 0) for this session, restored on exit — or remove it: docker service rm %s.", name, own.name)
+		}
+		if own.global {
+			answer("error: %q runs in GLOBAL mode — plug cannot park it (no replica count to restore). Remove it instead: docker service rm %s.", own.name, own.name)
+		}
+		// A Swarm STACK names its services <stack>_<svc> and carries the short
+		// name as a network alias — parking that is exactly the use case (same
+		// logical service, stack-prefixed). Refuse only a foreign alias: a
+		// service whose own name is unrelated would lose it as collateral.
+		if own.viaAlias && !strings.HasSuffix(own.name, "_"+name) {
+			answer("error: %q is a network ALIAS of service %q — parking that service would take its own name down too. Remove the alias instead.", name, own.name)
+		}
+	}
 
 	var attach []map[string]any
 	for _, n := range nets {
 		attach = append(attach, map[string]any{"Target": n, "Aliases": []string{name}})
 	}
+	labels := map[string]string{
+		"plug.signpost":       "1",
+		"plug.signpost.owner": self.owner(),
+	}
+	if own != nil { // the parking receipt — how unserve/gc restore it
+		labels[parkedServiceLabel] = own.name
+		labels[parkedReplicasLabel] = strconv.Itoa(max(own.replicas, 1))
+	}
 	spec := map[string]any{
-		"Name": signpostName(name),
-		"Labels": map[string]string{
-			"plug.signpost":       "1",
-			"plug.signpost.owner": self.owner(),
-		},
+		"Name":   signpostName(name),
+		"Labels": labels,
 		"TaskTemplate": map[string]any{
 			"ContainerSpec": map[string]any{
 				"Image":   self.image,
@@ -677,21 +842,68 @@ func swarmServe(name, port string, self selfInfo) {
 	if _, err := dockerAPI("POST", "/services/create", spec, nil); err != nil {
 		answer("error: creating the %s signpost service: %v", name, err)
 	}
+	if own != nil {
+		// Park AFTER the signpost exists: a brief both-in-DNS overlap is benign
+		// round-robin, whereas a no-record gap forwards the lookup to the upstream
+		// resolver (bench-proven on the embedded DNS).
+		if err := scaleService(own.id, 0); err != nil {
+			_, _ = dockerAPI("DELETE", "/services/"+signpostName(name), nil, nil)
+			answer("error: parking %q (scaling %s to 0): %v", name, own.name, err)
+		}
+		answer("dynamic parked")
+	}
 	answer("dynamic")
 }
 
+// restoreServiceParked scales back whatever a previous session's signpost
+// service parked (its receipt labels), then removes that signpost. Scale-back
+// first, delete second — the name keeps resolving throughout.
+func restoreServiceParked(name string) error {
+	var s struct {
+		Spec struct {
+			Labels map[string]string `json:"Labels"`
+		} `json:"Spec"`
+	}
+	if code, err := dockerAPI("GET", "/services/"+signpostName(name), nil, &s); err != nil {
+		if code == 404 || code == 503 { // absent, or not a manager (no service shape here)
+			return nil
+		}
+		return err
+	}
+	scaleBackParkedService(s.Spec.Labels)
+	if code, err := dockerAPI("DELETE", "/services/"+signpostName(name), nil, nil); err != nil && code != 404 {
+		return err
+	}
+	return nil
+}
+
+// scaleBackParkedService restores the replica count a receipt recorded,
+// best-effort: a service removed meanwhile is fine.
+func scaleBackParkedService(labels map[string]string) {
+	svc := labels[parkedServiceLabel]
+	if svc == "" {
+		return
+	}
+	n, err := strconv.Atoi(labels[parkedReplicasLabel])
+	if err != nil || n < 1 {
+		n = 1
+	}
+	_ = scaleService(svc, n)
+}
+
 func dockerUnserve(name string) {
-	// Drop whichever shape exists. The container shape is always meaningful; the
-	// service shape only on a Swarm manager (off one, /services/* answers 503 —
-	// not a real failure, so don't try it there). A real non-404 failure on
-	// either shape is surfaced (a swallowed error would leak the signpost).
-	cc, ec := dockerAPI("DELETE", "/containers/"+signpostName(name)+"?force=1", nil, nil)
-	if ec != nil && cc != 404 {
-		answer("error: removing the %s signpost: %v", name, ec)
+	// Drop whichever shape exists — restoring anything its receipt parked FIRST
+	// (scale-back / restart, then delete: the name resolves throughout). The
+	// container shape is always meaningful; the service shape only on a Swarm
+	// manager (off one, /services/* answers 503 — not a real failure). A real
+	// failure on either shape is surfaced (a swallowed error would leak the
+	// signpost or leave the parked service down).
+	if err := restoreContainerParked(name); err != nil {
+		answer("error: removing the %s signpost: %v", name, err)
 	}
 	if swarmManager() {
-		if sc, es := dockerAPI("DELETE", "/services/"+signpostName(name), nil, nil); es != nil && sc != 404 {
-			answer("error: removing the %s signpost service: %v", name, es)
+		if err := restoreServiceParked(name); err != nil {
+			answer("error: removing the %s signpost service: %v", name, err)
 		}
 	}
 	answer("ok")
@@ -721,6 +933,10 @@ func dockerGC() {
 		for _, c := range clist {
 			o := c.Labels["plug.signpost.owner"]
 			if o == mine || !ownerAlive(o, swarm) {
+				// An orphaned signpost's receipt is a takeover that never got
+				// restored (the session died with the agent) — restore it now,
+				// then sweep the signpost.
+				restartParkedContainers(c.Labels[parkedContainersLabel])
 				_, _ = dockerAPI("DELETE", "/containers/"+c.Id+"?force=1", nil, nil)
 			}
 		}
@@ -739,6 +955,7 @@ func dockerGC() {
 		for _, s := range slist {
 			o := s.Spec.Labels["plug.signpost.owner"]
 			if o == mine || !ownerAlive(o, swarm) {
+				scaleBackParkedService(s.Spec.Labels) // undo the orphan's takeover
 				_, _ = dockerAPI("DELETE", "/services/"+s.ID, nil, nil)
 			}
 		}
@@ -826,6 +1043,17 @@ func k8sAvailable() bool {
 }
 
 func k8sAPI(method, path string, body any, out any) (int, error) {
+	return k8sDo(method, path, "application/json", body, out)
+}
+
+// k8sMergePatch applies an RFC 7386 JSON merge patch — how the takeover
+// repoints a real Service's selector (and how the restore puts it back): object
+// keys merge (null deletes a key), arrays replace whole.
+func k8sMergePatch(path string, body any) (int, error) {
+	return k8sDo("PATCH", path, "application/merge-patch+json", body, nil)
+}
+
+func k8sDo(method, path, contentType string, body any, out any) (int, error) {
 	token, err := os.ReadFile(k8sSA + "/token")
 	if err != nil {
 		return 0, err
@@ -852,7 +1080,7 @@ func k8sAPI(method, path string, body any, out any) (int, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
 	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Content-Type", contentType)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -864,7 +1092,9 @@ func k8sAPI(method, path string, body any, out any) (int, error) {
 		_ = json.Unmarshal(data, out)
 	}
 	if resp.StatusCode >= 300 {
-		var e struct{ Message string `json:"message"` }
+		var e struct {
+			Message string `json:"message"`
+		}
 		_ = json.Unmarshal(data, &e)
 		return resp.StatusCode, fmt.Errorf("%s", firstNonEmpty(e.Message, resp.Status))
 	}
@@ -878,7 +1108,36 @@ func k8sNamespace() string {
 
 const k8sManaged = "app.kubernetes.io/managed-by"
 
-func k8sServe(name, port string) {
+// k8sParkedAnn is the k8s parking receipt: the takeover repoints the REAL
+// Service at the agent and stores its original selector+ports here, on the
+// object itself — so the restore (unserve or boot gc) survives any agent crash.
+// The annotation is written ONLY when absent: a crashed takeover session leaves
+// the Service already pointing at plug, and re-saving would overwrite the
+// original with {app: plug}, losing the way back.
+const k8sParkedAnn = "plug.softwarity.io/parked"
+
+// k8sReceipt is what the annotation stores — everything the restore re-patches.
+type k8sReceipt struct {
+	Selector map[string]string `json:"selector"`
+	Ports    json.RawMessage   `json:"ports"`
+}
+
+// selectorPatch builds the merge-patch value that REPLACES a selector: RFC 7386
+// merges maps key-by-key, so every key of the current selector that the target
+// doesn't carry must be explicitly nulled or it would survive the patch (and a
+// half-merged selector matches nothing).
+func selectorPatch(target, current map[string]string) map[string]any {
+	p := map[string]any{}
+	for k := range current {
+		p[k] = nil
+	}
+	for k, v := range target {
+		p[k] = v
+	}
+	return p
+}
+
+func k8sServe(name, port string, takeover bool) {
 	ns := k8sNamespace()
 	p, _ := strconv.Atoi(port)
 	svc := map[string]any{
@@ -900,16 +1159,43 @@ func k8sServe(name, port string) {
 		// No RBAC → the opt-in isn't applied. Not an error: static mode.
 		answer("static")
 	case code == 409:
-		// The name exists. Take it over ONLY if a previous plug session made it
-		// (a crashed session's leftover); a real service keeps its name.
+		// The name exists. A previous plug session's leftover is replaced; a REAL
+		// Service keeps its name — unless takeover, which repoints it at the agent
+		// for the session (selector+ports), receipt in an annotation on itself.
 		var existing struct {
 			Metadata struct {
-				Labels map[string]string `json:"labels"`
+				Labels      map[string]string `json:"labels"`
+				Annotations map[string]string `json:"annotations"`
 			} `json:"metadata"`
+			Spec struct {
+				Selector map[string]string `json:"selector"`
+				Ports    json.RawMessage   `json:"ports"`
+			} `json:"spec"`
 		}
 		_, gerr := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/services/"+name, nil, &existing)
 		if gerr != nil || existing.Metadata.Labels[k8sManaged] != "plug" {
-			answer("error: the Service %q already exists and is not plug's — it owns the name. Remove it to serve yours: kubectl delete service %q (scaling the workload keeps the Service).", name, name)
+			if gerr == nil && takeover {
+				receipt := existing.Metadata.Annotations[k8sParkedAnn]
+				if receipt == "" { // first takeover of this Service — save the way back
+					b, merr := json.Marshal(k8sReceipt{Selector: existing.Spec.Selector, Ports: existing.Spec.Ports})
+					if merr != nil {
+						answer("error: recording %q's original spec: %v", name, merr)
+					}
+					receipt = string(b)
+				}
+				patch := map[string]any{
+					"metadata": map[string]any{"annotations": map[string]any{k8sParkedAnn: receipt}},
+					"spec": map[string]any{
+						"selector": selectorPatch(map[string]string{"app": "plug"}, existing.Spec.Selector),
+						"ports":    []map[string]any{{"port": p, "targetPort": p}},
+					},
+				}
+				if _, perr := k8sMergePatch("/api/v1/namespaces/"+ns+"/services/"+name, patch); perr != nil {
+					answer("error: parking the Service %q (repointing it at the agent): %v", name, perr)
+				}
+				answer("dynamic parked")
+			}
+			answer("error: the Service %q already exists and is not plug's — it owns the name. Re-run with --takeover to repoint it to your session (restored on exit), or remove it: kubectl delete service %s.", name, name)
 		}
 		// It's ours: replace it. If the re-create fails, say SO — do not fall
 		// through to the "not plug's" lie (the name is now deleted; report the
@@ -924,21 +1210,61 @@ func k8sServe(name, port string) {
 	}
 }
 
+// k8sRestoreParked undoes a takeover on one Service: re-patch its original
+// selector+ports from the receipt annotation, and drop the annotation. Reports
+// whether the Service was parked at all.
+func k8sRestoreParked(ns, name string, ann map[string]string, current map[string]string) (bool, error) {
+	raw := ann[k8sParkedAnn]
+	if raw == "" {
+		return false, nil
+	}
+	var r k8sReceipt
+	if err := json.Unmarshal([]byte(raw), &r); err != nil {
+		return true, fmt.Errorf("unreadable parking receipt on %q: %v", name, err)
+	}
+	patch := map[string]any{
+		"metadata": map[string]any{"annotations": map[string]any{k8sParkedAnn: nil}},
+		"spec": map[string]any{
+			"selector": selectorPatch(r.Selector, current),
+			"ports":    r.Ports,
+		},
+	}
+	if _, err := k8sMergePatch("/api/v1/namespaces/"+ns+"/services/"+name, patch); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
 func k8sUnserve(name string) {
 	ns := k8sNamespace()
 	var existing struct {
 		Metadata struct {
-			Labels map[string]string `json:"labels"`
+			Labels      map[string]string `json:"labels"`
+			Annotations map[string]string `json:"annotations"`
 		} `json:"metadata"`
+		Spec struct {
+			Selector map[string]string `json:"selector"`
+		} `json:"spec"`
 	}
-	if _, err := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/services/"+name, nil, &existing); err != nil ||
-		existing.Metadata.Labels[k8sManaged] != "plug" {
-		answer("static") // not ours (or RBAC absent) — nothing to drop
+	if _, err := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/services/"+name, nil, &existing); err != nil {
+		answer("static") // absent (or RBAC absent) — nothing to drop
 	}
-	if _, err := k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/services/"+name, nil, nil); err != nil {
-		answer("error: %v", err)
+	if existing.Metadata.Labels[k8sManaged] == "plug" {
+		// Ours: the plug-created Service goes with the session.
+		if _, err := k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/services/"+name, nil, nil); err != nil {
+			answer("error: %v", err)
+		}
+		answer("ok")
 	}
-	answer("ok")
+	// A REAL Service we parked (takeover): restore it from its receipt.
+	parked, err := k8sRestoreParked(ns, name, existing.Metadata.Annotations, existing.Spec.Selector)
+	if err != nil {
+		answer("error: restoring the Service %q: %v", name, err)
+	}
+	if parked {
+		answer("ok")
+	}
+	answer("static") // not ours, not parked — nothing to drop
 }
 
 func k8sGC() {
@@ -946,14 +1272,25 @@ func k8sGC() {
 	var list struct {
 		Items []struct {
 			Metadata struct {
-				Name string `json:"name"`
+				Name        string            `json:"name"`
+				Labels      map[string]string `json:"labels"`
+				Annotations map[string]string `json:"annotations"`
 			} `json:"metadata"`
+			Spec struct {
+				Selector map[string]string `json:"selector"`
+			} `json:"spec"`
 		} `json:"items"`
 	}
-	if _, err := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/services?labelSelector="+k8sManaged+"%3Dplug", nil, &list); err != nil {
+	// One un-filtered list serves both sweeps: parked REAL Services (annotation —
+	// restore them) and plug-created ones (label — delete them).
+	if _, err := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/services", nil, &list); err != nil {
 		return
 	}
 	for _, s := range list.Items {
-		_, _ = k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/services/"+s.Metadata.Name, nil, nil)
+		if s.Metadata.Labels[k8sManaged] == "plug" {
+			_, _ = k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/services/"+s.Metadata.Name, nil, nil)
+			continue
+		}
+		_, _ = k8sRestoreParked(ns, s.Metadata.Name, s.Metadata.Annotations, s.Spec.Selector)
 	}
 }
