@@ -154,37 +154,61 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, log logfn) ([]string, s
 	// override while the daemon lives. One overwrite would leave every subsequent
 	// session without cluster DNS until `plug down`. So re-assert the override
 	// whenever it goes missing — the DNS sibling of the transport's self-heal.
+	//
+	// Re-assert QUIETLY when possible. Flushing the cache + HUPping mDNSResponder
+	// on every re-assert turned a chatty configd (a locationd Wi-Fi-scan loop
+	// re-publishing the DHCP lease ~2/min, observed live) into a resolver that
+	// restarts all day — which intermittently failed UNRELATED lookups
+	// machine-wide. The Service key is only an INPUT to the composite config: as
+	// long as Global (and Setup, when overridden) still point at us, what
+	// resolution consumes never changed, so rewrite the input without touching the
+	// resolver. A flush is due only when the EFFECTIVE config diverged — and even
+	// then coalesced through flushGate.
 	stopWatch := make(chan struct{})
 	watchDone := make(chan struct{})
 	go func() {
 		defer close(watchDone)
 		t := time.NewTicker(3 * time.Second)
 		defer t.Stop()
+		gate := flushGate{window: 30 * time.Second}
+		quiet := newLogLimiter(5 * time.Minute)
 		for {
 			select {
 			case <-stopWatch:
 				return
 			case <-t.C:
-				lost := false
+				input := false     // Service key — configd's composition input only
+				effective := false // what resolution consumes: Global, Setup, the files
 				if _, cur, _ := readDNSDict(dnsKey); len(cur) != 1 || cur[0] != dnsIP {
 					_ = scutilSet(dnsKey, set)
-					lost = true
+					input = true
 				}
 				if _, cur, _ := readDNSDict(globalDNSKey); len(cur) != 1 || cur[0] != dnsIP {
 					_ = scutilSet(globalDNSKey, set)
-					lost = true
+					effective = true
 				}
 				if setupOverridden {
 					if _, cur, _ := readDNSDict(setupKey); len(cur) != 1 || cur[0] != dnsIP {
 						_ = scutilSet(setupKey, setupSet)
-						lost = true
+						effective = true
 					}
 				}
-				if lost {
-					writeResolv(dnsIP)
+				if b, err := os.ReadFile(resolverFile); err != nil || string(b) != "nameserver "+dnsIP+"\n" {
 					_ = os.WriteFile(resolverFile, []byte("nameserver "+dnsIP+"\n"), 0o644)
+					effective = true
+				}
+				if b, err := os.ReadFile(resolvConf); err != nil || !strings.Contains(string(b), dnsIP) {
+					writeResolv(dnsIP)
+					effective = true
+				}
+				if effective {
+					gate.request()
+				}
+				if gate.due(time.Now()) {
 					flushDNS()
-					log.f("tun[mac]: system DNS override was replaced (configd event?) — re-asserted")
+					log.f("tun[mac]: effective DNS config was replaced — re-asserted (cache flushed)")
+				} else if (input || effective) && quiet.allow("reassert") {
+					log.f("tun[mac]: system DNS override was replaced (configd event?) — re-asserted quietly (repeats hidden 5m)")
 				}
 			}
 		}
@@ -318,6 +342,27 @@ var resolvConf = "/etc/resolv.conf" // overridable in tests
 // snapshotResolv captures /etc/resolv.conf as a restorable token: "L\n<target>" for
 // a symlink (the usual case — it points at /var/run/resolv.conf), "F\n<content>" for
 // a regular file, or "N" if absent.
+// flushGate coalesces DNS cache flushes: request() marks one pending, due()
+// releases at most one per window. The first request after a quiet period fires
+// immediately; a configd storm collapses into one flush per window instead of a
+// resolver restart per event.
+type flushGate struct {
+	window  time.Duration
+	last    time.Time
+	pending bool
+}
+
+func (g *flushGate) request() { g.pending = true }
+
+func (g *flushGate) due(now time.Time) bool {
+	if !g.pending || now.Sub(g.last) < g.window {
+		return false
+	}
+	g.pending = false
+	g.last = now
+	return true
+}
+
 func snapshotResolv() string {
 	if target, err := os.Readlink(resolvConf); err == nil {
 		return "L\n" + target

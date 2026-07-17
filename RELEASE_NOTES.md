@@ -2,6 +2,18 @@
 
 ## NEXT RELEASE
 
+### Fixed: macOS — the DNS watchdog no longer restarts the resolver on every configd event
+
+The daemon re-asserts its system-DNS override whenever macOS recomposes the
+network config — but it also flushed the cache and HUP'd `mDNSResponder` each
+time. On a machine where something keeps configd busy (observed live: a
+`locationd` Wi-Fi-scan loop re-publishing the DHCP lease ~2/min), that restarted
+the system resolver all day and intermittently failed **unrelated** lookups
+machine-wide (`Could not resolve host: github.com`…). The watchdog now rewrites
+the overridden keys **quietly** when the effective config (Global/Setup and the
+resolver files) still points at plug, and coalesces real flushes to at most one
+per 30 s. `daemon.log` lines are now timestamped.
+
 ### New: `--takeover` — develop a service that is already deployed
 
 The name of a `-s` mapping often belongs to the very service you are developing,

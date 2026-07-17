@@ -54,6 +54,18 @@ toute façon).
 - [ ] **Transport `kubectl exec`** : tunnel via `kubectl exec` sur un pod nu — zéro port exposé, accès gouverné par le kubeconfig RBAC (adoucit le compromis no-auth).
 - [ ] **Gateway hôte du tunnel** : la gateway (Java) déjà déployée héberge l'endpoint et l'active dynamiquement — son auth devant. Fin de l'agent dédié.
 
+## 🔴 macOS : re-assert DNS trop agressif (churn mDNSResponder) — 2.1.x
+Diagnostiqué en live (17/07) : `locationd` fait scanner le Wi-Fi en continu →
+ré-évaluation auto-join → **DHCP re-publish ~2/min** → configd re-dérive
+`State:/Network/Service/<en0>/DNS` (écrase l'override) → le watchdog plug
+(`route_darwin.go:159-191`, tick 3 s) ré-écrit **+ `flushcache` + `HUP
+mDNSResponder`** à chaque fois (~4 400 re-asserts/24 h en rafales) → la pile de
+résolution redémarre sans arrêt → **échecs getaddrinfo intermittents**
+(`Could not resolve host: github.com`…) pour TOUTE la machine.
+- [ ] **Re-assert silencieux** : si `Global`+`Setup` pointent encore `dnsIP` (ce que mDNSResponder consomme), ré-écrire la clé Service SANS `flushDNS()` — le flush+HUP n'est justifié que si la config effective a réellement divergé.
+- [ ] **Débounce** : max 1 flush/HUP par 30 s, même en rafale d'événements configd.
+- [ ] **Timestamper** les lignes du daemon.log (le diagnostic a buté sur des re-asserts non datés).
+
 ## ⚪ Dettes / plus tard
 - [ ] **Tests unitaires** (comportements déjà prouvés en e2e, faible priorité) : `answerDNS` strip `.plug` → mint du nom nu ; round-trip registre NRPT (`setSystemNRPT` / `clearSystemNRPT`) ; `DialContext` — un rejet de canal (`*ssh.OpenChannelError`) ne reconnecte pas ; `ensureVersion` (`.exe`) / `ensureWintunBeside`.
 - [ ] **Factoriser** `registry_windows` / `graft_windows` avec les `_darwin` (dupliqués volontairement le temps de valider Windows — à unifier maintenant).

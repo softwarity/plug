@@ -27,6 +27,12 @@ func daemonMain(_ []string) int {
 	}
 	defer release()
 
+	// Timestamp every daemon.log line: the log is the only forensic trail of a
+	// long-lived root daemon, and undated re-assert storms cost a live diagnosis.
+	dinfo := func(format string, a ...any) {
+		info(time.Now().Format("2006-01-02 15:04:05")+" "+format, a...)
+	}
+
 	// Crash net, first: repair a DNS a crashed daemon may have left pointing at a
 	// dead resolver — else even resolving an agent host below would fail.
 	tun.RestoreOrphanDNS(globalKey)
@@ -34,10 +40,10 @@ func daemonMain(_ []string) int {
 	ct := tun.NewClusterTransports()
 	_ = tun.SaveDNSBackup(globalKey) // snapshot the clean DNS before we override it
 
-	dp, err := tun.StartGlobalDatapath(ct, info)
+	dp, err := tun.StartGlobalDatapath(ct, dinfo)
 	if err != nil {
 		daemonReady(false)
-		info("daemon: %v", err)
+		dinfo("daemon: %v", err)
 		return 1
 	}
 
@@ -46,7 +52,7 @@ func daemonMain(_ []string) int {
 	tunnels := map[string]*tunnel.Transport{}
 	reconcileOnce(ct, tunnels)
 	daemonReady(true)
-	info("daemon: global datapath up (multicluster), %d cluster(s)", len(tunnels))
+	dinfo("daemon: global datapath up (multicluster), %d cluster(s)", len(tunnels))
 
 	stop := make(chan struct{})
 	go reconcileLoop(ct, tunnels, stop)
@@ -61,7 +67,7 @@ func daemonMain(_ []string) int {
 	dp.Stop() // idempotent
 	closeAll(ct, tunnels)
 	tun.ClearDNSBackup(globalKey)
-	info("daemon: global datapath down")
+	dinfo("daemon: global datapath down")
 	return 0
 }
 

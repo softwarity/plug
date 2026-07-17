@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestResolvSnapshotRoundTrip covers the /etc/resolv.conf override's crash net: a
@@ -89,5 +90,40 @@ func TestDNSBackupRoundTrip(t *testing.T) {
 	k2, r2, err := loadDNSBackup(path2)
 	if err != nil || k2 != key || r2 != "" {
 		t.Fatalf("empty round-trip: key=%q restore=%q err=%v", k2, r2, err)
+	}
+}
+
+// TestFlushGate covers the DNS-flush debounce: the first effective divergence
+// flushes immediately, a storm inside the window collapses into one deferred
+// flush, and a quiet gate never fires. The live symptom this guards against — a
+// configd event loop restarting mDNSResponder all day — can't run in CI.
+func TestFlushGate(t *testing.T) {
+	t0 := time.Now()
+	g := flushGate{window: 30 * time.Second}
+
+	if g.due(t0) {
+		t.Fatal("no request yet — nothing due")
+	}
+	g.request()
+	if !g.due(t0) {
+		t.Fatal("first request after a quiet period must fire immediately")
+	}
+	if g.due(t0) {
+		t.Fatal("released — nothing pending anymore")
+	}
+
+	// A storm inside the window: requests accumulate, nothing fires...
+	for i := 1; i <= 5; i++ {
+		g.request()
+		if g.due(t0.Add(time.Duration(i) * time.Second)) {
+			t.Fatalf("request at +%ds fired inside the 30s window", i)
+		}
+	}
+	// ...until the window passes — then exactly ONE deferred flush.
+	if !g.due(t0.Add(31 * time.Second)) {
+		t.Fatal("pending flush must fire once the window passed")
+	}
+	if g.due(t0.Add(32 * time.Second)) {
+		t.Fatal("storm must collapse into a single flush")
 	}
 }
