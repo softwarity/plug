@@ -50,22 +50,25 @@ Service keeps its **ClusterIP** through park and restore, so cached DNS stays
 valid and *new* connections reach your session immediately — but the pods keep
 running (only the name is rerouted): a parked k8s workload still consumes
 queues, and a caller holding a pre-switch **keep-alive connection** keeps
-reaching the old pod until it closes or idles out. Proven in CI on Compose and
-**Kubernetes** (park → traffic lands locally → restore, on all three OSes) and
-on the bench for Swarm (scale 0 → back to 2 replicas) including agent-crash
-recovery.
+reaching the old pod until it closes or idles out. Proven in CI on **all three
+backends** (park → traffic lands locally → restore, on all three OSes) — on
+Swarm including the scale-back to the *original* count (the CI target runs 2
+replicas); agent-crash recovery bench-proven.
 
-### CI: the whole e2e chain now also runs against Kubernetes
+### CI: the whole e2e chain now runs against Kubernetes and Swarm too
 
-Every push replays the full mesh e2e on **two cluster families**: the compose
-cluster, and a **kind** cluster (upstream Kubernetes) serving the same services
-under the same names. The agent is applied from the **published**
-`deploy/plug-k8s.yaml` — RBAC included, only the image swapped — so each push
-blesses the exact manifest users deploy: dynamic `-s` Services through the
-Services-only role, the takeover repoint/restore, NodePort reach, the 4×8
-protocol grid, multicluster, outage, gateway callback and collision, natively
-from Linux, macOS and Windows. The image publishes only when all six legs are
-green.
+Every push replays the full mesh e2e on **three cluster families**: the compose
+cluster, a **kind** cluster (upstream Kubernetes), and a **single-node Swarm** —
+same services, same names on each. On Kubernetes the agent is applied from the
+**published** `deploy/plug-k8s.yaml` — RBAC included, only the image swapped —
+so each push blesses the exact manifest users deploy: dynamic `-s` Services
+through the Services-only role, the takeover repoint/restore, NodePort reach.
+On Swarm the agent runs as a real **Swarm service on a non-attachable overlay**
+(the prod shape): `-s` provisions its name as a Swarm-service signpost there,
+and the takeover scales the deployed service to 0 and back. The 4×8 protocol
+grid, multicluster, outage, gateway callback and collision run against every
+family, natively from Linux, macOS and Windows. The image publishes only when
+all nine legs are green.
 
 ---
 
