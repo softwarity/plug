@@ -141,15 +141,19 @@ spec:
           image: rabbitmq:4
           ports: [{ containerPort: 5672 }]
           # user/vhost/queue pre-loaded from definitions.json (ConfigMap created
-          # by k8s-serve.sh from e2e/services/rabbitmq/ — same files as compose);
-          # ready only once the plug-e2e queue actually exists.
+          # by k8s-serve.sh from e2e/services/rabbitmq/ — same files as compose).
+          # NO exec probe here, unlike the compose healthcheck: a k8s exec probe
+          # runs as root, and an early `rabbitmqctl` writes a root-owned
+          # .erlang.cookie before the entrypoint lays down its own — the server
+          # (uid rabbitmq) then crash-loops on eacces (bench-reproduced). A TCP
+          # probe is enough: with load_definitions the AMQP listener only opens
+          # AFTER the import, and the amqp matrix cell asserts the queue anyway.
           volumeMounts:
             - { name: config, mountPath: /etc/rabbitmq/rabbitmq.conf, subPath: rabbitmq.conf }
             - { name: config, mountPath: /etc/rabbitmq/definitions.json, subPath: definitions.json }
           readinessProbe:
-            exec: { command: ["sh", "-c", "rabbitmqctl -q list_queues name 2>/dev/null | grep -q plug-e2e"] }
+            tcpSocket: { port: 5672 }
             periodSeconds: 3
-            timeoutSeconds: 10
             failureThreshold: 40
       volumes:
         - name: config

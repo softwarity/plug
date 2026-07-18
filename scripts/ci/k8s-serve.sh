@@ -57,8 +57,26 @@ PLUG_CLUSTER_IDENT="${PLUG_CLUSTER_IDENT:-solo}" \
   envsubst '$PLUG_CLUSTER_IDENT' < k8s.cluster.yaml | kubectl apply -f -
 
 echo "=== wait for every deployment ==="
-kubectl wait --for=condition=Available --timeout=300s deployment --all
+# One rollout status per deployment — NOT `kubectl wait --all`, which checks
+# sequentially: one stuck deployment eats the whole timeout and the rest get
+# reported "timed out" unchecked (that red herring cost a run). On failure,
+# dump what actually happened before dying — the runner (and the cluster's
+# state) is gone right after.
+failed=""
+for d in $(kubectl get deploy -o name); do
+  kubectl rollout status --timeout=180s "$d" || failed="$failed $d"
+done
 kubectl get deploy,svc -o wide
+if [ -n "$failed" ]; then
+  echo "=== NOT READY:$failed — diagnostic dump ===" >&2
+  kubectl get pods -o wide >&2
+  for p in $(kubectl get pods --field-selector=status.phase!=Running -o name; \
+             kubectl get pods -o json | jq -r '.items[] | select([.status.containerStatuses[]? | .ready] | all | not) | "pod/\(.metadata.name)"'); do
+    echo "--- describe $p ---" >&2; kubectl describe "$p" | tail -25 >&2
+    echo "--- logs $p ---" >&2; kubectl logs "$p" --tail=30 >&2 || true
+  done
+  exit 1
+fi
 
 echo "=== cluster up — serving for ${ttl}s (or until this run is cancelled) ==="
 sleep "$ttl"

@@ -65,6 +65,10 @@ jobs:
           hostname: plug-k8s-${{ inputs.corr }}
       - name: Serve the cluster (idle until cancelled)
         env:
-          PLUG_CLUSTER_TTL: "1200" # backstop only — kill-cluster cancels this run when the e2e jobs finish
+          # Backstop only — kill-cluster cancels this run when the e2e jobs
+          # finish. Longer than compose's: the TTL starts after the kind
+          # rollout, which lands ~2-3 min later, and the legs still need their
+          # full chain after that.
+          PLUG_CLUSTER_TTL: "2100"
           PLUG_CLUSTER_IDENT: ${{ inputs.corr }}
         run: bash scripts/ci/k8s-serve.sh

@@ -298,7 +298,7 @@ jobs:
     name: e2e-k8s (${{ matrix.os }}, same chain on kind)
     needs: start-cluster
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25 # a hung cell must not run the job (and the cluster) for hours
+    timeout-minutes: 30 # compose's 25 + the extra wait for the kind rollout — a hung cell must still not run the cluster for hours
     env:
       A: plug-k8s-${{ github.run_id }}-ka
       B: plug-k8s-${{ github.run_id }}-kb
