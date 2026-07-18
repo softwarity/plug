@@ -139,15 +139,11 @@ func attachExposes(cfg *config, raw []string) {
 
 // stripLeadingExposes pops the -s/--serve pairs a launcher left at the head of
 // the core's argv (see launcherRun) and parses them — an old launcher forwards
-// them there without understanding them. A --takeover is consumed and ignored:
-// it was the 2.1 pre-release opt-in and is the default now (a 2.1-era launcher
-// may still prefix it).
+// them there without understanding them.
 func stripLeadingExposes(args []string) ([]tunnel.ExposeSpec, []string, error) {
 	var specs []tunnel.ExposeSpec
 	for {
 		switch {
-		case len(args) >= 1 && args[0] == "--takeover":
-			args = args[1:]
 		case len(args) >= 2 && (args[0] == "-s" || args[0] == "--serve"):
 			spec, err := parseExpose(args[1])
 			if err != nil {
@@ -776,9 +772,6 @@ func parseArgs(args []string) (options, []string) {
 			o.port = flagValue(args, &i)
 		case "-s", "--serve":
 			o.exposes = append(o.exposes, flagValue(args, &i))
-		case "--takeover":
-			// The 2.1 pre-release opt-in — taking over is the default now.
-			// Accepted as a no-op so a week-old script keeps working.
 		default:
 			return o, args[i:]
 		}

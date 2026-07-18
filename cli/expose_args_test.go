@@ -63,22 +63,11 @@ func TestStripLeadingExposes(t *testing.T) {
 		t.Fatalf("rest = %v", rest)
 	}
 
-	// A 2.1-era launcher may still prefix --takeover (the pre-release opt-in,
-	// the default now): it is consumed as a no-op, in any order around -s —
-	// it must never leak into the command.
-	specs, rest, err = stripLeadingExposes([]string{"--takeover", "-s", "a:1:2", "npm", "start"})
-	if err != nil || len(specs) != 1 || !reflect.DeepEqual(rest, []string{"npm", "start"}) {
-		t.Fatalf("specs = %+v rest = %v err = %v", specs, rest, err)
-	}
-	specs, rest, err = stripLeadingExposes([]string{"-s", "a:1:2", "--takeover", "npm", "start"})
-	if err != nil || len(specs) != 1 || !reflect.DeepEqual(rest, []string{"npm", "start"}) {
-		t.Fatalf("specs = %+v rest = %v err = %v", specs, rest, err)
-	}
-
-	// No -s at the head: everything is the command (the normal case) — a
-	// --takeover INSIDE the command belongs to the command.
-	specs, rest, err = stripLeadingExposes([]string{"npm", "start", "-s", "--takeover"})
-	if err != nil || specs != nil || !reflect.DeepEqual(rest, []string{"npm", "start", "-s", "--takeover"}) {
+	// No -s at the head: everything is the command (the normal case). An
+	// unknown flag — --takeover was one, briefly, pre-release — is NOT
+	// consumed: it heads the command and fails loud at exec, never silently.
+	specs, rest, err = stripLeadingExposes([]string{"--takeover", "npm", "start"})
+	if err != nil || specs != nil || !reflect.DeepEqual(rest, []string{"--takeover", "npm", "start"}) {
 		t.Fatalf("specs = %v rest = %v err = %v", specs, rest, err)
 	}
 
