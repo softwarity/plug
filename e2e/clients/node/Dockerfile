@@ -17,4 +17,4 @@ COPY clients/node/client.js clients/node/health.proto ./
 COPY --from=agentimg /opt/plug/bin/plug-linux-${TARGETARCH} /usr/local/bin/plug
 RUN chmod +x /usr/local/bin/plug
 # PLUG_ROOT=1 → run under the TUN root mode (needs cap NET_ADMIN + /dev/net/tun).
-ENTRYPOINT ["plug", "-H", "agent", "--port", "22", "node", "/app/client.js"]
+ENTRYPOINT ["plug", "-H", "agent", "--port", "22", "-s", "e2e-node:18075:9", "node", "/app/client.js"]

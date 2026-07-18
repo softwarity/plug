@@ -2,6 +2,14 @@
 
 ## NEXT RELEASE
 
+### Fixed: UDP to a named service is now dropped loudly
+
+plug tunnels TCP only (the SSH channel is stream-only) — a named UDP flow was
+silently discarded, leaving the app hanging with no diagnostic at all. The
+session log now names it once per target:
+`udp <name>:<port> dropped — plug tunnels TCP only (repeats hidden 30s)`.
+DNS keeps being served in-stack as before; this is about every other UDP flow.
+
 ---
 
 ## 2.1.0

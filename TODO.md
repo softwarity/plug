@@ -1,6 +1,7 @@
 # plug — TODO / plan de travail
 
-_État : 17 juillet 2026 — post-2.0.0, takeover implémenté (→ 2.1.0)._
+_État : 18 juillet 2026 — **2.1.0 publiée** (takeover par défaut, 3 familles de
+clusters en CI, fix DNS macOS)._
 
 **Contexte.** La **2.0.0** est publiée. Elle apporte le **sens retour** : `plug -s
 name:cluster-port:local-port` publie ton process dans le cluster sous un nom
@@ -33,11 +34,11 @@ Comportements **prouvés au runtime en local**, pas encore rejoués en CI :
 - [ ] **Windows sous VPN d'entreprise** : non prouvé (macOS OK avec GlobalProtect).
 - [ ] **Sessions longues & charge** : heures, gros transferts, nombreuses connexions, sleep/wake — non exercés.
 
-## 🟣 UDP par nom (relais de datagrammes) — 2.1.0
+## 🟣 UDP par nom (relais de datagrammes) — futur (feature, sur décision)
 Le tunnel ne porte que du TCP (SSH `direct-tcpip` = stream-only). Le client capte
 **déjà** l'UDP (protocole enregistré, `gonet.NewUDPConn` utilisé pour le DNS) et
-le **droppe** hors DNS (`cli/internal/tun/netstack.go:170-171`). Plan :
-- [ ] **Drop-loud d'abord** (petit fix, tout de suite) : logguer (rate-limité) « udp `<name>:<port>` non tunnelé » au lieu de jeter en silence — fin du hang sans diagnostic (flaggé MAJEUR dans `audit.md`).
+le droppait en silence hors DNS. Plan :
+- [x] **Drop-loud** (18/07) : un flux UDP vers un nom minté loggue « udp `<name>:<port>` dropped — plug tunnels TCP only » (rate-limité 30 s, `udpDropLimiter`) — fin du hang sans diagnostic (flaggé MAJEUR dans `audit.md`).
 - [ ] **Client** : remplacer le drop par un forwarder UDP — `tab.lookup` → nom, `df(srcPort)` → cluster (réutilise l'attribution TCP), ouvrir un canal vers l'agent, **framing longueur-préfixée** des datagrammes.
 - [ ] **Agent** : sous-commande `plug-agent udp-relay <name> <port>` (invoquée en session SSH comme `serve-name`) → résout via le resolver cluster, `net.DialUDP`, relaie les datagrammes framés dans les deux sens.
 - [ ] **Cycle de vie** : flux synthétique par `(srcport, dst)` + **idle-timeout** pour reaper canal + relais (UDP sans-connexion).
@@ -54,18 +55,6 @@ toute façon).
 - [ ] **Transport `kubectl exec`** : tunnel via `kubectl exec` sur un pod nu — zéro port exposé, accès gouverné par le kubeconfig RBAC (adoucit le compromis no-auth).
 - [ ] **Gateway hôte du tunnel** : la gateway (Java) déjà déployée héberge l'endpoint et l'active dynamiquement — son auth devant. Fin de l'agent dédié.
 
-## 🔴 macOS : re-assert DNS trop agressif (churn mDNSResponder) — 2.1.x
-Diagnostiqué en live (17/07) : `locationd` fait scanner le Wi-Fi en continu →
-ré-évaluation auto-join → **DHCP re-publish ~2/min** → configd re-dérive
-`State:/Network/Service/<en0>/DNS` (écrase l'override) → le watchdog plug
-(`route_darwin.go:159-191`, tick 3 s) ré-écrit **+ `flushcache` + `HUP
-mDNSResponder`** à chaque fois (~4 400 re-asserts/24 h en rafales) → la pile de
-résolution redémarre sans arrêt → **échecs getaddrinfo intermittents**
-(`Could not resolve host: github.com`…) pour TOUTE la machine.
-- [ ] **Re-assert silencieux** : si `Global`+`Setup` pointent encore `dnsIP` (ce que mDNSResponder consomme), ré-écrire la clé Service SANS `flushDNS()` — le flush+HUP n'est justifié que si la config effective a réellement divergé.
-- [ ] **Débounce** : max 1 flush/HUP par 30 s, même en rafale d'événements configd.
-- [ ] **Timestamper** les lignes du daemon.log (le diagnostic a buté sur des re-asserts non datés).
-
 ## 🟠 Fuite DNS Docker-Desktop-sur-poste-plugué (diagnostiquée 18/07, live sur neo)
 Docker forwarde les noms inconnus du cluster vers le resolver de la VM → hérite
 du DNS du Mac → **resolver plug** quand des sessions tournent → un nom ABSENT du
@@ -78,7 +67,7 @@ cluster résout vers une fake IP `198.18.x.x` (vu : la gateway neo sur
 - [ ] **Tests unitaires** (comportements déjà prouvés en e2e, faible priorité) : `answerDNS` strip `.plug` → mint du nom nu ; round-trip registre NRPT (`setSystemNRPT` / `clearSystemNRPT`) ; `DialContext` — un rejet de canal (`*ssh.OpenChannelError`) ne reconnecte pas ; `ensureVersion` (`.exe`) / `ensureWintunBeside`.
 - [ ] **Factoriser** `registry_windows` / `graft_windows` avec les `_darwin` (dupliqués volontairement le temps de valider Windows — à unifier maintenant).
 - [ ] **Version service vs launcher** : rafraîchir le binaire du service au bump (ou auto).
-- [ ] Retirer les directives compose obsolètes (`PLUG_HOOK_DEBUG`, `seccomp:unconfined`, `SYS_PTRACE`) si encore présentes.
+- [x] Retirer les directives compose obsolètes (18/07) : `PLUG_HOOK_DEBUG`, `seccomp:unconfined`, `SYS_PTRACE` retirées des 4 clients e2e (aucun usage dans le code ; `apparmor:unconfined` reste — le bind mount-ns en a besoin sur les hosts AppArmor).
 - [ ] Nettoyage post-2.0.0 : tag Docker Hub `plug-bidi` (branche de dev) à supprimer.
 
 ---
@@ -86,6 +75,7 @@ cluster résout vers une fake IP `198.18.x.x` (vu : la gateway neo sur
 ## ✅ Acquis
 
 ### Post-2.0.0 → 2.1.0 (17-18 juillet 2026)
+- [x] **Fix macOS re-assert DNS** (17/07, livré en 2.1.0) : le churn mDNSResponder (locationd → DHCP re-publish ~2/min → configd écrase l'override → re-assert + flush + HUP en boucle → échecs getaddrinfo machine-wide) est corrigé — **re-assert silencieux** quand la config effective pointe encore plug, **débounce** max 1 flush/HUP par 30 s (`flushGate`), lignes du daemon.log **timestampées**.
 - [x] **Famille Swarm en CI** (18/07) : `swarm-for.yml`, troisième famille sur le même moule — swarm mono-nœud sur le runner, stack dédiée `e2e/swarm.cluster.yml` (configs Swarm pour rabbitmq/mosquitto, mêmes noms/ports). Prouve ce que seul le banc couvrait : l'agent en **service Swarm sur overlay non-attachable** (défaut stack), `-s` provisionne le nom en **service-signpost** sur cet overlay, takeover scale-0 → **retour au replica count d'origine** (tko à 2 replicas → restore-to-N asserté). Banc M5 sur le Swarm existant (stack throwaway) avant push ; CI verte ×3 OS du premier coup. Piège évité : backreference `\1` en ERE non portable (ugrep la refuse) → awk.
 - [x] **Famille k8s en CI** (18/07) : toute la chaîne e2e rejouée contre un cluster **kind** (Kubernetes upstream) — `k8s-for.yml` jumeau de `compose-for.yml` (ex-`cluster.yml`), mêmes noms/ports (`e2e/k8s.cluster.yaml`), agent déployé depuis le **manifeste publié** `deploy/plug-k8s.yaml` (RBAC compris, seule l'image changée) → chaque push bénit le fichier que les users déploient. NodePorts mappés sur le runner (`kind-config.yaml`) → contrat `host:2222`/`:18090` inchangé pour les jambes. **Prouvé au runtime** (banc M5 kind, puis CI ×3 OS) : `-s` crée/détruit le Service via le RBAC réel, takeover repointe le selector (reçu-annotation, restore, **ClusterIP identique** à travers park/restore). Deux leçons au passage : probe exec k8s tourne en **root** → race du cookie Erlang rabbitmq (probe tcp à la place) ; le **keep-alive** d'un caller pré-bascule continue d'atteindre l'ancien pod (pods parqués vivants) → prober sans keep-alive + caveat documenté page Kubernetes.
 - [x] **Takeover par défaut** : un nom `-s` tenu par le service déployé est **parqué** pour la session et **restauré** à la fin — conteneurs stoppés (Compose, **e2e CI**), service Swarm scalé 0 → replica count d'origine (**banc M5**), Service k8s re-pointé via annotation-reçu (codé). Reçu de parking sur le signpost → restore par unserve / **boot-gc** (crash agent) / **re-park au reconnect** (banc M5 ✅). Signpost créé AVANT le park (pas de trou DNS — fuite upstream prouvée au banc). D'abord opt-in `--takeover`, puis **défaut** (lancer `plug -s` est déjà l'intention ; flag accepté en no-op) ; un nom tenu par une **autre session** reste refusé ; vieil agent 2.0.x → fallback auto sur son comportement (refus + hint upgrade) ; RBAC k8s +update/patch ; cellules e2e `takeover` + `collision` (inter-sessions) ×3 OS, noms/ports par jambe.

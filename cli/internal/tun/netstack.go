@@ -54,6 +54,12 @@ var connLimiter = newLogLimiter(10 * time.Minute)
 // 300MB daemon.log). First failure logs; repeats stay quiet for the window.
 var dialErrLimiter = newLogLimiter(30 * time.Second)
 
+// udpDropLimiter throttles the "udp dropped" line: plug carries TCP only (SSH
+// direct-tcpip is stream-only), so a named UDP flow goes nowhere — but the old
+// silent drop left the app hanging with no diagnostic at all. First sight of a
+// target names the drop; a chatty client stays quiet for the window.
+var udpDropLimiter = newLogLimiter(30 * time.Second)
+
 type logLimiter struct {
 	mu     sync.Mutex
 	last   map[string]time.Time
@@ -168,7 +174,8 @@ func handleTCP(r *tcp.ForwarderRequest, tab *faketab, df dialFunc, log logfn) {
 // destination (dnsIP), connects it to the source, and re-injects the query — so
 // Read yields the question and Write replies to the client. Any UDP flow that is
 // NOT our resolver is drained and dropped (CreateEndpoint+Close, so the cloned
-// packet is released): plug serves only DNS in-stack.
+// packet is released) — LOUDLY when it targeted a minted name: plug serves only
+// DNS in-stack, and the app deserves to know why nothing answers.
 func handleDNS(r *udp.ForwarderRequest, tab *faketab, upstream *net.Resolver, log logfn) {
 	var wq waiter.Queue
 	ep, terr := r.CreateEndpoint(&wq)
@@ -176,7 +183,10 @@ func handleDNS(r *udp.ForwarderRequest, tab *faketab, upstream *net.Resolver, lo
 		return
 	}
 	id := r.ID()
-	if addrToU32(id.LocalAddress) != tab.dnsIP() || id.LocalPort != 53 {
+	if fake := addrToU32(id.LocalAddress); fake != tab.dnsIP() || id.LocalPort != 53 {
+		if name, ok := tab.lookup(fake); ok && udpDropLimiter.allow(name) {
+			log.f("tun: udp %s:%d dropped — plug tunnels TCP only (repeats hidden 30s)", name, id.LocalPort)
+		}
 		ep.Close()
 		return
 	}

@@ -10,6 +10,11 @@ services:
   agent:
     image: softwarity/plug:e2e
     networks: [edge, internal]
+    # -s is mandatory since 2.0.0 and the clients' entrypoints pass one — the
+    # sock lets the agent provision those names dynamically (same requirement
+    # as every real deployment; without it -s needs a pre-declared alias).
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
 
   # ---- cluster services (started selectively per protocol) ----
   httpbin:
@@ -82,33 +87,29 @@ services:
   client-go:
     build: { context: ., dockerfile: clients/go/Dockerfile }
     networks: [edge]
-    environment: { PLUG_HOOK_DEBUG: "1" }
-    security_opt: [seccomp:unconfined, apparmor:unconfined] # apparmor: allow the mount-ns bind (host AppArmor blocks it otherwise)
-    cap_add: [SYS_PTRACE, NET_ADMIN, SYS_ADMIN] # NET_ADMIN: TUN device+routes; SYS_ADMIN: per-launch mount ns
+    security_opt: [apparmor:unconfined] # allow the mount-ns bind (host AppArmor blocks it otherwise)
+    cap_add: [NET_ADMIN, SYS_ADMIN] # NET_ADMIN: TUN device+routes; SYS_ADMIN: per-launch mount ns
     devices: ["/dev/net/tun:/dev/net/tun"] # the TUN char device plug opens in root mode
 
   client-node:
     build: { context: ., dockerfile: clients/node/Dockerfile }
     networks: [edge]
-    environment: { PLUG_HOOK_DEBUG: "1" }
-    security_opt: [seccomp:unconfined, apparmor:unconfined] # apparmor: allow the mount-ns bind (host AppArmor blocks it otherwise)
-    cap_add: [SYS_PTRACE, NET_ADMIN, SYS_ADMIN] # NET_ADMIN: TUN device+routes; SYS_ADMIN: per-launch mount ns
+    security_opt: [apparmor:unconfined] # allow the mount-ns bind (host AppArmor blocks it otherwise)
+    cap_add: [NET_ADMIN, SYS_ADMIN] # NET_ADMIN: TUN device+routes; SYS_ADMIN: per-launch mount ns
     devices: ["/dev/net/tun:/dev/net/tun"]
 
   client-python:
     build: { context: ., dockerfile: clients/python/Dockerfile }
     networks: [edge]
-    environment: { PLUG_HOOK_DEBUG: "1" }
-    security_opt: [seccomp:unconfined, apparmor:unconfined] # apparmor: allow the mount-ns bind (host AppArmor blocks it otherwise)
-    cap_add: [SYS_PTRACE, NET_ADMIN, SYS_ADMIN] # NET_ADMIN: TUN device+routes; SYS_ADMIN: per-launch mount ns
+    security_opt: [apparmor:unconfined] # allow the mount-ns bind (host AppArmor blocks it otherwise)
+    cap_add: [NET_ADMIN, SYS_ADMIN] # NET_ADMIN: TUN device+routes; SYS_ADMIN: per-launch mount ns
     devices: ["/dev/net/tun:/dev/net/tun"]
 
   client-java:
     build: { context: ., dockerfile: clients/java/Dockerfile }
     networks: [edge]
-    environment: { PLUG_HOOK_DEBUG: "1" }
-    security_opt: [seccomp:unconfined, apparmor:unconfined] # apparmor: allow the mount-ns bind (host AppArmor blocks it otherwise)
-    cap_add: [SYS_PTRACE, NET_ADMIN, SYS_ADMIN] # NET_ADMIN: TUN device+routes; SYS_ADMIN: per-launch mount ns
+    security_opt: [apparmor:unconfined] # allow the mount-ns bind (host AppArmor blocks it otherwise)
+    cap_add: [NET_ADMIN, SYS_ADMIN] # NET_ADMIN: TUN device+routes; SYS_ADMIN: per-launch mount ns
     devices: ["/dev/net/tun:/dev/net/tun"]
 
 networks:

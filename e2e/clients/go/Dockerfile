@@ -20,4 +20,4 @@ COPY --from=agentimg /opt/plug/bin/plug-linux-${TARGETARCH} /usr/local/bin/plug
 COPY --from=build /eclient /usr/local/bin/eclient
 RUN chmod +x /usr/local/bin/plug /usr/local/bin/eclient
 # PLUG_ROOT=1 → run under the kernel-redirect root mode (needs cap NET_ADMIN).
-ENTRYPOINT ["plug", "-H", "agent", "--port", "22", "/usr/local/bin/eclient"]
+ENTRYPOINT ["plug", "-H", "agent", "--port", "22", "-s", "e2e-go:18074:9", "/usr/local/bin/eclient"]
