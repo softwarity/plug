@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.1.0
+
 ### Fixed: macOS — the DNS watchdog no longer restarts the resolver on every configd event
 
 The daemon re-asserts its system-DNS override whenever macOS recomposes the
