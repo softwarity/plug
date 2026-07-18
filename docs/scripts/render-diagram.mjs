@@ -1,8 +1,10 @@
 // Renders the animated About diagram (SMIL SVG) into video-ready frames, by
 // SEEKING the animation frame by frame (svg.setCurrentTime) — deterministic,
-// not a screen capture. Meant to run inside the official Playwright image, with
-// ffmpeg assembling the result in a second throwaway container — nothing is
-// installed on the host:
+// not a screen capture. The deploy-doc workflow runs it on every Pages deploy
+// and publishes the results under /plug/media/ (mp4, gif, hero png) — the
+// media are never committed. To run it locally without installing anything,
+// use the official Playwright image, with ffmpeg in a second throwaway
+// container:
 //
 //   cd docs
 //   docker run --rm -v "$PWD:/work" -w /work mcr.microsoft.com/playwright:v1.61.1-noble \

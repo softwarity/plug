@@ -52,6 +52,24 @@ jobs:
         working-directory: docs
         run: npm run build -- --base-href /plug/
 
+      # The social media kit (mp4 / gif / hero png) is DERIVED from the animated
+      # SVG — rendered here and served by Pages under /plug/media/, never
+      # committed (binaries would bloat the git history on every re-render).
+      # The runner ships ffmpeg; Playwright seeks the SMIL loop frame by frame.
+      - name: Render the diagram media
+        working-directory: docs
+        run: |
+          npm i --no-save playwright
+          npx playwright install --with-deps chromium
+          node scripts/render-diagram.mjs
+          mkdir -p dist/doc-site/browser/media
+          ffmpeg -y -framerate 15 -i .frames/f%03d.png -c:v libx264 -pix_fmt yuv420p -crf 20 \
+            -movflags +faststart dist/doc-site/browser/media/about-diagram.mp4
+          ffmpeg -y -framerate 15 -i .frames/f%03d.png \
+            -vf "fps=12,scale=800:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4" \
+            dist/doc-site/browser/media/about-diagram.gif
+          cp .frames/f180.png dist/doc-site/browser/media/about-diagram-hero.png
+
       - name: Setup Pages
         uses: actions/configure-pages@v6
 
