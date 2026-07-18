@@ -3,8 +3,6 @@
 package tun
 
 import (
-	"crypto/sha1"
-	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -13,12 +11,6 @@ import (
 )
 
 var graftDir = "/var/run/plug" // overridable in tests
-
-// ClusterHash is the short, filesystem-safe id for a cluster key (host:port).
-func ClusterHash(key string) string {
-	sum := sha1.Sum([]byte(key))
-	return hex.EncodeToString(sum[:8])
-}
 
 // lockPath is the per-cluster leader lock file.
 func lockPath(key string) string { return filepath.Join(graftDir, ClusterHash(key)+".lock") }

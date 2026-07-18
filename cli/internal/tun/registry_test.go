@@ -1,10 +1,11 @@
-//go:build darwin
+//go:build darwin || windows
 
 package tun
 
 import (
 	"os"
 	"os/exec"
+	"runtime"
 	"testing"
 )
 
@@ -35,36 +36,36 @@ func TestRegistryLiveClients(t *testing.T) {
 	}
 }
 
-func TestDaemonAlive(t *testing.T) {
+func TestRegistryClusterForPID(t *testing.T) {
 	old := graftDir
 	graftDir = t.TempDir()
 	defer func() { graftDir = old }()
 
-	const key = "host-b:2222"
-	if DaemonAlive(key) {
-		t.Fatal("no daemon yet → DaemonAlive must be false")
+	const key = "host-c:2222"
+	un := RegisterClient(key, os.Getpid())
+	defer un()
+	got, ok := clusterForPID(os.Getpid())
+	if !ok || got != key {
+		t.Fatalf("clusterForPID = %q,%v — want %q,true", got, ok, key)
 	}
-	leader, release, _ := AcquireCluster(key)
-	if !leader {
-		t.Fatal("first AcquireCluster should lead")
-	}
-	defer release()
-	if !DaemonAlive(key) {
-		t.Fatal("the lock is held → DaemonAlive must be true")
-	}
-	if pid := DaemonPID(key); pid != os.Getpid() {
-		t.Fatalf("DaemonPID = %d, want this process %d", pid, os.Getpid())
+	if _, ok := clusterForPID(1); ok {
+		t.Fatal("an unregistered PID must not map to a cluster")
 	}
 }
 
 // spawnAndKill starts a process, kills and reaps it, and returns its now-dead PID.
 func spawnAndKill(t *testing.T) int {
-	c := exec.Command("sleep", "30")
+	var c *exec.Cmd
+	if runtime.GOOS == "windows" {
+		c = exec.Command("ping", "-n", "30", "127.0.0.1")
+	} else {
+		c = exec.Command("sleep", "30")
+	}
 	if err := c.Start(); err != nil {
 		t.Fatalf("spawn: %v", err)
 	}
 	pid := c.Process.Pid
 	_ = c.Process.Kill()
-	_, _ = c.Process.Wait() // reap the zombie so kill(pid,0) reports ESRCH
+	_, _ = c.Process.Wait() // reap so liveness reports dead, not zombie
 	return pid
 }

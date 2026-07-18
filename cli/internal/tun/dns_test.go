@@ -1,6 +1,7 @@
 package tun
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"strings"
@@ -115,5 +116,24 @@ func TestAnswerAAAAIsNodata(t *testing.T) {
 	resp := answerDNS(query("grpc", 28), newFaketab(fakeBase), upstreamResolver(nil), nil)
 	if _, ok := answerIPv4(resp); ok {
 		t.Fatal("AAAA must be NODATA (no answer) to force IPv4")
+	}
+}
+
+// The Windows search-suffix path must land on the SAME fake as the bare name:
+// getaddrinfo asks for "svc.plug" (suffix appended so a real DNS query fires),
+// answerDNS strips it, and the connect must map back to "svc" for the agent.
+func TestAnswerDNSStripsSearchSuffix(t *testing.T) {
+	tab := newFaketab(fakeBase)
+	bare := answerDNS(query("svc", 1), tab, upstreamResolver(nil), nil)
+	suffixed := answerDNS(query("svc."+searchSuffix, 1), tab, upstreamResolver(nil), nil)
+	if bare == nil || suffixed == nil {
+		t.Fatal("nil response")
+	}
+	if !bytes.Equal(bare[len(bare)-4:], suffixed[len(suffixed)-4:]) {
+		t.Fatalf("suffixed name minted a DIFFERENT fake: %v vs %v",
+			bare[len(bare)-4:], suffixed[len(suffixed)-4:])
+	}
+	if name, ok := tab.lookup(fakeBase | 1); !ok || name != "svc" {
+		t.Fatalf("faketab must map back to the BARE name, got %q,%v", name, ok)
 	}
 }

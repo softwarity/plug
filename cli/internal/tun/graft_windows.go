@@ -3,8 +3,6 @@
 package tun
 
 import (
-	"crypto/sha1"
-	"encoding/hex"
 	"os"
 	"path/filepath"
 
@@ -28,12 +26,6 @@ var graftDir = func() string {
 	}
 	return `C:\ProgramData\plug`
 }()
-
-// ClusterHash is the short, filesystem-safe id for a cluster key (host:port).
-func ClusterHash(key string) string {
-	sum := sha1.Sum([]byte(key))
-	return hex.EncodeToString(sum[:8])
-}
 
 // readyPath marks that the service holds a LIVE tunnel for this cluster.
 func readyPath(key string) string { return filepath.Join(graftDir, ClusterHash(key)+".ready") }
