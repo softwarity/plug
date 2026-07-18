@@ -22,6 +22,8 @@ Prefix any command with `plug` and it joins the cluster by name — Node, the
 JVM, Python, Go, curl, gRPC, database drivers, anything. Stop the command and
 your machine is exactly as it was.
 
+[![How plug works, animated: the cluster serves a request on its own, then the plug session parks the deployed service and your machine serves the same request](docs/src/assets/about-diagram.svg)](https://softwarity.github.io/plug/)
+
 ## What you get
 
 - Reach cluster services by their real names, from your laptop — no port-forwards
