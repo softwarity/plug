@@ -1,0 +1,160 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="900" height="511" viewBox="0 0 900 511" xmlns="http://www.w3.org/2000/svg" role="img" font-family="-apple-system, Segoe UI, Roboto, sans-serif">
+<title>plug: your process is a full member of the cluster, both directions</title>
+<desc>Animated request walk in two rounds. Round one, the cluster alone: the browser clicks GET data, the request reaches the gateway, the DNS resolves service1 to the deployed service, which queries postgres and responds to the browser, which renders DATA. Then plug -s starts: the deployed service1 is parked, and the same request now walks browser, gateway, DNS, plug agent, SSH tunnel, your local service1 — which queries postgres back through the agent and responds to the browser — DATA again, served from your machine this time. The loop ends with the service restored.</desc>
+<defs>
+  <marker id="ab-g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#3fb950" /></marker>
+  <marker id="ab-p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#a371f7" /></marker>
+  <marker id="ab-b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#58a6ff" /></marker>
+</defs>
+<rect x="2" y="2" width="896" height="507" rx="16" fill="#0d1117" stroke="#30363d" stroke-width="1.5" />
+
+<rect x="30" y="180" width="132" height="102" rx="10" fill="#161b22" stroke="#30363d" />
+<rect x="42" y="192" width="108" height="18" rx="4" fill="#21262d" />
+<circle cx="51" cy="201" r="2.3" fill="#484f58" /><circle cx="60" cy="201" r="2.3" fill="#484f58" /><circle cx="69" cy="201" r="2.3" fill="#484f58" />
+<text x="112" y="204.5" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="8" fill="#8b949e">app.acme.com</text>
+<rect x="42" y="214" width="108" height="50" fill="#0d1117" stroke="#30363d" />
+<rect x="58" y="222" width="76" height="16" rx="4" fill="#21262d" stroke="#30363d" />
+<text x="96" y="233" text-anchor="middle" font-size="8" fill="#c9d1d9">GET data</text>
+<text x="96" y="304" text-anchor="middle" font-size="12" fill="#8b949e">a browser, out there</text>
+
+<rect x="222" y="52" width="418" height="396" rx="12" fill="#0e141b" stroke="#30363d" />
+<text x="246" y="80" font-size="12" letter-spacing="2" fill="#8b949e" font-weight="700">THE CLUSTER</text>
+<rect x="248" y="104" width="104" height="50" rx="8" fill="#161b22" stroke="#30363d" />
+<text x="300" y="126" text-anchor="middle" font-size="12.5" fill="#e6edf3" font-weight="600">gateway</text>
+<text x="300" y="143" text-anchor="middle" font-size="9" fill="#6e7681">published :443</text>
+<rect x="248" y="192" width="132" height="54" rx="8" fill="#161b22" stroke="#30363d" />
+<text x="314" y="214" text-anchor="middle" font-size="12" fill="#e6edf3" font-weight="600">cluster DNS</text>
+
+<rect x="520" y="146" width="90" height="98" rx="8" fill="#161b22" stroke="#a371f7" stroke-width="1.4" />
+<text x="565" y="182" text-anchor="middle" font-size="12.5" fill="#e6edf3" font-weight="600">plug</text>
+<text x="565" y="199" text-anchor="middle" font-size="11" fill="#8b949e">agent</text>
+
+<ellipse cx="574" cy="308" rx="36" ry="10" fill="#161b22" stroke="#30363d" />
+<path d="M538 308 V352 a36 10 0 0 0 72 0 V308" fill="#161b22" stroke="#30363d" />
+<ellipse cx="574" cy="308" rx="36" ry="10" fill="#161b22" stroke="#30363d" />
+<text x="574" y="338" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="12.5" fill="#e6edf3" font-weight="600">postgres</text>
+
+<!-- service1 as DEPLOYED (live before the session, restored at the end). -->
+<g opacity="1">
+  <animate attributeName="opacity" values="1;1;0;0;1" keyTimes="0;0.42;0.46;0.96;1" dur="16s" repeatCount="indefinite" />
+  <rect x="478" y="390" width="132" height="40" rx="8" fill="#21262d" stroke="#30363d" />
+  <text x="544" y="408" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#e6edf3" font-weight="600">service1</text>
+  <text x="544" y="422" text-anchor="middle" font-size="8" fill="#8b949e">deployed in the stack</text>
+</g>
+<!-- service1 PARKED while the plug session lives. -->
+<g opacity="0">
+  <animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.42;0.46;0.96;1" dur="16s" repeatCount="indefinite" />
+  <g opacity="0.55">
+    <rect x="478" y="390" width="132" height="40" rx="8" fill="#161b22" stroke="#30363d" stroke-dasharray="4 3" />
+    <text x="544" y="408" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11.5" fill="#8b949e" font-weight="600">service1</text>
+    <text x="544" y="422" text-anchor="middle" font-size="8" fill="#6e7681">deployed · restored on exit</text>
+  </g>
+  <rect x="564" y="383" width="42" height="14" rx="7" fill="#0d1117" stroke="#d29922" stroke-width="0.8" />
+  <text x="585" y="393" text-anchor="middle" font-size="8.5" fill="#d29922">parked</text>
+</g>
+
+<!-- Your side: dimmed until the plug session starts. -->
+<g opacity="0.3">
+  <animate attributeName="opacity" values="0.3;0.3;1;1;0.3" keyTimes="0;0.42;0.46;0.96;1" dur="16s" repeatCount="indefinite" />
+  <rect x="640" y="146" width="86" height="98" rx="6" fill="#0d1117" stroke="#21262d" stroke-dasharray="3 3" />
+  <text x="683" y="140" text-anchor="middle" font-size="9" fill="#6e7681">SSH tunnel</text>
+  <rect x="726" y="118" width="152" height="164" rx="12" fill="#161b22" stroke="#30363d" />
+  <text x="742" y="140" font-size="11" letter-spacing="1.5" fill="#8b949e" font-weight="700">YOUR MACHINE</text>
+  <rect x="742" y="150" width="120" height="64" rx="8" fill="#21262d" stroke="#30363d" />
+  <text x="802" y="176" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="14" fill="#e6edf3" font-weight="600">service1</text>
+  <text x="802" y="196" text-anchor="middle" font-size="10" fill="#8b949e">npm run start:dev</text>
+  <text x="802" y="254" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="9.5" fill="#6e7681">plug -s service1:80:3000</text>
+  <rect x="502" y="100" width="386" height="190" rx="16" fill="none" stroke="#a371f7" stroke-width="1.3" stroke-dasharray="6 4" opacity="0.85" />
+  <rect x="502" y="90" width="48" height="20" rx="5" fill="#0d1117" stroke="#a371f7" />
+  <text x="526" y="104" text-anchor="middle" font-size="11" fill="#a371f7" font-weight="700">plug</text>
+</g>
+
+<!-- The request walk. Step 1 (both rounds): browser -> gateway. -->
+<g opacity="0">
+  <animate attributeName="opacity" values="0;0;1;1;0;0;1;1;0;0" keyTimes="0;0.03;0.042;0.36;0.40;0.48;0.492;0.90;0.94;1" dur="16s" repeatCount="indefinite" />
+  <rect x="58" y="222" width="76" height="16" rx="4" fill="none" stroke="#3fb950" stroke-width="1.6" />
+  <line x1="162" y1="226" x2="246" y2="150" stroke="#3fb950" stroke-width="2.2" marker-end="url(#ab-g)" />
+  <text x="188" y="172" text-anchor="middle" font-size="9.5" fill="#3fb950" font-weight="600" transform="rotate(-30 188 172)">GET data</text>
+  <rect x="248" y="104" width="104" height="50" rx="8" fill="none" stroke="#3fb950" stroke-width="2" />
+</g>
+<!-- Step 2 (both rounds): gateway -> cluster DNS. -->
+<g opacity="0">
+  <animate attributeName="opacity" values="0;0;1;1;0;0;1;1;0;0" keyTimes="0;0.075;0.087;0.36;0.40;0.525;0.537;0.90;0.94;1" dur="16s" repeatCount="indefinite" />
+  <line x1="300" y1="154" x2="300" y2="190" stroke="#3fb950" stroke-width="2" marker-end="url(#ab-g)" />
+  <rect x="248" y="192" width="132" height="54" rx="8" fill="none" stroke="#3fb950" stroke-width="2" />
+</g>
+<!-- Round 1: the DNS resolves to the deployed service1. -->
+<g opacity="0">
+  <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.075;0.087;0.36;0.40;1" dur="16s" repeatCount="indefinite" />
+  <text x="314" y="232" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="9.5" fill="#3fb950">resolve: service1</text>
+</g>
+<g opacity="0">
+  <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.12;0.132;0.36;0.40;1" dur="16s" repeatCount="indefinite" />
+  <path d="M314 246 V410 H472" fill="none" stroke="#3fb950" stroke-width="2.2" marker-end="url(#ab-g)" />
+  <rect x="478" y="390" width="132" height="40" rx="8" fill="none" stroke="#3fb950" stroke-width="2" />
+</g>
+<g opacity="0">
+  <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.165;0.177;0.36;0.40;1" dur="16s" repeatCount="indefinite" />
+  <line x1="574" y1="387" x2="574" y2="366" stroke="#a371f7" stroke-width="2.2" marker-start="url(#ab-p)" marker-end="url(#ab-p)" />
+  <text x="562" y="380" text-anchor="end" font-size="9.5" fill="#a371f7">query postgres by name</text>
+</g>
+<!-- Round 1: the response travels back to the browser. -->
+<g opacity="0">
+  <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.21;0.222;0.36;0.40;1" dur="16s" repeatCount="indefinite" />
+  <path d="M478 424 C 360 480, 220 420, 158 285" fill="none" stroke="#58a6ff" stroke-width="2" marker-end="url(#ab-b)" />
+  <text x="330" y="464" text-anchor="middle" font-size="9.5" fill="#58a6ff">response</text>
+</g>
+<g opacity="0">
+  <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.24;0.252;0.36;0.40;1" dur="16s" repeatCount="indefinite" />
+  <text x="96" y="256" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="9.5" fill="#58a6ff" font-weight="700">DATA</text>
+</g>
+<!-- Round 2: the DNS now resolves service1 to the plug agent. -->
+<g opacity="0">
+  <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.525;0.537;0.90;0.94;1" dur="16s" repeatCount="indefinite" />
+  <text x="314" y="232" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="9.5" fill="#3fb950">service1 → agent</text>
+</g>
+<g opacity="0">
+  <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.57;0.582;0.90;0.94;1" dur="16s" repeatCount="indefinite" />
+  <line x1="380" y1="215" x2="518" y2="200" stroke="#3fb950" stroke-width="2.2" marker-end="url(#ab-g)" />
+  <rect x="520" y="146" width="90" height="98" rx="8" fill="none" stroke="#3fb950" stroke-width="2" />
+</g>
+<g opacity="0">
+  <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.615;0.627;0.90;0.94;1" dur="16s" repeatCount="indefinite" />
+  <line x1="610" y1="173" x2="740" y2="173" stroke="#3fb950" stroke-width="2.2" marker-end="url(#ab-g)" />
+  <text x="676" y="167" text-anchor="middle" font-size="9.5" fill="#3fb950">to your machine</text>
+  <rect x="742" y="150" width="120" height="64" rx="8" fill="none" stroke="#3fb950" stroke-width="2" />
+</g>
+<g opacity="0">
+  <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.66;0.672;0.90;0.94;1" dur="16s" repeatCount="indefinite" />
+  <line x1="740" y1="220" x2="612" y2="220" stroke="#a371f7" stroke-width="2.2" marker-start="url(#ab-p)" marker-end="url(#ab-p)" />
+</g>
+<g opacity="0">
+  <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.705;0.717;0.90;0.94;1" dur="16s" repeatCount="indefinite" />
+  <line x1="574" y1="248" x2="574" y2="295" stroke="#a371f7" stroke-width="2.2" marker-start="url(#ab-p)" marker-end="url(#ab-p)" />
+  <text x="562" y="275" text-anchor="end" font-size="9.5" fill="#a371f7">query postgres by name</text>
+</g>
+<!-- Round 2: the response travels from YOUR machine back to the browser. -->
+<g opacity="0">
+  <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.75;0.762;0.90;0.94;1" dur="16s" repeatCount="indefinite" />
+  <path d="M742 156 C 600 34, 250 34, 112 176" fill="none" stroke="#58a6ff" stroke-width="2" marker-end="url(#ab-b)" />
+  <text x="430" y="52" text-anchor="middle" font-size="9.5" fill="#58a6ff">response</text>
+</g>
+<g opacity="0">
+  <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.78;0.792;0.90;0.94;1" dur="16s" repeatCount="indefinite" />
+  <text x="96" y="256" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="9.5" fill="#58a6ff" font-weight="700">DATA</text>
+</g>
+<!-- postgres glows when the query lands (both rounds). -->
+<g opacity="0">
+  <animate attributeName="opacity" values="0;0;1;1;0;0;1;1;0;0" keyTimes="0;0.165;0.177;0.36;0.40;0.705;0.717;0.90;0.94;1" dur="16s" repeatCount="indefinite" />
+  <ellipse cx="574" cy="308" rx="36" ry="10" fill="none" stroke="#a371f7" stroke-width="2" />
+  <path d="M538 308 V352 a36 10 0 0 0 72 0 V308" fill="none" stroke="#a371f7" stroke-width="2" />
+</g>
+
+<line x1="60" y1="481" x2="90" y2="481" stroke="#3fb950" stroke-width="2.6" />
+<text x="98" y="485" font-size="11.5" fill="#8b949e">inbound — to your process (plug -s)</text>
+<line x1="350" y1="481" x2="380" y2="481" stroke="#a371f7" stroke-width="2.6" />
+<text x="388" y="485" font-size="11.5" fill="#8b949e">outbound — to postgres, by name</text>
+<line x1="620" y1="481" x2="650" y2="481" stroke="#58a6ff" stroke-width="2.6" />
+<text x="658" y="485" font-size="11.5" fill="#8b949e">response — back to the browser</text>
+      </svg>
