@@ -67,7 +67,10 @@ kubectl -n my-namespace port-forward svc/plug 2222:2222</app-code>
       Service is repointed at the agent (its original selector and ports saved in an annotation on
       the Service itself) and <strong>restored when the session ends</strong> — even across an
       agent restart. Note the pods themselves keep running (only the name is rerouted) — a parked
-      k8s workload still consumes queues and runs its crons. The
+      k8s workload still consumes queues and runs its crons. A nice property of this design: the
+      Service keeps its <strong>ClusterIP</strong> through park and restore, so cached DNS answers
+      (a JVM caches ~30&thinsp;s) stay <em>valid</em> across the switch — kube-proxy reroutes
+      underneath. No stale-IP window, unlike Swarm where the address behind the name changes. The
       <a href="https://github.com/softwarity/plug/blob/main/deploy/plug-k8s.yaml" target="_blank" rel="noopener">manifest</a>
       and the <a routerLink="/security">security model</a> spell out exactly what the grant allows.
     </p>
