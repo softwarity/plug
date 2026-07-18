@@ -79,7 +79,7 @@ interface Hole {
       What works where, and where the holes are — features × OS. One process run
       <strong>as if it were inside the cluster</strong>, via a userspace TUN over an SSH tunnel.
     </p>
-    <p class="snap">snapshot {{ snapshot }} · CI re-proves the install → grid → multicluster → reverse path on every push (3 OSes); rows noted <em>bench</em> are runtime-proven locally, not yet in CI</p>
+    <p class="snap">snapshot {{ snapshot }} · CI re-proves install → grid → multicluster → reverse path → takeover → crash-recovery on every push, on 3 OSes × 3 cluster families (compose, Swarm, Kubernetes); rows noted <em>bench</em> are runtime-proven locally, not yet in CI</p>
 
     <div class="legend">
       <span><i class="dot d-ok">✓</i> works (proven at runtime)</span>
@@ -148,7 +148,7 @@ interface Hole {
   `,
 })
 export class CoverageComponent {
-  protected readonly snapshot = '2026-07-17';
+  protected readonly snapshot = '2026-07-18';
   protected readonly os = ['Linux', 'macOS', 'Windows'];
 
   protected glyph(s: St): string {
@@ -158,8 +158,8 @@ export class CoverageComponent {
   protected readonly holes: Hole[] = [
     {
       sev: 'warn',
-      t: 'Windows under a corporate VPN + self-heal',
-      d: 'Everything else on Windows is proven in CI (install, grid, multicluster, outage recovery). Corporate-VPN behaviour and VPN/sleep self-heal there are still unproven.',
+      t: 'Windows under a corporate VPN',
+      d: 'Everything else on Windows is proven in CI — including self-heal: the resilience cell restarts the agent mid-session and traffic re-parks in seconds. Behaviour under a real corporate VPN client is the one Windows unknown left.',
     },
     {
       sev: 'warn',
@@ -192,11 +192,11 @@ export class CoverageComponent {
         { feat: 'Native selftest (datapath proof)', os: ['ok', 'ok', 'ok'], note: 'green on all three in CI' },
         { feat: 'e2e protocol matrix (8 protos × 4 langs)', os: ['ok', 'ok', 'ok'], note: 'native over a Tailscale mesh, against all THREE cluster families — compose, Swarm and Kubernetes (kind) — the same by-name path on Linux, macOS and Windows' },
         { feat: 'Split-horizon (short→cluster, FQDN→direct)', os: ['ok', 'ok', 'ok'], note: 'decided by the shape of the name — no config' },
-        { feat: 'Reverse: serve a local port to the cluster (<code>-s</code>)', os: ['ok', 'ok', 'ok'], note: 'sshd remote-forward — a cluster workload fetches the runner in CI, path self-verified at startup (re-arm after reconnect: local bench only)' },
+        { feat: 'Reverse: serve a local port to the cluster (<code>-s</code>)', os: ['ok', 'ok', 'ok'], note: 'sshd remote-forward — a cluster workload fetches the runner in CI, path self-verified at startup; re-arm after reconnect <b>in CI</b> (the resilience cell restarts the agent mid-session)' },
         { feat: 'Reverse: external caller → published gateway → runner (HTTP)', os: ['ok', 'ok', 'ok'], note: 'a POST to a PUBLISHED cluster gateway calls a <code>-s</code> name that lands on the runner\'s local sink; the correlation id AND the full request path round-trip back (root and a deep path) — the API-gateway use case, proven from outside the cluster' },
         { feat: '<code>-s</code> name provisioned dynamically (no redeploy)', os: ['ok', 'ok', 'ok'], note: 'CI serves a name declared nowhere, from a linux/mac/win client, on all three backends: docker-sock signpost container (Compose), Swarm-service signpost on a <b>non-attachable overlay</b> (Swarm), Service through the Services-only RBAC (k8s) — created &amp; torn down per session, swept on agent restart. Else static alias fallback' },
-        { feat: 'Takeover of a deployed name (default)', os: ['ok', 'ok', 'ok'], note: 'a deployed workload owning a <code>-s</code> name is parked for the session and restored on exit — <b>all three backends in CI</b>: containers stopped (Compose), Swarm service scaled to 0 &amp; back to its <b>original replica count</b> (the CI target runs 2), k8s Service repointed via annotation receipt (ClusterIP identical through park/restore). Another session\'s name stays refused. Boot-gc restores after an agent crash; a reconnect re-parks (<em>bench</em>)' },
-        { feat: 'Self-heal (VPN / sleep / agent restart)', os: ['ok', 'ok', 'warn'], note: 'keepalive times out a zombie connection then reconnects &amp; re-provisions; <em>bench, not CI</em>; Windows unproven' },
+        { feat: 'Takeover of a deployed name (default)', os: ['ok', 'ok', 'ok'], note: 'a deployed workload owning a <code>-s</code> name is parked for the session and restored on exit — <b>all three backends in CI</b>: containers stopped (Compose), Swarm service scaled to 0 &amp; back to its <b>original replica count</b> (the CI target runs 2), k8s Service repointed via annotation receipt (ClusterIP identical through park/restore). Another session\'s name stays refused. Boot-gc restore after an agent crash AND the re-park on reconnect are <b>in CI</b> (resilience cell)' },
+        { feat: 'Self-heal (VPN / sleep / agent restart)', os: ['ok', 'ok', 'ok'], note: 'keepalive times out a zombie connection then reconnects &amp; re-provisions — <b>in CI on all three OSes</b>: the resilience cell restarts the agent mid-session and traffic re-parks in seconds (boot-gc restores, the reconnect re-arms)' },
       ],
     },
     {
@@ -234,7 +234,7 @@ export class CoverageComponent {
       rows: [
         { feat: 'Docker Compose / Swarm', st: 'ok', note: 'agent image joins the stack network — both in CI (Swarm: a real single-node swarm, the agent as a Swarm service on a non-attachable overlay)' },
         { feat: 'Kubernetes — NodePort', st: 'ok', note: '<code>deploy/plug-k8s.yaml</code> applied as published (kind) — the CI legs install and run through it on every push' },
-        { feat: 'Kubernetes — kubectl port-forward', st: 'warn', note: 'zero exposed port, API-server RBAC — <em>bench, not CI</em>' },
+        { feat: 'Kubernetes — kubectl port-forward', st: 'ok', note: 'zero exposed port, API-server RBAC — the k8s cluster job answers the agent contract through a live port-forward on every push' },
         { feat: 'Cross-namespace', st: 'ok', note: 'via FQDN <code>svc.othernamespace</code>' },
       ],
     },

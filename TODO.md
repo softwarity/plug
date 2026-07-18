@@ -25,16 +25,16 @@ vertes.
 
 ---
 
-## 🟡 Combler les trous « banc → CI » (l'essentiel est fait)
-Comportements **prouvés au runtime en local**, pas encore rejoués en CI :
-- [ ] **Takeover : boot-gc + re-park au reconnect en CI** (banc M5 ✅ : agent kill → gc restaure → rearm re-parque → restore final).
-- [ ] **Self-heal en CI** : le keepalive tue le zombie puis reconnecte + re-provisionne — banc seulement ; Windows non prouvé. Cellule e2e : couper le chemin (sleep / agent restart), asserter la reprise.
-- [ ] **Re-arm `-s` après reconnexion** en CI (aujourd'hui banc local).
-- [ ] **`kubectl port-forward` comme transport** : banc seulement (le NodePort, lui, est traversé par la CI à chaque push).
-- [ ] **Windows sous VPN d'entreprise** : non prouvé (macOS OK avec GlobalProtect).
-- [ ] **Sessions longues & charge** : heures, gros transferts, nombreuses connexions, sleep/wake — non exercés.
+## 🟡 Ce qui reste hors CI (le banc → CI est bouclé)
+- [ ] **Windows sous VPN d'entreprise** : non prouvé (macOS OK avec GlobalProtect). Il faut un poste Windows avec un vrai client VPN corpo — la box 192.168.2.17 ferait l'affaire si on y installe le client ; banc ~30 min ensuite.
+- [ ] **Sessions longues & charge** : heures, gros transferts, sleep/wake. Piste actée : un workflow « soak » cron hebdo (session tenue 5-6 h, transferts gros volumes, asserts RSS/reconnexions) ; le sleep/wake réel reste un banc local assisté.
 
-## 🟣 UDP par nom (relais de datagrammes) — futur (feature, sur décision)
+## 🟣 UDP par nom (relais de datagrammes) — REPORTÉ (décision 18/07)
+La motivation « HTTP/3 » ne tient pas : le relais passerait par le tunnel TCP →
+QUIC-over-TCP est pathologique (HOL blocking, tout l'intérêt de QUIC perdu) et
+les clients h3 retombent en h2 proprement ; en intra-cluster personne ne parle
+h3. Le drop-loud (livré) rend le manque visible et diagnostiqué. À rouvrir si
+un cas DNS-vers-CoreDNS / StatsD / syslog réel mord. Plan conservé :
 Le tunnel ne porte que du TCP (SSH `direct-tcpip` = stream-only). Le client capte
 **déjà** l'UDP (protocole enregistré, `gonet.NewUDPConn` utilisé pour le DNS) et
 le droppait en silence hors DNS. Plan :
@@ -73,6 +73,12 @@ d'unknown host).
 ---
 
 ## ✅ Acquis
+
+### Post-2.1.0 (18 juillet 2026, après-midi)
+- [x] **Résilience en CI** : cellule `resilience` sur les jambes compose (cluster B — le A partagé ne voit jamais le blip) : takeover tenu sur `res-tko-<leg>`, le service `chaos` (docker.sock, labels compose scopés, répond AVANT de tirer) **redémarre l'agent en pleine session** → keepalive 5 s détecte, boot-gc restaure, le reconnect re-arme et **re-parque** (~10 s de bout en bout au banc), restore final au ttl. Ferme d'un coup : self-heal (**Windows inclus**), boot-gc, re-park au reconnect, re-arm `-s`. Et `k8s-serve.sh` prouve **kubectl port-forward** comme transport à chaque push.
+- [x] **NXDOMAIN honnête** (fix fuite DNS) : voir section 🟠 — vérif pré-mint via le verbe agent `resolve`, filtre anti-écho 198.18/15, cellule « dns honesty » ×9 jambes.
+- [x] **Drop-loud UDP** : un flux UDP vers un nom minté loggue la cause au lieu du hang silencieux.
+- [x] **Dettes** : registry factorisé (`darwin||windows`, tests sur les 2 OS), 4 tests neufs (strip `.plug`, NRPT, channel-reject-sans-reconnexion, ensureVersion), vestiges compose purgés + banc compose local remis au niveau 2.x (`-s` + sock).
 
 ### Post-2.0.0 → 2.1.0 (17-18 juillet 2026)
 - [x] **Fix macOS re-assert DNS** (17/07, livré en 2.1.0) : le churn mDNSResponder (locationd → DHCP re-publish ~2/min → configd écrase l'override → re-assert + flush + HUP en boucle → échecs getaddrinfo machine-wide) est corrigé — **re-assert silencieux** quand la config effective pointe encore plug, **débounce** max 1 flush/HUP par 30 s (`flushGate`), lignes du daemon.log **timestampées**.
