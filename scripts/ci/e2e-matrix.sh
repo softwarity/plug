@@ -210,9 +210,10 @@ do_matrix() {
 do_multicluster() {
   echo "=== multicluster: http://ident:5678 through plug-A and plug-B ==="
   # ident answers the corr id — strip whichever family prefix this leg targets
-  # (plug-cluster-<corr> for compose, plug-k8s-<corr> for kind).
+  # (plug-cluster-<corr> compose, plug-k8s-<corr> kind, plug-swarm-<corr> swarm).
   local expect_a="${peer#plug-cluster-}" expect_b="${peer_b#plug-cluster-}"
   expect_a="${expect_a#plug-k8s-}"; expect_b="${expect_b#plug-k8s-}"
+  expect_a="${expect_a#plug-swarm-}"; expect_b="${expect_b#plug-swarm-}"
   local ip_b mc=PASS a_out="" b_out="" mc_pid
   ip_b="$(wait_cluster "$peer_b")" || { echo "cluster $peer_b never became reachable" >&2; sum "**multicluster** ❌ (cluster B unreachable)"; return 1; }
   echo "cluster B reachable at $ip_b:$port"

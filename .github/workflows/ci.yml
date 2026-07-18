@@ -138,7 +138,7 @@ jobs:
     # is_default_branch) — a throwaway image to test that branch on a real
     # cluster, never latest. Off PRs (secrets). Delete stale branch tags from
     # Docker Hub after merge.
-    needs: [build, selftest, e2e, e2e-k8s]
+    needs: [build, selftest, e2e, e2e-k8s, e2e-swarm]
     if: success() && github.event_name != 'pull_request'
     uses: ./.github/workflows/_docker.yml
     secrets: inherit
@@ -146,13 +146,14 @@ jobs:
   # The e2e that native-Linux Docker can't give us: run plug NATIVELY on each OS
   # against a REAL cluster, reaching services BY NAME over a Tailscale mesh (the
   # cluster can't be Linux containers on a mac/win runner, so it runs ONCE on its
-  # own Linux run and every client joins it). TWO FAMILIES of clusters, same e2e
-  # chain against each: compose-for.yml (docker compose) and k8s-for.yml (kind —
-  # real upstream Kubernetes, the agent from the published deploy/plug-k8s.yaml).
-  # Part of CI, not a separate workflow; runs on EVERY branch push (so any
-  # branch gets its full mesh-blessed image), after the unit tests pass. Off
-  # PRs — it's heavy and needs the Tailscale/Docker secrets, absent on fork
-  # PRs. Needs TAILSCALE_CLIENT_ID/SECRET.
+  # own Linux run and every client joins it). THREE FAMILIES of clusters, same
+  # e2e chain against each: compose-for.yml (docker compose), k8s-for.yml (kind
+  # — real upstream Kubernetes, the agent from the published deploy/plug-k8s.yaml)
+  # and swarm-for.yml (single-node Swarm — the agent as a Swarm service on a
+  # non-attachable overlay). Part of CI, not a separate workflow; runs on EVERY
+  # branch push (so any branch gets its full mesh-blessed image), after the
+  # unit tests pass. Off PRs — it's heavy and needs the Tailscale/Docker
+  # secrets, absent on fork PRs. Needs TAILSCALE_CLIENT_ID/SECRET.
   start-cluster:
     name: start clusters
     needs: test
@@ -166,6 +167,8 @@ jobs:
       cluster_id_b: ${{ steps.dispatch_b.outputs.id }}
       k8s_id_a: ${{ steps.dispatch_ka.outputs.id }}
       k8s_id_b: ${{ steps.dispatch_kb.outputs.id }}
+      swarm_id_a: ${{ steps.dispatch_sa.outputs.id }}
+      swarm_id_b: ${{ steps.dispatch_sb.outputs.id }}
     steps:
       - uses: actions/checkout@v6
       # TWO clusters per family, so the e2e can assert multicluster: the same
@@ -187,6 +190,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-kb k8s-for.yml)" >> "$GITHUB_OUTPUT"
+      - id: dispatch_sa
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-sa swarm-for.yml)" >> "$GITHUB_OUTPUT"
+      - id: dispatch_sb
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-sb swarm-for.yml)" >> "$GITHUB_OUTPUT"
       # The compat cell needs the LAST PUBLISHED launcher for every OS, but only
       # this Linux job has Docker — extract all of them from the published image
       # here and ship them to the mac/win legs as an artifact.
@@ -360,9 +371,80 @@ jobs:
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh takeover "$A" "$B" 2222
 
+  # The SAME chain, third family: a real single-node SWARM (swarm-for.yml) —
+  # the agent as a Swarm service on a non-attachable overlay, -s names as
+  # Swarm-service signposts, and the takeover scaling the deployed service to
+  # 0 and back to its ORIGINAL replica count (the tko targets run 2 replicas).
+  # What only the bench had proven for Swarm now runs on every push, ×3 OSes.
+  e2e-swarm:
+    name: e2e-swarm (${{ matrix.os }}, same chain on swarm)
+    needs: start-cluster
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      A: plug-swarm-${{ github.run_id }}-sa
+      B: plug-swarm-${{ github.run_id }}-sb
+    strategy:
+      fail-fast: false # one OS failing must not cancel the others
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          cache: false
+      - uses: actions/setup-java@v4 # pin the JDK — the runners' ambient Java differs by OS
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Join the tailnet
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
+          tags: tag:ci
+          hostname: plug-swarm-${{ matrix.os }}-${{ github.run_id }}
+          args: --accept-dns=false # reach the cluster by tailnet IP; don't let Tailscale drive DNS
+      - name: Setup — install plug from the cluster + build clients
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh setup "$A" "$B" 2222
+      - name: Env passthrough
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh env "$A" "$B" 2222
+      - name: Protocol matrix (4 langs × 8 protocols)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh matrix "$A" "$B" 2222
+      - name: Multicluster (simultaneous)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh multicluster "$A" "$B" 2222
+      - name: Outage recovery
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh outage "$A" "$B" 2222
+      - name: Expose — serve a local port to the cluster (-s)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh expose "$A" "$B" 2222
+      - name: Gateway callback (external → published gateway → sink)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh gateway "$A" "$B" 2222
+      - name: Collision — a name already taken is refused
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh collision "$A" "$B" 2222
+      - name: Takeover — scale the deployed service to 0, serve ours, restore it
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh takeover "$A" "$B" 2222
+
   kill-cluster:
     name: kill clusters
-    needs: [start-cluster, e2e, e2e-k8s]
+    needs: [start-cluster, e2e, e2e-k8s, e2e-swarm]
     if: always() && needs.start-cluster.result == 'success'
     runs-on: ubuntu-latest
     permissions:
@@ -378,3 +460,5 @@ jobs:
           gh run cancel ${{ needs.start-cluster.outputs.cluster_id_b }} --repo ${{ github.repository }} || true
           gh run cancel ${{ needs.start-cluster.outputs.k8s_id_a }} --repo ${{ github.repository }} || true
           gh run cancel ${{ needs.start-cluster.outputs.k8s_id_b }} --repo ${{ github.repository }} || true
+          gh run cancel ${{ needs.start-cluster.outputs.swarm_id_a }} --repo ${{ github.repository }} || true
+          gh run cancel ${{ needs.start-cluster.outputs.swarm_id_b }} --repo ${{ github.repository }} || true

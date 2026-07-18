@@ -1,0 +1,156 @@
+# The CI "mesh cluster", SWARM FLAVOR — a real Swarm stack deployed by
+# scripts/ci/swarm-serve.sh (.github/workflows/swarm-for.yml): docker swarm init
+# on the runner, then `docker stack deploy -c swarm.cluster.yml plug-e2e`.
+# Same service names, same ports as the compose and k8s flavors — the OS legs
+# replay the exact same e2e chain.
+#
+# What this family proves beyond compose: the agent runs as a SWARM SERVICE on
+# a NON-ATTACHABLE overlay (the default for stack networks — the real prod
+# shape), `-s` provisions its name as a Swarm-service signpost on that overlay,
+# and the takeover scales the deployed service to 0 and back to its ORIGINAL
+# replica count — the tko-* targets run 2 replicas so the restore-to-N path is
+# asserted, not just 0→1.
+#
+# A dedicated file (not compose.yml + overlay): `stack deploy` deploys EVERY
+# service in the merged file — no per-service selection like `compose up` — and
+# ignores build:/cap_add:, so the client services must not be here. Local
+# images (plug-e2e/*:e2e) are pre-built by swarm-serve.sh; a single-node swarm
+# uses the node's local images, no registry needed.
+#
+# ${PLUG_CLUSTER_IDENT} (the corr id), ${PLUG_AGENT_PORT} and
+# ${PLUG_GATEWAY_PORT} are interpolated by `docker stack deploy` from the
+# caller's environment (ports are parameterized so a local bench can avoid a
+# machine's already-taken 2222).
+services:
+  agent:
+    image: softwarity/plug:e2e
+    ports:
+      - "${PLUG_AGENT_PORT:-2222}:22"
+    # The docker.sock is REQUIRED for -s (dynamic name provisioning): on Swarm
+    # the agent creates a Swarm-service signpost on the overlay. Manager node —
+    # service create needs the manager API (single-node swarm: the only node).
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [internal]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+
+  # ---- protocol matrix services (same set as compose.yml) ----
+  httpbin:
+    image: mccutchen/go-httpbin:v2.15.0
+    networks: [internal]
+
+  postgres:
+    image: postgres:18-alpine
+    environment: { POSTGRES_USER: plug, POSTGRES_PASSWORD: plug, POSTGRES_DB: plug }
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U plug -d plug"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:8-alpine
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  mongo:
+    image: mongo:8
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  rabbitmq:
+    image: rabbitmq:4
+    # Swarm configs instead of bind mounts (stack-native); same two files as
+    # compose. The Docker healthcheck runs as the container's own flow (no k8s
+    # root-probe cookie race here — see e2e/k8s.cluster.yaml for that story).
+    configs:
+      - { source: rabbitmq_conf, target: /etc/rabbitmq/rabbitmq.conf }
+      - { source: rabbitmq_defs, target: /etc/rabbitmq/definitions.json }
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmqctl -q list_queues name 2>/dev/null | grep -q plug-e2e"]
+      interval: 3s
+      timeout: 10s
+      retries: 30
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    configs:
+      - { source: mosquitto_conf, target: /mosquitto/config/mosquitto.conf }
+    networks: [internal]
+
+  grpc:
+    image: plug-e2e/grpc:e2e
+    networks: [internal]
+
+  wsserver:
+    image: plug-e2e/wsserver:e2e
+    networks: [internal]
+
+  # ---- mesh-cluster extras (same set as compose.cluster.yml) ----
+  ident:
+    image: hashicorp/http-echo
+    command: ["-listen=:5678", "-text=${PLUG_CLUSTER_IDENT:-solo}"]
+    networks: [internal]
+
+  prober:
+    image: plug-e2e/prober:e2e
+    networks: [internal]
+
+  gateway:
+    image: plug-e2e/gateway:e2e
+    ports:
+      - "${PLUG_GATEWAY_PORT:-18090}:8100"
+    networks: [internal]
+
+  flaky-linux:
+    image: plug-e2e/flaky:e2e
+    networks: [internal]
+  flaky-mac:
+    image: plug-e2e/flaky:e2e
+    networks: [internal]
+  flaky-win:
+    image: plug-e2e/flaky:e2e
+    networks: [internal]
+
+  # Takeover targets — 2 replicas each: the restore must come back to the
+  # ORIGINAL count, and 2 proves restore-to-N (the bench only proved it live).
+  tko-linux:
+    image: hashicorp/http-echo
+    command: ["-listen=:8085", "-text=deployed-tko-linux"]
+    networks: [internal]
+    deploy: { replicas: 2 }
+  tko-mac:
+    image: hashicorp/http-echo
+    command: ["-listen=:8086", "-text=deployed-tko-mac"]
+    networks: [internal]
+    deploy: { replicas: 2 }
+  tko-win:
+    image: hashicorp/http-echo
+    command: ["-listen=:8087", "-text=deployed-tko-win"]
+    networks: [internal]
+    deploy: { replicas: 2 }
+
+configs:
+  rabbitmq_conf:
+    file: ./services/rabbitmq/rabbitmq.conf
+  rabbitmq_defs:
+    file: ./services/rabbitmq/definitions.json
+  mosquitto_conf:
+    file: ./services/mosquitto/mosquitto.conf
+
+networks:
+  internal:
+    driver: overlay # NOT attachable — the shape the -s signpost must handle

@@ -1,0 +1,72 @@
+name: swarm-for
+
+# The e2e "cluster", SWARM FLAVOR — the third family next to compose-for.yml
+# and k8s-for.yml, so the OS legs replay the exact same e2e chain against a
+# real single-node Swarm: the agent as a Swarm service on a non-attachable
+# overlay, -s names provisioned as Swarm-service signposts, the takeover
+# scaling to 0 and back to the original replica count. Started (and later
+# cancelled) by ci.yml via `gh workflow run` / `gh run cancel`.
+#
+# Requires repo secrets TAILSCALE_CLIENT_ID / TAILSCALE_CLIENT_SECRET (a Tailscale
+# OAuth client tagged tag:ci). Dispatch-only by design.
+on:
+  workflow_dispatch:
+    inputs:
+      corr:
+        description: correlation id (the caller's run id) — names the tailnet node
+        required: true
+
+run-name: swarm-for-${{ inputs.corr }}
+
+permissions:
+  contents: read
+
+jobs:
+  # THE image under test, built from this branch — same two-job shape as the
+  # other families (the image travels between runners as an artifact).
+  build-agent:
+    name: build the agent image (this branch)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build
+        run: |
+          docker build -f agent/Dockerfile -t softwarity/plug:e2e .
+          # --entrypoint: the image's entrypoint ignores its args and execs sshd in
+          # the foreground — without the override this docker run never returns.
+          echo "agent image built — serves plug version: $(docker run --rm --entrypoint cat softwarity/plug:e2e /opt/plug/VERSION)" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Save the image for the serve job
+        run: docker save softwarity/plug:e2e | gzip > /tmp/agent-image.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: agent-image-swarm
+          path: /tmp/agent-image.tar.gz
+          retention-days: 1
+
+  serve:
+    name: serve the cluster (swarm)
+    needs: build-agent
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v7
+        with:
+          name: agent-image-swarm
+          path: /tmp
+      - name: Load the agent image
+        run: gunzip -c /tmp/agent-image.tar.gz | docker load
+      - name: Join the tailnet
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
+          tags: tag:ci
+          hostname: plug-swarm-${{ inputs.corr }}
+      - name: Serve the cluster (idle until cancelled)
+        env:
+          # Backstop only — kill-cluster cancels this run when the e2e jobs
+          # finish. Same margin as k8s-for's (the legs of the three families
+          # run concurrently and finish on the same horizon).
+          PLUG_CLUSTER_TTL: "2100"
+          PLUG_CLUSTER_IDENT: ${{ inputs.corr }}
+        run: bash scripts/ci/swarm-serve.sh
