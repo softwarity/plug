@@ -78,5 +78,21 @@ if [ -n "$failed" ]; then
   exit 1
 fi
 
+echo "=== kubectl port-forward as a transport (the zero-exposed-port path) ==="
+# The legs reach the agent through the NodePort; the OTHER documented way in —
+# a port-forward riding the API server, gated by kubeconfig RBAC — is proven
+# here on every push: the forwarded port must serve the agent's ssh contract.
+kubectl port-forward svc/plug 2223:2222 >/dev/null 2>&1 &
+pf=$!
+ok=""
+for _ in $(seq 1 15); do
+  v="$(ssh -n -p 2223 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+        -o LogLevel=ERROR -o BatchMode=yes -o ConnectTimeout=3 get@127.0.0.1 version 2>/dev/null || true)"
+  [ -n "$v" ] && { echo "port-forward OK — agent answers through it (version: $v)"; ok=1; break; }
+  sleep 2
+done
+kill "$pf" 2>/dev/null || true
+[ -n "$ok" ] || { echo "agent did not answer through kubectl port-forward" >&2; exit 1; }
+
 echo "=== cluster up — serving for ${ttl}s (or until this run is cancelled) ==="
 sleep "$ttl"

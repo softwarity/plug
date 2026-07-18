@@ -237,7 +237,13 @@ do_multicluster() {
   plug_to "$ip" bash -c "curl -s http://ident:5678 > /tmp/mc-a.out && sleep 8" 2>/tmp/mc-a.err &
   mc_pid=$!
   sleep 4 # let A establish and answer while it is still alive...
-  b_out="$(plug_to "$ip_b" curl -sS http://ident:5678 2>/tmp/mc-b.err || true)" # ...then hit B DURING A
+  # ...then hit B DURING A. Two tries: another leg's resilience cell may be
+  # restarting B's agent right now (a ~3s blip by design).
+  b_out="$(plug_to "$ip_b" curl -sS http://ident:5678 2>/tmp/mc-b.err || true)"
+  if ! printf '%s' "$b_out" | grep -q .; then
+    sleep 5
+    b_out="$(plug_to "$ip_b" curl -sS http://ident:5678 2>>/tmp/mc-b.err || true)"
+  fi
   wait "$mc_pid" 2>/dev/null || true
   a_out="$(cat /tmp/mc-a.out 2>/dev/null || true)"
   case "$a_out" in *"$expect_a"*) : ;; *) mc=FAIL ;; esac
@@ -452,6 +458,66 @@ do_collision() {
   sum "**collision refused** ❌"; return 1
 }
 
+# resilience: the M5 bench's crash-recovery chain, replayed in CI — on cluster
+# B, so the shared cluster A (every other cell) never sees the restart. A
+# takeover session holds res-tko-<leg>; the chaos service RESTARTS THE AGENT
+# mid-session; the keepalive must detect the dead transport, the rebooted
+# agent's boot-gc restore the parked service, the reconnect re-arm -s and
+# RE-PARK it — traffic back on the runner — and the session end restore the
+# deployed service for good. One cell, the whole self-heal story, Windows too.
+do_resilience() {
+  local rname rport
+  case "$(uname -s)" in
+    Darwin)               rname=res-tko-mac   rport=8116 ;;
+    MINGW*|MSYS*|CYGWIN*) rname=res-tko-win   rport=8117 ;;
+    *)                    rname=res-tko-linux rport=8115 ;;
+  esac
+  echo "=== resilience (cluster B): park $rname, RESTART the agent, re-park, restore ==="
+  local ip_b
+  ip_b="$(wait_cluster "$peer_b")" || { echo "cluster $peer_b unreachable" >&2; sum "**resilience (agent crash)** ❌ (cluster B)"; return 1; }
+  if ! ( cd "$root/e2e/echo-local" && go build -o "$root/echo-local$ext" . ); then
+    echo "--- resilience FAIL — echo-local did not build"; sum "**resilience (agent crash)** ❌ (build)"; return 1
+  fi
+  bprobe() { plug_to "$ip_b" curl -s --max-time 10 "http://prober:8097/fetch?url=http://$rname:$rport/" 2>/dev/null | tr -d '\r' | tail -1; }
+
+  local r=""
+  for _ in 1 2 3; do r="$(bprobe)"; [ "$r" = "deployed-res-$leg" ] && break; sleep 3; done
+  if [ "$r" != "deployed-res-$leg" ]; then
+    echo "--- resilience FAIL — baseline: prober said '${r:-nothing}' (want deployed-res-${leg})"
+    sum "**resilience (agent crash)** ❌ — baseline"; return 1
+  fi
+
+  # Hold the takeover with a tight keepalive so the dead transport is detected
+  # in seconds, not the default half-minute; -ttl ends the session naturally
+  # (Windows: kill would skip the teardown — see do_takeover).
+  PLUG_KEEPALIVE_SECS=5 "$PLUG" --host "$ip_b" --port "$port" -s "$rname:$rport:18123" \
+    "$root/echo-local$ext" -addr 127.0.0.1:18123 -text "local-res-$leg" -ttl 110s >/tmp/resilience.out 2>&1 &
+  local res_pid=$! during="" after_crash="" after=""
+  sleep 8
+  for _ in 1 2 3; do during="$(bprobe)"; [ "$during" = "local-res-$leg" ] && break; sleep 3; done
+
+  # Crash the agent mid-session (the chaos service answers, then fires).
+  plug_to "$ip_b" curl -s --max-time 10 "http://chaos:8095/restart-agent" >/dev/null 2>&1 || true
+  # keepalive detects (~10-15s at 5s cadence), reconnect re-arms and re-parks;
+  # the rebooted agent's boot-gc restored the deployed service in between.
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    after_crash="$(bprobe)"
+    [ "$after_crash" = "local-res-$leg" ] && break
+    sleep 5
+  done
+  wait $res_pid 2>/dev/null # the -ttl fires; teardown restores the deployed service
+
+  for _ in 1 2 3 4 5; do after="$(bprobe)"; [ "$after" = "deployed-res-$leg" ] && break; sleep 3; done
+
+  if [ "$during" = "local-res-$leg" ] && [ "$after_crash" = "local-res-$leg" ] && [ "$after" = "deployed-res-$leg" ]; then
+    echo "resilience OK — parked, agent restarted, RE-parked (self-heal + boot-gc + re-arm), restored"
+    sum "**resilience (agent crash mid-session)** ✅"; return 0
+  fi
+  echo "--- resilience FAIL — during='$during' after_crash='$after_crash' (want local-res-$leg) after='$after' (want deployed-res-$leg)"
+  echo "    --- session output ---"; tail -15 /tmp/resilience.out 2>/dev/null | sed 's/^/    /'
+  sum "**resilience (agent crash mid-session)** ❌ — during \`${during:-nothing}\` · post-crash \`${after_crash:-nothing}\` · after \`${after:-nothing}\`"; return 1
+}
+
 # ================================ dispatch ================================
 if [ "$phase" != setup ]; then
   [ -f "$envfile" ] || { echo "no e2e state at $envfile — run the setup phase first" >&2; exit 1; }
@@ -469,5 +535,6 @@ case "$phase" in
   gateway)      do_gateway ;;
   takeover)     do_takeover ;;
   collision)    do_collision ;;
-  *) echo "unknown phase: $phase (want setup|env|matrix|multicluster|outage|expose|gateway|takeover|collision)" >&2; exit 2 ;;
+  resilience)   do_resilience ;;
+  *) echo "unknown phase: $phase (want setup|env|matrix|multicluster|outage|expose|gateway|takeover|collision|resilience)" >&2; exit 2 ;;
 esac

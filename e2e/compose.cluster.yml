@@ -76,3 +76,29 @@ services:
     image: hashicorp/http-echo
     command: ["-listen=:8087", "-text=deployed-tko-win"]
     networks: [internal]
+
+  # Agent-crash simulator: GET chaos:8095/restart-agent restarts the agent
+  # container (docker.sock, by compose label) — the resilience cell's trigger.
+  # It answers BEFORE firing: the caller reaches it through the agent it kills.
+  chaos:
+    build: { context: ., dockerfile: services/chaos/Dockerfile }
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [internal]
+
+  # Resilience takeover targets — one per OS leg, one port per leg (same
+  # reasons as tko-*): the resilience cell parks these, RESTARTS THE AGENT
+  # mid-session, and asserts the park comes back (boot-gc restores, the
+  # reconnect re-parks) before the final restore.
+  res-tko-linux:
+    image: hashicorp/http-echo
+    command: ["-listen=:8115", "-text=deployed-res-linux"]
+    networks: [internal]
+  res-tko-mac:
+    image: hashicorp/http-echo
+    command: ["-listen=:8116", "-text=deployed-res-mac"]
+    networks: [internal]
+  res-tko-win:
+    image: hashicorp/http-echo
+    command: ["-listen=:8117", "-text=deployed-res-win"]
+    networks: [internal]
