@@ -192,7 +192,7 @@ import { MatIconModule } from '@angular/material/icon';
     <div class="diagram">
       <svg viewBox="0 0 900 470" xmlns="http://www.w3.org/2000/svg" role="img" font-family="-apple-system, Segoe UI, Roboto, sans-serif">
         <title>plug: your process is a full member of the cluster, both directions</title>
-        <desc>A browser hits the cluster's public gateway; the gateway calls service1, the cluster DNS resolves it to the plug agent, which tunnels to your machine's process; that process queries postgres by name back through the agent.</desc>
+        <desc>A browser hits the cluster's public gateway; the gateway calls service1, the cluster DNS resolves it to the plug agent, which tunnels to your machine's process; that process queries postgres by name back through the agent. The service1 already deployed in the cluster is parked (disabled) for the session and restored on exit.</desc>
         <defs>
           <marker id="ab-g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#3fb950" /></marker>
           <marker id="ab-p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#a371f7" /></marker>
@@ -214,6 +214,15 @@ import { MatIconModule } from '@angular/material/icon';
         <rect x="248" y="192" width="132" height="54" rx="8" fill="#161b22" stroke="#30363d" />
         <text x="314" y="214" text-anchor="middle" font-size="12" fill="#e6edf3" font-weight="600">cluster DNS</text>
         <text x="314" y="232" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="9.5" fill="#3fb950">service1 → agent</text>
+
+        <g opacity="0.5">
+          <rect x="248" y="254" width="132" height="40" rx="8" fill="#161b22" stroke="#30363d" stroke-dasharray="4 3" />
+          <text x="314" y="272" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11.5" fill="#8b949e" font-weight="600">service1</text>
+          <text x="314" y="286" text-anchor="middle" font-size="8" fill="#6e7681">deployed · restored on exit</text>
+        </g>
+        <rect x="334" y="247" width="42" height="14" rx="7" fill="#0d1117" stroke="#d29922" stroke-width="0.8" />
+        <text x="355" y="257" text-anchor="middle" font-size="8.5" fill="#d29922">parked</text>
+
         <ellipse cx="304" cy="312" rx="36" ry="10" fill="#161b22" stroke="#30363d" />
         <path d="M268 312 V356 a36 10 0 0 0 72 0 V312" fill="#161b22" stroke="#30363d" />
         <ellipse cx="304" cy="312" rx="36" ry="10" fill="#161b22" stroke="#30363d" />
@@ -255,7 +264,9 @@ import { MatIconModule } from '@angular/material/icon';
     </div>
     <p class="cap">
       One SSH tunnel carries both directions: your process reaches the cluster by name, and the
-      cluster reaches your process by the name you serve with <code>-s</code>.
+      cluster reaches your process by the name you serve with <code>-s</code>. Already deployed?
+      plug <strong>parks</strong> the in-cluster <code>service1</code> for the session — your
+      process takes its place, and it is restored when the session ends.
     </p>
 
     <div class="dirs">
@@ -294,7 +305,7 @@ import { MatIconModule } from '@angular/material/icon';
       <a routerLink="/how-it-works" class="feature-card">
         <mat-icon class="feature-icon">swap_horiz</mat-icon>
         <span class="feature-title">Reachable from the cluster</span>
-        <span class="feature-desc"><code>-s</code> publishes a local port under a cluster name — a gateway or workload reaches your process, for the session.</span>
+        <span class="feature-desc"><code>-s</code> publishes a local port under a cluster name — a gateway or workload reaches your process, for the session. A deployed service owning the name is <strong>parked</strong> meanwhile, restored on exit.</span>
       </a>
       <a routerLink="/profiles" class="feature-card">
         <mat-icon class="feature-icon">hub</mat-icon>

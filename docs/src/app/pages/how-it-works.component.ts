@@ -181,7 +181,10 @@ import { RouterLink } from '@angular/router';
       alias (Docker, via the socket) or a Service selecting the agent pod (Kubernetes, via a
       Services-only role) — created on <code>-s</code>, removed when the session ends, and
       re-provisioned automatically after a reconnect, with no stack redeploy. plug verifies the whole
-      loop at startup through the cluster's own DNS, and refuses a name a real service already owns.
+      loop at startup through the cluster's own DNS. A <strong>deployed</strong> service owning the
+      name is <strong>parked</strong> for the session (containers stopped / Swarm scaled to 0 / k8s
+      Service repointed) and <strong>restored on exit</strong> — your process substitutes for it; a
+      name held by another live plug session is refused.
       See <a routerLink="/swarm">Swarm</a> and
       <a routerLink="/kubernetes">Kubernetes</a>.
     </p>
