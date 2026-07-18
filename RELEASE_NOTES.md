@@ -14,14 +14,13 @@ the overridden keys **quietly** when the effective config (Global/Setup and the
 resolver files) still points at plug, and coalesces real flushes to at most one
 per 30 s. `daemon.log` lines are now timestamped.
 
-### New: takeover by default — develop a service that is already deployed
+### New: takeover — develop a service that is already deployed
 
 The name of a `-s` mapping often belongs to the very service you are developing,
 already deployed in the stack — until now plug refused it and asked you to remove
 the service by hand. Now plug **parks** the deployed workload for the session and
-**restores it when the session ends** — by default, no flag: `plug -s service1…`
-already states the intent (the same default as Telepresence's intercept and
-mirrord's steal). `--takeover`, the pre-release opt-in, is accepted as a no-op.
+**restores it when the session ends**: `plug -s service1…` already states the
+intent (the same behaviour as Telepresence's intercept and mirrord's steal).
 
 - **Docker / Compose** — the containers answering the name are stopped, and
   restarted afterwards.
