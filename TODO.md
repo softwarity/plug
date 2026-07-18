@@ -15,21 +15,22 @@ passée en **AGPL-3.0**. Windows est désormais une **jambe e2e complète en CI*
 (mesh Tailscale, natif, sans WSL2) — tout l'ancien chantier « verrouiller
 Windows » est bouclé.
 
-CI par push, 3 OS : install-depuis-cluster → grille 4 langages × 8 protocoles →
+CI par push, 3 OS × **2 familles de clusters** (Compose et Kubernetes/kind, 6
+jambes) : install-depuis-cluster → grille 4 langages × 8 protocoles →
 multicluster simultané → outage recovery → env passthrough → `-s` → gateway
-callback → collision → compat launcher/core.
+callback → collision → takeover → compat launcher/core (famille Compose).
+L'image ne publie que si les 6 jambes sont vertes.
 
 ---
 
 ## 🟡 Combler les trous « banc → CI » (le principal reste)
 Comportements **prouvés au runtime en local**, pas encore rejoués en CI :
-- [ ] **Takeover Swarm en CI** (banc M5 ✅ : scale-0 → trafic local → scale-back au replica count) ; **takeover k8s** : codé, jamais exécuté au runtime → banc k8s.
+- [ ] **Takeover Swarm en CI** (banc M5 ✅ : scale-0 → trafic local → scale-back au replica count) — le takeover k8s, lui, est en CI ✅.
 - [ ] **Takeover : boot-gc + re-park au reconnect en CI** (banc M5 ✅ : agent kill → gc restaure → rearm re-parque → restore final).
 - [ ] **Self-heal en CI** : le keepalive tue le zombie puis reconnecte + re-provisionne — banc seulement ; Windows non prouvé. Cellule e2e : couper le chemin (sleep / agent restart), asserter la reprise.
 - [ ] **Re-arm `-s` après reconnexion** en CI (aujourd'hui banc local).
-- [ ] **Backend k8s Service pour `-s`** : codé, pas encore testé au runtime (RBAC Services-only) → cellule e2e k8s.
-- [ ] **Swarm en CI** : agent sur overlay non-attachable — banc seulement (seul Compose est en CI).
-- [ ] **Kubernetes NodePort / `kubectl port-forward`** : banc seulement.
+- [ ] **Swarm en CI** : agent sur overlay non-attachable — banc seulement. Le moule est prêt : un `swarm-for.yml` sur le modèle de `k8s-for.yml` (docker swarm init sur le runner + stack deploy), mêmes jambes.
+- [ ] **`kubectl port-forward` comme transport** : banc seulement (le NodePort, lui, est traversé par la CI à chaque push).
 - [ ] **Windows sous VPN d'entreprise** : non prouvé (macOS OK avec GlobalProtect).
 - [ ] **Sessions longues & charge** : heures, gros transferts, nombreuses connexions, sleep/wake — non exercés.
 
@@ -85,7 +86,8 @@ cluster résout vers une fake IP `198.18.x.x` (vu : la gateway neo sur
 
 ## ✅ Acquis
 
-### Post-2.0.0 → 2.1.0 (17 juillet 2026)
+### Post-2.0.0 → 2.1.0 (17-18 juillet 2026)
+- [x] **Famille k8s en CI** (18/07) : toute la chaîne e2e rejouée contre un cluster **kind** (Kubernetes upstream) — `k8s-for.yml` jumeau de `compose-for.yml` (ex-`cluster.yml`), mêmes noms/ports (`e2e/k8s.cluster.yaml`), agent déployé depuis le **manifeste publié** `deploy/plug-k8s.yaml` (RBAC compris, seule l'image changée) → chaque push bénit le fichier que les users déploient. NodePorts mappés sur le runner (`kind-config.yaml`) → contrat `host:2222`/`:18090` inchangé pour les jambes. **Prouvé au runtime** (banc M5 kind, puis CI ×3 OS) : `-s` crée/détruit le Service via le RBAC réel, takeover repointe le selector (reçu-annotation, restore, **ClusterIP identique** à travers park/restore). Deux leçons au passage : probe exec k8s tourne en **root** → race du cookie Erlang rabbitmq (probe tcp à la place) ; le **keep-alive** d'un caller pré-bascule continue d'atteindre l'ancien pod (pods parqués vivants) → prober sans keep-alive + caveat documenté page Kubernetes.
 - [x] **Takeover par défaut** : un nom `-s` tenu par le service déployé est **parqué** pour la session et **restauré** à la fin — conteneurs stoppés (Compose, **e2e CI**), service Swarm scalé 0 → replica count d'origine (**banc M5**), Service k8s re-pointé via annotation-reçu (codé). Reçu de parking sur le signpost → restore par unserve / **boot-gc** (crash agent) / **re-park au reconnect** (banc M5 ✅). Signpost créé AVANT le park (pas de trou DNS — fuite upstream prouvée au banc). D'abord opt-in `--takeover`, puis **défaut** (lancer `plug -s` est déjà l'intention ; flag accepté en no-op) ; un nom tenu par une **autre session** reste refusé ; vieil agent 2.0.x → fallback auto sur son comportement (refus + hint upgrade) ; RBAC k8s +update/patch ; cellules e2e `takeover` + `collision` (inter-sessions) ×3 OS, noms/ports par jambe.
 
 ### 2.0.0 (juillet 2026)

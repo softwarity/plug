@@ -43,13 +43,29 @@ resolver (bench-proven on the embedded DNS).
 A name held by **another live plug session** is still refused — takeover
 applies to deployed workloads only, never to another dev's session. Against an
 older agent (2.0.x) the CLI falls back to that agent's own behaviour (a taken
-name is refused, with an upgrade hint). Callers holding a cached DNS answer
-(JVM ~30 s) may see brief connection errors at the switch. On Kubernetes the
-pods keep running — only the name is rerouted — so a parked k8s workload still
-consumes queues. Proven in CI on Compose (park → traffic lands locally →
-restore, on all three OSes) and on the bench for Swarm (scale 0 → back to 2
-replicas) including agent-crash recovery; the k8s backend is coded but not yet
-runtime-tested.
+name is refused, with an upgrade hint). Switch-time caveats, one per platform:
+on Swarm, callers holding a cached DNS answer (JVM ~30 s) may see brief
+connection errors (the address behind the name changes). On Kubernetes the
+Service keeps its **ClusterIP** through park and restore, so cached DNS stays
+valid and *new* connections reach your session immediately — but the pods keep
+running (only the name is rerouted): a parked k8s workload still consumes
+queues, and a caller holding a pre-switch **keep-alive connection** keeps
+reaching the old pod until it closes or idles out. Proven in CI on Compose and
+**Kubernetes** (park → traffic lands locally → restore, on all three OSes) and
+on the bench for Swarm (scale 0 → back to 2 replicas) including agent-crash
+recovery.
+
+### CI: the whole e2e chain now also runs against Kubernetes
+
+Every push replays the full mesh e2e on **two cluster families**: the compose
+cluster, and a **kind** cluster (upstream Kubernetes) serving the same services
+under the same names. The agent is applied from the **published**
+`deploy/plug-k8s.yaml` — RBAC included, only the image swapped — so each push
+blesses the exact manifest users deploy: dynamic `-s` Services through the
+Services-only role, the takeover repoint/restore, NodePort reach, the 4×8
+protocol grid, multicluster, outage, gateway callback and collision, natively
+from Linux, macOS and Windows. The image publishes only when all six legs are
+green.
 
 ---
 
