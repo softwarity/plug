@@ -7,11 +7,23 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="plug — run a local process as if it were inside your Docker Swarm cluster: cluster DNS and services reachable, zero app config. Documentation.">
 
-  <!-- Open Graph / Facebook / LinkedIn -->
+  <!-- Open Graph / Facebook / LinkedIn. The image is the static card every
+       scraper understands; the video is picked up where og:video is honoured
+       (Discord, Telegram…) — LinkedIn/X only read the image. Both files are
+       rendered from the animated diagram by the deploy pipeline. -->
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://softwarity.github.io/plug/">
   <meta property="og:title" content="plug — your local process, inside the cluster">
   <meta property="og:description" content="Prefix any command with plug and it resolves cluster DNS and reaches cluster services as if it ran in a container. One tiny agent, one CLI, zero app config.">
+  <meta property="og:image" content="https://softwarity.github.io/plug/media/about-diagram-og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="How plug works: the request walks browser, gateway, DNS, plug agent, SSH tunnel to your machine — the deployed service is parked for the session.">
+  <meta property="og:video" content="https://softwarity.github.io/plug/media/about-diagram.mp4">
+  <meta property="og:video:secure_url" content="https://softwarity.github.io/plug/media/about-diagram.mp4">
+  <meta property="og:video:type" content="video/mp4">
+  <meta property="og:video:width" content="1800">
+  <meta property="og:video:height" content="1022">
   <meta name="author" content="Softwarity">
 
   <!-- Twitter -->
@@ -19,6 +31,7 @@
   <meta name="twitter:url" content="https://softwarity.github.io/plug/">
   <meta name="twitter:title" content="plug — your local process, inside the cluster">
   <meta name="twitter:description" content="plug npm run start:dev — and your local service talks to the cluster like any container.">
+  <meta name="twitter:image" content="https://softwarity.github.io/plug/media/about-diagram-og.png">
 
   <link rel="icon" type="image/svg+xml" href="https://www.softwarity.io/img/softwarity.svg">
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">

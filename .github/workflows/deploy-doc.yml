@@ -69,6 +69,10 @@ jobs:
             -vf "fps=12,scale=800:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4" \
             dist/doc-site/browser/media/about-diagram.gif
           cp .frames/f180.png dist/doc-site/browser/media/about-diagram-hero.png
+          # The Open Graph card (og:image): 1200x630, the 1.91:1 ratio link
+          # previews expect — a centred crop of the round-2 hero frame.
+          ffmpeg -y -i .frames/f180.png -vf "crop=1800:945:0:38,scale=1200:630" \
+            dist/doc-site/browser/media/about-diagram-og.png
 
       - name: Setup Pages
         uses: actions/configure-pages@v6
