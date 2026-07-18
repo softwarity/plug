@@ -110,6 +110,15 @@ ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@$
       caches ~30&thinsp;s — may see a few connection errors right at the switch.)
     </p>
     <p>
+      Two switch-time facts worth knowing. <strong>Web apps:</strong> your local build and the
+      deployed one are <em>different builds</em> served under the same URL — their hashed chunks
+      don't overlap, so a browser tab opened on one will fail to lazy-load chunks after a switch.
+      <strong>Hard-reload the tab</strong> (Cmd-Shift-R) after switching; keep DevTools'
+      “Disable cache” on while developing. <strong>Watch mode:</strong> each rebuild briefly closes
+      your local port, so in-cluster callers see a few connection-refused during recompiles —
+      normal, it recovers by itself.
+    </p>
+    <p>
       On <strong>Swarm</strong>, run the agent on a manager node as a single replica — also already
       set above. Your existing network needs no change (a non-attachable overlay is fine).
     </p>
@@ -117,6 +126,16 @@ ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@$
       <strong>The socket is root on the host.</strong> Mount it only on a cluster you trust (the same
       trust plug's no-auth transport already assumes). Too much? Skip it and declare the name
       yourself as a static alias.
+    </div>
+    <div class="callout">
+      <strong>Cluster on the same machine as plug (Docker Desktop)?</strong> Docker forwards
+      lookups it cannot answer to the VM's upstream resolver — which inherits your machine's DNS,
+      pointed at plug while sessions run. A name that does <em>not</em> exist in the cluster then
+      resolves to a plug stand-in IP (<code>198.18.x.x</code>) instead of failing cleanly, and the
+      caller gets <em>connection refused</em> instead of <em>unknown host</em>. Fix it for good in
+      Docker Desktop → Settings → Docker Engine: add
+      <code>"dns": ["1.1.1.1", "8.8.8.8"]</code> (cluster-internal names are unaffected — only
+      unknown names stop leaking to your machine).
     </div>
     <p>
       Installed a launcher before <code>-s</code> existed? Put <code>-s</code> after

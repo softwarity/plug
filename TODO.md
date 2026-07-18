@@ -66,6 +66,14 @@ résolution redémarre sans arrêt → **échecs getaddrinfo intermittents**
 - [ ] **Débounce** : max 1 flush/HUP par 30 s, même en rafale d'événements configd.
 - [ ] **Timestamper** les lignes du daemon.log (le diagnostic a buté sur des re-asserts non datés).
 
+## 🟠 Fuite DNS Docker-Desktop-sur-poste-plugué (diagnostiquée 18/07, live sur neo)
+Docker forwarde les noms inconnus du cluster vers le resolver de la VM → hérite
+du DNS du Mac → **resolver plug** quand des sessions tournent → un nom ABSENT du
+cluster résout vers une fake IP `198.18.x.x` (vu : la gateway neo sur
+`area-qnh-frontend/198.18.0.6` → connection refused au lieu d'unknown host).
+- [x] **Doc** : callout page Swarm — remède `daemon.json "dns": ["1.1.1.1"]` (Docker Desktop → Docker Engine).
+- [ ] **Mitigation produit ?** macOS/Windows only (DNS machine-wide ; Linux immunisé par le mount-ns par session). Pistes : rien de propre identifié — le resolver ne peut pas distinguer une requête de la VM Docker d'une requête d'un process plugué (tout arrive du système). À creuser si d'autres cas mordent.
+
 ## ⚪ Dettes / plus tard
 - [ ] **Tests unitaires** (comportements déjà prouvés en e2e, faible priorité) : `answerDNS` strip `.plug` → mint du nom nu ; round-trip registre NRPT (`setSystemNRPT` / `clearSystemNRPT`) ; `DialContext` — un rejet de canal (`*ssh.OpenChannelError`) ne reconnecte pas ; `ensureVersion` (`.exe`) / `ensureWintunBeside`.
 - [ ] **Factoriser** `registry_windows` / `graft_windows` avec les `_darwin` (dupliqués volontairement le temps de valider Windows — à unifier maintenant).
