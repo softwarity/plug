@@ -1,0 +1,487 @@
+# The CI "mesh cluster", Kubernetes flavor — the k8s twin of
+# compose.yml + compose.cluster.yml, applied into a throwaway kind cluster by
+# scripts/ci/k8s-serve.sh (.github/workflows/k8s-for.yml). The OS legs replay
+# the EXACT same e2e chain as against the compose cluster: same service names,
+# same ports (every Service port == the process port, so `name:port` resolves
+# identically), same per-leg tko/flaky instances.
+#
+# NOT here: the agent. It is applied from deploy/plug-k8s.yaml — the PUBLISHED
+# manifest (ServiceAccount, RBAC, NodePort 32222) with only the image swapped to
+# the branch-built :e2e — so the CI blesses the exact file users deploy.
+#
+# ${PLUG_CLUSTER_IDENT}: substituted by envsubst at apply time (the cluster's
+# corr id) — the multicluster e2e asserts the SAME name reaches the RIGHT
+# cluster through each plug. Local images (grpc, wsserver, prober, flaky) are
+# `kind load`ed by k8s-serve.sh, hence imagePullPolicy: Never.
+
+# ---- protocol matrix services (same set cluster-serve.sh brings up) ----
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: httpbin
+  labels: { app: httpbin }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: httpbin } }
+  template:
+    metadata: { labels: { app: httpbin } }
+    spec:
+      containers:
+        - name: httpbin
+          image: mccutchen/go-httpbin:v2.15.0
+          ports: [{ containerPort: 8080 }]
+          readinessProbe: { tcpSocket: { port: 8080 }, periodSeconds: 2 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: httpbin }
+spec:
+  selector: { app: httpbin }
+  ports: [{ port: 8080, targetPort: 8080 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  labels: { app: postgres }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: postgres } }
+  template:
+    metadata: { labels: { app: postgres } }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:18-alpine
+          env:
+            - { name: POSTGRES_USER, value: plug }
+            - { name: POSTGRES_PASSWORD, value: plug }
+            - { name: POSTGRES_DB, value: plug }
+          ports: [{ containerPort: 5432 }]
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "plug", "-d", "plug"] }
+            periodSeconds: 2
+            failureThreshold: 30
+---
+apiVersion: v1
+kind: Service
+metadata: { name: postgres }
+spec:
+  selector: { app: postgres }
+  ports: [{ port: 5432, targetPort: 5432 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  labels: { app: redis }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: redis } }
+  template:
+    metadata: { labels: { app: redis } }
+    spec:
+      containers:
+        - name: redis
+          image: redis:8-alpine
+          ports: [{ containerPort: 6379 }]
+          readinessProbe:
+            exec: { command: ["redis-cli", "ping"] }
+            periodSeconds: 2
+            failureThreshold: 30
+---
+apiVersion: v1
+kind: Service
+metadata: { name: redis }
+spec:
+  selector: { app: redis }
+  ports: [{ port: 6379, targetPort: 6379 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongo
+  labels: { app: mongo }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: mongo } }
+  template:
+    metadata: { labels: { app: mongo } }
+    spec:
+      containers:
+        - name: mongo
+          image: mongo:8
+          ports: [{ containerPort: 27017 }]
+          readinessProbe:
+            exec: { command: ["mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"] }
+            periodSeconds: 2
+            timeoutSeconds: 5
+            failureThreshold: 30
+---
+apiVersion: v1
+kind: Service
+metadata: { name: mongo }
+spec:
+  selector: { app: mongo }
+  ports: [{ port: 27017, targetPort: 27017 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rabbitmq
+  labels: { app: rabbitmq }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: rabbitmq } }
+  template:
+    metadata: { labels: { app: rabbitmq } }
+    spec:
+      containers:
+        - name: rabbitmq
+          image: rabbitmq:4
+          ports: [{ containerPort: 5672 }]
+          # user/vhost/queue pre-loaded from definitions.json (ConfigMap created
+          # by k8s-serve.sh from e2e/services/rabbitmq/ — same files as compose);
+          # ready only once the plug-e2e queue actually exists.
+          volumeMounts:
+            - { name: config, mountPath: /etc/rabbitmq/rabbitmq.conf, subPath: rabbitmq.conf }
+            - { name: config, mountPath: /etc/rabbitmq/definitions.json, subPath: definitions.json }
+          readinessProbe:
+            exec: { command: ["sh", "-c", "rabbitmqctl -q list_queues name 2>/dev/null | grep -q plug-e2e"] }
+            periodSeconds: 3
+            timeoutSeconds: 10
+            failureThreshold: 40
+      volumes:
+        - name: config
+          configMap: { name: rabbitmq-config }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: rabbitmq }
+spec:
+  selector: { app: rabbitmq }
+  ports: [{ port: 5672, targetPort: 5672 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mosquitto
+  labels: { app: mosquitto }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: mosquitto } }
+  template:
+    metadata: { labels: { app: mosquitto } }
+    spec:
+      containers:
+        - name: mosquitto
+          image: eclipse-mosquitto:2
+          ports: [{ containerPort: 1883 }]
+          volumeMounts:
+            - { name: config, mountPath: /mosquitto/config/mosquitto.conf, subPath: mosquitto.conf }
+          readinessProbe: { tcpSocket: { port: 1883 }, periodSeconds: 2 }
+      volumes:
+        - name: config
+          configMap: { name: mosquitto-config }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: mosquitto }
+spec:
+  selector: { app: mosquitto }
+  ports: [{ port: 1883, targetPort: 1883 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grpc
+  labels: { app: grpc }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: grpc } }
+  template:
+    metadata: { labels: { app: grpc } }
+    spec:
+      containers:
+        - name: grpc
+          image: plug-e2e/grpc:e2e
+          imagePullPolicy: Never
+          ports: [{ containerPort: 50051 }]
+          readinessProbe: { tcpSocket: { port: 50051 }, periodSeconds: 2 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: grpc }
+spec:
+  selector: { app: grpc }
+  ports: [{ port: 50051, targetPort: 50051 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wsserver
+  labels: { app: wsserver }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: wsserver } }
+  template:
+    metadata: { labels: { app: wsserver } }
+    spec:
+      containers:
+        - name: wsserver
+          image: plug-e2e/wsserver:e2e
+          imagePullPolicy: Never
+          ports: [{ containerPort: 8090 }]
+          readinessProbe: { tcpSocket: { port: 8090 }, periodSeconds: 2 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: wsserver }
+spec:
+  selector: { app: wsserver }
+  ports: [{ port: 8090, targetPort: 8090 }]
+
+# ---- mesh-cluster extras (the compose.cluster.yml set) ----
+---
+# Answers this cluster's identity on :5678 — the multicluster witness.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ident
+  labels: { app: ident }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: ident } }
+  template:
+    metadata: { labels: { app: ident } }
+    spec:
+      containers:
+        - name: echo
+          image: hashicorp/http-echo
+          args: ["-listen=:5678", "-text=${PLUG_CLUSTER_IDENT}"]
+          ports: [{ containerPort: 5678 }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: ident }
+spec:
+  selector: { app: ident }
+  ports: [{ port: 5678, targetPort: 5678 }]
+---
+# In-cluster fetcher: GET prober:8097/fetch?url=… — the expose/takeover witness.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prober
+  labels: { app: prober }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: prober } }
+  template:
+    metadata: { labels: { app: prober } }
+    spec:
+      containers:
+        - name: prober
+          image: plug-e2e/prober:e2e
+          imagePullPolicy: Never
+          ports: [{ containerPort: 8097 }]
+          readinessProbe: { tcpSocket: { port: 8097 }, periodSeconds: 2 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: prober }
+spec:
+  selector: { app: prober }
+  ports: [{ port: 8097, targetPort: 8097 }]
+---
+# API-gateway simulator, PUBLISHED like on compose (18090 on the runner): fixed
+# NodePort 31890, mapped to host 18090 by kind's extraPortMappings — the e2e leg
+# POSTs to <tailnet-ip>:18090 exactly as before.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  labels: { app: gateway }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: gateway } }
+  template:
+    metadata: { labels: { app: gateway } }
+    spec:
+      containers:
+        - name: gateway
+          image: plug-e2e/gateway:e2e
+          imagePullPolicy: Never
+          ports: [{ containerPort: 8100 }]
+          readinessProbe: { tcpSocket: { port: 8100 }, periodSeconds: 2 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: gateway }
+spec:
+  type: NodePort
+  selector: { app: gateway }
+  ports:
+    - port: 8100
+      targetPort: 8100
+      nodePort: 31890
+---
+# Outage simulators, one per OS leg (shared cluster — see compose.cluster.yml).
+# :8099 listens ONLY after GET :8098/up, so the probe watches :8098 only.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flaky-linux
+  labels: { app: flaky-linux }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: flaky-linux } }
+  template:
+    metadata: { labels: { app: flaky-linux } }
+    spec:
+      containers:
+        - name: flaky
+          image: plug-e2e/flaky:e2e
+          imagePullPolicy: Never
+          ports: [{ containerPort: 8098 }, { containerPort: 8099 }]
+          readinessProbe: { tcpSocket: { port: 8098 }, periodSeconds: 2 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: flaky-linux }
+spec:
+  selector: { app: flaky-linux }
+  ports:
+    - { name: control, port: 8098, targetPort: 8098 }
+    - { name: data, port: 8099, targetPort: 8099 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flaky-mac
+  labels: { app: flaky-mac }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: flaky-mac } }
+  template:
+    metadata: { labels: { app: flaky-mac } }
+    spec:
+      containers:
+        - name: flaky
+          image: plug-e2e/flaky:e2e
+          imagePullPolicy: Never
+          ports: [{ containerPort: 8098 }, { containerPort: 8099 }]
+          readinessProbe: { tcpSocket: { port: 8098 }, periodSeconds: 2 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: flaky-mac }
+spec:
+  selector: { app: flaky-mac }
+  ports:
+    - { name: control, port: 8098, targetPort: 8098 }
+    - { name: data, port: 8099, targetPort: 8099 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flaky-win
+  labels: { app: flaky-win }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: flaky-win } }
+  template:
+    metadata: { labels: { app: flaky-win } }
+    spec:
+      containers:
+        - name: flaky
+          image: plug-e2e/flaky:e2e
+          imagePullPolicy: Never
+          ports: [{ containerPort: 8098 }, { containerPort: 8099 }]
+          readinessProbe: { tcpSocket: { port: 8098 }, periodSeconds: 2 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: flaky-win }
+spec:
+  selector: { app: flaky-win }
+  ports:
+    - { name: control, port: 8098, targetPort: 8098 }
+    - { name: data, port: 8099, targetPort: 8099 }
+---
+# Takeover targets: REAL deployed Services the takeover e2e reparks. One per OS
+# leg, one cluster PORT per leg (concurrent legs, shared agent — see
+# compose.cluster.yml). On k8s the park REPOINTS the Service selector at the
+# agent (pods keep running) and the restore puts the original selector back —
+# this is the runtime proof of the k8s takeover path.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tko-linux
+  labels: { app: tko-linux }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: tko-linux } }
+  template:
+    metadata: { labels: { app: tko-linux } }
+    spec:
+      containers:
+        - name: echo
+          image: hashicorp/http-echo
+          args: ["-listen=:8085", "-text=deployed-tko-linux"]
+          ports: [{ containerPort: 8085 }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: tko-linux }
+spec:
+  selector: { app: tko-linux }
+  ports: [{ port: 8085, targetPort: 8085 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tko-mac
+  labels: { app: tko-mac }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: tko-mac } }
+  template:
+    metadata: { labels: { app: tko-mac } }
+    spec:
+      containers:
+        - name: echo
+          image: hashicorp/http-echo
+          args: ["-listen=:8086", "-text=deployed-tko-mac"]
+          ports: [{ containerPort: 8086 }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: tko-mac }
+spec:
+  selector: { app: tko-mac }
+  ports: [{ port: 8086, targetPort: 8086 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tko-win
+  labels: { app: tko-win }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: tko-win } }
+  template:
+    metadata: { labels: { app: tko-win } }
+    spec:
+      containers:
+        - name: echo
+          image: hashicorp/http-echo
+          args: ["-listen=:8087", "-text=deployed-tko-win"]
+          ports: [{ containerPort: 8087 }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: tko-win }
+spec:
+  selector: { app: tko-win }
+  ports: [{ port: 8087, targetPort: 8087 }]

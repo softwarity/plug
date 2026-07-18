@@ -5,7 +5,7 @@
 //   - Docker/Swarm, docker.sock mounted (opt-in in the stack file): create a
 //     tiny SIGNPOST container carrying the DNS alias, relaying the port to the
 //     agent. Names appear and disappear with the session — no stack redeploy.
-//   - Kubernetes, RBAC applied (opt-in, deploy/plug-k8s-dynamic.yaml): create a
+//   - Kubernetes (RBAC granted by deploy/plug-k8s.yaml): create a
 //     Service selecting the agent pod. Same lifecycle.
 //   - Neither: answer "static" — the CLI falls back to pre-declared aliases.
 //
@@ -1035,7 +1035,7 @@ func urlEscape(s string) string {
 	return strings.NewReplacer("{", "%7B", "}", "%7D", `"`, "%22", "[", "%5B", "]", "%5D", ",", "%2C", ":", "%3A", "=", "%3D").Replace(s)
 }
 
-// ---- kubernetes backend (RBAC applied — deploy/plug-k8s-dynamic.yaml) ----
+// ---- kubernetes backend (RBAC applied — part of deploy/plug-k8s.yaml) ----
 
 const k8sSA = "/var/run/secrets/kubernetes.io/serviceaccount"
 

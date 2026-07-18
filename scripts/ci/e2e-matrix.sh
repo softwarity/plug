@@ -33,11 +33,12 @@ case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) ext=".exe"; py="python" ;; esac
 SSH_OPTS="-p $port -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o BatchMode=yes"
 
 # --- wait for a cluster over the tailnet (echoes its IP once its agent answers) ---
-# 140×3s ≈ 7min: the cluster run builds the agent image in its own job and ships
-# it to the serve job as an artifact before anything joins the mesh.
+# 200×3s ≈ 10min: the cluster run builds the agent image in its own job and ships
+# it to the serve job as an artifact before anything joins the mesh — and the
+# k8s family adds a kind create + image loads + rollout on top.
 wait_cluster() {
   wc_ip=""
-  for _ in $(seq 1 140); do
+  for _ in $(seq 1 200); do
     wc_ip="$(tailscale ip -4 "$1" 2>/dev/null | head -1 || true)"
     if [ -n "$wc_ip" ] && ssh -n $SSH_OPTS "get@$wc_ip" version >/dev/null 2>&1; then
       echo "$wc_ip"; return 0
@@ -208,7 +209,10 @@ do_matrix() {
 # id). The SAME name must reach the RIGHT backend through each plug, SIMULTANEOUSLY.
 do_multicluster() {
   echo "=== multicluster: http://ident:5678 through plug-A and plug-B ==="
+  # ident answers the corr id — strip whichever family prefix this leg targets
+  # (plug-cluster-<corr> for compose, plug-k8s-<corr> for kind).
   local expect_a="${peer#plug-cluster-}" expect_b="${peer_b#plug-cluster-}"
+  expect_a="${expect_a#plug-k8s-}"; expect_b="${expect_b#plug-k8s-}"
   local ip_b mc=PASS a_out="" b_out="" mc_pid
   ip_b="$(wait_cluster "$peer_b")" || { echo "cluster $peer_b never became reachable" >&2; sum "**multicluster** ❌ (cluster B unreachable)"; return 1; }
   echo "cluster B reachable at $ip_b:$port"

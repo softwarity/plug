@@ -129,7 +129,8 @@ jobs:
   image:
     name: Build & publish image
     # Publish ONLY once EVERY test has passed — unit tests, the TUN selftests on
-    # all three OSes, and the full mesh e2e (protocol matrix + multicluster). An
+    # all three OSes, and the full mesh e2e on BOTH cluster families (compose
+    # and kubernetes: protocol matrix + multicluster + takeover, ×3 OS each). An
     # image must never ship from a commit the e2e didn't bless. A fully green
     # MANUAL dispatch publishes too ("a manual build is a whole build").
     # main publishes `latest` (+ the `main` tag); ANY OTHER branch publishes ONLY
@@ -137,7 +138,7 @@ jobs:
     # is_default_branch) — a throwaway image to test that branch on a real
     # cluster, never latest. Off PRs (secrets). Delete stale branch tags from
     # Docker Hub after merge.
-    needs: [build, selftest, e2e]
+    needs: [build, selftest, e2e, e2e-k8s]
     if: success() && github.event_name != 'pull_request'
     uses: ./.github/workflows/_docker.yml
     secrets: inherit
@@ -145,10 +146,13 @@ jobs:
   # The e2e that native-Linux Docker can't give us: run plug NATIVELY on each OS
   # against a REAL cluster, reaching services BY NAME over a Tailscale mesh (the
   # cluster can't be Linux containers on a mac/win runner, so it runs ONCE on its
-  # own Linux run — cluster.yml — and every client joins it). Part of CI, not a
-  # separate workflow; runs on EVERY branch push (so any branch gets its full
-  # mesh-blessed image), after the unit tests pass. Off PRs — it's heavy and
-  # needs the Tailscale/Docker secrets, absent on fork PRs. Needs TAILSCALE_CLIENT_ID/SECRET.
+  # own Linux run and every client joins it). TWO FAMILIES of clusters, same e2e
+  # chain against each: compose-for.yml (docker compose) and k8s-for.yml (kind —
+  # real upstream Kubernetes, the agent from the published deploy/plug-k8s.yaml).
+  # Part of CI, not a separate workflow; runs on EVERY branch push (so any
+  # branch gets its full mesh-blessed image), after the unit tests pass. Off
+  # PRs — it's heavy and needs the Tailscale/Docker secrets, absent on fork
+  # PRs. Needs TAILSCALE_CLIENT_ID/SECRET.
   start-cluster:
     name: start clusters
     needs: test
@@ -160,11 +164,13 @@ jobs:
     outputs:
       cluster_id_a: ${{ steps.dispatch_a.outputs.id }}
       cluster_id_b: ${{ steps.dispatch_b.outputs.id }}
+      k8s_id_a: ${{ steps.dispatch_ka.outputs.id }}
+      k8s_id_b: ${{ steps.dispatch_kb.outputs.id }}
     steps:
       - uses: actions/checkout@v6
-      # TWO clusters, so the e2e can assert multicluster: the same service name
-      # must reach the RIGHT backend through each plug (each cluster's `ident`
-      # answers its own corr id).
+      # TWO clusters per family, so the e2e can assert multicluster: the same
+      # service name must reach the RIGHT backend through each plug (each
+      # cluster's `ident` answers its own corr id).
       - id: dispatch_a
         env:
           GH_TOKEN: ${{ github.token }}
@@ -173,6 +179,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-b)" >> "$GITHUB_OUTPUT"
+      - id: dispatch_ka
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-ka k8s-for.yml)" >> "$GITHUB_OUTPUT"
+      - id: dispatch_kb
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-kb k8s-for.yml)" >> "$GITHUB_OUTPUT"
       # The compat cell needs the LAST PUBLISHED launcher for every OS, but only
       # this Linux job has Docker — extract all of them from the published image
       # here and ship them to the mac/win legs as an artifact.
@@ -274,9 +288,81 @@ jobs:
         shell: bash
         run: bash scripts/ci/compat-launcher.sh "$A" 2222
 
+  # The SAME chain, replayed against the KUBERNETES family (k8s-for.yml / kind):
+  # what was "coded but never executed at runtime" — the k8s Service backend for
+  # -s (Services-only RBAC), the k8s takeover (selector repointed, annotation
+  # receipt, restore), NodePort reach — is now proven on every push, from all
+  # three OSes. No compat step here: launcher↔core is backend-independent and
+  # already covered by the compose legs.
+  e2e-k8s:
+    name: e2e-k8s (${{ matrix.os }}, same chain on kind)
+    needs: start-cluster
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25 # a hung cell must not run the job (and the cluster) for hours
+    env:
+      A: plug-k8s-${{ github.run_id }}-ka
+      B: plug-k8s-${{ github.run_id }}-kb
+    strategy:
+      fail-fast: false # one OS failing must not cancel the others
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          cache: false
+      - uses: actions/setup-java@v4 # pin the JDK — the runners' ambient Java differs by OS
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Join the tailnet
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
+          tags: tag:ci
+          hostname: plug-k8s-${{ matrix.os }}-${{ github.run_id }}
+          args: --accept-dns=false # reach the cluster by tailnet IP; don't let Tailscale drive DNS
+      - name: Setup — install plug from the cluster + build clients
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh setup "$A" "$B" 2222
+      - name: Env passthrough
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh env "$A" "$B" 2222
+      - name: Protocol matrix (4 langs × 8 protocols)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh matrix "$A" "$B" 2222
+      - name: Multicluster (simultaneous)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh multicluster "$A" "$B" 2222
+      - name: Outage recovery
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh outage "$A" "$B" 2222
+      - name: Expose — serve a local port to the cluster (-s)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh expose "$A" "$B" 2222
+      - name: Gateway callback (external → published gateway → sink)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh gateway "$A" "$B" 2222
+      - name: Collision — a name already taken is refused
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh collision "$A" "$B" 2222
+      - name: Takeover — repoint the deployed Service, serve ours, restore it
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh takeover "$A" "$B" 2222
+
   kill-cluster:
     name: kill clusters
-    needs: [start-cluster, e2e]
+    needs: [start-cluster, e2e, e2e-k8s]
     if: always() && needs.start-cluster.result == 'success'
     runs-on: ubuntu-latest
     permissions:
@@ -290,3 +376,5 @@ jobs:
         run: |
           gh run cancel ${{ needs.start-cluster.outputs.cluster_id_a }} --repo ${{ github.repository }} || true
           gh run cancel ${{ needs.start-cluster.outputs.cluster_id_b }} --repo ${{ github.repository }} || true
+          gh run cancel ${{ needs.start-cluster.outputs.k8s_id_a }} --repo ${{ github.repository }} || true
+          gh run cancel ${{ needs.start-cluster.outputs.k8s_id_b }} --repo ${{ github.repository }} || true

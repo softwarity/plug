@@ -1,0 +1,17 @@
+# kind config for the CI k8s mesh cluster (scripts/ci/k8s-serve.sh).
+#
+# The extraPortMappings publish the two NodePorts on the RUNNER's host, so the
+# e2e legs keep the exact same contract as against the compose cluster:
+#   <tailnet-ip>:2222  → the agent's ssh   (NodePort 32222, deploy/plug-k8s.yaml)
+#   <tailnet-ip>:18090 → the gateway       (NodePort 31890, e2e/k8s.cluster.yaml)
+# Everything else (ClusterIP Services) stays cluster-internal — only the agent
+# can reach it, exactly like a real cluster.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 32222
+        hostPort: 2222
+      - containerPort: 31890
+        hostPort: 18090

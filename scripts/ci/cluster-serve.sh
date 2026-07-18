@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Bring up the e2e "cluster" on THIS runner and keep it alive so a remote runner
 # (macOS/Windows), joined to the same Tailscale tailnet, can reach it BY NAME
-# through plug. Used by .github/workflows/cluster.yml.
+# through plug. Used by .github/workflows/compose-for.yml.
 #
 # The agent publishes :2222 on the host (compose.cluster.yml) so the runner's
 # tailnet IP:2222 lands on it. The services (httpbin, ...) stay on the internal

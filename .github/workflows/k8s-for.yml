@@ -1,10 +1,12 @@
-name: cluster
+name: k8s-for
 
-# The e2e "cluster", on its own run so it lives separately from the tests. It is
-# started (and later cancelled) by e2e-mesh.yml via `gh workflow run` /
-# `gh run cancel`. It brings up the agent + services, joins the Tailscale tailnet
-# under a name derived from the caller's run id, and idles until cancelled — so a
-# macOS/Windows runner on the same tailnet can reach it BY NAME through plug.
+# The e2e "cluster", KUBERNETES FLAVOR — the k8s twin of compose-for.yml, so the
+# OS legs replay the exact same e2e chain against a real Kubernetes backend
+# (kind: upstream k8s in Docker). Started (and later cancelled) by ci.yml via
+# `gh workflow run` / `gh run cancel`. It builds the agent from this branch,
+# stands up kind + the services (e2e/k8s.cluster.yaml) + the agent from the
+# PUBLISHED deploy/plug-k8s.yaml (RBAC included), joins the Tailscale tailnet,
+# and idles until cancelled.
 #
 # Requires repo secrets TAILSCALE_CLIENT_ID / TAILSCALE_CLIENT_SECRET (a Tailscale
 # OAuth client tagged tag:ci). Dispatch-only by design.
@@ -15,16 +17,14 @@ on:
         description: correlation id (the caller's run id) — names the tailnet node
         required: true
 
-run-name: cluster-for-${{ inputs.corr }}
+run-name: k8s-for-${{ inputs.corr }}
 
 permissions:
   contents: read
 
 jobs:
-  # THE image under test: the agent is built from this branch FIRST, as its own
-  # pipeline stage — it then serves both the cluster services and the plug
-  # installer/binaries that every OS leg installs from. Two jobs mean two
-  # runners, so the image travels as an artifact (docker save → docker load).
+  # THE image under test, built from this branch — same two-job shape as
+  # compose-for.yml (the image travels between runners as an artifact).
   build-agent:
     name: build the agent image (this branch)
     runs-on: ubuntu-latest
@@ -40,19 +40,19 @@ jobs:
         run: docker save softwarity/plug:e2e | gzip > /tmp/agent-image.tar.gz
       - uses: actions/upload-artifact@v7
         with:
-          name: agent-image
+          name: agent-image-k8s
           path: /tmp/agent-image.tar.gz
           retention-days: 1
 
   serve:
-    name: serve the cluster
+    name: serve the cluster (kind)
     needs: build-agent
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: actions/download-artifact@v7
         with:
-          name: agent-image
+          name: agent-image-k8s
           path: /tmp
       - name: Load the agent image
         run: gunzip -c /tmp/agent-image.tar.gz | docker load
@@ -62,11 +62,9 @@ jobs:
           oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
           oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
           tags: tag:ci
-          hostname: plug-cluster-${{ inputs.corr }}
+          hostname: plug-k8s-${{ inputs.corr }}
       - name: Serve the cluster (idle until cancelled)
         env:
           PLUG_CLUSTER_TTL: "1200" # backstop only — kill-cluster cancels this run when the e2e jobs finish
-          # The cluster's identity, served by the `ident` service — the multicluster
-          # e2e asserts that the SAME name reaches the RIGHT cluster through each plug.
           PLUG_CLUSTER_IDENT: ${{ inputs.corr }}
-        run: bash scripts/ci/cluster-serve.sh
+        run: bash scripts/ci/k8s-serve.sh
