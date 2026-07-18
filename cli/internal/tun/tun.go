@@ -95,14 +95,14 @@ type Datapath struct {
 // already-dialed cluster transport. The caller must Stop() it to tear everything
 // down (routes + DNS restored). This is the piece a daemon holds; Run wraps it.
 func StartDatapath(tr Dialer, logf func(string, ...any)) (*Datapath, error) {
-	return startDatapathDF(constDial(tr), logf)
+	return startDatapathDF(constDial(tr), func() []Dialer { return []Dialer{tr} }, logf)
 }
 
 // startDatapathDF is StartDatapath's core, parameterized by the dialFunc that
 // routes each intercepted flow to a transport: constDial for a single cluster,
 // multiDial for the global multicluster daemon. It brings up the TUN + routes +
 // DNS + netstack + bridge, identically in both cases.
-func startDatapathDF(df dialFunc, logf func(string, ...any)) (*Datapath, error) {
+func startDatapathDF(df dialFunc, dialers func() []Dialer, logf func(string, ...any)) (*Datapath, error) {
 	log := logfn(logf)
 	if err := checkPriv(); err != nil {
 		return nil, err
@@ -150,7 +150,11 @@ func startDatapathDF(df dialFunc, logf func(string, ...any)) (*Datapath, error) 
 	// dnsIP:53 (a UDP forwarder), reached by the child through the TUN — no
 	// loopback socket, so macOS's getaddrinfo (which ignores /etc/resolv.conf)
 	// resolves cluster names via the system resolver we just repointed at dnsIP.
-	st, ep := buildStack(tab, df, upstreamResolver(upstreams), log)
+	// Pre-mint existence check: a bare name is only minted if it exists in a
+	// connected cluster (asked through the agent, cached) — an absent name gets
+	// an honest NXDOMAIN. See newNameChecker for the fallbacks.
+	check := newNameChecker(dialers, log)
+	st, ep := buildStack(tab, df, upstreamResolver(upstreams), check, log)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	br := &bridge{dev: dev, ep: ep}

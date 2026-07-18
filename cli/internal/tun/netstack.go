@@ -82,7 +82,7 @@ func (l *logLimiter) allow(key string) bool {
 	return true
 }
 
-func buildStack(tab *faketab, df dialFunc, upstream *net.Resolver, log logfn) (*stack.Stack, *channel.Endpoint) {
+func buildStack(tab *faketab, df dialFunc, upstream *net.Resolver, check nameChecker, log logfn) (*stack.Stack, *channel.Endpoint) {
 	s := stack.New(stack.Options{
 		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, ipv6.NewProtocol},
 		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol},
@@ -105,7 +105,7 @@ func buildStack(tab *faketab, df dialFunc, upstream *net.Resolver, log logfn) (*
 	// and this UDP forwarder answers them. No loopback socket — so getaddrinfo on
 	// macOS, which ignores /etc/resolv.conf, reaches us via the system resolver.
 	udpFwd := udp.NewForwarder(s, func(r *udp.ForwarderRequest) {
-		handleDNS(r, tab, upstream, log)
+		handleDNS(r, tab, upstream, check, log)
 	})
 	s.SetTransportProtocolHandler(udp.ProtocolNumber, udpFwd.HandlePacket)
 	return s, ep
@@ -176,7 +176,7 @@ func handleTCP(r *tcp.ForwarderRequest, tab *faketab, df dialFunc, log logfn) {
 // NOT our resolver is drained and dropped (CreateEndpoint+Close, so the cloned
 // packet is released) — LOUDLY when it targeted a minted name: plug serves only
 // DNS in-stack, and the app deserves to know why nothing answers.
-func handleDNS(r *udp.ForwarderRequest, tab *faketab, upstream *net.Resolver, log logfn) {
+func handleDNS(r *udp.ForwarderRequest, tab *faketab, upstream *net.Resolver, check nameChecker, log logfn) {
 	var wq waiter.Queue
 	ep, terr := r.CreateEndpoint(&wq)
 	if terr != nil {
@@ -204,7 +204,7 @@ func handleDNS(r *udp.ForwarderRequest, tab *faketab, upstream *net.Resolver, lo
 			if err != nil {
 				return // idle past the deadline (or closed) → done with this client
 			}
-			if resp := answerDNS(buf[:n], tab, upstream); resp != nil {
+			if resp := answerDNS(buf[:n], tab, upstream, check); resp != nil {
 				_, _ = conn.Write(resp)
 			}
 		}

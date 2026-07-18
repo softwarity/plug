@@ -90,7 +90,7 @@ func answerIPv4(resp []byte) (uint32, bool) {
 
 func TestAnswerSingleLabelMintsFake(t *testing.T) {
 	tab := newFaketab(fakeBase)
-	resp := answerDNS(query("grpc", 1), tab, upstreamResolver(nil))
+	resp := answerDNS(query("grpc", 1), tab, upstreamResolver(nil), nil)
 	ip, ok := answerIPv4(resp)
 	if !ok {
 		t.Fatal("expected an A answer for a single-label name")
@@ -104,7 +104,7 @@ func TestAnswerSingleLabelMintsFake(t *testing.T) {
 }
 
 func TestAnswerLocalhostIsLoopback(t *testing.T) {
-	resp := answerDNS(query("localhost", 1), newFaketab(fakeBase), upstreamResolver(nil))
+	resp := answerDNS(query("localhost", 1), newFaketab(fakeBase), upstreamResolver(nil), nil)
 	ip, ok := answerIPv4(resp)
 	if !ok || ip != 0x7F000001 {
 		t.Fatalf("localhost → %08x,%v; want 127.0.0.1", ip, ok)
@@ -112,7 +112,7 @@ func TestAnswerLocalhostIsLoopback(t *testing.T) {
 }
 
 func TestAnswerAAAAIsNodata(t *testing.T) {
-	resp := answerDNS(query("grpc", 28), newFaketab(fakeBase), upstreamResolver(nil))
+	resp := answerDNS(query("grpc", 28), newFaketab(fakeBase), upstreamResolver(nil), nil)
 	if _, ok := answerIPv4(resp); ok {
 		t.Fatal("AAAA must be NODATA (no answer) to force IPv4")
 	}

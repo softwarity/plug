@@ -55,13 +55,13 @@ toute façon).
 - [ ] **Transport `kubectl exec`** : tunnel via `kubectl exec` sur un pod nu — zéro port exposé, accès gouverné par le kubeconfig RBAC (adoucit le compromis no-auth).
 - [ ] **Gateway hôte du tunnel** : la gateway (Java) déjà déployée héberge l'endpoint et l'active dynamiquement — son auth devant. Fin de l'agent dédié.
 
-## 🟠 Fuite DNS Docker-Desktop-sur-poste-plugué (diagnostiquée 18/07, live sur neo)
+## 🟠 Fuite DNS Docker-Desktop-sur-poste-plugué — RÉSOLUE (18/07)
 Docker forwarde les noms inconnus du cluster vers le resolver de la VM → hérite
 du DNS du Mac → **resolver plug** quand des sessions tournent → un nom ABSENT du
-cluster résout vers une fake IP `198.18.x.x` (vu : la gateway neo sur
-`area-qnh-frontend/198.18.0.6` → connection refused au lieu d'unknown host).
-- [x] **Doc** : callout page Swarm — remède `daemon.json "dns": ["1.1.1.1"]` (Docker Desktop → Docker Engine).
-- [ ] **Mitigation produit ?** macOS/Windows only (DNS machine-wide ; Linux immunisé par le mount-ns par session). Pistes : rien de propre identifié — le resolver ne peut pas distinguer une requête de la VM Docker d'une requête d'un process plugué (tout arrive du système). À creuser si d'autres cas mordent.
+cluster résolvait vers une fake IP `198.18.x.x` (connection refused au lieu
+d'unknown host).
+- [x] **Doc** : callout page Swarm — remède `daemon.json "dns": ["1.1.1.1"]` (devenu défense-en-profondeur).
+- [x] **Mitigation produit** (18/07) : le **mint est désormais vérifié** — avant de minter un nom nu, le CLI demande à l'agent (verbe `resolve`, cache 5 min/30 s nég) si le nom existe dans un cluster connecté ; absent partout → **NXDOMAIN honnête**. Le helper **filtre les échos 198.18/15** (une réponse dans la plage plug = la boucle poste-plugué, jamais un vrai service) — le fix est donc immunisé contre la boucle qu'il corrige. Vieil agent sans le verbe → mint comme avant (contrat de dégradation). Banc compose ✅ (`no such host` immédiat au lieu de 4 timeouts + refused) ; cellule e2e « dns honesty » ×9 jambes.
 
 ## ⚪ Dettes / plus tard
 - [ ] **Tests unitaires** (comportements déjà prouvés en e2e, faible priorité) : `answerDNS` strip `.plug` → mint du nom nu ; round-trip registre NRPT (`setSystemNRPT` / `clearSystemNRPT`) ; `DialContext` — un rejet de canal (`*ssh.OpenChannelError`) ne reconnecte pas ; `ensureVersion` (`.exe`) / `ensureWintunBeside`.

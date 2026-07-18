@@ -93,10 +93,11 @@ func upstreamResolver(servers []string) *net.Resolver {
 }
 
 // answerDNS parses the first question and builds a minimal response: A for a
-// single-label name → a fake IP in this instance's /24; A for a dotted name →
-// the real address via the saved upstream; AAAA → NODATA (force IPv4); localhost
-// → 127.0.0.1.
-func answerDNS(q []byte, tab *faketab, upstream *net.Resolver) []byte {
+// single-label name → a fake IP in this instance's /24 IF the name exists in a
+// connected cluster (check; nil skips the check and always mints); A for a
+// dotted name → the real address via the saved upstream; AAAA → NODATA (force
+// IPv4); localhost → 127.0.0.1.
+func answerDNS(q []byte, tab *faketab, upstream *net.Resolver, check nameChecker) []byte {
 	if len(q) < 13 {
 		return nil
 	}
@@ -119,7 +120,9 @@ func answerDNS(q []byte, tab *faketab, upstream *net.Resolver) []byte {
 		// force a DNS query. Strip it and mint the SAME fake IP as the bare name, so
 		// the connect maps back to "my-service" for the agent to resolve.
 		if base := name[:len(name)-len(searchSuffix)-1]; base != "" && !strings.Contains(base, ".") {
-			if ip := tab.mint(base); ip != 0 {
+			if check != nil && !check(base) {
+				rcode = 3 // honest NXDOMAIN — the name is in no connected cluster
+			} else if ip := tab.mint(base); ip != 0 {
 				answerIP = net.IPv4(byte(ip>>24), byte(ip>>16), byte(ip>>8), byte(ip))
 			} else {
 				rcode = 3
@@ -128,7 +131,9 @@ func answerDNS(q []byte, tab *faketab, upstream *net.Resolver) []byte {
 			rcode = 3
 		}
 	case !strings.Contains(name, "."): // single-label cluster name → fake
-		if ip := tab.mint(name); ip != 0 {
+		if check != nil && !check(name) {
+			rcode = 3 // honest NXDOMAIN — the name is in no connected cluster
+		} else if ip := tab.mint(name); ip != 0 {
 			answerIP = net.IPv4(byte(ip>>24), byte(ip>>16), byte(ip>>8), byte(ip))
 		} else {
 			rcode = 3 // NXDOMAIN — this instance's /24 is exhausted

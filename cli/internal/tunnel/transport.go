@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -80,6 +81,11 @@ type Transport struct {
 	client *ssh.Client
 	closed bool
 	done   chan struct{}
+
+	// resolveUnsupported remembers an agent that predates the `resolve` verb
+	// (it answered "unknown command") — asked once, then every later name
+	// check skips the round-trip and falls back to minting.
+	resolveUnsupported atomic.Bool
 }
 
 // Dial opens the SSH transport to the agent as the tunnel user, authenticating
@@ -472,4 +478,53 @@ func repin(path, addr, enc string) {
 	}
 	b.WriteString(addr + " " + enc + "\n")
 	_ = os.WriteFile(path, []byte(b.String()), 0o600)
+}
+
+// ResolveInCluster reports whether name exists in this transport's cluster,
+// asked THROUGH the agent (its resolver is where that truth lives): the CLI's
+// resolver calls this before minting a fake IP for a bare name, so an absent
+// name gets an honest NXDOMAIN instead of a fake that can only ever refuse the
+// connect. ok=false means the answer is unusable — an agent that predates the
+// verb — and the caller should mint as before (the degradation contract).
+// Transport hiccups fail OPEN (found=true, ok=true): a reconnecting tunnel
+// must never break name resolution.
+func (t *Transport) ResolveInCluster(name string) (found, ok bool) {
+	if t.resolveUnsupported.Load() {
+		return true, false
+	}
+	cl := t.current()
+	if cl == nil {
+		return true, true
+	}
+	sess, err := cl.NewSession()
+	if err != nil {
+		return true, true
+	}
+	defer sess.Close()
+	type res struct {
+		out []byte
+		err error
+	}
+	ch := make(chan res, 1)
+	go func() {
+		out, oerr := sess.Output("resolve " + name)
+		ch <- res{out, oerr}
+	}()
+	var r res
+	select {
+	case r = <-ch:
+	case <-time.After(3 * time.Second):
+		return true, true // a wedged session must not stall DNS — fail open
+	}
+	switch ans := strings.TrimSpace(string(r.out)); {
+	case ans == "found":
+		return true, true
+	case ans == "nxdomain":
+		return false, true
+	case strings.Contains(ans, "unknown command"):
+		t.resolveUnsupported.Store(true) // pre-2.2 agent — remember, mint as before
+		return true, false
+	default:
+		return true, true // garbled/error — fail open, retry next time
+	}
 }

@@ -130,16 +130,29 @@ do_setup() {
 
 # env passthrough: the child must see the caller's environment (a user's
 # `FOO=bar plug npm start` / dotenv workflow depends on env AND cwd surviving
-# plug's launcher → core → shim chain untouched).
+# plug's launcher → core → shim chain untouched). Piggybacked here: DNS honesty
+# — a name ABSENT from the cluster must answer NXDOMAIN (plug asks the agent
+# before minting), not hand out a fake IP that can only refuse the connect.
 do_env() {
   echo "=== env passthrough ==="
   local ev
   ev="$(PLUG_E2E_CANARY=canary-42 perl -e 'alarm 45; exec @ARGV or exit 127' "$PLUG" --host "$ip" --port "$port" $serve \
     bash -c 'echo "$PLUG_E2E_CANARY"' 2>/dev/null | tr -d '\r' | tail -1)"
   if [ "$ev" = "canary-42" ]; then
-    echo "env OK — the child sees the caller's variables"; sum "**env passthrough** ✅"; return 0
+    echo "env OK — the child sees the caller's variables"; sum "**env passthrough** ✅"
+  else
+    echo "--- env FAIL — child saw '${ev:-<nothing>}' (want canary-42)"; sum "**env passthrough** ❌"; return 1
   fi
-  echo "--- env FAIL — child saw '${ev:-<nothing>}' (want canary-42)"; sum "**env passthrough** ❌"; return 1
+
+  echo "=== dns honesty: an absent name must NXDOMAIN ==="
+  local nx
+  nx="$(plug curl -sS --max-time 8 "http://absent-name-e2e:9/" 2>&1 | tr -d '\r' | tail -1)"
+  if printf '%s' "$nx" | grep -qiE "could not resolve|no such host|name or service not known"; then
+    echo "dns OK — absent-name-e2e answered NXDOMAIN (honest resolution failure)"
+    sum "**dns honesty (absent → NXDOMAIN)** ✅"; return 0
+  fi
+  echo "--- dns FAIL — expected a resolution error, got: ${nx:-<nothing>}"
+  sum "**dns honesty (absent → NXDOMAIN)** ❌ — \`${nx:-nothing}\`"; return 1
 }
 
 # protocol matrix: every language client, UNDER plug, reaches each cluster

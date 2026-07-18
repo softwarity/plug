@@ -77,6 +77,18 @@ func (c *ClusterTransports) Keys() []string {
 	return ks
 }
 
+// All snapshots the current dialers — the name checker asks each of them
+// whether a bare name exists somewhere before minting a fake IP for it.
+func (c *ClusterTransports) All() []Dialer {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ds := make([]Dialer, 0, len(c.m))
+	for _, d := range c.m {
+		ds = append(ds, d)
+	}
+	return ds
+}
+
 func (c *ClusterTransports) get(key string) (Dialer, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -104,5 +116,5 @@ func (c *ClusterTransports) sole() (Dialer, string, bool) {
 // each cluster register. This is the macOS multicluster entry point; the
 // single-cluster StartDatapath is unchanged.
 func StartGlobalDatapath(ct *ClusterTransports, logf func(string, ...any)) (*Datapath, error) {
-	return startDatapathDF(multiDial(ct), logf)
+	return startDatapathDF(multiDial(ct), ct.All, logf)
 }

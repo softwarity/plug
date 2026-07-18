@@ -2,6 +2,23 @@
 
 ## NEXT RELEASE
 
+### Fixed: a name absent from the cluster now answers NXDOMAIN
+
+plug used to mint a stand-in IP for ANY bare name and let the connect sort it
+out — an absent name resolved "fine" and then hung or refused, which bit
+hardest with a cluster running on the plugged workstation itself (Docker
+Desktop forwards its containers' unknown lookups to the machine's DNS — plug —
+and a name that existed nowhere came back with a phantom `198.18.x.x`). The
+resolver now asks the agent whether the bare name exists in a connected
+cluster before minting (new agent verb `resolve`, verdicts cached: found
+5 min, absent 30 s so a service being deployed appears quickly) and answers an
+honest **NXDOMAIN** otherwise — apps get *unknown host* immediately instead of
+timeouts and *connection refused*. The agent discards answers inside
+`198.18.0.0/15` (plug's own fake range: such an answer can only be an echo of
+a plug resolver upstream, never a real service), which makes the check immune
+to the very loop it fixes. Against an older agent the CLI mints as before.
+Asserted end to end in CI on all nine legs (the "dns honesty" cell).
+
 ### Fixed: UDP to a named service is now dropped loudly
 
 plug tunnels TCP only (the SSH channel is stream-only) — a named UDP flow was

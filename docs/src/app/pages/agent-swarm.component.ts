@@ -130,12 +130,12 @@ ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@$
     <div class="callout">
       <strong>Cluster on the same machine as plug (Docker Desktop)?</strong> Docker forwards
       lookups it cannot answer to the VM's upstream resolver — which inherits your machine's DNS,
-      pointed at plug while sessions run. A name that does <em>not</em> exist in the cluster then
-      resolves to a plug stand-in IP (<code>198.18.x.x</code>) instead of failing cleanly, and the
-      caller gets <em>connection refused</em> instead of <em>unknown host</em>. Fix it for good in
-      Docker Desktop → Settings → Docker Engine: add
-      <code>"dns": ["1.1.1.1", "8.8.8.8"]</code> (cluster-internal names are unaffected — only
-      unknown names stop leaking to your machine).
+      pointed at plug while sessions run. Since 2.2 plug handles this honestly: before minting a
+      stand-in IP for a bare name it asks the agent whether the name exists in the cluster (echoes
+      of plug's own <code>198.18.x.x</code> range are recognized and discarded), and an absent name
+      answers <strong>unknown host</strong> — no more phantom <em>connection refused</em>. Belt and
+      braces, or on older agents: Docker Desktop → Settings → Docker Engine, add
+      <code>"dns": ["1.1.1.1", "8.8.8.8"]</code> so unknown names never leave the VM at all.
     </div>
     <p>
       Installed a launcher before <code>-s</code> existed? Put <code>-s</code> after

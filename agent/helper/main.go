@@ -113,6 +113,34 @@ func dispatch(cmd []string) {
 			answer("error: usage: unserve-name <name>")
 		}
 		unserveName(cmd[1])
+	case "resolve":
+		// Does <name> exist in THIS cluster? The CLI asks before minting a fake
+		// IP for a bare name, so an absent name gets an honest NXDOMAIN instead
+		// of a fake that can only refuse the connect (the Docker-Desktop
+		// DNS-leak fix). Resolution runs here, through the cluster's own
+		// resolver — the only place that truth lives. Both outcomes answer on
+		// stdout ("found"/"nxdomain"): an error would be indistinguishable from
+		// a pre-2.2 agent's "unknown command", which means "mint as before".
+		if len(cmd) != 2 || !nameRe.MatchString(cmd[1]) {
+			answer("error: usage: resolve <name>")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		addrs, err := net.DefaultResolver.LookupHost(ctx, cmd[1])
+		cancel()
+		for _, a := range addrs {
+			// 198.18.0.0/15 is the range plug itself mints fakes from — an
+			// answer there can only be an ECHO of a plug resolver upstream
+			// (cluster on a plugged workstation: embedded DNS → VM → host DNS
+			// → plug), never a real cluster service. Filtering it here is what
+			// makes the whole check immune to that loop.
+			if ip := net.ParseIP(a).To4(); ip != nil && ip[0] == 198 && ip[1]&0xFE == 18 {
+				continue
+			}
+			if err == nil {
+				answer("found")
+			}
+		}
+		answer("nxdomain")
 	default:
 		answer("error: unknown command %q", cmd[0])
 	}
