@@ -284,7 +284,7 @@ import { MatIconModule } from '@angular/material/icon';
         </g>
         <g opacity="0">
           <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.165;0.177;0.36;0.40;1" dur="16s" repeatCount="indefinite" />
-          <line x1="574" y1="387" x2="574" y2="366" stroke="#a371f7" stroke-width="2.2" marker-end="url(#ab-p)" />
+          <line x1="574" y1="387" x2="574" y2="366" stroke="#a371f7" stroke-width="2.2" marker-start="url(#ab-p)" marker-end="url(#ab-p)" />
           <text x="562" y="380" text-anchor="end" font-size="9.5" fill="#a371f7">query postgres by name</text>
         </g>
         <!-- Round 1: the response travels back to the browser. -->
@@ -311,11 +311,11 @@ import { MatIconModule } from '@angular/material/icon';
         </g>
         <g opacity="0">
           <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.66;0.672;0.90;0.94;1" dur="16s" repeatCount="indefinite" />
-          <line x1="740" y1="220" x2="612" y2="220" stroke="#a371f7" stroke-width="2.2" marker-end="url(#ab-p)" />
+          <line x1="740" y1="220" x2="612" y2="220" stroke="#a371f7" stroke-width="2.2" marker-start="url(#ab-p)" marker-end="url(#ab-p)" />
         </g>
         <g opacity="0">
           <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.705;0.717;0.90;0.94;1" dur="16s" repeatCount="indefinite" />
-          <line x1="574" y1="248" x2="574" y2="295" stroke="#a371f7" stroke-width="2.2" marker-end="url(#ab-p)" />
+          <line x1="574" y1="248" x2="574" y2="295" stroke="#a371f7" stroke-width="2.2" marker-start="url(#ab-p)" marker-end="url(#ab-p)" />
           <text x="562" y="275" text-anchor="end" font-size="9.5" fill="#a371f7">query postgres by name</text>
         </g>
         <!-- Round 2: the response travels from YOUR machine back to the browser. -->
