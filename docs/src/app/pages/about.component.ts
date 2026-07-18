@@ -192,10 +192,11 @@ import { MatIconModule } from '@angular/material/icon';
     <div class="diagram">
       <svg viewBox="0 0 900 511" xmlns="http://www.w3.org/2000/svg" role="img" font-family="-apple-system, Segoe UI, Roboto, sans-serif">
         <title>plug: your process is a full member of the cluster, both directions</title>
-        <desc>Animated request walk in two rounds. Round one, the cluster alone: the browser calls the gateway, the DNS resolves service1 to the deployed service, which queries postgres. Then plug -s starts: the deployed service1 is parked, and the same request now walks browser, gateway, DNS, plug agent, SSH tunnel, your local service1 — which queries postgres back through the agent. The loop ends with the service restored.</desc>
+        <desc>Animated request walk in two rounds. Round one, the cluster alone: the browser calls the gateway, the DNS resolves service1 to the deployed service, which queries postgres and responds to the browser. Then plug -s starts: the deployed service1 is parked, and the same request now walks browser, gateway, DNS, plug agent, SSH tunnel, your local service1 — which queries postgres back through the agent and responds to the browser from your machine. The loop ends with the service restored.</desc>
         <defs>
           <marker id="ab-g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#3fb950" /></marker>
           <marker id="ab-p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#a371f7" /></marker>
+          <marker id="ab-b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#58a6ff" /></marker>
         </defs>
         <rect x="2" y="2" width="896" height="507" rx="16" fill="#0d1117" stroke="#30363d" stroke-width="1.5" />
 
@@ -286,6 +287,12 @@ import { MatIconModule } from '@angular/material/icon';
           <line x1="574" y1="387" x2="574" y2="366" stroke="#a371f7" stroke-width="2.2" marker-end="url(#ab-p)" />
           <text x="562" y="380" text-anchor="end" font-size="9.5" fill="#a371f7">query postgres by name</text>
         </g>
+        <!-- Round 1: the response travels back to the browser. -->
+        <g opacity="0">
+          <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.21;0.222;0.36;0.40;1" dur="16s" repeatCount="indefinite" />
+          <path d="M478 424 C 360 480, 220 420, 158 285" fill="none" stroke="#58a6ff" stroke-width="2" marker-end="url(#ab-b)" />
+          <text x="330" y="464" text-anchor="middle" font-size="9.5" fill="#58a6ff">response</text>
+        </g>
         <!-- Round 2: the DNS now resolves service1 to the plug agent. -->
         <g opacity="0">
           <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.525;0.537;0.90;0.94;1" dur="16s" repeatCount="indefinite" />
@@ -311,6 +318,12 @@ import { MatIconModule } from '@angular/material/icon';
           <line x1="574" y1="248" x2="574" y2="295" stroke="#a371f7" stroke-width="2.2" marker-end="url(#ab-p)" />
           <text x="562" y="275" text-anchor="end" font-size="9.5" fill="#a371f7">query postgres by name</text>
         </g>
+        <!-- Round 2: the response travels from YOUR machine back to the browser. -->
+        <g opacity="0">
+          <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.75;0.762;0.90;0.94;1" dur="16s" repeatCount="indefinite" />
+          <path d="M742 156 C 600 34, 250 34, 112 176" fill="none" stroke="#58a6ff" stroke-width="2" marker-end="url(#ab-b)" />
+          <text x="430" y="52" text-anchor="middle" font-size="9.5" fill="#58a6ff">response</text>
+        </g>
         <!-- postgres glows when the query lands (both rounds). -->
         <g opacity="0">
           <animate attributeName="opacity" values="0;0;1;1;0;0;1;1;0;0" keyTimes="0;0.165;0.177;0.36;0.40;0.705;0.717;0.90;0.94;1" dur="16s" repeatCount="indefinite" />
@@ -319,9 +332,11 @@ import { MatIconModule } from '@angular/material/icon';
         </g>
 
         <line x1="60" y1="481" x2="90" y2="481" stroke="#3fb950" stroke-width="2.6" />
-        <text x="98" y="485" font-size="11.5" fill="#8b949e">inbound — browser → gateway → DNS → agent → your process (plug -s)</text>
-        <line x1="560" y1="481" x2="590" y2="481" stroke="#a371f7" stroke-width="2.6" />
-        <text x="598" y="485" font-size="11.5" fill="#8b949e">outbound — your process → postgres</text>
+        <text x="98" y="485" font-size="11.5" fill="#8b949e">inbound — to your process (plug -s)</text>
+        <line x1="350" y1="481" x2="380" y2="481" stroke="#a371f7" stroke-width="2.6" />
+        <text x="388" y="485" font-size="11.5" fill="#8b949e">outbound — to postgres, by name</text>
+        <line x1="620" y1="481" x2="650" y2="481" stroke="#58a6ff" stroke-width="2.6" />
+        <text x="658" y="485" font-size="11.5" fill="#8b949e">response — back to the browser</text>
       </svg>
     </div>
     <p class="cap">
