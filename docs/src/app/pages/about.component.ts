@@ -190,23 +190,23 @@ import { MatIconModule } from '@angular/material/icon';
     <app-code lang="text">plug -s my-app:8080:3000 npm run start:dev</app-code>
 
     <div class="diagram">
-      <svg viewBox="0 0 900 555" xmlns="http://www.w3.org/2000/svg" role="img" font-family="-apple-system, Segoe UI, Roboto, sans-serif">
+      <svg viewBox="0 0 900 511" xmlns="http://www.w3.org/2000/svg" role="img" font-family="-apple-system, Segoe UI, Roboto, sans-serif">
         <title>plug: your process is a full member of the cluster, both directions</title>
         <desc>Animated in two phases. First, the cluster runs on its own: the browser reaches the gateway, the DNS routes service1 to the deployed service, which queries postgres. Then plug -s starts on your machine: the deployed service1 is parked (disabled), the DNS routes service1 to the plug agent, and the same flows now go through the SSH tunnel to your local process — which queries postgres by name in return. The loop then restarts.</desc>
         <defs>
           <marker id="ab-g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#3fb950" /></marker>
           <marker id="ab-p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#a371f7" /></marker>
         </defs>
-        <rect x="2" y="2" width="896" height="551" rx="16" fill="#0d1117" stroke="#30363d" stroke-width="1.5" />
+        <rect x="2" y="2" width="896" height="507" rx="16" fill="#0d1117" stroke="#30363d" stroke-width="1.5" />
 
-        <rect x="30" y="196" width="132" height="102" rx="10" fill="#161b22" stroke="#30363d" />
-        <rect x="42" y="208" width="108" height="18" rx="4" fill="#21262d" />
-        <circle cx="51" cy="217" r="2.3" fill="#484f58" /><circle cx="60" cy="217" r="2.3" fill="#484f58" /><circle cx="69" cy="217" r="2.3" fill="#484f58" />
-        <rect x="42" y="230" width="108" height="50" fill="#0d1117" stroke="#30363d" />
-        <text x="96" y="260" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#e6edf3">app.acme.com</text>
-        <text x="96" y="320" text-anchor="middle" font-size="12" fill="#8b949e">a browser, out there</text>
+        <rect x="30" y="180" width="132" height="102" rx="10" fill="#161b22" stroke="#30363d" />
+        <rect x="42" y="192" width="108" height="18" rx="4" fill="#21262d" />
+        <circle cx="51" cy="201" r="2.3" fill="#484f58" /><circle cx="60" cy="201" r="2.3" fill="#484f58" /><circle cx="69" cy="201" r="2.3" fill="#484f58" />
+        <rect x="42" y="214" width="108" height="50" fill="#0d1117" stroke="#30363d" />
+        <text x="96" y="244" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#e6edf3">app.acme.com</text>
+        <text x="96" y="304" text-anchor="middle" font-size="12" fill="#8b949e">a browser, out there</text>
 
-        <rect x="222" y="52" width="418" height="440" rx="12" fill="#0e141b" stroke="#30363d" />
+        <rect x="222" y="52" width="418" height="396" rx="12" fill="#0e141b" stroke="#30363d" />
         <text x="246" y="80" font-size="12" letter-spacing="2" fill="#8b949e" font-weight="700">THE CLUSTER</text>
         <rect x="248" y="104" width="104" height="50" rx="8" fill="#161b22" stroke="#30363d" />
         <text x="300" y="126" text-anchor="middle" font-size="12.5" fill="#e6edf3" font-weight="600">gateway</text>
@@ -214,24 +214,24 @@ import { MatIconModule } from '@angular/material/icon';
         <rect x="248" y="192" width="132" height="54" rx="8" fill="#161b22" stroke="#30363d" />
         <text x="314" y="214" text-anchor="middle" font-size="12" fill="#e6edf3" font-weight="600">cluster DNS</text>
 
-        <rect x="520" y="178" width="90" height="98" rx="8" fill="#161b22" stroke="#a371f7" stroke-width="1.4" />
-        <text x="565" y="214" text-anchor="middle" font-size="12.5" fill="#e6edf3" font-weight="600">plug</text>
-        <text x="565" y="231" text-anchor="middle" font-size="11" fill="#8b949e">agent</text>
+        <rect x="520" y="146" width="90" height="98" rx="8" fill="#161b22" stroke="#a371f7" stroke-width="1.4" />
+        <text x="565" y="182" text-anchor="middle" font-size="12.5" fill="#e6edf3" font-weight="600">plug</text>
+        <text x="565" y="199" text-anchor="middle" font-size="11" fill="#8b949e">agent</text>
 
-        <ellipse cx="574" cy="345" rx="36" ry="10" fill="#161b22" stroke="#30363d" />
-        <path d="M538 345 V389 a36 10 0 0 0 72 0 V345" fill="#161b22" stroke="#30363d" />
-        <ellipse cx="574" cy="345" rx="36" ry="10" fill="#161b22" stroke="#30363d" />
-        <text x="574" y="375" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="12.5" fill="#e6edf3" font-weight="600">postgres</text>
+        <ellipse cx="574" cy="308" rx="36" ry="10" fill="#161b22" stroke="#30363d" />
+        <path d="M538 308 V352 a36 10 0 0 0 72 0 V308" fill="#161b22" stroke="#30363d" />
+        <ellipse cx="574" cy="308" rx="36" ry="10" fill="#161b22" stroke="#30363d" />
+        <text x="574" y="338" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="12.5" fill="#e6edf3" font-weight="600">postgres</text>
 
         <!-- BEFORE plug (phase 1): the deployed service1 is live and serves the flows. -->
         <g opacity="1">
           <animate attributeName="opacity" values="1;1;0;0;1" keyTimes="0;0.42;0.5;0.92;1" dur="12s" repeatCount="indefinite" />
-          <rect x="478" y="440" width="132" height="40" rx="8" fill="#21262d" stroke="#30363d" />
-          <text x="544" y="458" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#e6edf3" font-weight="600">service1</text>
-          <text x="544" y="472" text-anchor="middle" font-size="8" fill="#8b949e">deployed in the stack</text>
-          <path d="M314 246 V460 H472" fill="none" stroke="#3fb950" stroke-width="2.2" marker-end="url(#ab-g)" />
-          <line x1="574" y1="436" x2="574" y2="403" stroke="#a371f7" stroke-width="2.2" marker-end="url(#ab-p)" />
-          <text x="562" y="424" text-anchor="end" font-size="9.5" fill="#a371f7">query postgres by name</text>
+          <rect x="478" y="390" width="132" height="40" rx="8" fill="#21262d" stroke="#30363d" />
+          <text x="544" y="408" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#e6edf3" font-weight="600">service1</text>
+          <text x="544" y="422" text-anchor="middle" font-size="8" fill="#8b949e">deployed in the stack</text>
+          <path d="M314 246 V410 H472" fill="none" stroke="#3fb950" stroke-width="2.2" marker-end="url(#ab-g)" />
+          <line x1="574" y1="387" x2="574" y2="366" stroke="#a371f7" stroke-width="2.2" marker-end="url(#ab-p)" />
+          <text x="562" y="380" text-anchor="end" font-size="9.5" fill="#a371f7">query postgres by name</text>
         </g>
 
         <!-- WITH plug (phase 2): service1 is parked, the flows go to your machine. -->
@@ -239,44 +239,44 @@ import { MatIconModule } from '@angular/material/icon';
           <animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.42;0.5;0.92;1" dur="12s" repeatCount="indefinite" />
           <text x="314" y="232" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="9.5" fill="#3fb950">service1 → agent</text>
           <g opacity="0.55">
-            <rect x="478" y="440" width="132" height="40" rx="8" fill="#161b22" stroke="#30363d" stroke-dasharray="4 3" />
-            <text x="544" y="458" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11.5" fill="#8b949e" font-weight="600">service1</text>
-            <text x="544" y="472" text-anchor="middle" font-size="8" fill="#6e7681">deployed · restored on exit</text>
+            <rect x="478" y="390" width="132" height="40" rx="8" fill="#161b22" stroke="#30363d" stroke-dasharray="4 3" />
+            <text x="544" y="408" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11.5" fill="#8b949e" font-weight="600">service1</text>
+            <text x="544" y="422" text-anchor="middle" font-size="8" fill="#6e7681">deployed · restored on exit</text>
           </g>
-          <rect x="564" y="433" width="42" height="14" rx="7" fill="#0d1117" stroke="#d29922" stroke-width="0.8" />
-          <text x="585" y="443" text-anchor="middle" font-size="8.5" fill="#d29922">parked</text>
-          <line x1="380" y1="218" x2="518" y2="221" stroke="#3fb950" stroke-width="2.2" marker-end="url(#ab-g)" />
-          <line x1="610" y1="205" x2="740" y2="205" stroke="#3fb950" stroke-width="2.2" marker-end="url(#ab-g)" />
-          <text x="676" y="199" text-anchor="middle" font-size="9.5" fill="#3fb950">to your machine</text>
-          <line x1="740" y1="248" x2="612" y2="248" stroke="#a371f7" stroke-width="2.2" marker-end="url(#ab-p)" />
-          <line x1="574" y1="280" x2="574" y2="332" stroke="#a371f7" stroke-width="2.2" marker-end="url(#ab-p)" />
-          <text x="562" y="310" text-anchor="end" font-size="9.5" fill="#a371f7">query postgres by name</text>
+          <rect x="564" y="383" width="42" height="14" rx="7" fill="#0d1117" stroke="#d29922" stroke-width="0.8" />
+          <text x="585" y="393" text-anchor="middle" font-size="8.5" fill="#d29922">parked</text>
+          <line x1="380" y1="215" x2="518" y2="200" stroke="#3fb950" stroke-width="2.2" marker-end="url(#ab-g)" />
+          <line x1="610" y1="173" x2="740" y2="173" stroke="#3fb950" stroke-width="2.2" marker-end="url(#ab-g)" />
+          <text x="676" y="167" text-anchor="middle" font-size="9.5" fill="#3fb950">to your machine</text>
+          <line x1="740" y1="220" x2="612" y2="220" stroke="#a371f7" stroke-width="2.2" marker-end="url(#ab-p)" />
+          <line x1="574" y1="248" x2="574" y2="295" stroke="#a371f7" stroke-width="2.2" marker-end="url(#ab-p)" />
+          <text x="562" y="275" text-anchor="end" font-size="9.5" fill="#a371f7">query postgres by name</text>
         </g>
 
         <!-- Your side: dimmed until the plug session starts. -->
         <g opacity="0.3">
           <animate attributeName="opacity" values="0.3;0.3;1;1;0.3" keyTimes="0;0.42;0.5;0.92;1" dur="12s" repeatCount="indefinite" />
-          <rect x="640" y="178" width="86" height="98" rx="6" fill="#0d1117" stroke="#21262d" stroke-dasharray="3 3" />
-          <text x="683" y="172" text-anchor="middle" font-size="9" fill="#6e7681">SSH tunnel</text>
-          <rect x="726" y="150" width="152" height="164" rx="12" fill="#161b22" stroke="#30363d" />
-          <text x="742" y="172" font-size="11" letter-spacing="1.5" fill="#8b949e" font-weight="700">YOUR MACHINE</text>
-          <rect x="742" y="182" width="120" height="64" rx="8" fill="#21262d" stroke="#30363d" />
-          <text x="802" y="208" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="14" fill="#e6edf3" font-weight="600">service1</text>
-          <text x="802" y="228" text-anchor="middle" font-size="10" fill="#8b949e">npm run start:dev</text>
-          <text x="802" y="286" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="9.5" fill="#6e7681">plug -s service1:80:3000</text>
-          <rect x="502" y="132" width="386" height="196" rx="16" fill="none" stroke="#a371f7" stroke-width="1.3" stroke-dasharray="6 4" opacity="0.85" />
-          <rect x="502" y="122" width="48" height="20" rx="5" fill="#0d1117" stroke="#a371f7" />
-          <text x="526" y="136" text-anchor="middle" font-size="11" fill="#a371f7" font-weight="700">plug</text>
+          <rect x="640" y="146" width="86" height="98" rx="6" fill="#0d1117" stroke="#21262d" stroke-dasharray="3 3" />
+          <text x="683" y="140" text-anchor="middle" font-size="9" fill="#6e7681">SSH tunnel</text>
+          <rect x="726" y="118" width="152" height="164" rx="12" fill="#161b22" stroke="#30363d" />
+          <text x="742" y="140" font-size="11" letter-spacing="1.5" fill="#8b949e" font-weight="700">YOUR MACHINE</text>
+          <rect x="742" y="150" width="120" height="64" rx="8" fill="#21262d" stroke="#30363d" />
+          <text x="802" y="176" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="14" fill="#e6edf3" font-weight="600">service1</text>
+          <text x="802" y="196" text-anchor="middle" font-size="10" fill="#8b949e">npm run start:dev</text>
+          <text x="802" y="254" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="9.5" fill="#6e7681">plug -s service1:80:3000</text>
+          <rect x="502" y="100" width="386" height="190" rx="16" fill="none" stroke="#a371f7" stroke-width="1.3" stroke-dasharray="6 4" opacity="0.85" />
+          <rect x="502" y="90" width="48" height="20" rx="5" fill="#0d1117" stroke="#a371f7" />
+          <text x="526" y="104" text-anchor="middle" font-size="11" fill="#a371f7" font-weight="700">plug</text>
         </g>
 
-        <line x1="162" y1="242" x2="246" y2="150" stroke="#3fb950" stroke-width="2.2" marker-end="url(#ab-g)" />
-        <text x="188" y="185" text-anchor="middle" font-size="10.5" fill="#3fb950" font-weight="600" transform="rotate(-30 188 185)">GET</text>
+        <line x1="162" y1="226" x2="246" y2="150" stroke="#3fb950" stroke-width="2.2" marker-end="url(#ab-g)" />
+        <text x="188" y="174" text-anchor="middle" font-size="10.5" fill="#3fb950" font-weight="600" transform="rotate(-30 188 174)">GET</text>
         <line x1="300" y1="154" x2="300" y2="190" stroke="#3fb950" stroke-width="2" marker-end="url(#ab-g)" />
 
-        <line x1="60" y1="525" x2="90" y2="525" stroke="#3fb950" stroke-width="2.6" />
-        <text x="98" y="529" font-size="11.5" fill="#8b949e">inbound — browser → gateway → DNS → agent → your process (plug -s)</text>
-        <line x1="560" y1="525" x2="590" y2="525" stroke="#a371f7" stroke-width="2.6" />
-        <text x="598" y="529" font-size="11.5" fill="#8b949e">outbound — your process → postgres</text>
+        <line x1="60" y1="481" x2="90" y2="481" stroke="#3fb950" stroke-width="2.6" />
+        <text x="98" y="485" font-size="11.5" fill="#8b949e">inbound — browser → gateway → DNS → agent → your process (plug -s)</text>
+        <line x1="560" y1="481" x2="590" y2="481" stroke="#a371f7" stroke-width="2.6" />
+        <text x="598" y="485" font-size="11.5" fill="#8b949e">outbound — your process → postgres</text>
       </svg>
     </div>
     <p class="cap">
