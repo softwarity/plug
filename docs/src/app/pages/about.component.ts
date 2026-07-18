@@ -192,7 +192,7 @@ import { MatIconModule } from '@angular/material/icon';
     <div class="diagram">
       <svg viewBox="0 0 900 511" xmlns="http://www.w3.org/2000/svg" role="img" font-family="-apple-system, Segoe UI, Roboto, sans-serif">
         <title>plug: your process is a full member of the cluster, both directions</title>
-        <desc>Animated request walk in two rounds. Round one, the cluster alone: the browser calls the gateway, the DNS resolves service1 to the deployed service, which queries postgres and responds to the browser. Then plug -s starts: the deployed service1 is parked, and the same request now walks browser, gateway, DNS, plug agent, SSH tunnel, your local service1 — which queries postgres back through the agent and responds to the browser from your machine. The loop ends with the service restored.</desc>
+        <desc>Animated request walk in two rounds. Round one, the cluster alone: the browser clicks GET data, the request reaches the gateway, the DNS resolves service1 to the deployed service, which queries postgres and responds to the browser, which renders DATA. Then plug -s starts: the deployed service1 is parked, and the same request now walks browser, gateway, DNS, plug agent, SSH tunnel, your local service1 — which queries postgres back through the agent and responds to the browser — DATA again, served from your machine this time. The loop ends with the service restored.</desc>
         <defs>
           <marker id="ab-g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#3fb950" /></marker>
           <marker id="ab-p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#a371f7" /></marker>
@@ -203,8 +203,10 @@ import { MatIconModule } from '@angular/material/icon';
         <rect x="30" y="180" width="132" height="102" rx="10" fill="#161b22" stroke="#30363d" />
         <rect x="42" y="192" width="108" height="18" rx="4" fill="#21262d" />
         <circle cx="51" cy="201" r="2.3" fill="#484f58" /><circle cx="60" cy="201" r="2.3" fill="#484f58" /><circle cx="69" cy="201" r="2.3" fill="#484f58" />
+        <text x="112" y="204.5" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="8" fill="#8b949e">app.acme.com</text>
         <rect x="42" y="214" width="108" height="50" fill="#0d1117" stroke="#30363d" />
-        <text x="96" y="244" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#e6edf3">app.acme.com</text>
+        <rect x="58" y="222" width="76" height="16" rx="4" fill="#21262d" stroke="#30363d" />
+        <text x="96" y="233" text-anchor="middle" font-size="8" fill="#c9d1d9">GET data</text>
         <text x="96" y="304" text-anchor="middle" font-size="12" fill="#8b949e">a browser, out there</text>
 
         <rect x="222" y="52" width="418" height="396" rx="12" fill="#0e141b" stroke="#30363d" />
@@ -262,8 +264,9 @@ import { MatIconModule } from '@angular/material/icon';
         <!-- The request walk. Step 1 (both rounds): browser -> gateway. -->
         <g opacity="0">
           <animate attributeName="opacity" values="0;0;1;1;0;0;1;1;0;0" keyTimes="0;0.03;0.042;0.36;0.40;0.48;0.492;0.90;0.94;1" dur="16s" repeatCount="indefinite" />
+          <rect x="58" y="222" width="76" height="16" rx="4" fill="none" stroke="#3fb950" stroke-width="1.6" />
           <line x1="162" y1="226" x2="246" y2="150" stroke="#3fb950" stroke-width="2.2" marker-end="url(#ab-g)" />
-          <text x="188" y="174" text-anchor="middle" font-size="10.5" fill="#3fb950" font-weight="600" transform="rotate(-30 188 174)">GET</text>
+          <text x="188" y="172" text-anchor="middle" font-size="9.5" fill="#3fb950" font-weight="600" transform="rotate(-30 188 172)">GET data</text>
           <rect x="248" y="104" width="104" height="50" rx="8" fill="none" stroke="#3fb950" stroke-width="2" />
         </g>
         <!-- Step 2 (both rounds): gateway -> cluster DNS. -->
@@ -292,6 +295,10 @@ import { MatIconModule } from '@angular/material/icon';
           <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.21;0.222;0.36;0.40;1" dur="16s" repeatCount="indefinite" />
           <path d="M478 424 C 360 480, 220 420, 158 285" fill="none" stroke="#58a6ff" stroke-width="2" marker-end="url(#ab-b)" />
           <text x="330" y="464" text-anchor="middle" font-size="9.5" fill="#58a6ff">response</text>
+        </g>
+        <g opacity="0">
+          <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.24;0.252;0.36;0.40;1" dur="16s" repeatCount="indefinite" />
+          <text x="96" y="256" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="9.5" fill="#58a6ff" font-weight="700">DATA</text>
         </g>
         <!-- Round 2: the DNS now resolves service1 to the plug agent. -->
         <g opacity="0">
@@ -323,6 +330,10 @@ import { MatIconModule } from '@angular/material/icon';
           <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.75;0.762;0.90;0.94;1" dur="16s" repeatCount="indefinite" />
           <path d="M742 156 C 600 34, 250 34, 112 176" fill="none" stroke="#58a6ff" stroke-width="2" marker-end="url(#ab-b)" />
           <text x="430" y="52" text-anchor="middle" font-size="9.5" fill="#58a6ff">response</text>
+        </g>
+        <g opacity="0">
+          <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.78;0.792;0.90;0.94;1" dur="16s" repeatCount="indefinite" />
+          <text x="96" y="256" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="9.5" fill="#58a6ff" font-weight="700">DATA</text>
         </g>
         <!-- postgres glows when the query lands (both rounds). -->
         <g opacity="0">
