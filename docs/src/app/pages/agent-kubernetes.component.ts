@@ -70,7 +70,11 @@ kubectl -n my-namespace port-forward svc/plug 2222:2222</app-code>
       k8s workload still consumes queues and runs its crons. A nice property of this design: the
       Service keeps its <strong>ClusterIP</strong> through park and restore, so cached DNS answers
       (a JVM caches ~30&thinsp;s) stay <em>valid</em> across the switch — kube-proxy reroutes
-      underneath. No stale-IP window, unlike Swarm where the address behind the name changes. The
+      underneath, and <em>new</em> connections reach your session immediately. No stale-IP window,
+      unlike Swarm where the address behind the name changes. The mirror-image caveat: since the
+      parked pods keep running, a caller holding a <strong>keep-alive connection</strong> opened
+      before the switch keeps reaching the old pod until that connection closes or idles out
+      (typically under two minutes) — where Swarm's stopped container kills them outright. The
       <a href="https://github.com/softwarity/plug/blob/main/deploy/plug-k8s.yaml" target="_blank" rel="noopener">manifest</a>
       and the <a routerLink="/security">security model</a> spell out exactly what the grant allows.
     </p>

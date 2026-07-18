@@ -15,7 +15,15 @@ import (
 
 func main() {
 	mux := http.NewServeMux()
-	client := &http.Client{Timeout: 8 * time.Second}
+	// A fresh connection per fetch: the prober witnesses where the NAME routes
+	// NOW. With the default keep-alive pool it answers from a connection opened
+	// BEFORE a switch — on k8s the takeover repoints the Service but the parked
+	// pods stay up, so a pooled connection kept reaching the old pod and the
+	// witness lied (the takeover cell's 'during' probe saw the deployed text).
+	client := &http.Client{
+		Timeout:   8 * time.Second,
+		Transport: &http.Transport{DisableKeepAlives: true},
+	}
 	mux.HandleFunc("/fetch", func(w http.ResponseWriter, r *http.Request) {
 		url := r.URL.Query().Get("url")
 		if url == "" {
