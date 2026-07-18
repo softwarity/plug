@@ -139,7 +139,7 @@
   <g opacity="0">
     <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.705;0.717;0.90;0.94;1" dur="16s" repeatCount="indefinite" />
     <line x1="574" y1="222" x2="574" y2="269" stroke="#a371f7" stroke-width="2.2" marker-start="url(#ab-p)" marker-end="url(#ab-p)" />
-    <text x="562" y="249" text-anchor="end" font-size="9.5" fill="#a371f7">query postgres by name</text>
+    <text x="562" y="262" text-anchor="end" font-size="9.5" fill="#a371f7">query postgres by name</text>
   </g>
   <!-- Round 2: the response travels from YOUR machine back to the browser. -->
   <g opacity="0">

@@ -10,3 +10,4 @@
 /src/assets/plug-service.yml
 *.log
 .DS_Store
+/.frames
