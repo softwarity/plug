@@ -68,7 +68,6 @@ d'unknown host).
 - [x] **Factoriser `registry_windows`/`registry_darwin`** (18/07) : le commun (95 % identique) vit dans `registry.go` (`darwin || windows`) avec `ClusterHash` ; par-OS il ne reste que `processAlive`. Les tests registry tournent désormais AUSSI sur Windows. `graft_*` : PAS factorisé — divergence structurelle assumée (flock/leader-election macOS vs service unique Windows), plus rien d'accidentellement dupliqué.
 - [ ] **Version service vs launcher** : rafraîchir le binaire du service au bump (ou auto) — chantier de design (le service est SYSTEM/root : qui déclenche, avec quels droits), pas un quick-win.
 - [x] Retirer les directives compose obsolètes (18/07) : `PLUG_HOOK_DEBUG`, `seccomp:unconfined`, `SYS_PTRACE` retirées des 4 clients e2e (aucun usage dans le code ; `apparmor:unconfined` reste — le bind mount-ns en a besoin sur les hosts AppArmor).
-- [ ] Nettoyage post-2.0.0 : tag Docker Hub `plug-bidi` (branche de dev) à supprimer.
 
 ---
 
