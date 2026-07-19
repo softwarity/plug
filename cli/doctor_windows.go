@@ -50,7 +50,14 @@ func doctorOS(add func(check)) {
 		add(check{area: "local", name: "service", status: st, detail: detail, remedy: remedy})
 	}
 
-	// A leftover NRPT rule while nothing runs = stale resolver state.
+	// A leftover NRPT rule while nothing runs = stale resolver state — but the
+	// service self-tears-down ~30s AFTER the last client, and during that
+	// window a present rule is legitimate. `sc query` is readable by
+	// Authenticated Users (the install ACL grants it).
+	running := false
+	if out, err := exec.Command("sc", "query", tun.ServiceName).Output(); err == nil {
+		running = strings.Contains(string(out), "RUNNING")
+	}
 	sessions := 0
 	for _, key := range tun.ActiveClusters() {
 		sessions += tun.LiveClients(key)
@@ -64,19 +71,25 @@ func doctorOS(add func(check)) {
 					servers, _, _ := s.GetStringValue("GenericDNSServers")
 					s.Close()
 					if strings.HasPrefix(servers, "198.18.") {
-						stale = sessions == 0
+						stale = sessions == 0 && !running
 					}
 				}
 			}
 		}
 		base.Close()
-		if stale {
+		switch {
+		case stale:
 			add(check{area: "local", name: "system resolver", status: stFail,
-				detail: "a plug NRPT rule remains with NO live session (stale override)",
+				detail: "a plug NRPT rule remains with NO running service and no session (stale override)",
 				remedy: "plug down (clears it), then re-check"})
-		} else {
+		case sessions > 0:
 			add(check{area: "local", name: "system resolver", status: stOK,
-				detail: map[bool]string{true: fmt.Sprintf("plugged (%d live client(s))", sessions), false: "untouched"}[sessions > 0]})
+				detail: fmt.Sprintf("plugged (%d live client(s))", sessions)})
+		case running:
+			add(check{area: "local", name: "system resolver", status: stOK,
+				detail: "service running, no client — teardown pending (normal)"})
+		default:
+			add(check{area: "local", name: "system resolver", status: stOK, detail: "untouched"})
 		}
 	}
 }

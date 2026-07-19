@@ -7,7 +7,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 
 	"github.com/softwarity/plug/cli/internal/tun"
@@ -40,33 +39,30 @@ func doctorOS(add func(check)) {
 		}
 	}
 
-	// Per-profile daemon: alive, and WHICH core binary it runs.
+	// Live daemons, found by PROCESS (the flock in /var/run/plug is root-owned
+	// — probing it as a user reads "no daemon" and once turned a perfectly
+	// healthy teardown window into a "stale resolver" verdict). Each line shows
+	// WHICH core binary the daemon actually runs — the version gap made visible.
 	daemons := 0
-	for _, p := range listProfiles() {
-		host, port, err := readProfileSoft(p)
-		if err != nil {
-			continue
+	if out, err := exec.Command("ps", "-axo", "pid=,command=").Output(); err == nil {
+		for _, line := range strings.Split(string(out), "\n") {
+			if !strings.Contains(line, "__plug-daemon") {
+				continue
+			}
+			daemons++
+			f := strings.Fields(line)
+			if len(f) < 2 {
+				continue
+			}
+			pid, bin := f[0], f[1]
+			detail := "running (pid " + pid + ")"
+			if v := versionFromCorePath(bin); v != "" {
+				detail += ", core v" + v
+			} else {
+				detail += ", " + bin
+			}
+			add(check{area: "local", name: "daemon", status: stOK, detail: detail})
 		}
-		key := host + ":" + port
-		if !tun.DaemonAlive(key) {
-			continue
-		}
-		daemons++
-		pid := tun.DaemonPID(key)
-		bin := ""
-		if out, err := exec.Command("ps", "-o", "comm=", "-p", strconv.Itoa(pid)).Output(); err == nil {
-			bin = strings.TrimSpace(string(out))
-		}
-		detail := fmt.Sprintf("running (pid %d)", pid)
-		st, remedy := stOK, ""
-		if v := versionFromCorePath(bin); v != "" {
-			detail += ", core v" + v
-		} else if bin != "" {
-			// Not a cached versioned core — likely the launcher itself (dev) or a
-			// stale path.
-			detail += ", " + bin
-		}
-		add(check{area: "local", name: "daemon (" + p + ")", status: st, detail: detail, remedy: remedy})
 	}
 
 	// System resolver: pointed at plug? Legitimate while sessions live; STALE
@@ -81,8 +77,13 @@ func doctorOS(add func(check)) {
 	switch {
 	case plugged && sessions == 0 && daemons == 0:
 		add(check{area: "local", name: "system resolver", status: stFail,
-			detail: "still pointed at plug with NO live session (stale override)",
+			detail: "still pointed at plug with NO live daemon and no session (stale override)",
 			remedy: "plug down (restores the resolver), then re-check"})
+	case plugged && sessions == 0:
+		// The daemon lives, the last client just left: the self-teardown window,
+		// a legitimate in-between (it restores the resolver on its way out).
+		add(check{area: "local", name: "system resolver", status: stOK,
+			detail: "plugged, daemon alive, no client — teardown pending (normal)"})
 	case plugged:
 		add(check{area: "local", name: "system resolver", status: stOK,
 			detail: fmt.Sprintf("plugged (%d live client(s)) — normal while sessions run", sessions)})
