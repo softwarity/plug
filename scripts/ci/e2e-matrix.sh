@@ -149,10 +149,23 @@ do_env() {
   nx="$(plug curl -sS --max-time 8 "http://absent-name-e2e:9/" 2>&1 | tr -d '\r' | tail -1)"
   if printf '%s' "$nx" | grep -qiE "could not resolve|no such host|name or service not known"; then
     echo "dns OK — absent-name-e2e answered NXDOMAIN (honest resolution failure)"
-    sum "**dns honesty (absent → NXDOMAIN)** ✅"; return 0
+    sum "**dns honesty (absent → NXDOMAIN)** ✅"
+  else
+    echo "--- dns FAIL — expected a resolution error, got: ${nx:-<nothing>}"
+    sum "**dns honesty (absent → NXDOMAIN)** ❌ — \`${nx:-nothing}\`"; return 1
   fi
-  echo "--- dns FAIL — expected a resolution error, got: ${nx:-<nothing>}"
-  sum "**dns honesty (absent → NXDOMAIN)** ❌ — \`${nx:-nothing}\`"; return 1
+
+  echo "=== client-only (-c): consume the cluster, nothing served ==="
+  # The DB-tool shape: no name, no agent port, outbound only.
+  local co
+  co="$(perl -e 'alarm 45; exec @ARGV or exit 127' "$PLUG" --host "$ip" --port "$port" -c \
+    curl -s --max-time 10 -o /dev/null -w '%{http_code}' http://httpbin:8080/get 2>/dev/null | tr -d '\r' | tail -1)"
+  if [ "$co" = "200" ]; then
+    echo "client-only OK — -c reached httpbin by name with nothing served"
+    sum "**client-only (-c)** ✅"; return 0
+  fi
+  echo "--- client-only FAIL — got '${co:-nothing}' (want 200)"
+  sum "**client-only (-c)** ❌ — \`${co:-nothing}\`"; return 1
 }
 
 # protocol matrix: every language client, UNDER plug, reaches each cluster

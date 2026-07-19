@@ -2,6 +2,26 @@
 
 ## NEXT RELEASE
 
+### New: `-c` / `--client` — run a pure consumer of the cluster
+
+Some processes will never be called back by the cluster: a GUI database tool
+(DBeaver, MongoDB Compass), a one-off script, a batch consumer. Naming those
+with `-s` was noise with a real cost — a port bound on the shared agent, a
+signpost/Service created for a name nobody will ever call. Declare them a
+**pure client** instead:
+
+    plug -c "/Applications/MongoDB Compass.app/Contents/MacOS/MongoDB Compass"
+
+`-c` reaches cluster services by name like any plugged process, but names
+nothing and reserves nothing on the agent. It is **mutually exclusive** with
+`-s` — a process either serves a name or is a pure client — and omitting both
+still errors, now with the two shapes explained side by side: the 2.0 rule ("a
+process in a cluster is a service, and a service has a name") stays the
+default; `-c` is the explicit declaration of the exception. Needs an agent
+≥ 2.2 (an older one is refused with the upgrade hint). On macOS, launch the app
+binary directly (not `open -a` — that hands the process to launchd, breaking
+the ancestry multicluster attribution relies on).
+
 ### Fixed: a name absent from the cluster now answers NXDOMAIN
 
 plug used to mint a stand-in IP for ANY bare name and let the connect sort it

@@ -55,24 +55,30 @@ func TestParseArgsServe(t *testing.T) {
 }
 
 func TestStripLeadingExposes(t *testing.T) {
-	specs, rest, err := stripLeadingExposes([]string{"-s", "a:1:2", "--serve", "b:3:4", "npm", "start"})
-	if err != nil || len(specs) != 2 || specs[0].Name != "a" || specs[1].Name != "b" {
-		t.Fatalf("specs = %+v, err = %v", specs, err)
+	specs, client, rest, err := stripLeadingExposes([]string{"-s", "a:1:2", "--serve", "b:3:4", "npm", "start"})
+	if err != nil || len(specs) != 2 || specs[0].Name != "a" || specs[1].Name != "b" || client {
+		t.Fatalf("specs = %+v, client = %v, err = %v", specs, client, err)
 	}
 	if !reflect.DeepEqual(rest, []string{"npm", "start"}) {
 		t.Fatalf("rest = %v", rest)
 	}
 
+	// -c at the head (an old launcher forwards it there): stripped, flagged.
+	specs, client, rest, err = stripLeadingExposes([]string{"-c", "dbeaver"})
+	if err != nil || specs != nil || !client || !reflect.DeepEqual(rest, []string{"dbeaver"}) {
+		t.Fatalf("specs = %v client = %v rest = %v err = %v", specs, client, rest, err)
+	}
+
 	// No -s at the head: everything is the command (the normal case). An
 	// unknown flag — --takeover was one, briefly, pre-release — is NOT
 	// consumed: it heads the command and fails loud at exec, never silently.
-	specs, rest, err = stripLeadingExposes([]string{"--takeover", "npm", "start"})
-	if err != nil || specs != nil || !reflect.DeepEqual(rest, []string{"--takeover", "npm", "start"}) {
-		t.Fatalf("specs = %v rest = %v err = %v", specs, rest, err)
+	specs, client, rest, err = stripLeadingExposes([]string{"--takeover", "npm", "start"})
+	if err != nil || specs != nil || client || !reflect.DeepEqual(rest, []string{"--takeover", "npm", "start"}) {
+		t.Fatalf("specs = %v client = %v rest = %v err = %v", specs, client, rest, err)
 	}
 
 	// Invalid value fails loud — never silently swallowed into the command.
-	if _, _, err = stripLeadingExposes([]string{"-s", "garbage", "npm"}); err == nil {
+	if _, _, _, err = stripLeadingExposes([]string{"-s", "garbage", "npm"}); err == nil {
 		t.Fatal("invalid -s value should fail")
 	}
 }

@@ -106,6 +106,13 @@ ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@$
       exits, your machine is back exactly as it was. No sudo, no admin.
     </p>
     <p>
+      Running something the cluster will <em>never call back</em> — a GUI database tool (DBeaver,
+      MongoDB Compass), a one-off script? Declare it a <strong>pure client</strong> with
+      <code>-c</code> instead: it reaches services by name, but nothing is named and no port is
+      reserved on the agent. One or the other — never both:
+    </p>
+    <app-code lang="bash">plug -c "/Applications/MongoDB Compass.app/Contents/MacOS/MongoDB Compass"</app-code>
+    <p>
       plug is a small <strong>launcher</strong>: on connect it asks the agent which version it
       speaks and runs <em>exactly that version</em> (cached under <code>~/.plug/versions/</code>,
       downloaded once). Each cluster runs its own matching version, so several clusters on different

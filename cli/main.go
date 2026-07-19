@@ -47,6 +47,10 @@ Usage:
                                        run <command> as a named member of the
                                        cluster — it answers to <name>, and
                                        reaches cluster services by name in return
+  plug [-p profile] -c <command> [args...]
+                                       run <command> as a pure client of the
+                                       cluster — reaches services by name, is
+                                       never called back (DB tools, scripts)
   plug ls                              list profiles
   plug test [profile]                  check an agent is reachable
   plug rn <old> <new>                  rename a profile (alias: mv)
@@ -69,6 +73,10 @@ Options:
                          service scaled to 0, k8s Service repointed) and
                          restored when the session ends.
                          Repeatable; place after the other options.
+  -c, --client           this process only CONSUMES the cluster — nothing to
+                         name, no port reserved on the agent. For GUI DB tools
+                         (DBeaver, Compass…), one-off scripts, batch consumers.
+                         Mutually exclusive with -s.
   -h, --help             show this help
 `
 }
@@ -137,22 +145,26 @@ func attachExposes(cfg *config, raw []string) {
 	}
 }
 
-// stripLeadingExposes pops the -s/--serve pairs a launcher left at the head of
-// the core's argv (see launcherRun) and parses them — an old launcher forwards
-// them there without understanding them.
-func stripLeadingExposes(args []string) ([]tunnel.ExposeSpec, []string, error) {
+// stripLeadingExposes pops the -s/--serve pairs (and a -c/--client flag) a
+// launcher left at the head of the core's argv (see launcherRun) and parses
+// them — an old launcher forwards them there without understanding them.
+func stripLeadingExposes(args []string) ([]tunnel.ExposeSpec, bool, []string, error) {
 	var specs []tunnel.ExposeSpec
+	client := false
 	for {
 		switch {
 		case len(args) >= 2 && (args[0] == "-s" || args[0] == "--serve"):
 			spec, err := parseExpose(args[1])
 			if err != nil {
-				return nil, nil, err
+				return nil, false, nil, err
 			}
 			specs = append(specs, spec)
 			args = args[2:]
+		case len(args) >= 1 && (args[0] == "-c" || args[0] == "--client"):
+			client = true
+			args = args[1:]
 		default:
-			return specs, args, nil
+			return specs, client, args, nil
 		}
 	}
 }
@@ -214,6 +226,7 @@ type options struct {
 	host     string
 	port     string
 	exposes  []string // raw -s values; validated once, re-prefixed on the core exec
+	client   bool     // -c/--client: pure consumer — no name, nothing served
 }
 
 func main() {
@@ -288,18 +301,24 @@ func main() {
 	launcherRun(args)
 }
 
-// serveRequired enforces the one invocation shape: a command joins the cluster
-// AS a named member, so at least one VALID -s <name>:<cluster-port>:<local-port>
-// is mandatory — even when nothing calls back (name it anyway; most of the time
-// something will, and it keeps a single form to learn). Run before connecting,
-// so a missing or malformed -s fails instantly. Subcommands never reach here:
-// main() dispatches ls/test/about/… before launcherRun.
-func serveRequired(exposes []string) error {
-	if len(exposes) == 0 {
-		return errors.New("name your process in the cluster:\n" +
-			"  plug [-p profile] -s <name>:<cluster-port>:<local-port> <command> [args...]\n" +
-			"-s is required: a running process in a cluster is a service, and a service has a name —\n" +
-			"so name it, even when nothing calls it back.")
+// serveRequired enforces the invocation shape: a command either joins the
+// cluster AS a named member (-s — a running process in a cluster is a service,
+// and a service has a name) or declares itself a PURE CLIENT (-c — a GUI DB
+// tool, a one-off script: nothing will ever call it, so there is nothing to
+// name and no port to reserve on the agent). One or the other, never both,
+// never neither. Run before connecting, so a wrong shape fails instantly.
+// Subcommands never reach here: main() dispatches ls/test/about/… first.
+func serveRequired(exposes []string, client bool) error {
+	if client && len(exposes) > 0 {
+		return errors.New("-s and -c are mutually exclusive: a process either serves a name in the cluster or is a pure client")
+	}
+	if !client && len(exposes) == 0 {
+		return errors.New("tell plug what this process is to the cluster:\n" +
+			"  plug [-p profile] -s <name>:<cluster-port>:<local-port> <command> [args...]   # a service: the cluster can call it by name\n" +
+			"  plug [-p profile] -c <command> [args...]                                      # a pure client: DB tools, one-off scripts\n" +
+			"-s: a running process in a cluster is a service, and a service has a name — name it,\n" +
+			"    even when nothing calls it back yet.\n" +
+			"-c: this process only consumes the cluster — nothing to name, no port reserved on the agent.")
 	}
 	for _, r := range exposes {
 		if _, err := parseExpose(r); err != nil {
@@ -322,6 +341,9 @@ func launcherRun(args []string) {
 		if len(opts.exposes) > 0 {
 			fatal("-s serves a local port for the lifetime of a session — give plug a command to run")
 		}
+		if opts.client {
+			fatal("-c runs a command as a pure client of the cluster — give plug a command to run")
+		}
 		if opts.profile != "" {
 			name := opts.profile
 			if opts.host != "" {
@@ -338,13 +360,14 @@ func launcherRun(args []string) {
 		}
 		fatal("no command given\n\n" + usage())
 	}
-	if err := serveRequired(opts.exposes); err != nil {
+	if err := serveRequired(opts.exposes, opts.client); err != nil {
 		hint := ""
 		if hasServeFlag(cmdArgs) {
 			// A -s after the command word was passed TO the command (plug stops
 			// parsing its own flags at the first operand) — the likely mistake.
-			hint = "\n\nnote: a -s AFTER the command goes to the command; plug's -s must come BEFORE it:\n" +
-				"  plug -s <name>:<cluster-port>:<local-port> " + strings.Join(cmdArgs, " ")
+			hint = "\n\nnote: a -s/-c AFTER the command goes to the command; plug's flags must come BEFORE it:\n" +
+				"  plug -s <name>:<cluster-port>:<local-port> " + strings.Join(cmdArgs, " ") + "\n" +
+				"  plug -c " + strings.Join(cmdArgs, " ")
 		}
 		fatal("%s%s\n\n%s", err, hint, usage())
 	}
@@ -374,6 +397,11 @@ func launcherRun(args []string) {
 		fatal("the cluster agent reports v%s, which predates -s (needs plug ≥ 2.0.0).\n"+
 			"Upgrade the agent (redeploy the softwarity/plug image), then run again.", remote)
 	}
+	// -c is a 2.2 feature — an older released core would exec "-c" as the command.
+	if opts.client && versionBefore(remote, 2, 2) {
+		fatal("the cluster agent reports v%s, which predates -c (needs plug ≥ 2.2).\n"+
+			"Upgrade the agent (redeploy the softwarity/plug image), then run again.", remote)
+	}
 	bin, err := ensureVersion(remote, cfg)
 	if err != nil {
 		info("cannot fetch v%s (%v) — falling back to this launcher (v%s)", remote, err, version)
@@ -392,6 +420,9 @@ func launcherRun(args []string) {
 	for i := len(opts.exposes) - 1; i >= 0; i-- {
 		cmdArgs = append([]string{"-s", opts.exposes[i]}, cmdArgs...)
 	}
+	if opts.client {
+		cmdArgs = append([]string{"-c"}, cmdArgs...) // same wire format as -s: the core strips it back
+	}
 	child := exec.Command(bin, cmdArgs...)
 	child.Stdin, child.Stdout, child.Stderr = os.Stdin, os.Stdout, os.Stderr
 	child.Env = env
@@ -407,11 +438,28 @@ func launcherRun(args []string) {
 // args — used to give a precise hint when -s was placed after the command.
 func hasServeFlag(args []string) bool {
 	for _, a := range args {
-		if a == "-s" || a == "--serve" || strings.HasPrefix(a, "--serve=") {
+		if a == "-s" || a == "--serve" || strings.HasPrefix(a, "--serve=") ||
+			a == "-c" || a == "--client" {
 			return true
 		}
 	}
 	return false
+}
+
+// versionBefore reports whether a RELEASED agent version predates maj.min.
+// Non-semver versions ("dev+<rev>", "") are assumed current — a dev image is
+// always built from a branch at least as new as this launcher.
+func versionBefore(v string, maj, min int) bool {
+	parts := strings.SplitN(v, ".", 3)
+	if len(parts) < 2 {
+		return false
+	}
+	M, err1 := strconv.Atoi(parts[0])
+	m, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	return M < maj || (M == maj && m < min)
 }
 
 // coreMajor parses the leading major version from an agent version string, or
@@ -772,6 +820,8 @@ func parseArgs(args []string) (options, []string) {
 			o.port = flagValue(args, &i)
 		case "-s", "--serve":
 			o.exposes = append(o.exposes, flagValue(args, &i))
+		case "-c", "--client":
+			o.client = true
 		default:
 			return o, args[i:]
 		}
@@ -995,7 +1045,7 @@ func coreMain() {
 			}
 		}
 	}
-	specs, cmdArgs, err := stripLeadingExposes(os.Args[1:])
+	specs, _, cmdArgs, err := stripLeadingExposes(os.Args[1:]) // -c strips to an empty exposes list — exactly the pure-outbound datapath
 	if err != nil {
 		fatal("%v", err)
 	}
