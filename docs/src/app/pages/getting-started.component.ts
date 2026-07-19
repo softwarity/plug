@@ -133,7 +133,8 @@ ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@$
 
     <h3>Where to next</h3>
     <p>
-      Read <a routerLink="/how-it-works">How it works</a> for the mechanics,
+      Read the <a routerLink="/cli">CLI reference</a> for every command,
+      <a routerLink="/how-it-works">How it works</a> for the mechanics,
       <a routerLink="/profiles">Profiles &amp; versions</a> for day-to-day usage,
       <a routerLink="/swarm">Swarm</a> for the cluster side,
       <a routerLink="/security">Security model</a> before deploying anywhere sensitive, the

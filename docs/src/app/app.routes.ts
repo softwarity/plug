@@ -11,6 +11,10 @@ export const routes: Routes = [
     loadComponent: () => import('./pages/getting-started.component').then((m) => m.GettingStartedComponent),
   },
   {
+    path: 'cli',
+    loadComponent: () => import('./pages/cli.component').then((m) => m.CliComponent),
+  },
+  {
     path: 'how-it-works',
     loadComponent: () => import('./pages/how-it-works.component').then((m) => m.HowItWorksComponent),
   },
