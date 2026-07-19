@@ -27,6 +27,37 @@ step, and the report is redacted first (hostnames and IPs masked, profiles
 anonymized: the repo is public, your topology is yours). Paste-friendly for
 support either way.
 
+### New: `plug update` — one command updates the agent, then the CLI
+
+plug's distribution point IS the agent image (the CLI installs *from* the
+agent), so `plug update [-p profile]` walks that chain upstream, in order:
+
+1. **The agent refreshes itself** from its registry — a new agent verb,
+   `self-update`, and each backend does it its own way. **Kubernetes**: a
+   rolling restart of its own Deployment (the node re-pulls the tag per
+   `imagePullPolicy` — `Always` in the official manifest). **Swarm**: a forced
+   service update with the pinned digest dropped, so the manager re-resolves
+   the deployed tag. **Plain container** (Compose): it pulls the tag, and — a
+   container cannot recreate itself — hands back the one command that does
+   (`docker compose up -d plug`), image already local. WHICH version arrives
+   stays where it belongs: in the deployed tag (`latest` follows releases; a
+   pinned `2.2.0` is respected and said out loud).
+2. **The launcher refreshes itself from the agent** when the agent is now a
+   newer release, and re-applies the privileged grant (one sudo on
+   macOS/Linux). On Windows nothing extra is needed: the datapath service
+   starts on demand from the same `plug.exe`, so the next session simply runs
+   the new binary — the service-vs-launcher version gap `doctor` warns about,
+   closed. Never downward, never on a dev build.
+
+Live `-s` sessions ride the agent roll out by design: the keepalive detects
+the drop, the reconnect re-arms every forward on the new agent (the same
+self-heal chain the resilience cell proves on every push).
+
+The official Kubernetes manifest grants the agent three more verbs for this —
+`deployments get/list/patch`, still namespace-scoped, still minimal. On a
+cluster running the previous RBAC, `plug update` answers with the exact
+remedy instead of failing opaquely.
+
 ---
 
 ## 2.2.0

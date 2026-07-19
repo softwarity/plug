@@ -548,6 +548,46 @@ do_resilience() {
   sum "**resilience (agent crash mid-session)** ❌ — during \`${during:-nothing}\` · post-crash \`${after_crash:-nothing}\` · after \`${after:-nothing}\`"; return 1
 }
 
+# update: `plug update` end to end against THIS LEG'S res-agent (per-leg, like
+# resilience — never a shared agent). The agent side runs the docker backend:
+# softwarity/plug:e2e exists only locally, so the pull fails cleanly and the
+# verdict is `current … could not pull` — proving the verb answers and nothing
+# is disturbed. The launcher side is a dev build facing a dev agent, so the
+# self-replace path reports and skips (the rolling paths are bench-proven on
+# kind/swarm). Runs LAST among the compose cells on purpose.
+do_update() {
+  local ragent rsshport
+  case "$(uname -s)" in
+    Darwin)               ragent=res-agent-mac   rsshport=2224 ;;
+    MINGW*|MSYS*|CYGWIN*) ragent=res-agent-win   rsshport=2225 ;;
+    *)                    ragent=res-agent-linux rsshport=2223 ;;
+  esac
+  echo "=== update (cluster B): plug update against $ragent ==="
+  local ip_b
+  ip_b="$(wait_cluster "$peer_b")" || { echo "cluster $peer_b unreachable" >&2; sum "**plug update** ❌ (cluster B)"; return 1; }
+
+  local out rc=0
+  out="$("$PLUG" --host "$ip_b" --port "$rsshport" update </dev/null 2>&1)" || rc=$?
+  printf '%s\n' "$out" | sed 's/^/    /'
+  if [ "$rc" != 0 ]; then
+    echo "--- update FAIL — exit $rc"; sum "**plug update** ❌ — exit $rc"; return 1
+  fi
+  if ! printf '%s' "$out" | grep -Eq "agent: (current|pulled)"; then
+    echo "--- update FAIL — no agent verdict (want current/pulled)"; sum "**plug update** ❌ — no agent verdict"; return 1
+  fi
+  if ! printf '%s' "$out" | grep -Eq "launcher (already matches|is a dev build)"; then
+    echo "--- update FAIL — no launcher line"; sum "**plug update** ❌ — no launcher line"; return 1
+  fi
+  # The verb must have left the agent standing.
+  local v
+  v="$(ssh -n -p "$rsshport" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "get@$ip_b" version 2>/dev/null | tr -d '\r')"
+  if [ -z "$v" ]; then
+    echo "--- update FAIL — $ragent no longer answers"; sum "**plug update** ❌ — agent down after"; return 1
+  fi
+  echo "update OK — verdict relayed, launcher path reported, $ragent still v$v"
+  sum "**plug update (verb + launcher path)** ✅"; return 0
+}
+
 # ================================ dispatch ================================
 if [ "$phase" != setup ]; then
   [ -f "$envfile" ] || { echo "no e2e state at $envfile — run the setup phase first" >&2; exit 1; }
@@ -566,5 +606,6 @@ case "$phase" in
   takeover)     do_takeover ;;
   collision)    do_collision ;;
   resilience)   do_resilience ;;
-  *) echo "unknown phase: $phase (want setup|env|matrix|multicluster|outage|expose|gateway|takeover|collision|resilience)" >&2; exit 2 ;;
+  update)       do_update ;;
+  *) echo "unknown phase: $phase (want setup|env|matrix|multicluster|outage|expose|gateway|takeover|collision|resilience|update)" >&2; exit 2 ;;
 esac

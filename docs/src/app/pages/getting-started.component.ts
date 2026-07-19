@@ -123,6 +123,13 @@ ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@$
       downloaded once). Each cluster runs its own matching version, so several clusters on different
       versions never conflict. See <a routerLink="/profiles">Profiles &amp; versions</a>.
     </p>
+    <p>
+      New plug release? <code>plug update</code> walks that chain upstream: the agent refreshes
+      <em>itself</em> from its registry (Kubernetes rolls its Deployment, Swarm re-resolves its
+      service tag; a plain container pulls and hands you the one recreate command), then the
+      launcher refreshes itself from the agent and re-applies its privilege. Live sessions ride
+      the roll out — they reconnect onto the new agent by themselves.
+    </p>
 
     <h3>Where to next</h3>
     <p>

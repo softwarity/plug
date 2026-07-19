@@ -11,7 +11,7 @@ func TestRedact(t *testing.T) {
 	cases := map[string]string{
 		"unreachable at 10.2.3.4:2222":     "unreachable at x.x.x.x:2222",
 		"v2.1.0 at neo.corp.example:2222":  "v2.1.0 at redacted.host:2222",
-		"still pointed at plug":            "still pointed at plug",         // no host, untouched
+		"still pointed at plug":            "still pointed at plug",            // no host, untouched
 		"rm -r /Users/x/.plug/versions/v1": "rm -r /Users/x/.plug/versions/v1", // a path, untouched
 		"plug down (restores it)":          "plug down (restores it)",
 	}

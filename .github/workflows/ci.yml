@@ -311,6 +311,13 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/compat-launcher.sh "$A" 2222
+      # Last on purpose: its docker-backend pull attempt targets the res-agent's
+      # local-only :e2e tag (clean failure by design) — nothing after it depends
+      # on that agent's image anymore.
+      - name: Update — plug update verb + launcher path (per-leg agent)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh update "$A" "$B" 2222
 
   # The SAME chain, replayed against the KUBERNETES family (k8s-for.yml / kind):
   # what was "coded but never executed at runtime" — the k8s Service backend for

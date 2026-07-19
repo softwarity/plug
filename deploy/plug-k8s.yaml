@@ -103,6 +103,12 @@ rules:
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["get", "list", "create", "delete", "update", "patch"]
+  # `plug update`: the agent triggers a rolling restart of its OWN Deployment
+  # (a template-annotation patch), so the node re-pulls the tag above. Still
+  # namespace-scoped, still minimal.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

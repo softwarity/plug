@@ -42,6 +42,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -117,10 +118,7 @@ func dispatch(cmd []string) {
 		// One parsable line for `plug doctor`: the agent's version and which
 		// dynamic -s backend THIS deployment actually has — the answer to "will
 		// -s be dynamic here, and is the image current?" asked from the outside.
-		ver := "unknown"
-		if b, err := os.ReadFile("/opt/plug/VERSION"); err == nil {
-			ver = strings.TrimSpace(string(b))
-		}
+		ver := localVersion()
 		backend := "static"
 		switch {
 		case k8sAvailable():
@@ -166,9 +164,26 @@ func dispatch(cmd []string) {
 			}
 		}
 		answer("nxdomain")
+	case "self-update":
+		// `plug update` — refresh THIS agent from its registry, each backend its
+		// own way. One line out; the FIRST WORD is the verdict the CLI parses:
+		//   updating …   a redeploy was triggered (k8s rolling / swarm update)
+		//   current …    nothing newer under the deployed tag (docker backend)
+		//   pulled …     newer image pulled; recreating is the caller's move
+		//   static       no orchestrator access — redeploy by hand
+		//   error: …     precise failure (RBAC gap, not a manager, …)
+		selfUpdate()
 	default:
 		answer("error: unknown command %q", cmd[0])
 	}
+}
+
+// localVersion is this agent's own version, baked into the image.
+func localVersion() string {
+	if b, err := os.ReadFile("/opt/plug/VERSION"); err == nil {
+		return strings.TrimSpace(string(b))
+	}
+	return "unknown"
 }
 
 func serveName(name, port string, takeover bool) {
@@ -197,6 +212,173 @@ func gc() {
 	}
 	if dockerAvailable() {
 		dockerGC()
+	}
+}
+
+// ---- self-update: refresh THIS agent from its registry, per backend ----
+
+func selfUpdate() {
+	if k8sAvailable() {
+		k8sSelfUpdate()
+	}
+	if dockerAvailable() {
+		self, err := dockerSelf()
+		if err != nil {
+			answer("error: %v", err)
+		}
+		if self.service != "" {
+			swarmSelfUpdate(self)
+		}
+		dockerPlainSelfUpdate(self)
+	}
+	answer("static")
+}
+
+// k8sSelfUpdate triggers a rolling restart of the agent's own Deployment (a
+// template-annotation patch — what `kubectl rollout restart` does): the node
+// then re-pulls the deployed tag per its imagePullPolicy (Always in the
+// official manifest). The policy of WHICH version arrives stays where it
+// belongs — in the deployment's image tag.
+func k8sSelfUpdate() {
+	ns := k8sNamespace()
+	var list struct {
+		Items []struct {
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+		} `json:"items"`
+	}
+	code, err := k8sAPI("GET", "/apis/apps/v1/namespaces/"+ns+"/deployments?labelSelector=app%3Dplug", nil, &list)
+	if err != nil {
+		if code == 403 {
+			answer("error: the deployed RBAC predates self-update — re-apply deploy/plug-k8s.yaml (it adds the deployments grant), or run: kubectl -n %s rollout restart deployment plug", ns)
+		}
+		answer("error: finding the agent deployment: %v", err)
+	}
+	if len(list.Items) == 0 {
+		answer("error: no deployment labeled app=plug in namespace %s — restart the agent's workload by hand", ns)
+	}
+	name := list.Items[0].Metadata.Name
+	patch := map[string]any{"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{
+		"annotations": map[string]string{"plug.softwarity.io/restartedAt": time.Now().UTC().Format(time.RFC3339)},
+	}}}}
+	if code, err := k8sMergePatch("/apis/apps/v1/namespaces/"+ns+"/deployments/"+name, patch); err != nil {
+		if code == 403 {
+			answer("error: the deployed RBAC predates self-update — re-apply deploy/plug-k8s.yaml (it adds the deployments grant), or run: kubectl -n %s rollout restart deployment %s", ns, name)
+		}
+		answer("error: restarting deployment %s: %v", name, err)
+	}
+	answer("updating deployment %s (namespace %s) — rolling restart; the node re-pulls the tag per imagePullPolicy", name, ns)
+}
+
+// swarmSelfUpdate rolls the agent's own service: the pinned digest is dropped
+// from the image (stack deploy pins one — with it, no update ever changes
+// anything) so the manager re-resolves the TAG, and ForceUpdate rolls the task
+// even when the digest comes back unchanged.
+func swarmSelfUpdate(self selfInfo) {
+	if !swarmManager() {
+		answer("error: the agent's node is not a swarm manager — from one, run: docker service update --force %s", self.service)
+	}
+	var s struct {
+		ID      string `json:"ID"`
+		Version struct {
+			Index int `json:"Index"`
+		} `json:"Version"`
+		Spec map[string]any `json:"Spec"`
+	}
+	if _, err := dockerAPI("GET", "/services/"+self.service, nil, &s); err != nil {
+		answer("error: reading service %s: %v", self.service, err)
+	}
+	tt, _ := s.Spec["TaskTemplate"].(map[string]any)
+	if tt == nil {
+		answer("error: service %s has no task template", self.service)
+	}
+	img := self.image
+	if cs, _ := tt["ContainerSpec"].(map[string]any); cs != nil {
+		if is, _ := cs["Image"].(string); is != "" {
+			img = is
+		}
+		if i := strings.Index(img, "@sha256:"); i > 0 {
+			img = img[:i]
+		}
+		cs["Image"] = img
+	}
+	fu, _ := tt["ForceUpdate"].(float64)
+	tt["ForceUpdate"] = int(fu) + 1
+	if _, err := dockerAPI("POST", "/services/"+s.ID+"/update?version="+strconv.Itoa(s.Version.Index), s.Spec, nil); err != nil {
+		answer("error: updating service %s: %v", self.service, err)
+	}
+	answer("updating service %s — the swarm re-resolves %s and rolls the agent task", self.service, img)
+}
+
+// dockerPlainSelfUpdate (Compose / plain `docker run`): pull the deployed tag
+// and compare image ids. A container cannot recreate ITSELF, so when something
+// newer landed the answer carries the one command the caller runs — with the
+// image already local, that recreate is instant.
+func dockerPlainSelfUpdate(self selfInfo) {
+	ver := localVersion()
+	img := self.image
+	if strings.HasPrefix(img, "sha256:") {
+		answer("error: the agent was started from an image ID, not a tag — recreate it from a tag (softwarity/plug:latest) so updates can pull")
+	}
+	if i := strings.Index(img, "@sha256:"); i > 0 {
+		img = img[:i]
+	}
+	if err := dockerPull(img); err != nil {
+		answer("current v%s — could not pull %s (%v)", ver, img, err)
+	}
+	var pulled struct {
+		Id string `json:"Id"`
+	}
+	if _, err := dockerAPI("GET", "/images/"+img+"/json", nil, &pulled); err != nil {
+		answer("current v%s — could not inspect %s after the pull (%v)", ver, img, err)
+	}
+	if pulled.Id == self.imageID {
+		answer("current v%s — image %s unchanged", ver, img)
+	}
+	how := "recreate the agent container with the new image"
+	if self.compose != "" {
+		how = "docker compose up -d " + self.compose
+	}
+	answer("pulled %s — a newer image is local; the agent cannot recreate its own container: %s", img, how)
+}
+
+// dockerPull pulls ref (name[:tag]) through the daemon, draining the progress
+// stream — the API answers 200 and reports failures IN the stream. Its own
+// client: the pull outlives the 20s the control-plane calls are bounded to.
+func dockerPull(ref string) error {
+	name, tag := ref, "latest"
+	if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
+		name, tag = ref[:i], ref[i+1:]
+	}
+	cl := &http.Client{Timeout: 3 * time.Minute, Transport: dockerClient.Transport}
+	resp, err := cl.Post("http://docker/images/create?fromImage="+url.QueryEscape(name)+"&tag="+url.QueryEscape(tag), "text/plain", nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		var e struct {
+			Message string `json:"message"`
+		}
+		_ = json.Unmarshal(data, &e)
+		return fmt.Errorf("%s", firstNonEmpty(e.Message, strings.TrimSpace(string(data)), resp.Status))
+	}
+	dec := json.NewDecoder(resp.Body)
+	for {
+		var m struct {
+			Error string `json:"error"`
+		}
+		if err := dec.Decode(&m); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+		if m.Error != "" {
+			return fmt.Errorf("%s", m.Error)
+		}
 	}
 }
 
@@ -370,6 +552,8 @@ type selfInfo struct {
 	name    string // agent container/task name — relay target for the container backend
 	service string // agent's Swarm service name (empty off Swarm) — relay target for the service backend
 	image   string
+	imageID string // resolved image id — what self-update compares a fresh pull against
+	compose string // compose service name (empty outside Compose) — the recreate hint
 	nets    []netRef // application networks (overlay/bridge), minus ingress/host/none
 }
 
@@ -425,6 +609,7 @@ func dockerSelf() (selfInfo, error) {
 	var s selfInfo
 	var insp struct {
 		Name   string `json:"Name"`
+		Image  string `json:"Image"` // the resolved image ID (sha256:…)
 		Config struct {
 			Image  string            `json:"Image"`
 			Labels map[string]string `json:"Labels"`
@@ -445,6 +630,8 @@ func dockerSelf() (selfInfo, error) {
 	}
 	s.name = strings.TrimPrefix(insp.Name, "/")
 	s.image = insp.Config.Image
+	s.imageID = insp.Image
+	s.compose = insp.Config.Labels["com.docker.compose.service"]
 	s.service = insp.Config.Labels["com.docker.swarm.service.name"]
 	for n := range insp.NetworkSettings.Networks {
 		if undnsNetwork[n] {

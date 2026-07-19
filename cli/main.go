@@ -57,6 +57,9 @@ Usage:
                                        (binaries, resolver, service, clusters),
                                        apply the safe repairs with --fix, and
                                        offer to report problems as an issue
+  plug update [-p profile]             update that cluster's agent (it refreshes
+                                       its own deployment from the registry),
+                                       then this launcher from the agent
   plug rn <old> <new>                  rename a profile (alias: mv)
   plug rm <profile>                    remove a profile
   plug versions                        list cached versions
@@ -226,11 +229,11 @@ func (f forwardSpec) localValue(localAddr string) string {
 }
 
 type options struct {
-	profile  string
-	host     string
-	port     string
-	exposes  []string // raw -s values; validated once, re-prefixed on the core exec
-	client   bool     // -c/--client: pure consumer — no name, nothing served
+	profile string
+	host    string
+	port    string
+	exposes []string // raw -s values; validated once, re-prefixed on the core exec
+	client  bool     // -c/--client: pure consumer — no name, nothing served
 }
 
 func main() {
@@ -290,6 +293,9 @@ func main() {
 	case "doctor":
 		cmdDoctor(args[1:])
 		return
+	case "update":
+		cmdUpdate(args[1:])
+		return
 	case "uninstall":
 		uninstall(args[1:])
 		return
@@ -341,6 +347,31 @@ func serveRequired(exposes []string, client bool) error {
 // matching core binary (downloading it once if needed).
 func launcherRun(args []string) {
 	opts, cmdArgs := parseArgs(args)
+	// `plug -p X update` reads as naturally as `plug update -p X` — accept both
+	// (same for doctor). Re-route the pre-parsed flags to the subcommand.
+	if len(cmdArgs) > 0 && (cmdArgs[0] == "update" || cmdArgs[0] == "doctor") {
+		if len(opts.exposes) > 0 || opts.client {
+			fatal("-s/-c don't apply to %q", cmdArgs[0])
+		}
+		sub, rest := cmdArgs[0], cmdArgs[1:]
+		if sub == "update" { // doctor has no host flags — profiles only
+			if opts.port != "" {
+				rest = append([]string{"--port", opts.port}, rest...)
+			}
+			if opts.host != "" {
+				rest = append([]string{"-H", opts.host}, rest...)
+			}
+		}
+		if opts.profile != "" {
+			rest = append([]string{"-p", opts.profile}, rest...)
+		}
+		if sub == "update" {
+			cmdUpdate(rest)
+		} else {
+			cmdDoctor(rest)
+		}
+		return
+	}
 	if len(cmdArgs) == 0 {
 		// `plug -p <name>` with no command creates (or reconfigures) that profile.
 		// With -H/--port too it's written non-interactively (scriptable); otherwise

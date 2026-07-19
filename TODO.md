@@ -1,7 +1,8 @@
 # plug — TODO / plan de travail
 
 _État : 19 juillet 2026 — **2.2.0 publiée** (`-c`, NXDOMAIN honnête, drop-loud
-UDP) ; `plug doctor` + gate des images de release en route vers la 2.3._
+UDP) ; `plug doctor`, `plug update` + gate des images de release en route vers
+la 2.3._
 
 **Contexte.** La **2.0.0** est publiée. Elle apporte le **sens retour** : `plug -s
 name:cluster-port:local-port` publie ton process dans le cluster sous un nom
@@ -66,7 +67,7 @@ d'unknown host).
 ## ⚪ Dettes / plus tard
 - [x] **Tests unitaires** (18/07) : `answerDNS` strip `.plug` → mint du nom nu (même fake, mapping vers le nom nu) ; round-trip NRPT (`route_windows_test.go`, skip sans élévation — tourne sur la jambe test Windows) ; `DialContext` — un `*ssh.OpenChannelError` ne reconnecte PAS (serveur SSH mock in-process qui rejette les canaux et compte les connexions) ; `ensureVersion` cache-hit + rejet d'un cache tronqué (`launcher_test.go`, HOME isolé).
 - [x] **Factoriser `registry_windows`/`registry_darwin`** (18/07) : le commun (95 % identique) vit dans `registry.go` (`darwin || windows`) avec `ClusterHash` ; par-OS il ne reste que `processAlive`. Les tests registry tournent désormais AUSSI sur Windows. `graft_*` : PAS factorisé — divergence structurelle assumée (flock/leader-election macOS vs service unique Windows), plus rien d'accidentellement dupliqué.
-- [ ] **Version service vs launcher** : rafraîchir le binaire du service au bump (ou auto) — chantier de design (le service est SYSTEM/root : qui déclenche, avec quels droits), pas un quick-win.
+- [x] **Version service vs launcher** (19/07) : fermé par `plug update` — le launcher remplacé EST le binaire du service Windows (même `plug.exe`, binPath inchangé), et le service démarre à la demande → la session suivante exécute la nouvelle version, sans UAC. macOS/Linux : re-grant setuid/caps (un sudo) au passage.
 - [x] Retirer les directives compose obsolètes (18/07) : `PLUG_HOOK_DEBUG`, `seccomp:unconfined`, `SYS_PTRACE` retirées des 4 clients e2e (aucun usage dans le code ; `apparmor:unconfined` reste — le bind mount-ns en a besoin sur les hosts AppArmor).
 
 ---
@@ -74,6 +75,7 @@ d'unknown host).
 ## ✅ Acquis
 
 ### Post-2.2.0 (19 juillet 2026)
+- [x] **`plug update`** : remonte la chaîne de distribution (registre → agent → launcher). Nouveau verbe agent `self-update` : k8s **rolling restart de son propre Deployment** (patch annotation ; le nœud re-pull le tag — RBAC officiel +`deployments get/list/patch`, 403 → remède exact), Swarm **service update forcé, digest retiré** (le manager re-résout le tag), conteneur plain **pull + commande de recréation** (il ne peut pas se recréer lui-même). Puis le **launcher se remplace depuis l'agent** (rename atomique, re-grant setuid/caps ; Windows : le service à la demande prend le nouveau binaire seul — le trou « version service vs launcher » fermé). Jamais de downgrade, jamais sur un build dev. Les sessions `-s` survivent au roll (self-heal). Cellule e2e `update` jambes compose (agents par-jambe), rolling k8s/swarm prouvé au banc M5.
 - [x] **`plug doctor`** : diagnostic lecture-seule de toute la chaîne avec remède par constat — binaires (launcher, cores en cache, **la version que le service/daemon exécute réellement** — le trou du bump, désormais détecté et nommé), état système (resolver plug SANS session = état sale ; daemon.json Docker Desktop ; sonde NXDOMAIN live sur le datapath qui tourne), et par profil : agent joignable/version, backend `-s` dynamique (nouveau verbe agent `info`), agent pre-2.2. En fin de rapport interactif : proposition d'**issue GitHub pré-remplie** (le navigateur = login + relecture ; hostnames/IPs rédigés, profils anonymisés — le repo est public). Banc M5 réel ✅ (a trouvé deux vrais problèmes du poste au passage), cellule e2e ×9 jambes.
 - [x] **Gate des images de release** : `docker-release.yml` attend désormais le **vert du run CI du commit taggé** avant de publier les images versionnées — le même contrat que `:latest` (leçon 2.2.0 : image saine partie pendant que la CI échouait sur une cellule cassée).
 - [x] **Cellule resilience durcie** : agents de crash-test **par jambe** (`res-agent-<leg>`, chaos ciblé par label) — les trois jambes concurrentes ne s'entre-torpillent plus (le teardown perdait son agent quand les jambes s'alignaient) ; le prober témoin passe par l'agent principal, qui ne redémarre plus jamais.
