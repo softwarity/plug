@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.2.0
+
 ### New: `-c` / `--client` — run a pure consumer of the cluster
 
 Some processes will never be called back by the cluster: a GUI database tool
