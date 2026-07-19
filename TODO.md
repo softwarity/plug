@@ -74,7 +74,9 @@ d'unknown host).
 
 ## ✅ Acquis
 
-### Post-2.1.0 (18 juillet 2026, après-midi)
+### Post-2.1.0 (18-19 juillet 2026)
+- [x] **`-c`/`--client`** (19/07) : consommateur pur (DBeaver, Compass, scripts) — atteint les services par nom, **rien de nommé, aucun port réservé sur l'agent**. Exclusif avec `-s` ; ni l'un ni l'autre → la doc du choix. Garde agent ≥ 2.2, câblage launcher→core comme `-s`, cellule e2e ×9 jambes, banc ✅.
+- [x] **CI anti-famine** (19/07) : `concurrency` par branche (un push annule le run précédent) + les serves cluster **suivent leur appelant** (`idle-until-caller-done.sh`, poll 60 s — un run annulé n'orpheline plus ses clusters, le TTL n'est que le filet). Leçon au passage : chemin relatif après un `cd` (exit 127 ×6 clusters) → toujours `$root` absolu, et tester le tail depuis le répertoire piégé.
 - [x] **Résilience en CI** : cellule `resilience` sur les jambes compose (cluster B — le A partagé ne voit jamais le blip) : takeover tenu sur `res-tko-<leg>`, le service `chaos` (docker.sock, labels compose scopés, répond AVANT de tirer) **redémarre l'agent en pleine session** → keepalive 5 s détecte, boot-gc restaure, le reconnect re-arme et **re-parque** (~10 s de bout en bout au banc), restore final au ttl. Ferme d'un coup : self-heal (**Windows inclus**), boot-gc, re-park au reconnect, re-arm `-s`. Et `k8s-serve.sh` prouve **kubectl port-forward** comme transport à chaque push.
 - [x] **NXDOMAIN honnête** (fix fuite DNS) : voir section 🟠 — vérif pré-mint via le verbe agent `resolve`, filtre anti-écho 198.18/15, cellule « dns honesty » ×9 jambes.
 - [x] **Drop-loud UDP** : un flux UDP vers un nom minté loggue la cause au lieu du hang silencieux.
