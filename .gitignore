@@ -4,3 +4,4 @@ bin/
 e2e/clients/go/eclient
 e2e/clients/go/eclient.exe
 agent/helper/plug-agent
+cli/cli
