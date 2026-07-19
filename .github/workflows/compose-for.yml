@@ -20,6 +20,7 @@ run-name: compose-for-${{ inputs.corr }}
 
 permissions:
   contents: read
+  actions: read # the serve idles by WATCHING the caller run — dead caller, dead cluster
 
 jobs:
   # THE image under test: the agent is built from this branch FIRST, as its own
@@ -66,6 +67,7 @@ jobs:
           hostname: plug-cluster-${{ inputs.corr }}
       - name: Serve the cluster (idle until cancelled)
         env:
+          GH_TOKEN: ${{ github.token }} # idle-until-caller-done polls the caller run
           PLUG_CLUSTER_TTL: "1200" # backstop only — kill-cluster cancels this run when the e2e jobs finish
           # The cluster's identity, served by the `ident` service — the multicluster
           # e2e asserts that the SAME name reaches the RIGHT cluster through each plug.

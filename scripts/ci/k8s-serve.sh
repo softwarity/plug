@@ -94,5 +94,4 @@ done
 kill "$pf" 2>/dev/null || true
 [ -n "$ok" ] || { echo "agent did not answer through kubectl port-forward" >&2; exit 1; }
 
-echo "=== cluster up — serving for ${ttl}s (or until this run is cancelled) ==="
-sleep "$ttl"
+bash "$(dirname "$0")/idle-until-caller-done.sh"

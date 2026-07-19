@@ -57,5 +57,4 @@ if [ -z "$ok" ]; then
   exit 1
 fi
 
-echo "=== cluster up — serving for ${ttl}s (or until this run is cancelled) ==="
-sleep "$ttl"
+bash "$(dirname "$0")/idle-until-caller-done.sh"

@@ -21,6 +21,7 @@ run-name: k8s-for-${{ inputs.corr }}
 
 permissions:
   contents: read
+  actions: read # the serve idles by WATCHING the caller run — dead caller, dead cluster
 
 jobs:
   # THE image under test, built from this branch — same two-job shape as
