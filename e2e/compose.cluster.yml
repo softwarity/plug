@@ -77,11 +77,40 @@ services:
     command: ["-listen=:8087", "-text=deployed-tko-win"]
     networks: [internal]
 
-  # Agent-crash simulator: GET chaos:8095/restart-agent restarts the agent
-  # container (docker.sock, by compose label) — the resilience cell's trigger.
-  # It answers BEFORE firing: the caller reaches it through the agent it kills.
+  # Agent-crash simulator: GET chaos:8095/restart-agent?svc=<service> restarts
+  # that compose service's container (docker.sock, by label) — the resilience
+  # cell's trigger. It answers BEFORE firing: the caller reaches it through the
+  # very cluster whose agent is about to die.
   chaos:
     build: { context: ., dockerfile: services/chaos/Dockerfile }
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [internal]
+
+  # Per-leg CRASH-TEST agents: the resilience cell restarts an agent
+  # mid-session, and the three legs run CONCURRENTLY — crashing the shared
+  # agent interleaved three ways tore the sessions' teardowns apart (the legs
+  # aligned once and all three restores lost their agent). Each leg crashes its
+  # OWN dedicated agent; the main agent (and the prober behind it) never
+  # reboots. Same image, sock mounted (the signpost/park needs it).
+  res-agent-linux:
+    image: softwarity/plug:e2e
+    ports:
+      - "2223:22"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [internal]
+  res-agent-mac:
+    image: softwarity/plug:e2e
+    ports:
+      - "2224:22"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [internal]
+  res-agent-win:
+    image: softwarity/plug:e2e
+    ports:
+      - "2225:22"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     networks: [internal]

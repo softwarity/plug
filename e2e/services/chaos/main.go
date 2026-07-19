@@ -38,11 +38,12 @@ func docker(method, path string) (*http.Response, error) {
 	return c.Do(req)
 }
 
-// agentID finds the running agent container by its compose labels — service
-// AND project, so a same-named service from another compose project on the
-// host can never be the target.
-func agentID() (string, error) {
-	filters := url.QueryEscape(`{"label":["com.docker.compose.service=agent","com.docker.compose.project=plug-e2e"]}`)
+// agentID finds a running agent container by its compose labels — service AND
+// project, so a same-named service from another compose project on the host
+// can never be the target. svc selects WHICH agent (the per-leg crash-test
+// ones, or the main one by default).
+func agentID(svc string) (string, error) {
+	filters := url.QueryEscape(`{"label":["com.docker.compose.service=` + svc + `","com.docker.compose.project=plug-e2e"]}`)
 	resp, err := docker("GET", "/containers/json?filters="+filters)
 	if err != nil {
 		return "", err
@@ -62,8 +63,12 @@ func agentID() (string, error) {
 
 func main() {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/restart-agent", func(w http.ResponseWriter, _ *http.Request) {
-		id, err := agentID()
+	mux.HandleFunc("/restart-agent", func(w http.ResponseWriter, r *http.Request) {
+		svc := r.URL.Query().Get("svc")
+		if svc == "" {
+			svc = "agent"
+		}
+		id, err := agentID(svc)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return

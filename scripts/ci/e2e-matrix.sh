@@ -472,20 +472,23 @@ do_collision() {
 }
 
 # resilience: the M5 bench's crash-recovery chain, replayed in CI — on cluster
-# B, so the shared cluster A (every other cell) never sees the restart. A
-# takeover session holds res-tko-<leg>; the chaos service RESTARTS THE AGENT
-# mid-session; the keepalive must detect the dead transport, the rebooted
-# agent's boot-gc restore the parked service, the reconnect re-arm -s and
-# RE-PARK it — traffic back on the runner — and the session end restore the
-# deployed service for good. One cell, the whole self-heal story, Windows too.
+# B, against a PER-LEG crash-test agent (res-agent-<leg>, its own published
+# port): the three legs run concurrently, and interleaved restarts of a SHARED
+# agent tore each other's teardowns apart the one time the legs aligned. A
+# takeover session holds res-tko-<leg> through its own agent; the chaos service
+# RESTARTS THAT AGENT mid-session; the keepalive must detect the dead
+# transport, the rebooted agent's boot-gc restore the parked service, the
+# reconnect re-arm -s and RE-PARK it — traffic back on the runner — and the
+# session end restore the deployed service for good. The prober is reached
+# through the MAIN agent, which never reboots — a witness that cannot blink.
 do_resilience() {
-  local rname rport
+  local rname rport ragent rsshport
   case "$(uname -s)" in
-    Darwin)               rname=res-tko-mac   rport=8116 ;;
-    MINGW*|MSYS*|CYGWIN*) rname=res-tko-win   rport=8117 ;;
-    *)                    rname=res-tko-linux rport=8115 ;;
+    Darwin)               rname=res-tko-mac   rport=8116 ragent=res-agent-mac   rsshport=2224 ;;
+    MINGW*|MSYS*|CYGWIN*) rname=res-tko-win   rport=8117 ragent=res-agent-win   rsshport=2225 ;;
+    *)                    rname=res-tko-linux rport=8115 ragent=res-agent-linux rsshport=2223 ;;
   esac
-  echo "=== resilience (cluster B): park $rname, RESTART the agent, re-park, restore ==="
+  echo "=== resilience (cluster B): park $rname via $ragent, RESTART that agent, re-park, restore ==="
   local ip_b
   ip_b="$(wait_cluster "$peer_b")" || { echo "cluster $peer_b unreachable" >&2; sum "**resilience (agent crash)** ❌ (cluster B)"; return 1; }
   if ! ( cd "$root/e2e/echo-local" && go build -o "$root/echo-local$ext" . ); then
@@ -500,19 +503,19 @@ do_resilience() {
     sum "**resilience (agent crash)** ❌ — baseline"; return 1
   fi
 
-  # Hold the takeover with a tight keepalive so the dead transport is detected
-  # in seconds, not the default half-minute; -ttl ends the session naturally
+  # Hold the takeover THROUGH THIS LEG'S OWN AGENT, with a tight keepalive so
+  # the dead transport is detected in seconds; -ttl ends the session naturally
   # (Windows: kill would skip the teardown — see do_takeover).
-  PLUG_KEEPALIVE_SECS=5 "$PLUG" --host "$ip_b" --port "$port" -s "$rname:$rport:18123" \
+  PLUG_KEEPALIVE_SECS=5 "$PLUG" --host "$ip_b" --port "$rsshport" -s "$rname:$rport:18123" \
     "$root/echo-local$ext" -addr 127.0.0.1:18123 -text "local-res-$leg" -ttl 110s >/tmp/resilience.out 2>&1 &
   local res_pid=$! during="" after_crash="" after=""
   sleep 8
   for _ in 1 2 3; do during="$(bprobe)"; [ "$during" = "local-res-$leg" ] && break; sleep 3; done
 
-  # Crash the agent mid-session (the chaos service answers, then fires).
-  plug_to "$ip_b" curl -s --max-time 10 "http://chaos:8095/restart-agent" >/dev/null 2>&1 || true
+  # Crash THIS LEG'S agent mid-session (the chaos service answers, then fires).
+  plug_to "$ip_b" curl -s --max-time 10 "http://chaos:8095/restart-agent?svc=$ragent" >/dev/null 2>&1 || true
   # keepalive detects (~10-15s at 5s cadence), reconnect re-arms and re-parks;
-  # the rebooted agent's boot-gc restored the deployed service in between.
+  # the rebooted agent's boot-gc restored the parked service in between.
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     after_crash="$(bprobe)"
     [ "$after_crash" = "local-res-$leg" ] && break
