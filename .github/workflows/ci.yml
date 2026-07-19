@@ -6,6 +6,15 @@ on:
   pull_request:
   workflow_dispatch: # manual e2e-over-the-mesh run
 
+# One pipeline per branch: two close pushes used to run TWO full pipelines at
+# once (12 dispatched clusters + 18 legs for 20 runner slots) and the starved
+# serve jobs queued past the legs' 10-min cluster wait. Only the newest commit
+# needs blessing — cancel the older run; its clusters die on their TTL
+# backstop (that is what the backstop is for).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # plug's own code, built and unit-tested NATIVELY on all three OSes. Each job
   # records its real PASS/FAIL as an artifact the `platforms` job reads back.
