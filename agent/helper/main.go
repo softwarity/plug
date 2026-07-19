@@ -113,6 +113,31 @@ func dispatch(cmd []string) {
 			answer("error: usage: unserve-name <name>")
 		}
 		unserveName(cmd[1])
+	case "info":
+		// One parsable line for `plug doctor`: the agent's version and which
+		// dynamic -s backend THIS deployment actually has — the answer to "will
+		// -s be dynamic here, and is the image current?" asked from the outside.
+		ver := "unknown"
+		if b, err := os.ReadFile("/opt/plug/VERSION"); err == nil {
+			ver = strings.TrimSpace(string(b))
+		}
+		backend := "static"
+		switch {
+		case k8sAvailable():
+			backend = "kubernetes"
+		case dockerAvailable():
+			backend = "docker"
+			var inf struct {
+				Swarm struct {
+					LocalNodeState string `json:"LocalNodeState"`
+				} `json:"Swarm"`
+			}
+			if code, err := dockerAPI("GET", "/info", nil, &inf); err == nil && code == 200 &&
+				inf.Swarm.LocalNodeState == "active" {
+				backend = "docker-swarm"
+			}
+		}
+		answer("version=%s backend=%s", ver, backend)
 	case "resolve":
 		// Does <name> exist in THIS cluster? The CLI asks before minting a fake
 		// IP for a bare name, so an absent name gets an honest NXDOMAIN instead

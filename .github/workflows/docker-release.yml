@@ -4,15 +4,51 @@ name: Docker release
 # the released image (semver tags) via the shared multi-arch workflow. The CLI
 # binaries are served straight from the agent container (the `get` user), so
 # they are deliberately not attached to the GitHub Release.
+#
+# A released image must be AS BLESSED as :latest — the gate below waits for
+# the CI run of this very commit (the 9-leg mesh e2e) and refuses to publish
+# on anything but green. Before it existed, 2.2.0 shipped while its CI run was
+# still failing on a broken test cell — sound image, broken contract.
 on:
   push:
     tags: ["v*"]
 
 permissions:
   contents: read
+  actions: read # the gate reads this commit's CI run
 
 jobs:
+  gate:
+    name: wait for this commit's CI to be green
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha="${{ github.sha }}"
+          # ~50 min budget: the full mesh e2e takes ~30. A cancelled or red CI
+          # run fails the gate loudly — re-run the CI on the release commit,
+          # then re-run this workflow.
+          for _ in $(seq 1 50); do
+            read -r st cc < <(gh run list --repo "$GITHUB_REPOSITORY" --workflow=ci.yml \
+              --commit "$sha" --limit 1 --json status,conclusion \
+              --jq '.[0] | "\(.status) \(.conclusion // "")"' 2>/dev/null || echo "none ")
+            case "$st $cc" in
+              "completed success")
+                echo "CI is green for $sha — publishing"
+                exit 0 ;;
+              "completed "*)
+                echo "::error::CI concluded '$cc' for $sha — refusing to publish the release image. Re-run the CI on this commit, then re-run this workflow."
+                exit 1 ;;
+            esac
+            echo "CI for $sha: ${st:-no run yet} — waiting"
+            sleep 60
+          done
+          echo "::error::timed out waiting for this commit's CI run"
+          exit 1
+
   image:
     name: Build & publish image
+    needs: gate
     uses: ./.github/workflows/_docker.yml
     secrets: inherit

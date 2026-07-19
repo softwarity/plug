@@ -2,6 +2,31 @@
 
 ## NEXT RELEASE
 
+### New: `plug doctor` — health-check everything plug touches
+
+One read-only command that checks the whole chain and names the remedy next to
+every finding: the binaries (launcher, cached cores — and the version the
+privileged service/daemon ACTUALLY runs, the one thing the per-cluster version
+mechanism does not refresh), the system state (a resolver still pointed at
+plug with **no** live session — the stale state that once broke machine-wide
+DNS), and each profile's cluster: agent reachable and its version, whether
+`-s` will be **dynamic** there (docker sock / swarm / kubernetes RBAC — via a
+new agent verb, `info`) and whether the agent predates 2.2 (no honest
+NXDOMAIN, no `-c`). With sessions running it even probes the live datapath: an
+absent name must answer NXDOMAIN — a minted fake means the running daemon
+predates 2.2.
+
+`--fix` applies the SAFE repairs on the way (today: purging a truncated
+cached core — it re-downloads on next use). Anything touching privileges, your
+own sessions or the cluster stays a printed remedy on purpose: a doctor that
+silently escalates would lose the trust it is meant to build.
+
+When problems are found on an interactive terminal, doctor offers to open a
+**pre-filled GitHub issue** — the browser is both the login and the review
+step, and the report is redacted first (hostnames and IPs masked, profiles
+anonymized: the repo is public, your topology is yours). Paste-friendly for
+support either way.
+
 ---
 
 ## 2.2.0

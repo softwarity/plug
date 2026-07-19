@@ -1,7 +1,7 @@
 # plug — TODO / plan de travail
 
-_État : 18 juillet 2026 — **2.1.0 publiée** (takeover par défaut, 3 familles de
-clusters en CI, fix DNS macOS)._
+_État : 19 juillet 2026 — **2.2.0 publiée** (`-c`, NXDOMAIN honnête, drop-loud
+UDP) ; `plug doctor` + gate des images de release en route vers la 2.3._
 
 **Contexte.** La **2.0.0** est publiée. Elle apporte le **sens retour** : `plug -s
 name:cluster-port:local-port` publie ton process dans le cluster sous un nom
@@ -72,6 +72,11 @@ d'unknown host).
 ---
 
 ## ✅ Acquis
+
+### Post-2.2.0 (19 juillet 2026)
+- [x] **`plug doctor`** : diagnostic lecture-seule de toute la chaîne avec remède par constat — binaires (launcher, cores en cache, **la version que le service/daemon exécute réellement** — le trou du bump, désormais détecté et nommé), état système (resolver plug SANS session = état sale ; daemon.json Docker Desktop ; sonde NXDOMAIN live sur le datapath qui tourne), et par profil : agent joignable/version, backend `-s` dynamique (nouveau verbe agent `info`), agent pre-2.2. En fin de rapport interactif : proposition d'**issue GitHub pré-remplie** (le navigateur = login + relecture ; hostnames/IPs rédigés, profils anonymisés — le repo est public). Banc M5 réel ✅ (a trouvé deux vrais problèmes du poste au passage), cellule e2e ×9 jambes.
+- [x] **Gate des images de release** : `docker-release.yml` attend désormais le **vert du run CI du commit taggé** avant de publier les images versionnées — le même contrat que `:latest` (leçon 2.2.0 : image saine partie pendant que la CI échouait sur une cellule cassée).
+- [x] **Cellule resilience durcie** : agents de crash-test **par jambe** (`res-agent-<leg>`, chaos ciblé par label) — les trois jambes concurrentes ne s'entre-torpillent plus (le teardown perdait son agent quand les jambes s'alignaient) ; le prober témoin passe par l'agent principal, qui ne redémarre plus jamais.
 
 ### Post-2.1.0 (18-19 juillet 2026)
 - [x] **`-c`/`--client`** (19/07) : consommateur pur (DBeaver, Compass, scripts) — atteint les services par nom, **rien de nommé, aucun port réservé sur l'agent**. Exclusif avec `-s` ; ni l'un ni l'autre → la doc du choix. Garde agent ≥ 2.2, câblage launcher→core comme `-s`, cellule e2e ×9 jambes, banc ✅.

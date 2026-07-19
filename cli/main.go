@@ -53,6 +53,10 @@ Usage:
                                        never called back (DB tools, scripts)
   plug ls                              list profiles
   plug test [profile]                  check an agent is reachable
+  plug doctor [-p profile] [--fix]     health-check everything plug touches
+                                       (binaries, resolver, service, clusters),
+                                       apply the safe repairs with --fix, and
+                                       offer to report problems as an issue
   plug rn <old> <new>                  rename a profile (alias: mv)
   plug rm <profile>                    remove a profile
   plug versions                        list cached versions
@@ -282,6 +286,9 @@ func main() {
 		return
 	case "test":
 		cmdTestProfile(args[1:])
+		return
+	case "doctor":
+		cmdDoctor(args[1:])
 		return
 	case "uninstall":
 		uninstall(args[1:])

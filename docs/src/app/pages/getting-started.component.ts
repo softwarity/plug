@@ -113,6 +113,11 @@ ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@$
     </p>
     <app-code lang="bash">plug -c "/Applications/MongoDB Compass.app/Contents/MacOS/MongoDB Compass"</app-code>
     <p>
+      Something feels off? <code>plug doctor</code> checks everything plug touches — binaries,
+      resolver state, the privileged service, each profile's cluster — and names the remedy next
+      to each finding (it can open a pre-filled GitHub issue, redacted, if you want to report one).
+    </p>
+    <p>
       plug is a small <strong>launcher</strong>: on connect it asks the agent which version it
       speaks and runs <em>exactly that version</em> (cached under <code>~/.plug/versions/</code>,
       downloaded once). Each cluster runs its own matching version, so several clusters on different

@@ -162,10 +162,24 @@ do_env() {
     curl -s --max-time 10 -o /dev/null -w '%{http_code}' http://httpbin:8080/get 2>/dev/null | tr -d '\r' | tail -1)"
   if [ "$co" = "200" ]; then
     echo "client-only OK — -c reached httpbin by name with nothing served"
-    sum "**client-only (-c)** ✅"; return 0
+    sum "**client-only (-c)** ✅"
+  else
+    echo "--- client-only FAIL — got '${co:-nothing}' (want 200)"
+    sum "**client-only (-c)** ❌ — \`${co:-nothing}\`"; return 1
   fi
-  echo "--- client-only FAIL — got '${co:-nothing}' (want 200)"
-  sum "**client-only (-c)** ❌ — \`${co:-nothing}\`"; return 1
+
+  echo "=== doctor: the health checks must pass on a healthy leg ==="
+  # Read-only end to end (local state + this leg's profile against the real
+  # agent); non-interactive stdin, so the issue prompt never fires. Exit 0 =
+  # no ✗ finding on a machine the install one-liner just set up.
+  local dr
+  dr="$(perl -e 'alarm 60; exec @ARGV or exit 127' "$PLUG" doctor </dev/null 2>&1)"
+  if [ $? -eq 0 ] && printf '%s' "$dr" | grep -q "agent"; then
+    echo "doctor OK — all checks green on this leg"
+    sum "**doctor** ✅"; return 0
+  fi
+  echo "--- doctor FAIL —"; printf '%s\n' "$dr" | tail -20 | sed 's/^/    /'
+  sum "**doctor** ❌"; return 1
 }
 
 # protocol matrix: every language client, UNDER plug, reaches each cluster
