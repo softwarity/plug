@@ -57,4 +57,4 @@ if [ -z "$ok" ]; then
   exit 1
 fi
 
-bash "$(dirname "$0")/idle-until-caller-done.sh"
+bash "$root/scripts/ci/idle-until-caller-done.sh"

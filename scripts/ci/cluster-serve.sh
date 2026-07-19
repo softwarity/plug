@@ -32,4 +32,4 @@ $compose up -d --build --wait \
   chaos res-tko-linux res-tko-mac res-tko-win
 $compose ps
 
-bash "$(dirname "$0")/idle-until-caller-done.sh"
+bash "$root/scripts/ci/idle-until-caller-done.sh"
