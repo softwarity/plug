@@ -93,15 +93,17 @@ Options:
 
 // cmdAbout explains the concept in a few lines — the "why", not the plumbing.
 func cmdAbout() {
-	fmt.Print(`plug runs your local command as a member of your cluster: cluster service names
-resolve, its services are reachable, and your process is itself reachable in the
-cluster under a name — no code change, no proxy config.
+	fmt.Print(`plug runs your local command as a full member of your cluster, in both
+directions: cluster service names resolve, and your process is itself reachable
+in the cluster under a name — no code change, no proxy config.
 
 Set it up once per cluster (the install grants the privilege plug needs), then:
 
   plug -s my-app:8080:3000 npm run start:dev
 
 Your process now reaches cluster services by name and answers at my-app:8080.
+If a deployed service already owns that name, it is parked for the session and
+restored when you stop.
 Only consuming the cluster (a DB tool, a one-off script)? plug -c <command>.
 Several clusters? Just name one with -p — plug creates the profile on first run:
 
