@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.3.0
+
 ### New: `plug doctor` — health-check everything plug touches
 
 One read-only command that checks the whole chain and names the remedy next to
