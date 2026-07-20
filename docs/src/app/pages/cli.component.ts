@@ -66,8 +66,16 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
         <td><a routerLink="/profiles">Profiles</a></td>
       </tr>
       <tr>
-        <td><code>plug version</code> / <code>plug versions</code></td>
-        <td>the launcher's own version / launcher + every cached cluster version</td>
+        <td><code>plug version [-p profile]</code></td>
+        <td>
+          bare: this launcher's version; with a profile (or <code>-H</code>): that cluster
+          <em>agent's</em> version — one bare value, script-friendly
+        </td>
+        <td><a routerLink="/profiles">Versions</a></td>
+      </tr>
+      <tr>
+        <td><code>plug versions</code></td>
+        <td>the whole picture: launcher, cached cores, and each profile's agent version</td>
         <td><a routerLink="/profiles">Versions</a></td>
       </tr>
       <tr>
@@ -111,6 +119,11 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
         <td><code>-c, --client</code></td>
         <td>pure consumer — nothing named, no port reserved on the agent</td>
         <td><a routerLink="/getting-started">Getting started</a></td>
+      </tr>
+      <tr>
+        <td><code>-h, --help</code></td>
+        <td>show the built-in help (this page, condensed)</td>
+        <td></td>
       </tr>
     </table>
 

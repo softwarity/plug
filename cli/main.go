@@ -62,7 +62,10 @@ Usage:
                                        then this launcher from the agent
   plug rn <old> <new>                  rename a profile (alias: mv)
   plug rm <profile>                    remove a profile
-  plug versions                        list cached versions
+  plug version [-p profile]            this launcher's version — or, with a
+                                       profile, that cluster agent's version
+  plug versions                        launcher, cached cores, and the agent
+                                       version of every profile
   plug uninstall                       remove plug from this machine
   plug about                           what plug is, in a few lines
 
@@ -99,6 +102,7 @@ Set it up once per cluster (the install grants the privilege plug needs), then:
   plug -s my-app:8080:3000 npm run start:dev
 
 Your process now reaches cluster services by name and answers at my-app:8080.
+Only consuming the cluster (a DB tool, a one-off script)? plug -c <command>.
 Several clusters? Just name one with -p — plug creates the profile on first run:
 
   plug -p staging -s my-app:8080:3000 npm run start:dev
@@ -267,7 +271,7 @@ func main() {
 		fmt.Print(usage())
 		return
 	case "version":
-		fmt.Println(version)
+		cmdVersion(args[1:])
 		return
 	case "about":
 		cmdAbout()
@@ -348,13 +352,14 @@ func serveRequired(exposes []string, client bool) error {
 func launcherRun(args []string) {
 	opts, cmdArgs := parseArgs(args)
 	// `plug -p X update` reads as naturally as `plug update -p X` — accept both
-	// (same for doctor). Re-route the pre-parsed flags to the subcommand.
-	if len(cmdArgs) > 0 && (cmdArgs[0] == "update" || cmdArgs[0] == "doctor") {
+	// (same for doctor and version). Re-route the pre-parsed flags to the
+	// subcommand.
+	if len(cmdArgs) > 0 && (cmdArgs[0] == "update" || cmdArgs[0] == "doctor" || cmdArgs[0] == "version") {
 		if len(opts.exposes) > 0 || opts.client {
 			fatal("-s/-c don't apply to %q", cmdArgs[0])
 		}
 		sub, rest := cmdArgs[0], cmdArgs[1:]
-		if sub == "update" { // doctor has no host flags — profiles only
+		if sub != "doctor" { // doctor has no host flags — profiles only
 			if opts.port != "" {
 				rest = append([]string{"--port", opts.port}, rest...)
 			}
@@ -365,10 +370,13 @@ func launcherRun(args []string) {
 		if opts.profile != "" {
 			rest = append([]string{"-p", opts.profile}, rest...)
 		}
-		if sub == "update" {
+		switch sub {
+		case "update":
 			cmdUpdate(rest)
-		} else {
+		case "doctor":
 			cmdDoctor(rest)
+		default:
+			cmdVersion(rest)
 		}
 		return
 	}
@@ -642,21 +650,104 @@ func ensureWintunBeside(bin string) {
 	_ = os.WriteFile(dst, data, 0o644)
 }
 
+// cmdVersion prints THIS launcher's version — or, pointed at a cluster
+// (-p/-H), that cluster AGENT's version. One bare value either way, so scripts
+// stay trivial; `plug versions` is the whole picture at once. The bare form
+// must stay network-free and instant: installers and doctor exec it.
+func cmdVersion(args []string) {
+	var profile, host, port string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-p", "--profile":
+			profile = flagValue(args, &i)
+		case "-H", "--host":
+			host = flagValue(args, &i)
+		case "--port":
+			port = flagValue(args, &i)
+		default:
+			fatal("usage: plug version [-p profile]")
+		}
+	}
+	if profile == "" && host == "" {
+		fmt.Println(version)
+		return
+	}
+	cfg, _ := updateTarget(profile, host, port)
+	v, err := agentVersion(cfg)
+	if err != nil {
+		fatal("cannot reach the agent at %s:%s: %v", cfg.host, cfg.port, err)
+	}
+	fmt.Println(v)
+}
+
+// agentVersionTimeout bounds agentVersion for the parallel `plug versions`
+// sweep — a down cluster must cost seconds, not the full dial timeout.
+func agentVersionTimeout(cfg config, d time.Duration) (string, error) {
+	type res struct {
+		v   string
+		err error
+	}
+	ch := make(chan res, 1)
+	go func() {
+		v, err := agentVersion(cfg)
+		ch <- res{v, err}
+	}()
+	select {
+	case r := <-ch:
+		return r.v, r.err
+	case <-time.After(d):
+		return "", errors.New("timeout")
+	}
+}
+
 func listVersions() {
 	fmt.Printf("launcher: v%s\n", version)
 	entries, err := os.ReadDir(versionsDir())
-	if err != nil || len(entries) == 0 {
+	var cached []string
+	if err == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				cached = append(cached, e.Name())
+			}
+		}
+		sort.Strings(cached)
+	}
+	if len(cached) == 0 {
 		fmt.Println("cached: (none yet)")
+	} else {
+		fmt.Printf("cached: %s\n", strings.Join(cached, ", "))
+	}
+	// Each profile's agent, asked in parallel — the answer to "which version is
+	// each of my clusters on?", not just what happens to be cached locally.
+	names := listProfiles()
+	if len(names) == 0 {
 		return
 	}
-	var names []string
-	for _, e := range entries {
-		if e.IsDir() {
-			names = append(names, e.Name())
-		}
+	rows := make(map[string]string, len(names))
+	type row struct{ name, out string }
+	ch := make(chan row, len(names))
+	for _, n := range names {
+		go func(n string) {
+			host, port, err := readProfileSoft(n)
+			if err != nil {
+				ch <- row{n, "broken profile (" + err.Error() + ")"}
+				return
+			}
+			v, err := agentVersionTimeout(config{host: host, port: port}, 5*time.Second)
+			if err != nil {
+				ch <- row{n, fmt.Sprintf("unreachable (%s:%s)", host, port)}
+				return
+			}
+			ch <- row{n, fmt.Sprintf("agent v%s (%s:%s)", v, host, port)}
+		}(n)
 	}
-	sort.Strings(names)
-	fmt.Printf("cached: %s\n", strings.Join(names, ", "))
+	for range names {
+		r := <-ch
+		rows[r.name] = r.out
+	}
+	for _, n := range names {
+		fmt.Printf("%s: %s\n", n, rows[n])
+	}
 }
 
 // ---- get-user helpers (no key: passwordless ForceCommand download) ----

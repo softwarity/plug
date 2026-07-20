@@ -204,7 +204,8 @@ import { MatIconModule } from '@angular/material/icon';
         <span class="dir-tag out">outbound</span><br />
         <strong>Reach the cluster by name.</strong> Your process addresses
         <code>postgres</code>, <code>my-service:8080</code> — the same names any workload inside
-        uses. No port-forwards, no <code>localhost:PORT</code> mappings.
+        uses. No port-forwards, no <code>localhost:PORT</code> mappings. Only consuming (a DB
+        tool, a one-off script)? That's <code>plug -c</code>.
       </div>
       <div class="dir">
         <span class="dir-tag in">inbound</span><br />
