@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.3.1
+
 ### Improved: bare `plug version` says when the launcher lags your clusters
 
 `plug version` answers for the launcher — not what sessions run (each cluster
