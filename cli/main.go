@@ -1216,7 +1216,17 @@ func runChildEnv(cmdArgs []string, env []string) int {
 	}
 	go func() {
 		for s := range sigs {
-			child.Process.Signal(s)
+			// A terminal Ctrl-C is delivered by the kernel to the WHOLE
+			// foreground process group — the child included (it shares ours).
+			// SIGINT is caught here only so plug survives to run its teardown;
+			// re-sending it made every Ctrl-C a DOUBLE SIGINT for the child,
+			// and dev servers treat the second as "force quit NOW" — dying
+			// without restoring the terminal they put in raw mode (arrow keys
+			// then echo ^[[A in the shell). A targeted SIGTERM at plug alone
+			// is NOT group-delivered, so that one is relayed.
+			if s == syscall.SIGTERM {
+				child.Process.Signal(s)
+			}
 		}
 	}()
 

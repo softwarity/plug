@@ -37,7 +37,12 @@ func runChild(cmdArgs []string, privResolv string) (int, error) {
 	}
 	go func() {
 		for s := range sigs {
-			_ = child.Process.Signal(s)
+			// Ctrl-C (SIGINT) is group-delivered — the child already has it;
+			// re-sending doubled it and dev servers force-quit on the second
+			// without restoring the tty. Only a targeted SIGTERM is relayed.
+			if s == syscall.SIGTERM {
+				_ = child.Process.Signal(s)
+			}
 		}
 	}()
 

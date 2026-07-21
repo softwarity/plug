@@ -2,6 +2,19 @@
 
 ## NEXT RELEASE
 
+### Fixed: Ctrl-C no longer leaves the terminal in raw mode
+
+A terminal Ctrl-C is delivered by the kernel to the whole foreground process
+group — your command included. plug additionally re-sent it, so the child saw
+a **double SIGINT**; dev servers (webpack / `ng serve`, `nest --watch`…) treat
+the second one as "force quit NOW" and died without restoring the terminal
+they had put in raw mode — the shell then echoed `^[[A` on arrow-up instead
+of walking the history. plug now catches SIGINT only to survive long enough
+for its own teardown and relays nothing (the child already has it); a
+**targeted** SIGTERM at plug alone — which the kernel does not group-deliver —
+is still relayed. Your command's graceful-shutdown path (and your terminal)
+now behave exactly as without plug.
+
 ---
 
 ## 2.3.0
