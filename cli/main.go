@@ -672,6 +672,7 @@ func cmdVersion(args []string) {
 	}
 	if profile == "" && host == "" {
 		fmt.Println(version)
+		warnStaleLauncher()
 		return
 	}
 	cfg, _ := updateTarget(profile, host, port)
@@ -680,6 +681,37 @@ func cmdVersion(args []string) {
 		fatal("cannot reach the agent at %s:%s: %v", cfg.host, cfg.port, err)
 	}
 	fmt.Println(v)
+}
+
+// warnStaleLauncher — bare `plug version` answers for the LAUNCHER, which is
+// not what sessions run (they run each cluster's exact core). With clusters
+// freshly updated that bare answer reads like plug is old — disorienting. When
+// the LOCAL CACHE proves a cluster already served a newer release, say so: on
+// stderr, tty only (stdout stays a bare value — scripts and doctor exec it),
+// and never over the network (version's instant/offline contract).
+func warnStaleLauncher() {
+	if !isTTY(os.Stderr) || !semverOK(version) {
+		return // piped, or a dev build — a developer, not the audience
+	}
+	if max := maxCachedRelease(); max != "" && semverLess(version, max) {
+		info("a cluster already served v%s — this launcher is v%s; plug update aligns it", max, version)
+	}
+}
+
+// maxCachedRelease is the newest RELEASED core in ~/.plug/versions ("" when
+// only dev builds are cached).
+func maxCachedRelease() string {
+	entries, err := os.ReadDir(versionsDir())
+	if err != nil {
+		return ""
+	}
+	best := ""
+	for _, e := range entries {
+		if e.IsDir() && semverOK(e.Name()) && (best == "" || semverLess(best, e.Name())) {
+			best = e.Name()
+		}
+	}
+	return best
 }
 
 // agentVersionTimeout bounds agentVersion for the parallel `plug versions`

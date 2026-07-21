@@ -2,6 +2,16 @@
 
 ## NEXT RELEASE
 
+### Improved: bare `plug version` says when the launcher lags your clusters
+
+`plug version` answers for the launcher — not what sessions run (each cluster
+runs its exact core). With clusters freshly updated, that bare answer read
+like plug was old. When the local cache proves a cluster already served a
+newer release, a one-line note now follows on stderr (tty only — the stdout
+value stays bare for scripts): `a cluster already served v2.4.0 — this
+launcher is v2.3.0; plug update aligns it`. No network involved: `version`
+stays instant and offline.
+
 ### Fixed: Ctrl-C no longer leaves the terminal in raw mode
 
 A terminal Ctrl-C is delivered by the kernel to the whole foreground process

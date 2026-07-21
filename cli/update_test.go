@@ -47,6 +47,25 @@ func TestUpdateWord(t *testing.T) {
 	}
 }
 
+// TestMaxCachedRelease pins the stale-launcher hint's source of truth: newest
+// RELEASED core in the cache, numeric compare, dev builds ignored.
+func TestMaxCachedRelease(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // what os.UserHomeDir reads on Windows
+	if got := maxCachedRelease(); got != "" {
+		t.Fatalf("empty cache: got %q", got)
+	}
+	for _, d := range []string{"dev+abc", "2.2.0+x", "2.10.0+y", "not-a-version"} {
+		if err := os.MkdirAll(filepath.Join(home, ".plug", "versions", d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := maxCachedRelease(); got != "2.10.0+y" {
+		t.Fatalf("got %q, want 2.10.0+y (numeric compare, dev ignored)", got)
+	}
+}
+
 // TestReplaceBinary exercises the swap on every OS (Windows included in CI):
 // the target must hold the new bytes afterwards, with no .old left behind on a
 // non-running file.
