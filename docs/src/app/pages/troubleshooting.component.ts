@@ -36,6 +36,16 @@ import { CodeComponent } from '../code/code.component';
       <a routerLink="/kubernetes">the Kubernetes page</a>.
     </p>
 
+    <h3>Your command crashed mid-session — is it plug?</h3>
+    <p>
+      When the process you launched dies on its own (a dev server tripping over its own build
+      cache is a classic — an Angular one recovers with <code>rm -rf .angular/cache</code>), plug
+      is just the messenger: it closes the session cleanly and the deployed service takes the name
+      back. Telling them apart is easy — plug's own lines are prefixed <code>[plug]</code>;
+      a stack trace from your runtime (node, java, python…) is your app's. Relaunch your command
+      and the name is yours again.
+    </p>
+
     <h3>A name that exists nowhere answers "unknown host"</h3>
     <p>
       That is intended (since 2.2): plug asks the cluster before answering, so a typo or a
