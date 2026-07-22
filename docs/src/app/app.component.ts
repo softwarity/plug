@@ -30,6 +30,7 @@ export class AppComponent {
     { path: '/swarm', label: 'Swarm', icon: 'dns' },
     { path: '/kubernetes', label: 'Kubernetes', icon: 'hub' },
     { path: '/security', label: 'Security model', icon: 'shield' },
+    { path: '/troubleshooting', label: 'Troubleshooting', icon: 'troubleshoot' },
     { path: '/coverage', label: 'Coverage matrix', icon: 'table_chart' },
     { path: '/roadmap', label: 'Roadmap', icon: 'map' },
   ];

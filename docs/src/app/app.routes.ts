@@ -31,6 +31,11 @@ export const routes: Routes = [
     loadComponent: () =>
       import('./pages/agent-kubernetes.component').then((m) => m.AgentKubernetesComponent),
   },
+  {
+    path: 'troubleshooting',
+    loadComponent: () =>
+      import('./pages/troubleshooting.component').then((m) => m.TroubleshootingComponent),
+  },
   { path: 'agent', redirectTo: 'swarm', pathMatch: 'full' },
   {
     path: 'security',
