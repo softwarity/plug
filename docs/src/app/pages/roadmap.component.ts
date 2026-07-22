@@ -65,7 +65,9 @@ import { MatIconModule } from '@angular/material/icon';
       cluster hosts the tunnel endpoint and turns it on and off dynamically — dev tooling that
       piggybacks on infrastructure you already trust, with the gateway's own authentication in
       front. The install and versioning contract already exists (see below); the gateway will
-      simply expose the same surface, so the CLI will not need to relearn anything.
+      simply expose the same surface, so the CLI will not need to relearn anything. That gateway is
+      <a href="https://softwarity.github.io/meerkat/" target="_blank" rel="noopener">Meerkat</a>,
+      a companion project.
     </p>
 
     <div class="callout">
@@ -102,7 +104,7 @@ import { MatIconModule } from '@angular/material/icon';
         <tr><td>Reverse direction: serve a local port to the cluster under a cluster name (<code>-s</code>), name provisioned dynamically (docker-sock / k8s-RBAC)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
         <tr><td>Takeover (default): a deployed service owning a <code>-s</code> name is parked for the session and restored on exit</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
         <tr><td><code>kubectl exec</code> transport (no exposed port)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
-        <tr><td>Gateway hosting the tunnel + install surface</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
+        <tr><td>Gateway hosting the tunnel + install surface (<a href="https://softwarity.github.io/meerkat/" target="_blank" rel="noopener">Meerkat</a>)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
         <tr><td>IPv6 fake-pool + v6-literal tunnelling (overlays are IPv4 today)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
         <tr><td>UDP by name — framed datagram relay over the tunnel (TCP-only today)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
         <tr><td>Native protocol e2e on every OS (8 protocols × 4 languages, by name over a mesh)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
