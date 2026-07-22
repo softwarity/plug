@@ -137,6 +137,15 @@ ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@$
       braces, or on older agents: Docker Desktop → Settings → Docker Engine, add
       <code>"dns": ["1.1.1.1", "8.8.8.8"]</code> so unknown names never leave the VM at all.
     </div>
+    <div class="callout">
+      <strong>App seems back only after "a long time"?</strong> On Swarm the address behind a
+      served name <em>changes</em> when its signpost is recreated (a session relaunch, or
+      <code>plug update</code> rolling the agent). A caller that pools
+      <strong>keep-alive connections</strong> and caches DNS — a Java gateway, typically — keeps
+      hitting the old address until its pool recycles, which can take a while. plug is already
+      answering at the new one: bounce the caller
+      (<code>docker service update --force your-gateway</code>) and it reconnects instantly.
+    </div>
     <p>
       Installed a launcher before <code>-s</code> existed? Put <code>-s</code> after
       <code>-p</code>/<code>--host</code> — older launchers pass flags they don't know to the core.
