@@ -3,7 +3,7 @@
 [![release](https://img.shields.io/github/v/release/softwarity/plug?label=release)](https://github.com/softwarity/plug/releases)
 [![docker](https://img.shields.io/docker/v/softwarity/plug?sort=semver&label=docker)](https://hub.docker.com/r/softwarity/plug)
 [![docker pulls](https://img.shields.io/docker/pulls/softwarity/plug)](https://hub.docker.com/r/softwarity/plug)
-[![license](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
+[![license](https://img.shields.io/badge/license-FSL--1.1-blue)](LICENSE)
 [![arch](https://img.shields.io/badge/arch-amd64%20·%20arm64-brightgreen)](https://hub.docker.com/r/softwarity/plug/tags)
 [![CLI](https://img.shields.io/badge/CLI-linux%20·%20macOS%20·%20windows-blue)](https://github.com/softwarity/plug/releases)
 [![CI](https://github.com/softwarity/plug/actions/workflows/ci.yml/badge.svg)](https://github.com/softwarity/plug/actions/workflows/ci.yml)
@@ -188,9 +188,13 @@ package to install or keep in sync.
 
 ## License
 
-plug is [AGPL-3.0](LICENSE) — free to use and self-host. Building it into a
-**closed or hosted commercial product**? A commercial license is available —
-contact **[francois@hhdev.fr](mailto:francois@hhdev.fr)**.
+plug is [FSL-1.1-Apache-2.0](LICENSE) — free for any purpose, including
+building it into your own product, self-hosting it, or using it internally at
+a company. The one thing it doesn't permit is a **competing use**: offering
+plug itself, or a product/service that substitutes for it (e.g. a rival
+hosted-gateway offering), to others. It converts to Apache-2.0 two years after
+each release. Want to do exactly that anyway? A commercial license is
+available — contact **[francois@hhdev.fr](mailto:francois@hhdev.fr)**.
 
-Third-party components (all AGPL-compatible) are listed in
+Third-party components are listed in
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).

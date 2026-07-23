@@ -2,6 +2,20 @@
 
 ## NEXT RELEASE
 
+### Changed: license — AGPL-3.0 → FSL-1.1-Apache-2.0
+
+plug is now licensed under the [Functional Source
+License](https://fsl.software/) (FSL-1.1-Apache-2.0) instead of AGPL-3.0.
+AGPL already let a competitor build a rival product with plug's code — the
+one condition was sharing their own source back. FSL closes that: it's free
+for **any purpose, including building it into your own product or using it
+internally at a company** — the one thing it doesn't permit is a **competing
+use** (offering plug itself, or a substitute for it such as a rival
+hosted-gateway offering, to others). It converts to Apache-2.0 two years
+after each release, the same terms already used by
+[Meerkat](https://softwarity.github.io/meerkat/), the gateway on plug's
+roadmap. Nothing else about how you use plug day to day changes.
+
 ---
 
 ## 2.3.1

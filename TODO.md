@@ -13,7 +13,9 @@ est devenu obligatoire** — une seule forme d'invocation. La **détection de
 collision** refuse un nom déjà pris (message précis par backend). Le transport
 **s'auto-répare** : keepalive borné qui tue une connexion zombie (sleep / VPN /
 proxy Docker Desktop) puis reconnecte et **re-provisionne** le nom. Licence
-passée en **AGPL-3.0**. Windows est désormais une **jambe e2e complète en CI**
+passée en AGPL-3.0, puis **FSL-1.1-Apache-2.0** (23/07 — protège contre une
+gateway commerciale rivale bâtie sur le tunnel, cohérent avec `meerkat`).
+Windows est désormais une **jambe e2e complète en CI**
 (mesh Tailscale, natif, sans WSL2) — tout l'ancien chantier « verrouiller
 Windows » est bouclé.
 
@@ -73,6 +75,9 @@ d'unknown host).
 ---
 
 ## ✅ Acquis
+
+### Post-2.3.1 (23 juillet 2026)
+- [x] **Relicence AGPL-3.0 → FSL-1.1-Apache-2.0** : l'AGPL autorisait déjà un concurrent à intégrer `plug` dans un produit rival (ex. une gateway commercialisée) — à la seule condition qu'il republie son propre code, une obligation de partage, pas une interdiction. La FSL, elle, interdit directement cet usage concurrent (converge vers Apache-2.0 deux ans après chaque release, comme `meerkat` — cohérence de gamme). Tout le reste (usage libre, interne, intégration dans un produit non-concurrent) reste inchangé. `LICENSE`, badges, section README, `THIRD_PARTY_LICENSES.md`, page About du site mis à jour.
 
 ### Post-2.2.0 (19 juillet 2026)
 - [x] **`plug update`** : remonte la chaîne de distribution (registre → agent → launcher). Nouveau verbe agent `self-update` : k8s **rolling restart de son propre Deployment** (patch annotation ; le nœud re-pull le tag — RBAC officiel +`deployments get/list/patch`, 403 → remède exact), Swarm **service update forcé, digest retiré** (le manager re-résout le tag), conteneur plain **pull + commande de recréation** (il ne peut pas se recréer lui-même). Puis le **launcher se remplace depuis l'agent** (rename atomique, re-grant setuid/caps ; Windows : le service à la demande prend le nouveau binaire seul — le trou « version service vs launcher » fermé). Jamais de downgrade, jamais sur un build dev. Les sessions `-s` survivent au roll (self-heal). Cellule e2e `update` jambes compose (agents par-jambe), rolling k8s/swarm prouvé au banc M5.

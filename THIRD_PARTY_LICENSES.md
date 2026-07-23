@@ -1,9 +1,10 @@
 # Third-party licenses
 
-plug is licensed under **AGPL-3.0** (see [`LICENSE`](LICENSE)). It bundles the
-third-party components below, each under **its own license** — listed here for
-attribution. Full license texts are at the linked sources (and are vendored with
-each Go module). Nothing here changes plug's own AGPL-3.0 terms.
+plug is licensed under **FSL-1.1-Apache-2.0** (see [`LICENSE`](LICENSE)). It
+bundles the third-party components below, each under **its own license** —
+listed here for attribution. Full license texts are at the linked sources (and
+are vendored with each Go module). Nothing here changes plug's own
+FSL-1.1-Apache-2.0 terms.
 
 The Go-module list is generated from the actual link graph of the `plug` binary
 (`go-licenses`, union of linux / macOS / windows builds).
@@ -32,8 +33,8 @@ Sources / copyright holders / full texts:
 ## plug agent — the `docker.io/softwarity/plug` image
 
 The agent is an Alpine image bundling these **independent programs**. This is
-*mere aggregation* — each keeps its own license, and plug's AGPL-3.0 covers only
-the `plug-agent` binary plug adds, not the programs below.
+*mere aggregation* — each keeps its own license, and plug's FSL-1.1-Apache-2.0
+covers only the `plug-agent` binary plug adds, not the programs below.
 
 | Component | Role | License |
 |---|---|---|
@@ -51,7 +52,8 @@ Sources:
 
 ---
 
-All of these licenses are **compatible with AGPL-3.0**: BSD and MIT are permissive
-and GPL/AGPL-compatible, and Apache-2.0 is compatible with the **v3** GPL family
-(so with AGPL-3.0). The image programs run as separate processes (aggregation),
-not linked into plug's code.
+None of these licenses restrict redistribution alongside a source-available
+license like FSL: BSD, MIT and Apache-2.0 are permissive (no obligation flows
+back onto plug), and BusyBox's GPL-2.0 only reaches the aggregated image, not
+plug's own code — the image programs run as separate processes (mere
+aggregation), not linked into plug's code.

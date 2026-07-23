@@ -278,7 +278,7 @@ import { MatIconModule } from '@angular/material/icon';
           <tr><td>Cluster-side</td><td>one agent container</td><td>none (uses your kubeconfig)</td><td>traffic-manager install</td></tr>
           <tr><td>Auth</td><td>none — trusted dev cluster</td><td>your kubeconfig / RBAC</td><td>your kubeconfig / RBAC</td></tr>
           <tr><td>Per-dev isolation on a shared service</td><td>one name, one session</td><td>Operator (header / queue split)</td><td>intercept filtering (header / path)</td></tr>
-          <tr><td>Price</td><td><strong>Free · AGPL-3.0</strong></td><td>Free OSS · $40/seat/mo Teams · Enterprise custom</td><td>Free OSS · paid cloud features</td></tr>
+          <tr><td>Price</td><td><strong>Free · FSL-1.1</strong></td><td>Free OSS · $40/seat/mo Teams · Enterprise custom</td><td>Free OSS · paid cloud features</td></tr>
         </tbody>
       </table>
     </div>
