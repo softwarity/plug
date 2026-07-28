@@ -125,14 +125,13 @@ ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@$
       <code>-s</code> can only ever be a port, so there is nothing to disambiguate.
       <code>&#123;PORT&#125;</code> <strong>references</strong> it in the command — braced, because
       argv is free text and a bare <code>PORT</code> would also rewrite
-      <code>--transport=PORTAL</code>. Any name works, and it is exported to your command as well,
-      so one that already reads an environment variable needs no flag at all:
+      <code>--transport=PORTAL</code>. Any name works. The mapping is armed on that same number,
+      so the cluster reaches <code>web:8080</code> whichever port your process landed on today.
     </p>
-    <app-code lang="bash">plug -s web:8080:PROXY_PORT  polyglot --config=./angular.json   # reads $PROXY_PORT</app-code>
     <p>
-      Both spellings carry the same number, and the mapping is armed on it — the cluster reaches
-      <code>web:8080</code> whichever port your process landed on today. Some things this makes
-      easy:
+      The command line is the only channel — plug puts nothing in your process's environment. One
+      number, one way to hand it over, and no variable of yours quietly overwritten. Some things
+      this makes easy:
     </p>
     <app-code lang="bash"># Two branches of the same service, side by side, both answering in the cluster
 git worktree add ../hotfix &amp;&amp; cd ../hotfix
@@ -144,10 +143,12 @@ plug -s web:80:PORT -s web-tls:443:PORT node server.js --listen=&#123;PORT&#125;
 # A shared CI runner, where a pinned port is a race against the other jobs
 plug -s e2e:8080:PORT npm run serve -- --port=&#123;PORT&#125;</app-code>
     <p>
-      A <code>&#123;TOKEN&#125;</code> nothing declared is rejected at startup rather than passed
-      through: left alone it reaches your command as the literal string
-      <code>&#123;PROT&#125;</code>, which either crashes it or — worse — makes it fall back to a
-      default port the cluster is not forwarding to, and you get silence instead of an error.
+      The two halves have to match, and plug says so at startup rather than let either mistake
+      through — both fail silently otherwise, from opposite ends. A
+      <code>&#123;TOKEN&#125;</code> nothing declared reaches your command as the literal string
+      <code>&#123;PROT&#125;</code>, which either crashes it or makes it fall back to a default
+      port the cluster is not forwarding to. A name nothing references allocates a port your
+      process is never told about — the cluster name gets published, and nothing ever answers it.
       Commands that use braces for their own purposes (<code>awk '&#123;print&#125;'</code>) are
       untouched when no <code>-s</code> names a port.
     </p>

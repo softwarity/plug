@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"net"
-	"os"
 	"regexp"
 	"strings"
 
@@ -17,21 +16,26 @@ import (
 //
 //	plug -s web:8080:PORT  npm run dev -- --port={PORT}
 //
-// PORT declares the variable (bare — the third field of a -s can only ever be a
-// port, so there is nothing to disambiguate), {PORT} references it in the
-// child's argv (braced — argv is free text, and a bare PORT would also match
-// --transport=PORTAL). The same name is exported to the child, so a command that
-// already reads an env var needs no flag at all:
+// PORT declares (bare — the third field of a -s can only ever be a port, so
+// there is nothing to disambiguate), {PORT} references it in the child's argv
+// (braced — argv is free text, and a bare PORT would also match
+// --transport=PORTAL).
 //
-//	plug -s web:8080:PROXY_PORT  polyglot --config=./angular.json
+// The command line is the ONLY channel: nothing is exported to the child's
+// environment. Two ways to hand over one number would be two things to keep in
+// agreement, and injecting a variable of the user's choosing means quietly
+// overwriting whatever the application already kept under that name.
 //
-// Declaring without referencing is fine (that second form). The reverse is not:
-// a {TOKEN} nobody declared is a typo, and typos here are silent — the child
-// would just receive a literal "{PROT}" and bind something else.
+// So the two halves are required to match, both ways. A {TOKEN} nobody declared
+// is a typo — left alone the child receives the literal "{PROT}" and binds
+// something else. A declaration nobody references is the same bug seen from the
+// other end: plug would allocate a port the process never hears about, bind the
+// cluster name to it, and nothing would ever answer.
 
-// portVarName is the token accepted in a -s third field and inside {…}. It is
-// exported as an environment variable, so it must be a valid one: a letter or
-// underscore, then letters, digits and underscores.
+// portVarName is the token accepted in a -s third field and inside {…}: a letter
+// or underscore, then letters, digits and underscores. Deliberately the shape of
+// an identifier — it reads as a name rather than as a mangled port, and it can't
+// collide with the digits it stands in for.
 var portVarName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // portVarRef matches a {TOKEN} reference in the child's argv.
@@ -69,13 +73,9 @@ func hasPortVars(specs []tunnel.ExposeSpec) bool {
 	return false
 }
 
-// resolvePortVars allocates a local port for every named -s, exports it to the
-// child as $NAME, and substitutes {NAME} throughout the child's argv. Returns
-// the specs with LocalPort filled in and the rewritten argv.
-//
-// Runs in the process that will spawn the child — the core — so the env is set
-// on ourselves and inherited (every platform's child path starts from
-// os.Environ(); none overrides Env with a curated list).
+// resolvePortVars allocates a local port for every named -s and substitutes
+// {NAME} throughout the child's argv. Returns the specs with LocalPort filled in
+// and the rewritten argv.
 func resolvePortVars(specs []tunnel.ExposeSpec, cmdArgs []string) ([]tunnel.ExposeSpec, []string, error) {
 	if !hasPortVars(specs) {
 		return specs, cmdArgs, nil
@@ -98,30 +98,41 @@ func resolvePortVars(specs []tunnel.ExposeSpec, cmdArgs []string) ([]tunnel.Expo
 			}
 			port = p
 			ports[s.PortVar] = port
-			if err := os.Setenv(s.PortVar, port); err != nil {
-				return nil, nil, fmt.Errorf("-s %s: cannot export %s: %w", s.Name, s.PortVar, err)
-			}
 		}
 		out[i].LocalPort = port
 	}
-	args, err := substitutePortVars(cmdArgs, ports)
+	args, used, err := substitutePortVars(cmdArgs, ports)
 	if err != nil {
 		return nil, nil, err
+	}
+	// A name that reached no reference is a port the child will never hear
+	// about — the mapping would be armed and simply never answer. Say so here,
+	// where the fix is obvious, rather than leave it to be debugged from the
+	// far end of the cluster.
+	for _, s := range out {
+		if s.PortVar != "" && !used[s.PortVar] {
+			return nil, nil, fmt.Errorf("-s %s:%s:%s names the local port, but {%s} appears nowhere "+
+				"in the command — plug would pick a port your process is never told about.\n"+
+				"Pass it: … --port={%s}   (or pin the number: -s %s:%s:<port>)",
+				s.Name, s.ClusterPort, s.PortVar, s.PortVar, s.PortVar, s.Name, s.ClusterPort)
+		}
 	}
 	return out, args, nil
 }
 
-// substitutePortVars replaces every {NAME} in argv with its port. An unknown
-// {TOKEN} is an error, not a literal: it is either a typo in a name that WAS
-// declared, or a reference to a -s that isn't there — both silent bugs if left
-// to reach the child.
-func substitutePortVars(cmdArgs []string, ports map[string]string) ([]string, error) {
+// substitutePortVars replaces every {NAME} in argv with its port, and reports
+// which names were actually referenced. An unknown {TOKEN} is an error, not a
+// literal: it is either a typo in a name that WAS declared, or a reference to a
+// -s that isn't there — both silent bugs if left to reach the child.
+func substitutePortVars(cmdArgs []string, ports map[string]string) ([]string, map[string]bool, error) {
 	out := make([]string, len(cmdArgs))
+	used := make(map[string]bool, len(ports))
 	for i, arg := range cmdArgs {
 		var bad string
 		out[i] = portVarRef.ReplaceAllStringFunc(arg, func(ref string) string {
 			name := ref[1 : len(ref)-1]
 			if port, ok := ports[name]; ok {
+				used[name] = true
 				return port
 			}
 			if bad == "" {
@@ -130,12 +141,12 @@ func substitutePortVars(cmdArgs []string, ports map[string]string) ([]string, er
 			return ref
 		})
 		if bad != "" {
-			return nil, fmt.Errorf("{%s} in %q references no -s mapping — declared: %s\n"+
+			return nil, nil, fmt.Errorf("{%s} in %q references no -s mapping — declared: %s\n"+
 				"declare it by naming the local port: -s <name>:<cluster-port>:%s",
 				bad, arg, declaredList(ports), bad)
 		}
 	}
-	return out, nil
+	return out, used, nil
 }
 
 // declaredList renders the declared names for an error message, sorted so the

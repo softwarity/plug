@@ -11,9 +11,10 @@ import (
 )
 
 // A named local port (-s web:8080:PORT) is user-facing grammar: the third field
-// of a -s, the {PORT} references in the command, and the exported $PORT are one
-// contract. Lock all three down — a regression here is silent (the child binds
-// a port the cluster isn't forwarding to, and simply never receives traffic).
+// of a -s and the {PORT} references in the command are one contract, and the
+// command line is the only channel — nothing is exported to the environment.
+// Lock it down: a regression here is silent (the child binds a port the cluster
+// isn't forwarding to, and simply never receives traffic).
 
 func TestParseExposePortVar(t *testing.T) {
 	// A named third field parses as a declaration, not a port.
@@ -95,31 +96,32 @@ func TestResolvePortVars(t *testing.T) {
 	if want := "--port=" + port; args[4] != want {
 		t.Fatalf("args = %v, want the last arg %q", args, want)
 	}
-	// Same value in the environment, so a command that reads an env var needs
-	// no {…} at all.
-	if os.Getenv("PORT") != port {
-		t.Fatalf("$PORT = %q, want %q", os.Getenv("PORT"), port)
-	}
 	// Everything else is untouched.
 	if !reflect.DeepEqual(args[:4], []string{"npm", "run", "dev", "--"}) {
 		t.Fatalf("args = %v", args)
 	}
+	// The command line is the ONLY channel. Exporting the name as well would be
+	// a second way to carry one number — and would silently overwrite whatever
+	// the application already kept under that name.
+	if v, ok := os.LookupEnv("PORT"); ok {
+		t.Fatalf("$PORT was exported as %q — nothing must be injected into the child's environment", v)
+	}
 }
 
-// Declaring without referencing is legitimate: the child reads $PROXY_PORT.
-func TestResolvePortVarsEnvOnly(t *testing.T) {
+// Declaring a name and never referencing it allocates a port the child is never
+// told about: the mapping gets armed and nothing ever answers it. Silent from
+// the cluster's side, so it has to fail here.
+func TestResolvePortVarsDeclaredButUnused(t *testing.T) {
 	specs := []tunnel.ExposeSpec{{Name: "web", ClusterPort: "8080", PortVar: "PROXY_PORT"}}
-	cmd := []string{"polyglot", "--config=./angular.json"}
-
-	got, args, err := resolvePortVars(specs, cmd)
-	if err != nil {
-		t.Fatalf("resolvePortVars: %v", err)
+	_, _, err := resolvePortVars(specs, []string{"polyglot", "--config=./angular.json"})
+	if err == nil {
+		t.Fatal("a declaration with no {PROXY_PORT} reference must be rejected")
 	}
-	if !reflect.DeepEqual(args, cmd) {
-		t.Fatalf("args = %v, want untouched %v", args, cmd)
-	}
-	if os.Getenv("PROXY_PORT") != got[0].LocalPort {
-		t.Fatalf("$PROXY_PORT = %q, want %q", os.Getenv("PROXY_PORT"), got[0].LocalPort)
+	// The message must carry the fix, not just the complaint.
+	for _, want := range []string{"PROXY_PORT", "--port={PROXY_PORT}", "pin"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q should mention %q", err.Error(), want)
+		}
 	}
 }
 
@@ -148,12 +150,16 @@ func TestResolvePortVarsSharedName(t *testing.T) {
 		{Name: "web", ClusterPort: "80", PortVar: "PORT"},
 		{Name: "web-tls", ClusterPort: "443", PortVar: "PORT"},
 	}
-	got, _, err := resolvePortVars(specs, []string{"srv"})
+	got, args, err := resolvePortVars(specs, []string{"srv", "--listen={PORT}"})
 	if err != nil {
 		t.Fatalf("resolvePortVars: %v", err)
 	}
 	if got[0].LocalPort != got[1].LocalPort {
 		t.Fatalf("shared name got %s and %s — one name is one port", got[0].LocalPort, got[1].LocalPort)
+	}
+	// One reference satisfies both declarations — they are the same name.
+	if args[1] != "--listen="+got[0].LocalPort {
+		t.Fatalf("args = %v, specs = %+v", args, got)
 	}
 }
 
@@ -206,7 +212,7 @@ func TestResolvePortVarsIgnoresBracesWhenUnused(t *testing.T) {
 // A bare name is NOT substituted — only {…} is. Otherwise every argument
 // containing the word would be rewritten (--transport=PORTAL).
 func TestSubstitutePortVarsOnlyBraced(t *testing.T) {
-	args, err := substitutePortVars(
+	args, used, err := substitutePortVars(
 		[]string{"srv", "--transport=PORTAL", "PORT", "--p={PORT}"},
 		map[string]string{"PORT": "54321"},
 	)
@@ -217,12 +223,17 @@ func TestSubstitutePortVarsOnlyBraced(t *testing.T) {
 	if !reflect.DeepEqual(args, want) {
 		t.Fatalf("args = %v, want %v", args, want)
 	}
+	// The bare occurrences must not count as references either — otherwise
+	// `--transport=PORTAL` alone would satisfy a declaration.
+	if !used["PORT"] || len(used) != 1 {
+		t.Fatalf("used = %v, want only the braced reference to count", used)
+	}
 }
 
 // Several references in one argument, and the command word itself, are all fair
 // game — substitution is positional-agnostic.
 func TestSubstitutePortVarsRepeated(t *testing.T) {
-	args, err := substitutePortVars(
+	args, _, err := substitutePortVars(
 		[]string{"--url=http://localhost:{PORT}/{PORT}"},
 		map[string]string{"PORT": "4242"},
 	)

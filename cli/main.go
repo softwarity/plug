@@ -84,11 +84,10 @@ Options:
                          restored when the session ends.
                          Repeatable; place after the other options.
                          <local-port> may be a NAME instead of a number — plug
-                         then picks a free port per session, passes it to your
-                         command wherever {NAME} appears, and exports it as
-                         $NAME. Nothing to pin, nothing to collide:
+                         then picks a free port for the session and writes it
+                         into your command wherever {NAME} appears. Nothing to
+                         pin, nothing to collide:
                            plug -s web:8080:PORT npm run dev -- --port={PORT}
-                           plug -s web:8080:PROXY_PORT polyglot   # reads $PROXY_PORT
   -c, --client           this process only CONSUMES the cluster — nothing to
                          name, no port reserved on the agent. For GUI DB tools
                          (DBeaver, Compass…), one-off scripts, batch consumers.

@@ -176,15 +176,13 @@ plug -s web:8080:PORT  npm run dev -- --port={PORT}
 `PORT` declares (bare — the third field of a `-s` can only ever be a port, so
 there is nothing to disambiguate), `{PORT}` references it in the command
 (braced — argv is free text, and a bare `PORT` would also rewrite
-`--transport=PORTAL`). Any name works; it is exported to your command too, so
-one that already reads an environment variable needs no flag at all:
+`--transport=PORTAL`). Any name works. The mapping is armed on that same
+number, so the cluster reaches `web:8080` whichever port your process landed on
+today.
 
-```bash
-plug -s web:8080:PROXY_PORT  polyglot --config=./angular.json   # reads $PROXY_PORT
-```
-
-Both spellings carry the same number, and the mapping is armed on it — the
-cluster reaches `web:8080` no matter which port your process landed on today.
+The command line is the only channel — plug puts nothing in your process's
+environment. One number, one way to hand it over, and no variable of yours
+quietly overwritten.
 
 Some things this makes easy:
 
@@ -200,11 +198,17 @@ plug -s web:80:PORT -s web-tls:443:PORT node server.js --listen={PORT}
 plug -s e2e:8080:PORT npm run serve -- --port={PORT}
 ```
 
-A `{TOKEN}` nothing declared is rejected at startup rather than passed through:
-left alone it reaches your command as the literal string `{PROT}`, which either
-crashes it or — worse — makes it fall back to a default port the cluster is not
-forwarding to, and you get silence instead of an error. Commands that use braces
-for their own purposes (`awk '{print}'`) are untouched when no `-s` names a port.
+The two halves have to match, and plug says so at startup rather than let either
+mistake through — both fail silently otherwise, from opposite ends:
+
+- a `{TOKEN}` nothing declared reaches your command as the literal string
+  `{PROT}`, which either crashes it or makes it fall back to a default port the
+  cluster is not forwarding to;
+- a name nothing references allocates a port your process is never told about —
+  the cluster name gets published, and nothing ever answers it.
+
+Commands that use braces for their own purposes (`awk '{print}'`) are untouched
+when no `-s` names a port.
 
 Pinning still works, and still makes sense when something outside the session
 needs a stable address (a bookmarked URL, a debugger attach config).

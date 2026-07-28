@@ -11,10 +11,10 @@ plug -s web:8080:PORT  npm run dev -- --port={PORT}
 ```
 
 plug allocates a free local port for the session, substitutes `{PORT}`
-everywhere in your command, and arms the mapping on that same number. The name
-is exported to the child too, so a command that already reads an environment
-variable needs no flag at all — `plug -s web:8080:PROXY_PORT polyglot` just
-works.
+everywhere in your command, and arms the mapping on that same number. The
+command line is the only channel — nothing is put in your process's
+environment: one number, one way to hand it over, and no variable of yours
+quietly overwritten.
 
 Why: the **cluster** port is agreed in advance (it is what other workloads
 dial), but the **local** one is nobody's business but yours. Pinning it is what
@@ -25,11 +25,12 @@ removes the negotiation entirely.
 The two spellings are deliberate: bare on the left because the third field of a
 `-s` can only ever be a port — nothing to disambiguate; braced on the right
 because argv is free text, and a bare `PORT` would also rewrite
-`--transport=PORTAL`. A `{TOKEN}` nothing declared fails at startup instead of
-reaching your command as a literal, which is the silent version of this bug (the
-child falls back to a default port the cluster isn't forwarding to, and you get
-silence rather than an error). Commands using braces for their own purposes
-(`awk '{print}'`) are untouched when no `-s` names a port.
+`--transport=PORTAL`. The halves must match, and a mismatch fails at startup
+rather than silently — a `{TOKEN}` nothing declared would reach the child as a
+literal and make it fall back to a port the cluster isn't forwarding to, and a
+name nothing references would allocate a port the child is never told about.
+Commands using braces for their own purposes (`awk '{print}'`) are untouched
+when no `-s` names a port.
 
 Pinned ports keep working, unchanged. Naming needs ≥ 2.4 on **both sides**: the
 launcher checks the mapping before connecting, and the mapping then crosses the

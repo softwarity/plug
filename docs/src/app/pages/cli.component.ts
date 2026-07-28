@@ -113,7 +113,7 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
           serve this process under a cluster name for the session (repeatable; a deployed owner of
           the name is parked, then restored). <code>local-port</code> may be a
           <strong>name</strong> instead of a number — plug then picks a free port per session and
-          passes it to your command as <code>&#123;NAME&#125;</code> and <code>$NAME</code>
+          writes it into your command wherever <code>&#123;NAME&#125;</code> appears
         </td>
         <td><a routerLink="/getting-started">Getting started</a></td>
       </tr>
