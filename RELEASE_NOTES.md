@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.4.0
+
 ### Added: name the local port and plug picks a free one
 
 The third field of a `-s` may now be a **name** instead of a number:
