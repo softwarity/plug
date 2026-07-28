@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.4.1
+
 ### Fixed: `plug update` now actually moves a pinned cluster forward
 
 An agent deployed from a pinned release tag could never be updated. `plug update`
