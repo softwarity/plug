@@ -2,6 +2,53 @@
 
 ## NEXT RELEASE
 
+### Fixed: `plug update` now actually moves a pinned cluster forward
+
+An agent deployed from a pinned release tag could never be updated. `plug update`
+asked the agent to refresh itself, the agent re-resolved its own tag —
+`softwarity/plug:2.3.0` resolves to 2.3.0, today and forever — and the command
+finished 90 seconds later reporting that nothing had changed. The one situation
+where you reach for `update` was the one where it did nothing.
+
+It now **rewrites the tag**. The agent lists the releases published for its own
+repository, picks the newest `x.y.z`, and moves the deployment to it — majors
+included. plug is the infrastructure carrying your sessions, not an application
+dependency held back for reproducibility: there is no version of "up to date"
+that leaves a cluster on an old agent.
+
+Each backend applies it its own way:
+
+- **Swarm** — the service's image is updated to the new tag (the pinned digest
+  dropped), and the task rolls.
+- **Kubernetes** — the Deployment's container image is patched, alongside the
+  restart annotation.
+- **Compose / plain container** — the new image is pulled, and since a container
+  cannot recreate itself, the reply carries the exact command that does, plus a
+  reminder to change the tag in the compose file (otherwise the next `up` puts
+  the old pin straight back).
+
+A **moving** tag (`latest`, `main`, a branch) is left alone and merely re-pulled:
+it already resolves to whatever its publisher last pushed, and repointing it
+would override a deliberate choice.
+
+Two side effects worth having. A pinned deployment that is already on the newest
+release is now answered **immediately** — no workload rolled, no 90-second poll
+for a change that cannot come. And the lookup goes to the registry that actually
+holds the image, so a mirror or a private registry is asked about its own tags;
+one that cannot be listed degrades to the previous behaviour and says why,
+rather than blocking the update.
+
+### Changed: released versions no longer carry a commit hash
+
+`plug version` answered `2.3.0+bb03611`. The commit exists to tell two builds of
+a **moving** tag apart — without it, two rebuilds of `main` look identical and
+the CLI keeps serving its cached core. A release tag already designates exactly
+one commit, so there the suffix only made every version harder to read. Releases
+are now stamped bare (`2.4.0`); builds off a branch keep `dev+<rev>`.
+
+Consequence, and it is the right one: rebuilding a release tag in place no
+longer propagates to clients. A release is immutable — cut a new one.
+
 ---
 
 ## 2.4.0

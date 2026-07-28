@@ -165,10 +165,18 @@ func dispatch(cmd []string) {
 		}
 		answer("nxdomain")
 	case "self-update":
-		// `plug update` — refresh THIS agent from its registry, each backend its
-		// own way. One line out; the FIRST WORD is the verdict the CLI parses:
+		// `plug update` — move THIS agent to the newest release, each backend its
+		// own way. A deployment pinned to a release tag has that tag REWRITTEN
+		// (2.3.0 → 2.4.0): plug is infrastructure, not an application dependency
+		// to hold back, and re-resolving a pin can only ever return the same
+		// image. A moving tag (latest, main, a branch) belongs to its publisher
+		// and is only re-pulled.
+		//
+		// One line out; the FIRST WORD is the verdict the CLI parses:
 		//   updating …   a redeploy was triggered (k8s rolling / swarm update)
-		//   current …    nothing newer under the deployed tag (docker backend)
+		//   current …    already the newest release, or a moving tag that did
+		//                not move — answered WITHOUT rolling anything, so the
+		//                CLI does not poll for a change that cannot come
 		//   pulled …     newer image pulled; recreating is the caller's move
 		//   static       no orchestrator access — redeploy by hand
 		//   error: …     precise failure (RBAC gap, not a manager, …)
@@ -234,11 +242,11 @@ func selfUpdate() {
 	answer("static")
 }
 
-// k8sSelfUpdate triggers a rolling restart of the agent's own Deployment (a
-// template-annotation patch — what `kubectl rollout restart` does): the node
-// then re-pulls the deployed tag per its imagePullPolicy (Always in the
-// official manifest). The policy of WHICH version arrives stays where it
-// belongs — in the deployment's image tag.
+// k8sSelfUpdate updates the agent's own Deployment. A pinned RELEASE tag is
+// rewritten to the newest release — a rolling restart alone would re-pull the
+// same pin forever. A moving tag keeps the restart-only path (the annotation
+// patch `kubectl rollout restart` uses), which makes the node re-pull it per
+// its imagePullPolicy — Always in the official manifest.
 func k8sSelfUpdate() {
 	ns := k8sNamespace()
 	var list struct {
@@ -246,6 +254,16 @@ func k8sSelfUpdate() {
 			Metadata struct {
 				Name string `json:"name"`
 			} `json:"metadata"`
+			Spec struct {
+				Template struct {
+					Spec struct {
+						Containers []struct {
+							Name  string `json:"name"`
+							Image string `json:"image"`
+						} `json:"containers"`
+					} `json:"spec"`
+				} `json:"template"`
+			} `json:"spec"`
 		} `json:"items"`
 	}
 	code, err := k8sAPI("GET", "/apis/apps/v1/namespaces/"+ns+"/deployments?labelSelector=app%3Dplug", nil, &list)
@@ -258,26 +276,56 @@ func k8sSelfUpdate() {
 	if len(list.Items) == 0 {
 		answer("error: no deployment labeled app=plug in namespace %s — restart the agent's workload by hand", ns)
 	}
-	name := list.Items[0].Metadata.Name
-	patch := map[string]any{"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{
+	dep := list.Items[0]
+	name := dep.Metadata.Name
+
+	// Find the container running the agent image — a pod may carry sidecars,
+	// and patching the wrong one would be silent.
+	img, container := "", ""
+	for _, c := range dep.Spec.Template.Spec.Containers {
+		if strings.Contains(c.Image, "plug") {
+			img, container = c.Image, c.Name
+			break
+		}
+	}
+	if img == "" && len(dep.Spec.Template.Spec.Containers) == 1 {
+		img, container = dep.Spec.Template.Spec.Containers[0].Image, dep.Spec.Template.Spec.Containers[0].Name
+	}
+
+	target, plan, note := retarget(img)
+	if plan == planCurrent {
+		answer("current %s", note)
+	}
+	// The restart annotation goes on either way: with a new image it makes the
+	// rollout unambiguous, with a moving tag it IS the update.
+	template := map[string]any{"metadata": map[string]any{
 		"annotations": map[string]string{"plug.softwarity.io/restartedAt": time.Now().UTC().Format(time.RFC3339)},
-	}}}}
+	}}
+	if plan == planRetarget && container != "" {
+		template["spec"] = map[string]any{"containers": []map[string]any{
+			{"name": container, "image": target},
+		}}
+	}
+	patch := map[string]any{"spec": map[string]any{"template": template}}
 	if code, err := k8sMergePatch("/apis/apps/v1/namespaces/"+ns+"/deployments/"+name, patch); err != nil {
 		if code == 403 {
 			answer("error: the deployed RBAC predates self-update — re-apply deploy/plug-k8s.yaml (it adds the deployments grant), or run: kubectl -n %s rollout restart deployment %s", ns, name)
 		}
-		answer("error: restarting deployment %s: %v", name, err)
+		answer("error: updating deployment %s: %v", name, err)
 	}
-	answer("updating deployment %s (namespace %s) — rolling restart; the node re-pulls the tag per imagePullPolicy", name, ns)
+	answer("updating deployment %s (namespace %s) — %s", name, ns, note)
 }
 
-// swarmSelfUpdate rolls the agent's own service: the pinned digest is dropped
-// from the image (stack deploy pins one — with it, no update ever changes
-// anything) so the manager re-resolves the TAG, and ForceUpdate rolls the task
-// even when the digest comes back unchanged.
+// swarmSelfUpdate rolls the agent's own service. A pinned RELEASE tag is moved
+// to the newest release (that is the whole point — re-resolving a pin can only
+// ever return the same image); a moving tag is left as it is and merely
+// re-resolved. Either way the pinned digest is dropped from the image (stack
+// deploy pins one — with it, no update ever changes anything) and ForceUpdate
+// rolls the task even when the digest comes back unchanged.
 func swarmSelfUpdate(self selfInfo) {
 	if !swarmManager() {
-		answer("error: the agent's node is not a swarm manager — from one, run: docker service update --force %s", self.service)
+		answer("error: the agent's node is not a swarm manager — from one, run: docker service update --image %s %s",
+			retargetImageOnly(self.image), self.service)
 	}
 	var s struct {
 		ID      string `json:"ID"`
@@ -301,14 +349,23 @@ func swarmSelfUpdate(self selfInfo) {
 		if i := strings.Index(img, "@sha256:"); i > 0 {
 			img = img[:i]
 		}
-		cs["Image"] = img
+	}
+	target, plan, note := retarget(img)
+	// Already the newest release: say so NOW rather than roll the task and let
+	// the CLI poll 90s for a version that cannot change. The tag is a pin and
+	// the registry has nothing above it — there is nothing to re-resolve.
+	if plan == planCurrent {
+		answer("current %s", note)
+	}
+	if cs, _ := tt["ContainerSpec"].(map[string]any); cs != nil {
+		cs["Image"] = target
 	}
 	fu, _ := tt["ForceUpdate"].(float64)
 	tt["ForceUpdate"] = int(fu) + 1
 	if _, err := dockerAPI("POST", "/services/"+s.ID+"/update?version="+strconv.Itoa(s.Version.Index), s.Spec, nil); err != nil {
 		answer("error: updating service %s: %v", self.service, err)
 	}
-	answer("updating service %s — the swarm re-resolves %s and rolls the agent task", self.service, img)
+	answer("updating service %s — %s, and the task rolls", self.service, note)
 }
 
 // dockerPlainSelfUpdate (Compose / plain `docker run`): pull the deployed tag
@@ -324,23 +381,43 @@ func dockerPlainSelfUpdate(self selfInfo) {
 	if i := strings.Index(img, "@sha256:"); i > 0 {
 		img = img[:i]
 	}
-	if err := dockerPull(img); err != nil {
-		answer("current v%s — could not pull %s (%v)", ver, img, err)
+	target, plan, note := retarget(img)
+	if plan == planCurrent {
+		answer("current %s", note)
 	}
-	var pulled struct {
-		Id string `json:"Id"`
+	// Pull the image the deployment should end up on — the new tag when the pin
+	// moves, the same one when it is a moving tag. Either way it is local by the
+	// time the operator runs the recreate, so that step is instant.
+	if err := dockerPull(target); err != nil {
+		answer("current v%s — could not pull %s (%v)", ver, target, err)
 	}
-	if _, err := dockerAPI("GET", "/images/"+img+"/json", nil, &pulled); err != nil {
-		answer("current v%s — could not inspect %s after the pull (%v)", ver, img, err)
+	// A retarget always warrants the recreate: the container runs an image the
+	// deployment no longer names. Only a moving tag can legitimately turn out
+	// to be unchanged.
+	if plan == planResolve {
+		var pulled struct {
+			Id string `json:"Id"`
+		}
+		if _, err := dockerAPI("GET", "/images/"+target+"/json", nil, &pulled); err != nil {
+			answer("current v%s — could not inspect %s after the pull (%v)", ver, target, err)
+		}
+		if pulled.Id == self.imageID {
+			answer("current v%s — image %s unchanged", ver, target)
+		}
 	}
-	if pulled.Id == self.imageID {
-		answer("current v%s — image %s unchanged", ver, img)
-	}
-	how := "recreate the agent container with the new image"
+	// A container cannot recreate itself. Hand back the exact command — and
+	// when the tag moved, the compose file has to be edited first, or the next
+	// `up` would put the old pin straight back.
+	how := "recreate the agent container with " + target
 	if self.compose != "" {
 		how = "docker compose up -d " + self.compose
+		if plan == planRetarget {
+			how = "set the plug service's image to " + target + " in your compose file, then: " + how
+		}
+	} else if plan == planRetarget {
+		how = "recreate the agent container from " + target
 	}
-	answer("pulled %s — a newer image is local; the agent cannot recreate its own container: %s", img, how)
+	answer("pulled %s — %s; the agent cannot recreate its own container: %s", target, note, how)
 }
 
 // dockerPull pulls ref (name[:tag]) through the daemon, draining the progress
@@ -552,8 +629,8 @@ type selfInfo struct {
 	name    string // agent container/task name — relay target for the container backend
 	service string // agent's Swarm service name (empty off Swarm) — relay target for the service backend
 	image   string
-	imageID string // resolved image id — what self-update compares a fresh pull against
-	compose string // compose service name (empty outside Compose) — the recreate hint
+	imageID string   // resolved image id — what self-update compares a fresh pull against
+	compose string   // compose service name (empty outside Compose) — the recreate hint
 	nets    []netRef // application networks (overlay/bridge), minus ingress/host/none
 }
 

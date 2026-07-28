@@ -56,7 +56,12 @@ func cmdUpdate(args []string) {
 		info("agent: %s", verdict)
 		after = waitNewVersion(cfg, before)
 		if after == before {
-			info("agent still v%s after the refresh — already the newest under its tag, or the deployment pins an exact version (point it at a moving tag like softwarity/plug:latest to follow releases)", before)
+			// The agent named the image it moved to before rolling, so a version
+			// that has not changed is no longer "maybe a pin": the rollout itself
+			// is stuck or slow. Point at where that is visible.
+			info("agent still v%s after 90s — the rollout has not landed yet. Check it cluster-side "+
+				"(docker service ps <service> / kubectl rollout status deployment/<name>): a pull that "+
+				"cannot reach the registry, or a task that keeps restarting, both look like this.", before)
 		} else {
 			info("agent updated: v%s → v%s", before, after)
 		}

@@ -1,9 +1,11 @@
 # Build context is the REPO ROOT (so the CLI sources are available):
 #   docker build -f agent/Dockerfile -t softwarity/plug .
-# The version — VERSION plus the GIT_REV build metadata — is stamped into every
-# binary and written to /opt/plug/VERSION; the CLI compares against it to decide
-# whether to fetch a newer core, so even rebuilds of `latest` (same VERSION, new
-# commit) differ. Pass the revision: --build-arg GIT_REV=$(git rev-parse --short HEAD)
+# The version — VERSION, plus GIT_REV as build metadata when one is given — is
+# stamped into every binary and written to /opt/plug/VERSION; the CLI compares
+# against it to decide whether to fetch a newer core. Pass GIT_REV for a build
+# off a MOVING ref (a branch, where VERSION is "dev"), so two rebuilds of the
+# same tag stay distinct: --build-arg GIT_REV=$(git rev-parse --short HEAD).
+# A release passes none: v2.4.0 already designates exactly one commit.
 ARG VERSION=dev
 ARG GIT_REV=
 

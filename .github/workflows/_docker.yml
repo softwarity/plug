@@ -37,16 +37,28 @@ jobs:
           password: ${{ secrets.DOCKERHUB_RW }}
       - name: Resolve version
         id: ver
-        # A v-tag → its semver; any branch → "dev". The short commit is appended
-        # as build metadata (Dockerfile) so every rebuild — even the same
-        # `latest` tag — is distinct and the CLI picks up the new core.
+        # A v-tag → its semver, bare. Any branch → "dev" plus the short commit as
+        # build metadata (Dockerfile), because "dev" alone names every build of
+        # every branch: without the commit, two rebuilds of `main` would look
+        # identical and the CLI would keep serving the cached core.
+        #
+        # A RELEASE needs none of that — v2.4.0 designates one commit, so the
+        # commit adds nothing and only makes the version harder to read
+        # everywhere it shows (plug version, plug versions, update messages).
+        # Consequence, and it is the right one: rebuilding a release tag in
+        # place no longer propagates — a release is immutable, cut a new one.
         run: |
           ref="${GITHUB_REF#refs/tags/v}"
           case "$GITHUB_REF" in
-            refs/tags/v*) echo "value=$ref" >> "$GITHUB_OUTPUT" ;;
-            *)            echo "value=dev"   >> "$GITHUB_OUTPUT" ;;
+            refs/tags/v*)
+              echo "value=$ref" >> "$GITHUB_OUTPUT"
+              echo "rev="       >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "value=dev"                 >> "$GITHUB_OUTPUT"
+              echo "rev=${GITHUB_SHA::7}"      >> "$GITHUB_OUTPUT"
+              ;;
           esac
-          echo "rev=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
       - name: Build and push by digest
         id: build
         uses: docker/build-push-action@v7

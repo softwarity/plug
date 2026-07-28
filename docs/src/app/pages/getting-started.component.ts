@@ -171,11 +171,27 @@ plug -s e2e:8080:PORT npm run serve -- --port=&#123;PORT&#125;</app-code>
       versions never conflict. See <a routerLink="/profiles">Profiles &amp; versions</a>.
     </p>
     <p>
-      New plug release? <code>plug update</code> walks that chain upstream: the agent refreshes
-      <em>itself</em> from its registry (Kubernetes rolls its Deployment, Swarm re-resolves its
-      service tag; a plain container pulls and hands you the one recreate command), then the
-      launcher refreshes itself from the agent and re-applies its privilege. Live sessions ride
-      the roll out — they reconnect onto the new agent by themselves.
+      New plug release? <code>plug update</code> walks that chain upstream: the agent moves
+      <em>itself</em> to the newest release, then the launcher refreshes itself from the agent and
+      re-applies its privilege. Live sessions ride the roll out — they reconnect onto the new agent
+      by themselves.
+    </p>
+    <p>
+      Moving itself means the deployment's <strong>tag is rewritten</strong> when it pins a release
+      — <code>softwarity/plug:2.3.0</code> becomes <code>softwarity/plug:2.4.0</code>, majors
+      included. plug is infrastructure carrying your sessions, not an application dependency you
+      hold back for reproducibility; and re-resolving a pinned tag could only ever return the same
+      image, which made <code>update</code> a no-op exactly where it was needed. Each backend
+      applies it its own way: Swarm updates the service's image, Kubernetes patches the
+      Deployment's container image, and a plain container — which cannot recreate itself — pulls
+      the new image and hands you the one command that does.
+    </p>
+    <p>
+      A <strong>moving</strong> tag (<code>latest</code>, <code>main</code>, a branch) is left
+      exactly as it is and simply re-pulled: it already resolves to whatever its publisher last
+      pushed, and repointing it would override a deliberate choice. And when a pinned deployment is
+      already on the newest release, plug says so immediately instead of rolling the workload to
+      find out.
     </p>
 
     <h3>Where to next</h3>
