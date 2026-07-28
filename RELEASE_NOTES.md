@@ -2,6 +2,41 @@
 
 ## NEXT RELEASE
 
+### Added: name the local port and plug picks a free one
+
+The third field of a `-s` may now be a **name** instead of a number:
+
+```bash
+plug -s web:8080:PORT  npm run dev -- --port={PORT}
+```
+
+plug allocates a free local port for the session, substitutes `{PORT}`
+everywhere in your command, and arms the mapping on that same number. The name
+is exported to the child too, so a command that already reads an environment
+variable needs no flag at all — `plug -s web:8080:PROXY_PORT polyglot` just
+works.
+
+Why: the **cluster** port is agreed in advance (it is what other workloads
+dial), but the **local** one is nobody's business but yours. Pinning it is what
+makes two projects fight over `3000`, what stops the same app running on two
+branches at once, and what turns a shared CI runner into a race. Naming it
+removes the negotiation entirely.
+
+The two spellings are deliberate: bare on the left because the third field of a
+`-s` can only ever be a port — nothing to disambiguate; braced on the right
+because argv is free text, and a bare `PORT` would also rewrite
+`--transport=PORTAL`. A `{TOKEN}` nothing declared fails at startup instead of
+reaching your command as a literal, which is the silent version of this bug (the
+child falls back to a default port the cluster isn't forwarding to, and you get
+silence rather than an error). Commands using braces for their own purposes
+(`awk '{print}'`) are untouched when no `-s` names a port.
+
+Pinned ports keep working, unchanged. Naming needs ≥ 2.4 on **both sides**: the
+launcher checks the mapping before connecting, and the mapping then crosses the
+launcher→core exec raw, so it is the cluster's own core that resolves it. An
+older agent says which it is and points at the pinned form; `plug update` aligns
+the two.
+
 ### Changed: license — AGPL-3.0 → FSL-1.1-Apache-2.0
 
 plug is now licensed under the [Functional Source

@@ -7,7 +7,7 @@
 # NAME over the Tailscale mesh.
 #
 #   e2e-matrix.sh <phase> <cluster-a> <cluster-b> [port]
-#   phases: setup env matrix multicluster outage expose gateway takeover collision
+#   phases: setup env matrix multicluster outage expose exposevar gateway takeover collision
 #
 # `setup` installs plug + builds the clients and records the shared state
 # ($RUNNER_TEMP/plug-e2e-env) the other phases read back — they run as separate
@@ -346,6 +346,48 @@ do_expose() {
   sum "**expose (cluster→local)** ❌ — prober said \`${eo:-nothing}\`"; return 1
 }
 
+# exposevar: the SAME reverse path, with the local port NAMED instead of pinned
+# (-s <name>:<cluster-port>:PORT). plug allocates a free port, substitutes {PORT}
+# in the command, and arms the mapping on that same number.
+#
+# This is the one check the unit tests cannot make: that the port the child binds
+# and the port the tunnel forwards to are the SAME number. Get that wrong and
+# nothing errors — echo-local listens happily on one port while the cluster name
+# forwards to another, and the prober just gets nothing. Which is exactly what
+# this asserts: a body, by name, through the cluster.
+do_expose_var() {
+  local exname exposeport
+  case "$(uname -s)" in
+    Darwin) exname=exposedvar-mac; exposeport=18102 ;;
+    MINGW*|MSYS*|CYGWIN*) exname=exposedvar-win; exposeport=18103 ;;
+    *) exname=exposedvar-linux; exposeport=18101 ;;
+  esac
+  echo "=== exposevar: $exname:$exposeport → a port plug picks, injected as {PORT} ==="
+  if ! ( cd "$root/e2e/echo-local" && go build -o "$root/echo-local$ext" . ); then
+    echo "--- exposevar FAIL — echo-local did not build"; sum "**expose, named port (-s …:PORT)** ❌ (build)"; return 1
+  fi
+  # echo-local defaults to :18086 when -addr is unusable — so an unsubstituted
+  # "{PORT}" cannot accidentally pass by landing on the pinned phase's port.
+  "$PLUG" --host "$ip" --port "$port" -s "$exname:$exposeport:PORT" \
+    "$root/echo-local$ext" -addr "127.0.0.1:{PORT}" -text "exposevar-ok-$exname" >/tmp/exposevar.out 2>&1 &
+  local expose_pid=$! eo=""
+  sleep 8
+  for _ in 1 2 3; do
+    eo="$(plug curl -s --max-time 10 "http://prober:8097/fetch?url=http://$exname:$exposeport/" 2>/tmp/exposevar-probe.err | tr -d '\r' | tail -1)"
+    [ "$eo" = "exposevar-ok-$exname" ] && break
+    sleep 3
+  done
+  kill $expose_pid 2>/dev/null; wait $expose_pid 2>/dev/null
+  if [ "$eo" = "exposevar-ok-$exname" ]; then
+    echo "exposevar OK — allocated port, substituted in argv, and the mapping agreed with it"
+    sum "**expose, named port (-s …:PORT)** ✅"; return 0
+  fi
+  echo "--- exposevar FAIL — prober said '${eo:-nothing}' (want exposevar-ok-$exname)"
+  echo "    --- exposevar session output ---"; tail -12 /tmp/exposevar.out 2>/dev/null | sed 's/^/    /'
+  tail -6 /tmp/exposevar-probe.err 2>/dev/null | sed 's/^/    /'
+  sum "**expose, named port (-s …:PORT)** ❌ — prober said \`${eo:-nothing}\`"; return 1
+}
+
 # gateway callback (reverse, driven from OUTSIDE): an EXTERNAL caller POSTs to the
 # cluster's PUBLISHED gateway, which calls a -s name INSIDE the cluster that lands
 # on our sink; the sink answers "<path> <id>" back. Two calls: root and deep path.
@@ -602,10 +644,11 @@ case "$phase" in
   multicluster) do_multicluster ;;
   outage)       do_outage ;;
   expose)       do_expose ;;
+  exposevar)    do_expose_var ;;
   gateway)      do_gateway ;;
   takeover)     do_takeover ;;
   collision)    do_collision ;;
   resilience)   do_resilience ;;
   update)       do_update ;;
-  *) echo "unknown phase: $phase (want setup|env|matrix|multicluster|outage|expose|gateway|takeover|collision|resilience|update)" >&2; exit 2 ;;
+  *) echo "unknown phase: $phase (want setup|env|matrix|multicluster|outage|expose|exposevar|gateway|takeover|collision|resilience|update)" >&2; exit 2 ;;
 esac

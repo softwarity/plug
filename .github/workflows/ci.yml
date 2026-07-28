@@ -290,6 +290,10 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh expose "$A" "$B" 2222
+      - name: Expose, named port — plug picks it, {PORT} carries it into the command
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh exposevar "$A" "$B" 2222
       - name: Gateway callback (external → published gateway → sink)
         if: always()
         shell: bash
@@ -378,6 +382,10 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh expose "$A" "$B" 2222
+      - name: Expose, named port — plug picks it, {PORT} carries it into the command
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh exposevar "$A" "$B" 2222
       - name: Gateway callback (external → published gateway → sink)
         if: always()
         shell: bash
@@ -449,6 +457,10 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh expose "$A" "$B" 2222
+      - name: Expose, named port — plug picks it, {PORT} carries it into the command
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh exposevar "$A" "$B" 2222
       - name: Gateway callback (external → published gateway → sink)
         if: always()
         shell: bash

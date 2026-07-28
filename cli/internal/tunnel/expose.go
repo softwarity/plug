@@ -28,6 +28,12 @@ type ExposeSpec struct {
 	Name        string // cluster DNS name — used for messages and the path check
 	ClusterPort string
 	LocalPort   string
+	// PortVar is set when the third field named a variable instead of a port
+	// (-s web:8080:PORT): plug picks a free local port, fills LocalPort in, and
+	// hands the number to the child as $PortVar and {PortVar}. Carried on the
+	// spec because it IS the third field's other spelling; nothing in this
+	// package reads it — by the time a spec is armed, LocalPort is resolved.
+	PortVar string
 }
 
 func (s ExposeSpec) String() string {

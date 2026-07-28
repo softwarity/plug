@@ -83,6 +83,12 @@ Options:
                          service scaled to 0, k8s Service repointed) and
                          restored when the session ends.
                          Repeatable; place after the other options.
+                         <local-port> may be a NAME instead of a number — plug
+                         then picks a free port per session, passes it to your
+                         command wherever {NAME} appears, and exports it as
+                         $NAME. Nothing to pin, nothing to collide:
+                           plug -s web:8080:PORT npm run dev -- --port={PORT}
+                           plug -s web:8080:PROXY_PORT polyglot   # reads $PROXY_PORT
   -c, --client           this process only CONSUMES the cluster — nothing to
                          name, no port reserved on the agent. For GUI DB tools
                          (DBeaver, Compass…), one-off scripts, batch consumers.
@@ -136,13 +142,27 @@ func parseExpose(s string) (tunnel.ExposeSpec, error) {
 		return tunnel.ExposeSpec{}, fmt.Errorf("-s %s: %q is not a valid name — a cluster DNS name is a "+
 			"lowercase letter then letters, digits or hyphens (max 63), e.g. my-app", s, parts[0])
 	}
-	for _, p := range parts[1:] {
-		n, err := strconv.Atoi(p)
-		if err != nil || n < 1 || n > 65535 {
-			return tunnel.ExposeSpec{}, fmt.Errorf("-s %s: %q is not a valid port", s, p)
-		}
+	// The cluster port is what other workloads dial — it is agreed in advance,
+	// so it is always a number.
+	if !validPort(parts[1]) {
+		return tunnel.ExposeSpec{}, fmt.Errorf("-s %s: %q is not a valid port", s, parts[1])
 	}
-	return tunnel.ExposeSpec{Name: parts[0], ClusterPort: parts[1], LocalPort: parts[2]}, nil
+	// The LOCAL port may instead be NAMED, and plug allocates a free one per
+	// session (see portvar.go).
+	if validPort(parts[2]) {
+		return tunnel.ExposeSpec{Name: parts[0], ClusterPort: parts[1], LocalPort: parts[2]}, nil
+	}
+	if !portVarName.MatchString(parts[2]) {
+		return tunnel.ExposeSpec{}, fmt.Errorf("-s %s: %q is neither a port nor a variable name — "+
+			"give a number, or name it to have plug pick a free one (-s %s:%s:PORT, then {PORT} "+
+			"in your command)", s, parts[2], parts[0], parts[1])
+	}
+	return tunnel.ExposeSpec{Name: parts[0], ClusterPort: parts[1], PortVar: parts[2]}, nil
+}
+
+func validPort(p string) bool {
+	n, err := strconv.Atoi(p)
+	return err == nil && n >= 1 && n <= 65535
 }
 
 // attachExposes parses the raw -s values for an in-process core run — the
@@ -450,6 +470,19 @@ func launcherRun(args []string) {
 		fatal("the cluster agent reports v%s, which predates -c (needs plug ≥ 2.2).\n"+
 			"Upgrade the agent (redeploy the softwarity/plug image), then run again.", remote)
 	}
+	// A NAMED local port (-s web:8080:PORT) is a 2.4 feature. The mapping crosses
+	// the exec raw, so an older core would parse that third field as a port and
+	// reject it with a message about the port, not about the version. Say which
+	// it is, and offer the pinned form that works on any agent.
+	if versionBefore(remote, 2, 4) {
+		for _, r := range opts.exposes {
+			if spec, err := parseExpose(r); err == nil && spec.PortVar != "" {
+				fatal("-s %s names its local port, which needs plug ≥ 2.4 — the cluster agent reports v%s.\n"+
+					"Upgrade the agent (redeploy the softwarity/plug image), or pin the port for now "+
+					"(-s %s:%s:<number>).", r, remote, spec.Name, spec.ClusterPort)
+			}
+		}
+	}
 	bin, err := ensureVersion(remote, cfg)
 	if err != nil {
 		info("cannot fetch v%s (%v) — falling back to this launcher (v%s)", remote, err, version)
@@ -572,9 +605,19 @@ func coreGetenv(name, legacy string) string {
 	return os.Getenv(legacy)
 }
 
-// runCore executes the tunnel logic in this very process (version match / fallback).
+// runCore executes the tunnel logic in this very process — the single point
+// where a process becomes the core, whether it got there by matching the
+// cluster's version, by falling back to itself, or by being exec'd as the
+// downloaded core (coreMain). Named local ports are resolved HERE for that
+// reason: it is the last stop before the mappings are armed and the child is
+// spawned, and the child inherits the environment this call sets.
 func runCore(cfg config, cmdArgs []string) {
-	os.Exit(coreRun(cfg, cmdArgs))
+	specs, args, err := resolvePortVars(cfg.exposes, cmdArgs)
+	if err != nil {
+		fatal("%v", err)
+	}
+	cfg.exposes = specs
+	os.Exit(coreRun(cfg, args))
 }
 
 func versionsDir() string {
@@ -1216,7 +1259,7 @@ func coreMain() {
 	if len(cmdArgs) == 0 {
 		fatal("core: no command")
 	}
-	os.Exit(coreRun(cfg, cmdArgs))
+	runCore(cfg, cmdArgs)
 }
 
 func runChild(cmdArgs []string) int {

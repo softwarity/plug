@@ -162,6 +162,57 @@ even across an agent restart. Your local process answers the name in its
 place; afterwards the cluster is exactly as it was. A name held by another
 live plug session is still refused.
 
+## Let plug pick the local port
+
+The cluster port is agreed in advance — it is what other workloads dial. The
+**local** one is nobody's business but yours, and pinning it is what makes two
+projects fight over `3000`, or the same app refuse to run on two branches at
+once. Name it instead, and plug picks a free one per session:
+
+```bash
+plug -s web:8080:PORT  npm run dev -- --port={PORT}
+```
+
+`PORT` declares (bare — the third field of a `-s` can only ever be a port, so
+there is nothing to disambiguate), `{PORT}` references it in the command
+(braced — argv is free text, and a bare `PORT` would also rewrite
+`--transport=PORTAL`). Any name works; it is exported to your command too, so
+one that already reads an environment variable needs no flag at all:
+
+```bash
+plug -s web:8080:PROXY_PORT  polyglot --config=./angular.json   # reads $PROXY_PORT
+```
+
+Both spellings carry the same number, and the mapping is armed on it — the
+cluster reaches `web:8080` no matter which port your process landed on today.
+
+Some things this makes easy:
+
+```bash
+# Two branches of the same service, side by side, both answering in the cluster
+git worktree add ../hotfix && cd ../hotfix
+plug -s api:8080:PORT ./mvnw spring-boot:run -Dserver.port={PORT}
+
+# One process, two cluster names, one listener — the same name means one port
+plug -s web:80:PORT -s web-tls:443:PORT node server.js --listen={PORT}
+
+# A shared CI runner, where a pinned port is a race against the other jobs
+plug -s e2e:8080:PORT npm run serve -- --port={PORT}
+```
+
+A `{TOKEN}` nothing declared is rejected at startup rather than passed through:
+left alone it reaches your command as the literal string `{PROT}`, which either
+crashes it or — worse — makes it fall back to a default port the cluster is not
+forwarding to, and you get silence instead of an error. Commands that use braces
+for their own purposes (`awk '{print}'`) are untouched when no `-s` names a port.
+
+Pinning still works, and still makes sense when something outside the session
+needs a stable address (a bookmarked URL, a debugger attach config).
+
+Needs plug ≥ 2.4 on both sides: your launcher checks the mapping before it
+connects, and the cluster's own core is what resolves it. `plug update` aligns
+the two.
+
 ## Limits
 
 It carries TCP reached by name. UDP, QUIC and ping are not tunnelled (most
