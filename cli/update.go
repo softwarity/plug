@@ -103,6 +103,13 @@ func cmdUpdate(args []string) {
 	case "current", "pulled":
 		info("agent: %s", verdict)
 	default:
+		// Two updates racing is already serialized cluster-side — Swarm's
+		// service update carries the spec's version index (compare-and-swap),
+		// so the loser gets "out of sequence". Say what that means instead of
+		// relaying the rpc noise: someone else's update won, and won cleanly.
+		if strings.Contains(verdict, "out of sequence") {
+			fatal("another update reached the cluster first — let it finish, then check: plug version -p <profile>")
+		}
 		if strings.Contains(verdict, "unknown command") || strings.Contains(verdict, "not found") {
 			// A pre-2.3 agent can't refresh itself — but it CAN still serve its
 			// binaries, so the launcher hop below stays worth doing (align on

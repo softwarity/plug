@@ -18,6 +18,12 @@ digest question only the cluster can answer), an agent from before this
 existed — or an outbound firewall (LuLu et al.) blocking plug's first registry
 call, which is also worth allowing once.
 
+Concurrent updates need no lock: the orchestrator already serializes them —
+Swarm's service update is a compare-and-swap on the spec's version, Kubernetes
+converges on the last patch, and the launcher self-replace is an atomic rename.
+The loser of the race now gets a plain "another update reached the cluster
+first" instead of the rpc noise.
+
 Also fixed on the way: an image pinned by digest alone (`repo@sha256:…`, no
 tag) was read as `latest` once the digest was stripped — an update would have
 quietly switched the deployment onto the moving stream. It now follows the
