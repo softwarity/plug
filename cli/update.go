@@ -54,7 +54,7 @@ func cmdUpdate(args []string) {
 	if err != nil {
 		fatal("cannot reach the agent at %s:%s: %v", cfg.host, cfg.port, err)
 	}
-	info("agent v%s at %s", before, label)
+	info("agent v%s at %s", shortVersion(before), label)
 
 	// An agent from before this existed runs `self-update <tag>` as a plain
 	// self-update: it ignores the word and refreshes along the tag it already
@@ -80,7 +80,7 @@ func cmdUpdate(args []string) {
 		after = waitNewVersion(cfg, before)
 		switch {
 		case after != before:
-			info("agent updated: v%s → v%s", before, after)
+			info("agent updated: v%s → v%s", shortVersion(before), shortVersion(after))
 		case want != "":
 			// Switching channels does not have to change the version — `latest`
 			// and the newest release routinely name the same build. The image

@@ -143,7 +143,7 @@ func doctorLocal(add func(check)) {
 	// Launcher.
 	self, _ := os.Executable()
 	add(check{area: "local", name: "launcher", status: stOK,
-		detail: fmt.Sprintf("v%s (%s)", version, self)})
+		detail: fmt.Sprintf("v%s (%s)", shortVersion(version), self)})
 
 	// Cached cores: a truncated download must never be trusted (ensureVersion
 	// refuses them, but say it here too).
@@ -209,7 +209,7 @@ func doctorProfile(name string, add func(check)) {
 		return
 	}
 	add(check{area: name, name: "agent", status: stOK,
-		detail: fmt.Sprintf("v%s at %s:%s", ver, host, port)})
+		detail: fmt.Sprintf("v%s at %s:%s", shortVersion(ver), host, port)})
 
 	tr, err := tunnel.Dial(host, port, sshUser, embeddedKey, tun.SharedKnownHosts(), nil)
 	if err != nil {

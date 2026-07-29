@@ -2,164 +2,78 @@
 
 ## NEXT RELEASE
 
----
+> **BREAKING — an agent without orchestrator access no longer starts.** No Docker
+> socket mounted (or, on Kubernetes, no RBAC): the container now exits 1 instead
+> of coming up. A cluster running plug only for the outbound tunnel never needed
+> that access — **add the mount before updating**, or that agent will not come
+> back up. The container prints the stack-file lines that fix it.
 
-## 2.5.0
+### Fixed: `-s` starts your command immediately
 
-> **BREAKING — an agent without orchestrator access no longer starts.**
-> Deployed without the Docker socket mounted (or, on Kubernetes, without the
-> RBAC), the agent container now exits 1 instead of coming up. If one of your
-> clusters runs plug only for the outbound tunnel and never uses `-s`, it has
-> never needed that access — **add the mount before updating**, or that agent
-> will not come back up. The container prints the exact stack-file lines and a
-> link to the documentation. See *Changed: the agent refuses to start* below.
+Exposing a name used to cost 11.5s before your command ran, on a healthy
+cluster. All of it was one wait: the agent creates the signpost and answers at
+once, but the cluster still has to schedule it — measured at 6s, 37s and 29s on
+three identical runs of the same Swarm. plug blocked on that, and a probe sent
+too early cannot fail fast (a VIP with no task behind it drops the SYN), so the
+check burned a full 10s timeout to learn nothing.
 
-### Fixed: `plug -s` no longer waits on the cluster before starting your command
+The path is now proven in the **background**. Hand-back went from 11.5s to
+**0.06s**; traffic reaches your process the moment the cluster is ready. Short
+probes (0.75s → 8s) catch that moment instead of waiting it out, and the overall
+budget went from 44.5s to 90s — the old one sat in the middle of the spread a
+real cluster produces (3s to 62s observed), which is exactly when a wait turns
+into an intermittent `not reachable inside the cluster`.
 
-A session that exposed a name spent its first seconds doing nothing you asked
-for. Timed against a real agent, the phases of `-s` are: dial the agent 0.04s,
-bind the remote forward 0.00s, ask it to provision the name 0.03s — and then 6s,
-37s, 29s on three identical runs. All of it was the same wait: the agent creates
-the signpost and answers immediately, but Docker Swarm still has to schedule the
-task behind it, and plug blocked until traffic could cross it.
-
-Two things made that worse than the wait itself. A VIP whose task is not running
-yet **drops** the SYN rather than refusing it, so a probe sent too early cannot
-fail fast — it hangs for its full timeout. And the check spent its whole budget
-in one 10-second block, so even a cluster that converged in 3 seconds was noticed
-only 11.5 seconds in. That was the floor on **every** launch, on a perfectly
-healthy cluster.
-
-The path is now proven **in the background**. Everything decidable at once still
-fails the session, and still costs milliseconds: an agent that cannot provision
-names at all, a port another instance already exposes, a name the agent refuses,
-a workload it cannot park. Only the proof, which depends on someone else's
-scheduler, is deferred. Hand-back went from 11.5s to **0.06s**; the child starts
-immediately, and traffic reaches it the moment the cluster is ready (measured at
-4.2s, while the check was still running). A cluster that happens to be ready
-already answers the one upfront probe in 1–5ms, and the session is proven before
-it starts, exactly as before.
-
-Deferring is not a judgement call the error can make. A freshly created Swarm
-service has no VIP yet, so the cluster answers `Name does not resolve` in 75ms —
-word for word what it answers for a name that will never exist. Branching on
-that would fail every session at startup.
-
-The check itself was rebuilt around the same measurement. Short probes, close
-together and growing (0.75s → 8s), catch the path within a beat of it opening
-instead of paying a full timeout to learn it had not opened yet. The datapath
-keeps its own 10-second budget: there, a slow open is a slow service, not a race
-with provisioning.
-
-Two consequences worth stating. A name that never comes up is now a loud
-`WARNING` during the session, naming the command that shows why
-(`docker service ps plug-sp-<name>`, `kubectl get svc <name>`), instead of a
-refusal to start; the session keeps running, so a name that appears late still
-works. And while a check is in flight its self-test window is briefly armed on
-real connections: a **server-first** protocol (SMTP, some databases) can see one
-greeting delayed by ~500ms, once, right after the path opens. Client-first
-traffic — HTTP, so anything a web framework serves — is unaffected, measured at
-2–6ms throughout.
+Everything decidable at once still fails the session in milliseconds: a port
+already exposed, a name refused, a workload that cannot be parked. A name that
+never comes up becomes a `WARNING` during the session, naming the command that
+shows why (`docker service ps plug-sp-<name>`), instead of a refusal to start.
 
 ### Added: `plug update <tag>` switches the channel a cluster follows
 
-`plug update` answered one question: is there something newer on the tag this
-deployment already carries? The other one — put this cluster on a different tag
-— had no answer, and meant editing the stack file and redeploying by hand.
-
-Now the command takes the target:
-
-```
-plug -p neo update tag        # the newest release published (2.4.1)
+```bash
+plug -p neo update tag        # the newest release published
 plug -p neo update latest     # the latest stream
-plug -p neo update feat-09    # that branch's tag, at whatever it points to now
+plug -p neo update feat-09    # a branch's tag, at whatever it points to now
 plug -p neo update 2.3.0      # an exact release — downgrades included
 ```
 
-Release and stream are told apart the way the images are published: a tag
-matching `x`, `x.y` or `x.y.z` is a release, anything else (`latest`, `main`, a
-branch name) is a stream that moves under you. So `update tag` asks the registry
-for the newest `x.y.z` and pins it, while `update feat-09` carries the tag and
-takes whatever it points at today.
+Release and stream are told apart by the tag itself: `x`, `x.y` or `x.y.z` is a
+release, anything else moves under you. The tag is checked against the registry
+**before** anything is repointed — aiming a deployment at a tag nobody published
+leaves an agent that cannot pull. Without a target the command is unchanged.
 
-The tag is checked against the registry **before** anything is repointed. Moving
-a deployment to a tag nobody published replaces a working agent with one that
-cannot pull — on Swarm or Kubernetes, a rollout to unwind by hand. A typo is
-answered with the streams and the newest releases:
+### Changed: orchestrator access is now required, not optional
 
-```
-softwarity/plug has no tag "feat-9" — published: latest, main, 2.4.1, 2.4.0,
-2.3.1, 2.3.0 (+23 older)
-```
+`-s` used to degrade to a *static* mode when the agent could not create names,
+leaving you to pre-declare them yourself. That mode is gone, along with the
+compatibility shims for agents older than this release. Provisioning is the
+feature; an agent that cannot do it is a deployment mistake, which is why it now
+refuses to start (above) and `plug doctor` reports it as a failure.
 
-Without a target the command is unchanged: follow the tag already deployed. And
-a switch that lands on the same version is reported as such rather than as a
-stalled rollout — `latest` and the newest release routinely name one build.
+Unaffected: the outbound tunnel needs no socket and no RBAC, and never did.
 
-One guard worth knowing about: an agent from before this feature runs
-`self-update <tag>` as a plain self-update — it ignores the word and refreshes
-along the tag it already carries, so the channel would silently not change while
-the command reported success. The CLI refuses on the agent's version instead,
-and says to update it first.
+### Fixed: an agent's commit hash still showed at launch
 
-### Removed: the "static" fallback
+2.4.1 stopped stamping releases with their commit, but only for images built
+from then on: an agent still on 2.4.0 or earlier reports `2.4.0+983761c`, and
+every line that printed it kept the suffix — `using cluster version` at launch
+included. Versions are now rendered short wherever they are shown for reading. A
+branch build keeps its revision, which is the only thing telling two apart, and
+the cached-core list keeps it too, since those are directory names.
 
-`-s` used to degrade to a *static* mode when the agent had no way to create the
-name — no Docker socket, no Kubernetes RBAC, a Swarm agent off a manager node,
-an agent on no network able to carry an alias. You were then expected to
-pre-declare the name yourself and hope it was the right one.
+### Fixed: a CI cell was passing without testing anything
 
-That mode is gone. Agreeing on a name cluster-side, one by one, before you can
-use it, is the exact coordination `-s` exists to remove: a half-working path
-that merely resembles the feature costs more than not having it. Provisioning is
-the feature.
+`compat-launcher.sh` decides what an old launcher can be asked to do by walking
+git history from the revision in its version string — which only exists in a
+`dev+<rev>` build. Releases stopped carrying that suffix in 2.4.1, so both its
+guards read a bare `2.4.1`, found no revision, and answered "too old" for a
+launcher newer than every fix they guarded: the Linux leg exited green having
+tested nothing, and mac/Windows ran without the `-s` a session now requires.
+The guards are gone rather than repaired.
 
-No access at all is caught at boot (below). The narrower gaps — an agent off a
-Swarm manager node, one on no overlay its services share, a Kubernetes RBAC that
-does not cover Services — only show up when a name is asked for, and there the
-agent names its own gap rather than leaving the CLI to guess from a single word.
-`plug doctor` reports it as a failure rather than a warning, since nothing about
-`-s` works without it.
-
-### Changed: the agent refuses to start without orchestrator access
-
-plug is there to plug services into a cluster. An agent that cannot create a
-name can still carry sessions, but it cannot do the thing it is deployed for —
-and a deployment that only reveals a missing mount the first time someone runs
-`-s` has hidden the mistake behind an otherwise healthy container.
-
-So it is now checked at boot. No Docker socket and no Kubernetes RBAC: the
-container exits 1, printing the stack-file lines that fix it and a link to the
-documentation. Swarm and Kubernetes surface it as a task that will not come up,
-which is exactly where a missing volume mount belongs.
-
-### Removed: fallbacks for agents older than this release
-
-The `-s` path carried compatibility shims: a pre-2.1 agent that rejected the
-`takeover` form got the bare verb retried, and a `static` reply was translated
-for `plug update` and `plug doctor`. They are gone. An agent that does not
-answer the current protocol is reported as answering off-protocol, and the
-remedy is the same one it has always been — redeploy the agent image.
-
-### Fixed: `-s` no longer fails on a cluster that is merely slow to provision
-
-`fpl-svc is not reachable inside the cluster (context deadline exceeded)`,
-intermittently, on a name that was fine a moment later. The retry budget totalled
-44.5 seconds — which sat squarely in the middle of the spread a real cluster
-produces. Provisioning the same signpost service on one Docker Desktop Swarm
-reached Running in 3s, 8s, 10s, 45s, 56s and 62s depending on how loaded the
-daemon was. Anything past 44.5s failed a session whose name was simply still
-coming up.
-
-The budget is now 90 seconds, and the error says how long it insisted and how
-many attempts it made — so a genuine misconfiguration still reads as one, and is
-no longer confused with a busy scheduler. Combined with the background check
-above, this wait is no longer charged to your command either way.
-
-If launches are consistently at the slow end of that spread, the cause is usually
-cluster-side rather than plug: a Swarm manager carrying a large history of dead
-tasks and stopped containers schedules noticeably slower. `docker system prune`
-and a daemon restart bring it back down.
+The `e2e` job is now `e2e-compose`, next to `e2e-k8s` and `e2e-swarm`. Update any
+branch protection rule that requires the old check name.
 
 ---
 

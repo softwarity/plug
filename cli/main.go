@@ -494,7 +494,7 @@ func launcherRun(args []string) {
 		runCore(cfg, cmdArgs)
 		return
 	}
-	info("using cluster version v%s", remote)
+	info("using cluster version v%s", shortVersion(remote))
 	raiseAmbientCaps() // linux: file caps don't survive exec'ing the downloaded core
 	// -s mappings cross the exec RAW, as leading argv: the downloaded core owns
 	// the grammar (validation included) — this launcher must not veto values a
@@ -534,6 +534,26 @@ func hasServeFlag(args []string) bool {
 // versionBefore reports whether a RELEASED agent version predates maj.min.
 // Non-semver versions ("dev+<rev>", "") are assumed current — a dev image is
 // always built from a branch at least as new as this launcher.
+// releaseVersionRe matches the versions whose build metadata is redundant: a
+// released x.y(.z). "dev" is not one — without its revision it names every build
+// of every branch, which is the whole reason the suffix exists.
+var releaseVersionRe = regexp.MustCompile(`^\d+\.\d+(\.\d+)?$`)
+
+// shortVersion renders a version for a HUMAN. A release tag already designates
+// one commit, so "2.4.0+983761c" only makes the version harder to read wherever
+// it shows; a branch build keeps its revision, which is the only thing telling
+// two of them apart. Releases have been stamped bare since 2.4.1, so this is
+// what makes an agent from before that read the same as one from after.
+//
+// Display only. Anywhere a version IDENTIFIES something — the core cache
+// directory, any comparison — the full string is what counts.
+func shortVersion(v string) string {
+	if base, _, ok := strings.Cut(v, "+"); ok && releaseVersionRe.MatchString(base) {
+		return base
+	}
+	return v
+}
+
 func versionBefore(v string, maj, min int) bool {
 	parts := strings.SplitN(v, ".", 3)
 	if len(parts) < 2 {
@@ -727,7 +747,7 @@ func cmdVersion(args []string) {
 	if err != nil {
 		fatal("cannot reach the agent at %s:%s: %v", cfg.host, cfg.port, err)
 	}
-	fmt.Println(v)
+	fmt.Println(shortVersion(v))
 }
 
 // warnStaleLauncher — bare `plug version` answers for the LAUNCHER, which is
@@ -741,7 +761,7 @@ func warnStaleLauncher() {
 		return // piped, or a dev build — a developer, not the audience
 	}
 	if max := maxCachedRelease(); max != "" && semverLess(version, max) {
-		info("a cluster already served v%s — this launcher is v%s; plug update aligns it", max, version)
+		info("a cluster already served v%s — this launcher is v%s; plug update aligns it", shortVersion(max), shortVersion(version))
 	}
 }
 
@@ -782,7 +802,7 @@ func agentVersionTimeout(cfg config, d time.Duration) (string, error) {
 }
 
 func listVersions() {
-	fmt.Printf("launcher: v%s\n", version)
+	fmt.Printf("launcher: v%s\n", shortVersion(version))
 	entries, err := os.ReadDir(versionsDir())
 	var cached []string
 	if err == nil {
@@ -819,7 +839,7 @@ func listVersions() {
 				ch <- row{n, fmt.Sprintf("unreachable (%s:%s)", host, port)}
 				return
 			}
-			ch <- row{n, fmt.Sprintf("agent v%s (%s:%s)", v, host, port)}
+			ch <- row{n, fmt.Sprintf("agent v%s (%s:%s)", shortVersion(v), host, port)}
 		}(n)
 	}
 	for range names {
