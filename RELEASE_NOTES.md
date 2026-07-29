@@ -1,6 +1,6 @@
 # Release Notes
 
-## 2.5.0
+## NEXT RELEASE
 
 > **BREAKING — an agent without orchestrator access no longer starts.**
 > Deployed without the Docker socket mounted (or, on Kubernetes, without the
