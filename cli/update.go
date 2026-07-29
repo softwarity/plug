@@ -73,7 +73,10 @@ func cmdUpdate(args []string) {
 		info("switching this cluster to %s", updateTargetWord(want))
 	}
 	after := before
-	verdict := askSelfUpdate(cfg, want)
+	verdict := clientSideUpdate(cfg, before, want)
+	if verdict == "" {
+		verdict = askSelfUpdate(cfg, want)
+	}
 	switch updateWord(verdict) {
 	case "updating":
 		info("agent: %s", verdict)
@@ -153,6 +156,62 @@ func updateTarget(profile, host, port string) (config, string) {
 		p = port
 	}
 	return config{host: h, port: p}, fmt.Sprintf("%s (%s:%s)", name, h, p)
+}
+
+// clientSideUpdate is `plug update`'s fast path: ask the agent WHICH image it
+// carries (info), resolve the target against that image's own registry from
+// THIS machine, and hand the agent an already checked tag to APPLY. The lookup
+// is the same either way — what changes is where it runs from: the agent's
+// leaves the cluster through the Docker Desktop VM, whose DNS follows the
+// plugged workstation's (measured: ~31s per registry round-trip); this
+// process's rides the stub straight to the saved upstream (~1s).
+//
+// Returns the agent's verdict line, or "" to fall back to the agent-side
+// lookup: an agent from before `info` named its image, a registry only the
+// cluster can reach, a moving tag whose currentness is a digest question only
+// the cluster can answer, or an agent from before `apply` existed.
+func clientSideUpdate(cfg config, before, want string) string {
+	tr, err := tunnel.Dial(cfg.host, cfg.port, sshUser, embeddedKey, tun.SharedKnownHosts(), nil)
+	if err != nil {
+		fatal("tunnel user: %v — the agent image may be too old; redeploy softwarity/plug", err)
+	}
+	defer tr.Close()
+	out, err := tr.Exec("info")
+	if err != nil || !strings.HasPrefix(out, "version=") {
+		return ""
+	}
+	img := ""
+	for _, f := range strings.Fields(out) {
+		if v, ok := strings.CutPrefix(f, "image="); ok {
+			img = v
+		}
+	}
+	if img == "" {
+		return ""
+	}
+	host, repo, _ := parseImageRef(img)
+	tags, err := registryTags(host, repo)
+	if err != nil {
+		info("cannot list %s from this machine (%v) — asking the agent to do the lookup", repo, err)
+		return ""
+	}
+	apply, current, errMsg, delegate := decideClient(img, before, want, tags)
+	switch {
+	case delegate:
+		return ""
+	case errMsg != "":
+		fatal("%s", errMsg)
+	case current != "":
+		return "current " + current
+	}
+	verdict, err := tr.Exec("self-update apply " + apply)
+	if err != nil {
+		fatal("asking the agent: %v", err)
+	}
+	if strings.Contains(verdict, "usage: self-update") {
+		return "" // an agent from before `apply` — let it do its own lookup
+	}
+	return verdict
 }
 
 // askSelfUpdate runs the agent's self-update verb over the tunnel user and

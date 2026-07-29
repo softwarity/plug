@@ -2,6 +2,28 @@
 
 ## NEXT RELEASE
 
+### Changed: `plug update` looks the registry up from your machine
+
+The lookup behind `update` — list the tags, pick the target — ran on the agent,
+whose traffic leaves the cluster through the Docker Desktop VM and follows the
+workstation's DNS: plugged during a session, ~31s per registry round-trip. The
+CLI now asks the agent which image it carries (`info` names it), resolves the
+target against that image's own registry from your machine (~1s), and hands the
+agent an already checked tag to apply (`self-update apply <tag>`). An
+unpublished tag is refused before anything is asked of the cluster.
+
+The agent-side lookup remains the fallback, tried after a 4-second budget: a
+registry only the cluster can reach, a moving tag (whose currentness is a
+digest question only the cluster can answer), an agent from before this
+existed — or an outbound firewall (LuLu et al.) blocking plug's first registry
+call, which is also worth allowing once.
+
+Also fixed on the way: an image pinned by digest alone (`repo@sha256:…`, no
+tag) was read as `latest` once the digest was stripped — an update would have
+quietly switched the deployment onto the moving stream. It now follows the
+release channel, which is what a pin means.
+
+
 ---
 
 ## 2.5.2

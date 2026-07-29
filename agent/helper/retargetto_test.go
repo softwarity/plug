@@ -58,3 +58,41 @@ var errTest = &testErr{}
 type testErr struct{}
 
 func (*testErr) Error() string { return "no route to registry" }
+
+// applyPlan trusts the caller's registry check and must never look anything up
+// — what it decides from the image alone is all it has.
+func TestApplyPlan(t *testing.T) {
+	for _, c := range []struct{ img, tag, target, plan string }{
+		{"softwarity/plug:2.5.1", "2.5.2", "softwarity/plug:2.5.2", planRetarget},
+		{"softwarity/plug:2.5.2", "2.5.2", "softwarity/plug:2.5.2", planCurrent},
+		{"softwarity/plug:latest", "latest", "softwarity/plug:latest", planResolve},
+		{"softwarity/plug:2.5.1", "latest", "softwarity/plug:latest", planRetarget},
+		// a digest-only pin never equals any tag — always a switch
+		{"softwarity/plug@sha256:abc", "2.5.2", "softwarity/plug:2.5.2", planRetarget},
+		{"softwarity/plug:2.5.1@sha256:abc", "2.5.2", "softwarity/plug:2.5.2", planRetarget},
+		{"docker.io/softwarity/plug:2.5.1", "2.5.2", "docker.io/softwarity/plug:2.5.2", planRetarget},
+	} {
+		target, plan, _ := applyPlan(c.tag)(c.img)
+		if target != c.target || plan != c.plan {
+			t.Errorf("applyPlan(%q)(%q) = (%q,%q), want (%q,%q)", c.tag, c.img, target, plan, c.target, c.plan)
+		}
+	}
+}
+
+func TestHasTag(t *testing.T) {
+	for _, c := range []struct {
+		ref  string
+		want bool
+	}{
+		{"softwarity/plug:2.5.1", true},
+		{"softwarity/plug", false},
+		{"softwarity/plug@sha256:abc", false},
+		{"softwarity/plug:2.5.1@sha256:abc", true},
+		{"localhost:5000/plug", false}, // the colon is the registry port
+		{"localhost:5000/plug:dev", true},
+	} {
+		if got := hasTag(c.ref); got != c.want {
+			t.Errorf("hasTag(%q) = %v, want %v", c.ref, got, c.want)
+		}
+	}
+}

@@ -63,12 +63,57 @@ const (
 // retarget decides what to do with the image a deployment carries, asking the
 // registry when the tag is a pinned release.
 func retarget(img string) (target, plan, note string) {
+	// An image pinned by DIGEST alone names no channel: parsed naively, the
+	// missing tag READS as `latest`, and an update would quietly move the
+	// deployment onto the moving stream. The pin holds whatever release is
+	// RUNNING — follow the release channel from there.
+	if strings.Contains(img, "@sha256:") && !hasTag(img) {
+		base, _, _ := strings.Cut(img, "@")
+		newest, err := newestRelease(base)
+		v := localVersion()
+		return retargetPlan(base+":"+v, v, newest, err)
+	}
 	var newest string
 	var err error
 	if _, _, tag := parseImageRef(img); isReleaseTag(tag) {
 		newest, err = newestRelease(img)
 	}
 	return retargetPlan(img, localVersion(), newest, err)
+}
+
+// hasTag reports whether ref carries an explicit tag (a colon past the last
+// slash, digest excluded) — "repo@sha256:x" has none, "host:5000/repo" neither.
+func hasTag(ref string) bool {
+	if i := strings.Index(ref, "@"); i > 0 {
+		ref = ref[:i]
+	}
+	return strings.LastIndex(ref, ":") > strings.LastIndex(ref, "/")
+}
+
+// tagRe is a syntactically valid image tag — what `self-update apply` accepts.
+var tagRe = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$`)
+
+// followPlan is `plug update` doing its own lookup: follow the deployment's
+// tag, or the target the operator named (see updatePlan).
+func followPlan(want string) func(string) (string, string, string) {
+	return func(img string) (string, string, string) { return updatePlan(img, want) }
+}
+
+// applyPlan is the CLI-checked path: the caller already resolved tag against
+// the registry this image lives in and only asks for it to be APPLIED — no
+// lookup here. On a plugged workstation, each registry round-trip from the
+// cluster VM cost ~31s; the CLI's own took ~1s.
+func applyPlan(tag string) func(string) (string, string, string) {
+	return func(img string) (target, plan, note string) {
+		target = retagged(img, tag)
+		if _, _, cur := parseImageRef(img); hasTag(img) && cur == tag {
+			if isReleaseTag(tag) {
+				return target, planCurrent, "already on " + target
+			}
+			return target, planResolve, "re-resolving " + target
+		}
+		return target, planRetarget, fmt.Sprintf("switching the deployment from %s to %s", img, target)
+	}
 }
 
 // retargetPlan is that decision on its own, with the registry's answer passed
