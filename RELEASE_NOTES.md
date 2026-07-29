@@ -2,6 +2,16 @@
 
 ## NEXT RELEASE
 
+### Fixed: a stale NXDOMAIN no longer outlives a name's re-provisioning
+
+plug's negative DNS answers carried no SOA, so the OS picked its own negative
+cache duration — and macOS held one long enough that a `-s` name swept during an
+agent restart kept failing instantly on the whole machine after it was back,
+without the lookup ever reaching plug again. Negative answers now carry a SOA
+bounding that cache to 5 seconds: absent stays absent, but never longer than it
+really was. (Immediate remedy on an affected machine:
+`sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder`.)
+
 ---
 
 ## 2.5.1

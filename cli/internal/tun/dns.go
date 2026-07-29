@@ -162,7 +162,11 @@ func answerDNS(q []byte, tab *faketab, upstream *net.Resolver, check nameChecker
 	} else {
 		r = append(r, 0, 0)
 	}
-	r = append(r, 0, 0, 0, 0)    // NS/AR counts
+	if answerIP != nil {
+		r = append(r, 0, 0, 0, 0) // NS/AR counts
+	} else {
+		r = append(r, 0, 1, 0, 0) // one AUTHORITY record: the negative-TTL SOA
+	}
 	r = append(r, q[12:qend]...) // question
 	if answerIP != nil {
 		r = append(r, 0xC0, 0x0C)  // name ptr
@@ -170,6 +174,25 @@ func answerDNS(q []byte, tab *faketab, upstream *net.Resolver, check nameChecker
 		r = append(r, 0, 0, 0, 30) // TTL
 		r = append(r, 0, 4)
 		r = append(r, answerIP.To4()...)
+	} else {
+		// Negative answers carry a synthetic SOA whose MINIMUM bounds the
+		// client's NEGATIVE cache (RFC 2308). Without it the client picks its
+		// own duration — and macOS's mDNSResponder held one NXDOMAIN long
+		// enough to outlive the few seconds a -s name is gone while an agent
+		// restart re-provisions it: the name was back, every lookup on the
+		// machine still failed instantly from the cache. 5s keeps that window
+		// honest: absent stays absent, but never longer than it really was.
+		r = append(r, 0)          // owner: root
+		r = append(r, 0, 6, 0, 1) // SOA, IN
+		r = append(r, 0, 0, 0, 5) // TTL
+		r = append(r, 0, 22)      // RDLENGTH: mname(1) rname(1) + 5×uint32
+		r = append(r, 0)          // MNAME: root
+		r = append(r, 0)          // RNAME: root
+		r = append(r, 0, 0, 0, 1) // SERIAL
+		r = append(r, 0, 0, 0, 5) // REFRESH
+		r = append(r, 0, 0, 0, 5) // RETRY
+		r = append(r, 0, 0, 0, 5) // EXPIRE
+		r = append(r, 0, 0, 0, 5) // MINIMUM — the negative TTL
 	}
 	return r
 }

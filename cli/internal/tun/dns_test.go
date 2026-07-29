@@ -137,3 +137,51 @@ func TestAnswerDNSStripsSearchSuffix(t *testing.T) {
 		t.Fatalf("faketab must map back to the BARE name, got %q,%v", name, ok)
 	}
 }
+
+// Negative answers must carry a SOA bounding the client's negative cache (RFC
+// 2308): without one, macOS's mDNSResponder held an NXDOMAIN from the few
+// seconds a -s name was gone (agent restart, signpost re-provisioned) long
+// after the name was back — every lookup on the machine failing instantly
+// without ever reaching the stub again.
+func TestNegativeAnswersCarryShortSOA(t *testing.T) {
+	tab := newFaketab(fakeBase)
+	deny := func(string) bool { return false } // every name: not in the cluster
+	for _, c := range []struct {
+		name  string
+		resp  []byte
+		rcode byte
+	}{
+		{"NXDOMAIN (honest check)", answerDNS(query("gone", 1), tab, upstreamResolver(nil), deny), 3},
+		{"NODATA (AAAA)", answerDNS(query("grpc", 28), tab, upstreamResolver(nil), nil), 0},
+	} {
+		r := c.resp
+		if r == nil {
+			t.Fatalf("%s: nil response", c.name)
+		}
+		if got := r[3] & 0x0F; got != c.rcode {
+			t.Errorf("%s: rcode = %d, want %d", c.name, got, c.rcode)
+		}
+		if an := int(r[6])<<8 | int(r[7]); an != 0 {
+			t.Errorf("%s: ANCOUNT = %d, want 0", c.name, an)
+		}
+		if ns := int(r[8])<<8 | int(r[9]); ns != 1 {
+			t.Fatalf("%s: NSCOUNT = %d, want 1 (the SOA)", c.name, ns)
+		}
+		// The authority record sits right after the question.
+		_, p := parseName(r, 12)
+		p += 4         // qtype+qclass
+		if r[p] != 0 { // owner: root
+			t.Fatalf("%s: SOA owner not root", c.name)
+		}
+		p++
+		if typ := int(r[p])<<8 | int(r[p+1]); typ != 6 {
+			t.Fatalf("%s: authority type = %d, want SOA(6)", c.name, typ)
+		}
+		ttl := uint32(r[p+4])<<24 | uint32(r[p+5])<<16 | uint32(r[p+6])<<8 | uint32(r[p+7])
+		min := r[len(r)-4:]
+		minimum := uint32(min[0])<<24 | uint32(min[1])<<16 | uint32(min[2])<<8 | uint32(min[3])
+		if ttl > 5 || minimum > 5 {
+			t.Errorf("%s: negative TTL %d/MINIMUM %d — must stay ≤5s", c.name, ttl, minimum)
+		}
+	}
+}
