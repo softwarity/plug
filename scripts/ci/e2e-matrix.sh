@@ -668,7 +668,7 @@ do_update_jump() {
   # The DECISION, asserted the same way on every backend: a release strictly
   # newer than the one it runs must be named.
   local target
-  target="$(printf '%s' "$out" | sed -n 's|.*to softwarity/plug:\([0-9][0-9.]*\).*|\1|p' | head -1)"
+  target="$(printf '%s' "$out" | sed -n 's|.*to [a-z0-9./-]*plug:\([0-9][0-9.]*\).*|\1|p' | head -1)"
   if [ -z "$target" ]; then
     echo "--- update-jump FAIL — the agent named no newer release (it should move off 2.4.1)"
     sum "**update jump** ❌ — no target named"; return 1

@@ -30,7 +30,8 @@ $compose up -d --build --wait \
   agent httpbin postgres redis mongo rabbitmq mosquitto grpc wsserver ident \
   flaky-linux flaky-mac flaky-win tko-linux tko-mac tko-win prober gateway \
   chaos res-tko-linux res-tko-mac res-tko-win \
-  res-agent-linux res-agent-mac res-agent-win
+  res-agent-linux res-agent-mac res-agent-win \
+  old-agent-linux old-agent-mac old-agent-win
 $compose ps
 
 bash "$root/scripts/ci/idle-until-caller-done.sh"
