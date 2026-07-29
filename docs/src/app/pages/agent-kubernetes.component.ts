@@ -55,7 +55,9 @@ kubectl -n my-namespace port-forward svc/plug 2222:2222</app-code>
       <strong>Service selecting the agent pod</strong>, and the agent creates and deletes it itself
       per session. The manifest above already grants exactly what that needs — a small,
       namespace-scoped RBAC role (manage Services, nothing else); it is part of the one deploy, so
-      <code>-s</code> works out of the box.
+      <code>-s</code> works out of the box. Apply the manifest as a whole: an agent that cannot
+      manage Services <strong>refuses to start</strong>, rather than come up looking healthy and
+      fail on the first <code>-s</code>.
     </p>
     <p>
       A dev runs <code>plug -s service1:8081:4200 npm start</code> — pods calling

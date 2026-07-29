@@ -217,6 +217,23 @@ Needs plug ≥ 2.4 on both sides: your launcher checks the mapping before it
 connects, and the cluster's own core is what resolves it. `plug update` aligns
 the two.
 
+## Move a cluster to another version
+
+`plug update` follows the tag the deployment already carries. Name a tag to
+switch the channel it follows:
+
+```bash
+plug -p neo update tag        # the newest release published
+plug -p neo update latest     # the latest stream
+plug -p neo update feat-09    # a branch's tag, at whatever it points to now
+plug -p neo update 2.3.0      # an exact release — downgrades included
+```
+
+The tag is checked against the registry before anything is repointed: aiming a
+deployment at a tag nobody published leaves an agent that cannot pull. Release
+and stream are told apart by the tag itself — `x`, `x.y` or `x.y.z` is a
+release, anything else moves under you.
+
 ## Limits
 
 It carries TCP reached by name. UDP, QUIC and ping are not tunnelled (most

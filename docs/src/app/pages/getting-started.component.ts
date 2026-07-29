@@ -69,8 +69,10 @@ import { MatIconModule } from '@angular/material/icon';
     <app-file src="assets/plug-service.yml" download="plug-service.yml" [initial]="'opened'" [preview]="16" />
     <p>
       The socket line is <strong>required</strong> on Docker, Compose and Swarm: it is how the agent
-      creates your <a routerLink="/swarm"><code>-s</code> name</a>. It is root on the host, so mount
-      it only on a cluster you trust. Kubernetes needs no socket — a Services-only RBAC role instead. See
+      creates your <a routerLink="/swarm"><code>-s</code> name</a>, and an agent without it
+      <strong>refuses to start</strong> rather than fail on your first <code>-s</code>. It is root on
+      the host, so mount it only on a cluster you trust. Kubernetes needs no socket — a Services-only
+      RBAC role instead, and the same rule applies. See
       <a routerLink="/swarm">Swarm</a> for the standalone variant, or
       <a routerLink="/kubernetes">Kubernetes</a> for the cluster.
     </p>
@@ -185,6 +187,16 @@ plug -s e2e:8080:PORT npm run serve -- --port=&#123;PORT&#125;</app-code>
       applies it its own way: Swarm updates the service's image, Kubernetes patches the
       Deployment's container image, and a plain container — which cannot recreate itself — pulls
       the new image and hands you the one command that does.
+    </p>
+    <p>
+    <p>
+      <code>plug update</code> follows the tag the deployment already carries. To move a cluster to a
+      <strong>different</strong> one, name it: <code>plug -p neo update tag</code> takes the newest
+      release published, <code>plug -p neo update latest</code> the latest stream, and
+      <code>plug -p neo update feat-09</code> a branch's tag at whatever it points to now — an exact
+      release (<code>2.3.0</code>) works too, downgrades included. The agent checks the tag exists on
+      the registry before repointing anything: aiming a deployment at a tag nobody published would
+      leave you with an agent that cannot pull.
     </p>
     <p>
       A <strong>moving</strong> tag (<code>latest</code>, <code>main</code>, a branch) is left

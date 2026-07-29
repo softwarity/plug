@@ -16,6 +16,35 @@ import { CodeComponent } from '../code/code.component';
     </p>
     <app-code lang="bash">plug doctor</app-code>
 
+    <h3>The agent container will not start</h3>
+    <p>
+      It prints what it is missing and exits: no Docker socket mounted, or no Kubernetes RBAC. That
+      is deliberate. plug is deployed to plug services into the cluster, and creating a name takes
+      that access — an agent that cannot do it would look healthy right up to your first
+      <code>-s</code>. Add the mount (or apply <code>plug-k8s.yaml</code>) and redeploy; the message
+      carries the exact stack-file lines.
+    </p>
+
+    <h3><code>-s</code> starts instantly, then warns that nothing reached the name</h3>
+    <p>
+      The mapping is armed the moment your command starts — proving the path end to end takes as
+      long as the cluster needs to schedule the name (seconds, sometimes a minute on a loaded Swarm),
+      and that wait is not charged to your command. The proof runs in the background and only speaks
+      up if it fails.
+    </p>
+    <p>
+      When it does, the name never carried traffic. Look cluster-side, where the message points:
+      <code>docker service ps plug-sp-&lt;name&gt;</code> or <code>kubectl get svc &lt;name&gt;</code>.
+      A signpost stuck in <em>Preparing</em>, a task restarting in a loop, or another workload
+      holding the name all look like this. The session keeps running, so a name that comes up late
+      still works.
+    </p>
+    <p>
+      If every launch sits at the slow end, the cause is usually the daemon rather than plug: a Swarm
+      manager carrying a long history of dead tasks and stopped containers schedules noticeably
+      slower. <code>docker system prune</code> and a restart bring it back down.
+    </p>
+
     <h3>After switching between the deployed service and your session, the app lags behind</h3>
     <p>
       You stop a session and the deployed service takes the name back — or the other way around —
