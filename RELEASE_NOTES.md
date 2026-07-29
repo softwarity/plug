@@ -1,6 +1,14 @@
 # Release Notes
 
-## NEXT RELEASE
+## 2.5.0
+
+> **BREAKING — an agent without orchestrator access no longer starts.**
+> Deployed without the Docker socket mounted (or, on Kubernetes, without the
+> RBAC), the agent container now exits 1 instead of coming up. If one of your
+> clusters runs plug only for the outbound tunnel and never uses `-s`, it has
+> never needed that access — **add the mount before updating**, or that agent
+> will not come back up. The container prints the exact stack-file lines and a
+> link to the documentation. See *Changed: the agent refuses to start* below.
 
 ### Fixed: `plug -s` no longer waits on the cluster before starting your command
 
