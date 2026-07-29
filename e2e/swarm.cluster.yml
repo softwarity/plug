@@ -37,6 +37,46 @@ services:
       placement:
         constraints: [node.role == manager]
 
+  # Per-leg agents deployed from a PUBLISHED RELEASE, for the update cells. 2.4.1
+  # is the oldest agent that can retarget itself. Here the retarget is APPLIED:
+  # swarmSelfUpdate rewrites the service's image and the task rolls, so the jump
+  # is observable as a version change — the Compose backend can only pull and
+  # hand back the command. Manager placement for the same reason as the agent
+  # above: a service update needs the manager API.
+  old-agent-linux:
+    image: softwarity/plug:2.4.1
+    ports:
+      - "2226:22"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [internal]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+  old-agent-mac:
+    image: softwarity/plug:2.4.1
+    ports:
+      - "2227:22"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [internal]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+  old-agent-win:
+    image: softwarity/plug:2.4.1
+    ports:
+      - "2228:22"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [internal]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+
   # ---- protocol matrix services (same set as compose.yml) ----
   httpbin:
     image: mccutchen/go-httpbin:v2.15.0

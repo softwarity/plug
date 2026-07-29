@@ -322,6 +322,18 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh update "$A" "$B" 2222
+      # The published-release agents (2.4.1) live for these two. REFUSALS FIRST:
+      # one of them needs an agent that predates `update <tag>`, and on Swarm/k8s
+      # the jump below actually rolls that agent forward — after which it is no
+      # longer old enough to prove anything.
+      - name: Update — <tag> refuses an unpublished tag, and an agent too old
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh updatetag "$A" "$B" 2222
+      - name: Update — a release agent retargets to the newest release
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh updatejump "$A" "$B" 2222
 
   # The SAME chain, replayed against the KUBERNETES family (k8s-for.yml / kind):
   # what was "coded but never executed at runtime" — the k8s Service backend for
@@ -398,6 +410,13 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh takeover "$A" "$B" 2222
+      # The retarget DECISION is backend-independent, but applying it is not:
+      # Swarm rewrites the service image, k8s patches the Deployment — both roll
+      # the agent for real, where Compose can only pull. Run it on all three.
+      - name: Update — a release agent retargets to the newest release
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh updatejump "$A" "$B" 2222
 
   # The SAME chain, third family: a real single-node SWARM (swarm-for.yml) —
   # the agent as a Swarm service on a non-attachable overlay, -s names as
@@ -473,6 +492,13 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh takeover "$A" "$B" 2222
+      # The retarget DECISION is backend-independent, but applying it is not:
+      # Swarm rewrites the service image, k8s patches the Deployment — both roll
+      # the agent for real, where Compose can only pull. Run it on all three.
+      - name: Update — a release agent retargets to the newest release
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh updatejump "$A" "$B" 2222
 
   kill-cluster:
     name: kill clusters

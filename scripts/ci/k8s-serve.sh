@@ -45,6 +45,13 @@ sed -e 's|image: docker.io/softwarity/plug:latest|image: softwarity/plug:e2e|' \
     -e 's|imagePullPolicy: Always|imagePullPolicy: Never|' \
     "$root/deploy/plug-k8s.yaml" | kubectl apply -f -
 
+# The update cells start from a PUBLISHED release, so this one is NOT rewritten
+# to the branch image: it is pulled from the registry as 2.4.1, which is the
+# whole point (the oldest agent that can retarget itself). One namespace each —
+# see the manifest for why.
+echo "=== deploy the per-leg 2.4.1 agents (update cells) ==="
+kubectl apply -f "$root/e2e/k8s.old-agents.yaml"
+
 echo "=== deploy the services ==="
 kubectl create configmap rabbitmq-config \
   --from-file=rabbitmq.conf=services/rabbitmq/rabbitmq.conf \
@@ -65,6 +72,10 @@ echo "=== wait for every deployment ==="
 failed=""
 for d in $(kubectl get deploy -o name); do
   kubectl rollout status --timeout=180s "$d" || failed="$failed $d"
+done
+# The 2.4.1 agents live in their own namespaces, which the loop above does not see.
+for ns in plug-old-linux plug-old-mac plug-old-win; do
+  kubectl -n "$ns" rollout status --timeout=180s deploy/plug || failed="$failed $ns/plug"
 done
 kubectl get deploy,svc -o wide
 if [ -n "$failed" ]; then

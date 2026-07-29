@@ -1122,6 +1122,50 @@ func restartParkedContainers(receipt string) {
 // swarmServe runs the signpost as a Swarm SERVICE. A service joins the stack's
 // overlay whether or not it is `attachable` — the whole reason this backend
 // exists — and carries the alias there, relaying to the agent's service VIP.
+// pinnedImage returns img pinned to the digest the LOCAL engine knows for its
+// repository (repo@sha256:…), or img unchanged when it has none (an image built
+// locally, never pulled). Swarm-specific on purpose: a bare tag in a service
+// spec makes the manager resolve it against the registry at create time, and on
+// a plugged workstation that lookup rides the session's own DNS detour —
+// measured at three ~31s registry round-trips per signpost, which WAS the whole
+// -s wait. The signpost's image is the agent's own, so the local digest is
+// always the right answer and costs no network at all (0.6s to Running,
+// measured, with a session active). `plug update` writes bare tags (it drops
+// the digest to move the deployment), so without this every updated agent
+// reintroduces the wait.
+func pinnedImage(img string) string {
+	base := img
+	if i := strings.Index(base, "@sha256:"); i > 0 {
+		base = base[:i] // re-pin from local knowledge, not from a stale spec
+	}
+	var info struct {
+		RepoDigests []string `json:"RepoDigests"`
+	}
+	if _, err := dockerAPI("GET", "/images/"+base+"/json", nil, &info); err != nil {
+		return img
+	}
+	if d := digestFor(base, info.RepoDigests); d != "" {
+		return d
+	}
+	return img
+}
+
+// digestFor picks the RepoDigest matching img's repository — an image can carry
+// digests for several repos (retagged), and a digest for another repo would
+// make the manager pull a stranger.
+func digestFor(img string, repoDigests []string) string {
+	repo := img
+	if i := strings.LastIndex(repo, ":"); i > strings.LastIndex(repo, "/") {
+		repo = repo[:i]
+	}
+	for _, d := range repoDigests {
+		if strings.HasPrefix(d, repo+"@sha256:") {
+			return d
+		}
+	}
+	return ""
+}
+
 func swarmServe(name, port string, self selfInfo) {
 	// -s relays to the agent's service VIP, and the session's remote-forward
 	// lives on ONE task — so >1 replica makes the VIP miss it intermittently.
@@ -1177,7 +1221,7 @@ func swarmServe(name, port string, self selfInfo) {
 		"Labels": labels,
 		"TaskTemplate": map[string]any{
 			"ContainerSpec": map[string]any{
-				"Image":   self.image,
+				"Image":   pinnedImage(self.image),
 				"Command": []string{"/usr/local/bin/plug-agent", "signpost", port, self.relayTarget() + ":" + port},
 			},
 			"Networks":      attach,

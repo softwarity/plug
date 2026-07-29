@@ -4,6 +4,8 @@
 # e2e legs keep the exact same contract as against the compose cluster:
 #   <tailnet-ip>:2222  → the agent's ssh   (NodePort 32222, deploy/plug-k8s.yaml)
 #   <tailnet-ip>:18090 → the gateway       (NodePort 31890, e2e/k8s.cluster.yaml)
+#   <tailnet-ip>:222[678] → the per-leg 2.4.1 agents the update cells retarget
+#                          (NodePorts 3222[678], e2e/k8s.old-agents.yaml)
 # Everything else (ClusterIP Services) stays cluster-internal — only the agent
 # can reach it, exactly like a real cluster.
 kind: Cluster
@@ -15,3 +17,9 @@ nodes:
         hostPort: 2222
       - containerPort: 31890
         hostPort: 18090
+      - containerPort: 32226
+        hostPort: 2226
+      - containerPort: 32227
+        hostPort: 2227
+      - containerPort: 32228
+        hostPort: 2228

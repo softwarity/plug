@@ -57,6 +57,31 @@ refuses to start (above) and `plug doctor` reports it as a failure.
 
 Unaffected: the outbound tunnel needs no socket and no RBAC, and never did.
 
+### Fixed: on Swarm, creating a `-s` name no longer waits on the registry
+
+The signpost service was created with a bare tag, so the Swarm manager resolved
+it against the registry at create time — and on a plugged workstation that
+lookup rides the session's own DNS detour: three ~31s registry round-trips per
+signpost, which was the whole `-s` wait. The agent now pins the image to the
+digest the local engine already knows (the signpost runs the agent's own image),
+leaving the manager nothing to resolve: 0.6s to Running, measured with a session
+active. Bare tags are what `plug update` writes (it drops the digest to move the
+deployment), so every updated agent used to reintroduce the wait.
+
+### Added: the update path is now covered end to end
+
+`plug update` was asserted only as "the verb answers and the agent survives" —
+the agent under it runs an unpublished tag, so it could never actually move.
+Three cells now run against agents deployed from a **published release**, on all
+three OSes:
+
+- a 2.4.1 agent (the oldest that can retarget itself) must ask the registry and
+  name a newer release — the decision `plug update` exists to make;
+- `update <tag>` must refuse a tag the registry does not have, and leave the
+  agent standing;
+- `update <tag>` against that 2.4.1 agent must refuse on its version, rather
+  than degrade into a plain self-update that silently ignores the target.
+
 ### Fixed: an agent's commit hash still showed at launch
 
 2.4.1 stopped stamping releases with their commit, but only for images built

@@ -637,6 +637,124 @@ if [ "$phase" != setup ]; then
   { [ -n "${PLUG:-}" ] && [ -x "$PLUG" ]; } || { echo "plug not usable ('${PLUG:-}') — did setup fail?" >&2; exit 1; }
 fi
 
+# --- update: a RELEASE agent must retarget itself to the newest one -------------
+#
+# The published 2.4.1 is the oldest agent that can do this (registry.go landed
+# there), and the only starting point that proves anything: it must ask the
+# registry, find a NEWER x.y.z than its own, and name it. Aiming at a version is
+# what `plug update` is for — re-resolving the tag it already carries is what it
+# used to do, and that returned the same image forever.
+#
+# Compose cannot recreate a container from inside it, so the verdict is "pulled"
+# plus the command that finishes the job; the rollout itself is Swarm/k8s work,
+# covered by the resilience cell. What this asserts is the DECISION.
+do_update_jump() {
+  local oldport
+  case "$(uname -s)" in
+    Darwin)               oldport=2227 ;;
+    MINGW*|MSYS*|CYGWIN*) oldport=2228 ;;
+    *)                    oldport=2226 ;;
+  esac
+  echo "=== update-jump (cluster B): a published 2.4.1 agent must retarget to the newest release ==="
+  local ip_b
+  ip_b="$(wait_cluster "$peer_b")" || { echo "cluster $peer_b unreachable" >&2; sum "**update jump** ❌ (cluster B)"; return 1; }
+
+  local out rc=0
+  out="$("$PLUG" --host "$ip_b" --port "$oldport" update </dev/null 2>&1)" || rc=$?
+  printf '%s\n' "$out" | sed 's/^/    /'
+  if [ "$rc" != 0 ]; then
+    echo "--- update-jump FAIL — exit $rc"; sum "**update jump** ❌ — exit $rc"; return 1
+  fi
+  # The DECISION, asserted the same way on every backend: a release strictly
+  # newer than the one it runs must be named.
+  local target
+  target="$(printf '%s' "$out" | sed -n 's|.*to softwarity/plug:\([0-9][0-9.]*\).*|\1|p' | head -1)"
+  if [ -z "$target" ]; then
+    echo "--- update-jump FAIL — the agent named no newer release (it should move off 2.4.1)"
+    sum "**update jump** ❌ — no target named"; return 1
+  fi
+  if [ "$target" = "2.4.1" ]; then
+    echo "--- update-jump FAIL — retargeted to itself ($target)"
+    sum "**update jump** ❌ — retargeted to itself"; return 1
+  fi
+
+  # Then what each backend can actually DO with that decision. Swarm rewrites
+  # the service image and k8s patches the Deployment, so the agent really lands
+  # on the new version and the CLI reports the move; Compose cannot recreate a
+  # container from inside it, so it stops at "pulled" plus the command that
+  # finishes the job. Assert whichever this cluster is, from the CLI's own line
+  # — never skip: a backend that silently did nothing would look identical.
+  local now
+  now="$(ssh -n -p "$oldport" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "get@$ip_b" version 2>/dev/null | tr -d '\r')"
+  if printf '%s' "$out" | grep -q "agent updated: v2.4.1"; then
+    if [ "$now" != "$target" ]; then
+      echo "--- update-jump FAIL — reported a move to $target but the agent answers v$now"
+      sum "**update jump** ❌ — moved to $target, agent still v$now"; return 1
+    fi
+    echo "update-jump OK — 2.4.1 retargeted to $target and the rollout landed (agent now v$now)"
+    sum "**plug update (release agent rolls: 2.4.1 → $target)** ✅"; return 0
+  fi
+  if printf '%s' "$out" | grep -q "cannot recreate its own container"; then
+    if [ "$now" != "2.4.1" ]; then
+      echo "--- update-jump FAIL — nothing should have rolled here, yet the agent answers v$now"
+      sum "**update jump** ❌ — unexpected roll to v$now"; return 1
+    fi
+    echo "update-jump OK — 2.4.1 retargeted to $target, pulled it, and handed back the recreate (agent still v$now)"
+    sum "**plug update (release agent retargets: 2.4.1 → $target)** ✅"; return 0
+  fi
+  echo "--- update-jump FAIL — named $target but neither rolled nor pulled"
+  sum "**update jump** ❌ — decision without an action"; return 1
+}
+
+# --- update <tag>: the two ways it must REFUSE ---------------------------------
+#
+# Both matter more than the happy path. Repointing a deployment at a tag nobody
+# published leaves an agent that cannot pull — on Swarm/k8s, a rollout to unwind
+# by hand. And an agent that predates the target argument runs `self-update <tag>`
+# as a PLAIN self-update: it ignores the word, so the channel would silently not
+# change while the command reported success.
+do_update_tag() {
+  local rsshport oldport
+  case "$(uname -s)" in
+    Darwin)               rsshport=2224 oldport=2227 ;;
+    MINGW*|MSYS*|CYGWIN*) rsshport=2225 oldport=2228 ;;
+    *)                    rsshport=2223 oldport=2226 ;;
+  esac
+  echo "=== update-tag (cluster B): an unpublished tag, and an agent too old for the argument ==="
+  local ip_b
+  ip_b="$(wait_cluster "$peer_b")" || { echo "cluster $peer_b unreachable" >&2; sum "**update tag** ❌ (cluster B)"; return 1; }
+
+  # 1) A tag the registry does not have: refused, and the agent left standing.
+  local out rc=0
+  out="$("$PLUG" --host "$ip_b" --port "$rsshport" update definitely-not-a-published-tag </dev/null 2>&1)" || rc=$?
+  printf '%s\n' "$out" | sed 's/^/    /'
+  if [ "$rc" = 0 ]; then
+    echo "--- update-tag FAIL — an unpublished tag was ACCEPTED"; sum "**update tag** ❌ — unpublished tag accepted"; return 1
+  fi
+  if ! printf '%s' "$out" | grep -q "has no tag"; then
+    echo "--- update-tag FAIL — refused, but not for the right reason"; sum "**update tag** ❌ — wrong refusal"; return 1
+  fi
+  local v
+  v="$(ssh -n -p "$rsshport" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "get@$ip_b" version 2>/dev/null | tr -d '\r')"
+  if [ -z "$v" ]; then
+    echo "--- update-tag FAIL — the agent went down on a refusal"; sum "**update tag** ❌ — agent down after refusal"; return 1
+  fi
+
+  # 2) An agent from before the argument existed: refused on its version, not
+  #    quietly turned into a plain self-update.
+  rc=0
+  out="$("$PLUG" --host "$ip_b" --port "$oldport" update latest </dev/null 2>&1)" || rc=$?
+  printf '%s\n' "$out" | sed 's/^/    /'
+  if [ "$rc" = 0 ]; then
+    echo "--- update-tag FAIL — a 2.4.1 agent ACCEPTED a target it would ignore"; sum "**update tag** ❌ — old agent accepted a target"; return 1
+  fi
+  if ! printf '%s' "$out" | grep -q "needs an agent"; then
+    echo "--- update-tag FAIL — refused, but not on the agent's version"; sum "**update tag** ❌ — wrong refusal (old agent)"; return 1
+  fi
+  echo "update-tag OK — unpublished tag refused (agent still v$v), and a 2.4.1 agent refused on its version"
+  sum "**plug update <tag> (refuses an unpublished tag, and an agent too old)** ✅"; return 0
+}
+
 case "$phase" in
   setup)        do_setup ;;
   env)          do_env ;;
@@ -650,5 +768,7 @@ case "$phase" in
   collision)    do_collision ;;
   resilience)   do_resilience ;;
   update)       do_update ;;
+  updatejump)   do_update_jump ;;
+  updatetag)    do_update_tag ;;
   *) echo "unknown phase: $phase (want setup|env|matrix|multicluster|outage|expose|exposevar|gateway|takeover|collision|resilience|update)" >&2; exit 2 ;;
 esac

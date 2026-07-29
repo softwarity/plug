@@ -1,0 +1,291 @@
+# Per-leg agents deployed from a PUBLISHED RELEASE, for the update cells of the
+# e2e (k8s family). 2.4.1 is the oldest agent that can retarget itself, so it is
+# the only meaningful starting point: `plug update` against it must reach the
+# newest release published, and here the retarget is APPLIED — k8sSelfUpdate
+# patches the Deployment's image and the rollout makes the jump observable as a
+# version change.
+#
+# ONE NAMESPACE PER AGENT, on purpose. k8sSelfUpdate finds the deployment to
+# patch with `labelSelector=app=plug` and takes Items[0]; two plug Deployments
+# sharing a namespace would make it patch whichever came back first. A namespace
+# each keeps every agent pointed at itself — and the agent reads its own
+# namespace from its service-account token, so nothing has to be told.
+#
+# The image is pinned deliberately: 2.4.1 is a historical fact (the release that
+# taught the agent to retarget), not a version to keep current.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: plug-old-linux
+  labels: { app: plug }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: plug
+  namespace: plug-old-linux
+  labels: { app: plug }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: plug
+  namespace: plug-old-linux
+  labels: { app: plug }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: plug }
+  template:
+    metadata:
+      labels: { app: plug }
+    spec:
+      serviceAccountName: plug
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: plug
+          image: docker.io/softwarity/plug:2.4.1
+          # A pin, not a stream: never re-resolve it, or the cell would start
+          # from whatever the tag means today rather than from 2.4.1.
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: ssh
+              containerPort: 22
+          readinessProbe:
+            tcpSocket: { port: 22 }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits: { cpu: 250m, memory: 128Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: plug
+  namespace: plug-old-linux
+  labels: { app: plug }
+spec:
+  type: NodePort
+  selector: { app: plug }
+  ports:
+    - name: ssh
+      port: 2222
+      targetPort: 22
+      nodePort: 32226
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: plug-serve-names
+  namespace: plug-old-linux
+  labels: { app: plug }
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "create", "delete", "update", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: plug-serve-names
+  namespace: plug-old-linux
+  labels: { app: plug }
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: plug-serve-names
+subjects:
+  - kind: ServiceAccount
+    name: plug
+    namespace: plug-old-linux
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: plug-old-mac
+  labels: { app: plug }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: plug
+  namespace: plug-old-mac
+  labels: { app: plug }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: plug
+  namespace: plug-old-mac
+  labels: { app: plug }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: plug }
+  template:
+    metadata:
+      labels: { app: plug }
+    spec:
+      serviceAccountName: plug
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: plug
+          image: docker.io/softwarity/plug:2.4.1
+          # A pin, not a stream: never re-resolve it, or the cell would start
+          # from whatever the tag means today rather than from 2.4.1.
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: ssh
+              containerPort: 22
+          readinessProbe:
+            tcpSocket: { port: 22 }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits: { cpu: 250m, memory: 128Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: plug
+  namespace: plug-old-mac
+  labels: { app: plug }
+spec:
+  type: NodePort
+  selector: { app: plug }
+  ports:
+    - name: ssh
+      port: 2222
+      targetPort: 22
+      nodePort: 32227
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: plug-serve-names
+  namespace: plug-old-mac
+  labels: { app: plug }
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "create", "delete", "update", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: plug-serve-names
+  namespace: plug-old-mac
+  labels: { app: plug }
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: plug-serve-names
+subjects:
+  - kind: ServiceAccount
+    name: plug
+    namespace: plug-old-mac
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: plug-old-win
+  labels: { app: plug }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: plug
+  namespace: plug-old-win
+  labels: { app: plug }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: plug
+  namespace: plug-old-win
+  labels: { app: plug }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: plug }
+  template:
+    metadata:
+      labels: { app: plug }
+    spec:
+      serviceAccountName: plug
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: plug
+          image: docker.io/softwarity/plug:2.4.1
+          # A pin, not a stream: never re-resolve it, or the cell would start
+          # from whatever the tag means today rather than from 2.4.1.
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: ssh
+              containerPort: 22
+          readinessProbe:
+            tcpSocket: { port: 22 }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits: { cpu: 250m, memory: 128Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: plug
+  namespace: plug-old-win
+  labels: { app: plug }
+spec:
+  type: NodePort
+  selector: { app: plug }
+  ports:
+    - name: ssh
+      port: 2222
+      targetPort: 22
+      nodePort: 32228
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: plug-serve-names
+  namespace: plug-old-win
+  labels: { app: plug }
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "create", "delete", "update", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: plug-serve-names
+  namespace: plug-old-win
+  labels: { app: plug }
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: plug-serve-names
+subjects:
+  - kind: ServiceAccount
+    name: plug
+    namespace: plug-old-win

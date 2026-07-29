@@ -115,6 +115,34 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     networks: [internal]
 
+  # Per-leg agents deployed from a PUBLISHED RELEASE, for the update cells. 2.4.1
+  # is the oldest agent that can retarget itself (registry.go landed there), so
+  # it is the only meaningful starting point: `plug update` against it must reach
+  # the newest release on the registry, and `plug update <tag>` against it must
+  # be REFUSED — it predates the verb's target argument. Pinned on purpose; this
+  # is a historical fact, not a version to keep current.
+  old-agent-linux:
+    image: softwarity/plug:2.4.1
+    ports:
+      - "2226:22"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [internal]
+  old-agent-mac:
+    image: softwarity/plug:2.4.1
+    ports:
+      - "2227:22"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [internal]
+  old-agent-win:
+    image: softwarity/plug:2.4.1
+    ports:
+      - "2228:22"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [internal]
+
   # Resilience takeover targets — one per OS leg, one port per leg (same
   # reasons as tko-*): the resilience cell parks these, RESTARTS THE AGENT
   # mid-session, and asserts the park comes back (boot-gc restores, the
