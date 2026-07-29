@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.5.1
+
 ### Fixed: on Swarm, creating a `-s` name no longer waits on the registry
 
 The signpost service was created with a bare tag, so the Swarm manager resolved
