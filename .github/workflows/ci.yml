@@ -147,7 +147,7 @@ jobs:
     # is_default_branch) — a throwaway image to test that branch on a real
     # cluster, never latest. Off PRs (secrets). Delete stale branch tags from
     # Docker Hub after merge.
-    needs: [build, selftest, e2e, e2e-k8s, e2e-swarm]
+    needs: [build, selftest, e2e-compose, e2e-k8s, e2e-swarm]
     if: success() && github.event_name != 'pull_request'
     uses: ./.github/workflows/_docker.yml
     secrets: inherit
@@ -225,8 +225,8 @@ jobs:
           path: latest-launchers/*
           retention-days: 1
 
-  e2e:
-    name: e2e (${{ matrix.os }}, by name over the mesh)
+  e2e-compose:
+    name: e2e-compose (${{ matrix.os }}, by name over the mesh)
     needs: start-cluster
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25 # a hung cell must not run the job (and the cluster) for hours
@@ -476,7 +476,7 @@ jobs:
 
   kill-cluster:
     name: kill clusters
-    needs: [start-cluster, e2e, e2e-k8s, e2e-swarm]
+    needs: [start-cluster, e2e-compose, e2e-k8s, e2e-swarm]
     if: always() && needs.start-cluster.result == 'success'
     runs-on: ubuntu-latest
     permissions:

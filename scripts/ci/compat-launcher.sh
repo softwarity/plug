@@ -52,37 +52,22 @@ esac
 lver="$($L version)"
 echo "latest launcher ($(uname -s)/${arch:-amd64}): v$lver"
 
-# The privilege hand-off (Linux ambient caps) ships IN the launcher, so a
-# published launcher that predates that fix can never pass the Linux leg — and
-# the image gating would deadlock (red run → no publish → latest stays pre-fix
-# forever). Arm the cell only once `latest` contains the fix; older launchers
-# need one re-install (release-noted). Only the ambient-caps hand-off is
-# version-sensitive, so this guard is Linux-only.
-if [ "$(uname -s)" = Linux ]; then
-  ambient_fix=0e8c6195a899418a70f5c8cd61efbfbfb0beeac2
-  lrev="${lver##*+}" # "dev+<rev>" → <rev>
-  if [ "$lrev" = "$lver" ] || ! git merge-base --is-ancestor "$ambient_fix" "$lrev" 2>/dev/null; then
-    echo "latest launcher ($lver) predates the ambient-caps fix — Linux compat arms itself on the next publish"
-    exit 0
-  fi
-fi
-
-# -s became mandatory on `latest` (a running process is a named cluster member),
-# and the launcher validates the name. Pass a throwaway -s ONLY if this latest
-# launcher understands it (>= 99adcf5, where -s landed): a pre-`-s` launcher would
-# reject the flag, a mandatory-s one requires it. Same ancestry gate as the
-# ambient-caps one above. One name+port per OS leg — the legs share the agent.
-serve_support=99adcf51c145bbfa7dc3974e134a1bf6593640a0
-cserve=""
-lrev="${lver##*+}" # "dev+<rev>" → <rev>
-if [ "$lrev" != "$lver" ] && git merge-base --is-ancestor "$serve_support" "$lrev" 2>/dev/null; then
-  case "$(uname -s)" in
-    Darwin)               cserve="-s compat-mac:18077:9" ;;
-    MINGW*|MSYS*|CYGWIN*) cserve="-s compat-win:18078:9" ;;
-    *)                    cserve="-s compat-linux:18076:9" ;;
-  esac
-  echo "latest launcher understands -s → naming this session $cserve"
-fi
+# A running process is a named cluster member, so the launcher requires a -s.
+# One throwaway name+port per OS leg — the legs share the agent.
+#
+# No version gate here on purpose. This used to skip cells for launchers too old
+# to carry the ambient-caps hand-off or to understand -s, keyed off the commit
+# revision in a "dev+<rev>" version. Releases stopped carrying that suffix in
+# 2.4.1, which silently turned both gates into "no": the Linux leg exited green
+# without testing anything, and mac/Windows ran without the -s they now require.
+# A guard that fails green is worse than the compatibility it was buying —
+# and plug keeps itself current (plug update, and plug doctor to see it).
+case "$(uname -s)" in
+  Darwin)               cserve="-s compat-mac:18077:9" ;;
+  MINGW*|MSYS*|CYGWIN*) cserve="-s compat-win:18078:9" ;;
+  *)                    cserve="-s compat-linux:18076:9" ;;
+esac
+echo "naming this session $cserve"
 
 echo "=== old launcher → this branch's cluster (probe, download the new core, run) ==="
 # curl -sS: keep the body quiet but SHOW errors — a silent DNS/route failure is
