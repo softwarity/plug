@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.5.2
+
 ### Fixed: a stale NXDOMAIN no longer outlives a name's re-provisioning
 
 plug's negative DNS answers carried no SOA, so the OS picked its own negative
