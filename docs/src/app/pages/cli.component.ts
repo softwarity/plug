@@ -51,8 +51,14 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
         <td><a routerLink="/getting-started">Getting started</a></td>
       </tr>
       <tr>
-        <td><code>plug update [-p profile]</code></td>
-        <td>the agent refreshes itself from its registry, then this launcher from the agent</td>
+        <td><code>plug update [-p profile] [&lt;tag&gt;]</code></td>
+        <td>
+          the agent refreshes itself from its registry, then this launcher from the agent.
+          A tag <strong>switches the channel</strong> the deployment follows —
+          <code>tag</code> for the newest release, <code>latest</code> for the latest stream, or a
+          branch tag such as <code>feat-09</code>. The agent checks the tag exists before
+          repointing anything.
+        </td>
         <td><a routerLink="/getting-started">Getting started</a></td>
       </tr>
       <tr>

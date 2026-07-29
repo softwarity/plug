@@ -220,18 +220,18 @@ func doctorProfile(name string, add func(check)) {
 	defer tr.Close()
 
 	if out, err := tr.Exec("info"); err == nil && strings.HasPrefix(out, "version=") {
-		backend := "static"
+		backend := "none"
 		for _, f := range strings.Fields(out) {
 			if v, ok := strings.CutPrefix(f, "backend="); ok {
 				backend = v
 			}
 		}
-		if backend == "static" {
-			add(check{area: name, name: "dynamic -s", status: stWarn,
-				detail: "no backend (no docker.sock, no k8s RBAC)",
-				remedy: "mount the sock (compose/swarm) or apply plug-k8s.yaml — else pre-declare aliases"})
+		if backend == "none" {
+			add(check{area: name, name: "-s names", status: stFail,
+				detail: "the agent cannot create cluster names",
+				remedy: "mount /var/run/docker.sock (on Swarm, on a manager node), or apply plug-k8s.yaml"})
 		} else {
-			add(check{area: name, name: "dynamic -s", status: stOK, detail: backend})
+			add(check{area: name, name: "-s names", status: stOK, detail: backend})
 		}
 		add(check{area: name, name: "agent features", status: stOK,
 			detail: "≥ 2.2 (honest NXDOMAIN, -c, takeover)"})

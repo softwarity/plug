@@ -136,9 +136,9 @@ the fly, which it does per engine:
   The agent just needs to run on a **manager** node (to create services).
 - **Kubernetes** — no socket: the bundled [manifest](deploy/plug-k8s.yaml) grants
   a Services-only RBAC role, so `-s` creates and deletes the backing Service itself.
-- **No socket** — the agent falls back to *static*: you pre-declare the name
-  yourself (a network alias, a Service). It works, but you lose the on-the-fly
-  provisioning — so mount the socket.
+- **No socket, no RBAC** — the agent **refuses to start**, naming what is
+  missing. Provisioning is the feature; an agent that cannot do it is a
+  deployment mistake, not a degraded mode.
 
 ```yaml
 services:

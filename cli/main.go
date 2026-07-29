@@ -57,9 +57,14 @@ Usage:
                                        (binaries, resolver, service, clusters),
                                        apply the safe repairs with --fix, and
                                        offer to report problems as an issue
-  plug update [-p profile]             update that cluster's agent (it refreshes
+  plug update [-p profile] [<tag>]     update that cluster's agent (it refreshes
                                        its own deployment from the registry),
-                                       then this launcher from the agent
+                                       then this launcher from the agent.
+                                       A tag SWITCHES the channel it follows:
+                                         plug update tag       newest release
+                                         plug update latest    the latest stream
+                                         plug update feat-09   that branch's tag
+                                       The agent checks the tag exists first.
   plug rn <old> <new>                  rename a profile (alias: mv)
   plug rm <profile>                    remove a profile
   plug version [-p profile]            this launcher's version — or, with a

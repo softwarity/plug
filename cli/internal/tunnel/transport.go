@@ -248,7 +248,19 @@ func channelDial(ctx context.Context, cl *ssh.Client, addr string) (net.Conn, er
 // DialCluster dials a cluster service:port through the tunnel, bounding the
 // channel open with a timeout.
 func (t *Transport) DialCluster(addr string) (net.Conn, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), channelTimeout)
+	return t.DialClusterTimeout(addr, channelTimeout)
+}
+
+// DialClusterTimeout is DialCluster with the open bounded by d instead of the
+// datapath default. For probing a name that may not be up YET: a service whose
+// backend isn't ready drops the SYN rather than refusing it (a Swarm VIP with
+// no running task, a k8s Service with no endpoint), so an early probe cannot
+// fail fast — it costs the full timeout to learn nothing. A short budget,
+// retried, finds the moment the path opens instead of paying channelTimeout to
+// be told it hadn't opened yet. The datapath keeps the long one: there, a slow
+// open is a slow service, not a race with provisioning.
+func (t *Transport) DialClusterTimeout(addr string, d time.Duration) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), d)
 	defer cancel()
 	return t.DialContext(ctx, "tcp", addr)
 }
@@ -379,8 +391,8 @@ func (t *Transport) Forward(ctx context.Context, listenAddr, target string, logf
 // line of its combined output. Used by the -s provisioning verbs (serve-name /
 // unserve-name): the agent's ForceCommand answers the one-line protocol; an
 // OLD agent image runs the command through /bin/sh instead and answers
-// "sh: serve-name: not found" — the caller treats anything off-protocol as
-// "static", so the verb degrades cleanly across versions.
+// "sh: serve-name: not found" — anything off-protocol is an agent that cannot
+// serve the verb, and the caller says so rather than guessing.
 func (t *Transport) Exec(cmd string) (string, error) {
 	cl := t.current()
 	if cl == nil {

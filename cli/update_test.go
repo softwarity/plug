@@ -106,7 +106,6 @@ func TestUpdateWordOnAgentReplies(t *testing.T) {
 		{"current v2.4.0 — image softwarity/plug:latest unchanged", "current"},
 		// Compose: the image is local, the recreate is the caller's move.
 		{"pulled softwarity/plug:2.4.0 — moving the deployment from softwarity/plug:2.3.0 to softwarity/plug:2.4.0; the agent cannot recreate its own container: set the plug service's image to softwarity/plug:2.4.0 in your compose file, then: docker compose up -d plug", "pulled"},
-		{"static", "static"},
 		{"error: the agent's node is not a swarm manager — from one, run: docker service update --image softwarity/plug:2.4.0 neo_plug", "error:"},
 	} {
 		if got := updateWord(c.reply); got != c.want {

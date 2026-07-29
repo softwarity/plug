@@ -28,7 +28,7 @@ import (
 )
 
 func cmdUpdate(args []string) {
-	var profile, host, port string
+	var profile, host, port, want string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "-p", "--profile":
@@ -38,7 +38,14 @@ func cmdUpdate(args []string) {
 		case "--port":
 			port = flagValue(args, &i)
 		default:
-			fatal("usage: plug update [-p profile]")
+			// The one positional: which tag the deployment should carry from now
+			// on. `tag` means the newest release; anything else is a tag name —
+			// latest, main, feat-09 — and the agent checks it exists before
+			// repointing anything.
+			if strings.HasPrefix(args[i], "-") || want != "" {
+				fatal("usage: plug update [-p profile] [<tag>|tag|latest]")
+			}
+			want = args[i]
 		}
 	}
 	cfg, label := updateTarget(profile, host, port)
@@ -49,26 +56,49 @@ func cmdUpdate(args []string) {
 	}
 	info("agent v%s at %s", before, label)
 
+	// An agent from before this existed runs `self-update <tag>` as a plain
+	// self-update: it ignores the word and refreshes along the tag it already
+	// carries. That is the worst possible outcome — the channel silently does
+	// not change while the command reports success — so refuse on the version
+	// rather than let it happen.
+	if want != "" {
+		if versionBefore(before, 2, 5) {
+			how := "plug update"
+			if profile != "" {
+				how = "plug -p " + profile + " update"
+			}
+			fatal("switching the channel needs an agent ≥ 2.5 — this cluster runs v%s, which would ignore\n"+
+				"      %q and just refresh itself. Bring it up first: %s", before, want, how)
+		}
+		info("switching this cluster to %s", updateTargetWord(want))
+	}
 	after := before
-	verdict := askSelfUpdate(cfg)
+	verdict := askSelfUpdate(cfg, want)
 	switch updateWord(verdict) {
 	case "updating":
 		info("agent: %s", verdict)
 		after = waitNewVersion(cfg, before)
-		if after == before {
+		switch {
+		case after != before:
+			info("agent updated: v%s → v%s", before, after)
+		case want != "":
+			// Switching channels does not have to change the version — `latest`
+			// and the newest release routinely name the same build. The image
+			// moved either way, which is what was asked for; only say where to
+			// look if the rollout is what has not landed.
+			info("agent is on %s, still v%s — expected if that tag names the same build; "+
+				"otherwise the rollout has not landed yet (docker service ps <service> / "+
+				"kubectl rollout status deployment/<name>)", updateTargetWord(want), after)
+		default:
 			// The agent named the image it moved to before rolling, so a version
 			// that has not changed is no longer "maybe a pin": the rollout itself
 			// is stuck or slow. Point at where that is visible.
 			info("agent still v%s after 90s — the rollout has not landed yet. Check it cluster-side "+
 				"(docker service ps <service> / kubectl rollout status deployment/<name>): a pull that "+
 				"cannot reach the registry, or a task that keeps restarting, both look like this.", before)
-		} else {
-			info("agent updated: v%s → v%s", before, after)
 		}
 	case "current", "pulled":
 		info("agent: %s", verdict)
-	case "static":
-		info("the agent has no orchestrator access (no docker.sock, no k8s RBAC) — update it by redeploying the softwarity/plug image (compose: docker compose pull && docker compose up -d; k8s: kubectl rollout restart)")
 	default:
 		if strings.Contains(verdict, "unknown command") || strings.Contains(verdict, "not found") {
 			// A pre-2.3 agent can't refresh itself — but it CAN still serve its
@@ -127,14 +157,18 @@ func updateTarget(profile, host, port string) (config, string) {
 
 // askSelfUpdate runs the agent's self-update verb over the tunnel user and
 // returns its one-line verdict.
-func askSelfUpdate(cfg config) string {
+func askSelfUpdate(cfg config, want string) string {
 	tr, err := tunnel.Dial(cfg.host, cfg.port, sshUser, embeddedKey, tun.SharedKnownHosts(), nil)
 	if err != nil {
 		fatal("tunnel user: %v — the agent image may be too old; redeploy softwarity/plug", err)
 	}
 	defer tr.Close()
 	info("asking the agent to refresh itself (a registry pull can take a minute)…")
-	out, err := tr.Exec("self-update")
+	verb := "self-update"
+	if want != "" {
+		verb += " " + want
+	}
+	out, err := tr.Exec(verb)
 	if err != nil {
 		fatal("asking the agent: %v", err)
 	}
@@ -315,4 +349,14 @@ func semverParse(s string) ([3]int, bool) {
 		v[i] = n
 	}
 	return v, true
+}
+
+// updateTargetWord renders the requested target for the one line printed before
+// the agent is asked — "the newest release" reads as an intent, where the bare
+// word `tag` would read as a tag literally named that.
+func updateTargetWord(want string) string {
+	if want == "tag" {
+		return "the newest release"
+	}
+	return "the " + want + " tag"
 }

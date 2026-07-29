@@ -16,9 +16,9 @@ import (
 )
 
 // The reverse direction: the agent listens on 0.0.0.0:<ClusterPort> (reached by
-// the other workloads through a pre-declared cluster DNS name — a network alias
-// on the agent service in Compose/Swarm, a Service selecting the agent pod in
-// Kubernetes) and every connection is relayed down this session's SSH
+// the other workloads through a cluster DNS name the agent provisions for the
+// session — a signpost container in Compose, a signpost service in Swarm, a
+// Service in Kubernetes) and every connection is relayed down this session's SSH
 // connection to 127.0.0.1:<LocalPort>. sshd does all the server-side work
 // (standard remote forward), so the listener lives and dies with the session:
 // Ctrl-C and the port closes, nothing to clean up cluster-side.
@@ -59,8 +59,8 @@ type Exposed struct {
 
 	// rearmHook re-provisions a DYNAMIC name after a reconnect: rearm re-binds
 	// only the sshd forward, but a restarted agent GC's the signpost, so the
-	// name must be re-created (and re-verified). nil for static names. Set once
-	// before serve() starts re-arming, so no lock is needed.
+	// name must be re-created (and re-verified). Set once before serve() starts
+	// re-arming, so no lock is needed.
 	rearmHook func() error
 }
 
@@ -248,7 +248,13 @@ func (e *Exposed) relayLocal(conn net.Conn, sniffed []byte, pending <-chan int) 
 // Verify proves the full loop once: it dials <Name>:<ClusterPort> through the
 // agent — resolving the name exactly as any cluster workload would — writes a
 // nonce, and checks the nonce lands back on THIS session's listener.
-func (e *Exposed) Verify() error {
+//
+// d bounds the cluster-side DIAL only, so a caller that will retry can probe a
+// still-provisioning name for a short budget instead of the full one (see
+// DialClusterTimeout). Once the channel is open the path exists, so a nonce that
+// doesn't come back is a verdict, not a race — something else is answering the
+// name — and it keeps the full window to be reached.
+func (e *Exposed) Verify(d time.Duration) error {
 	nonce := make([]byte, 16)
 	if _, err := rand.Read(nonce); err != nil {
 		return nil // can't verify, don't block the session on it
@@ -266,7 +272,7 @@ func (e *Exposed) Verify() error {
 	// in flight past our timeout is recognized and dropped, not forwarded.
 	defer time.AfterFunc(2*time.Second, func() { e.nonce.CompareAndSwap(&nonce, nil) })
 
-	conn, err := e.t.DialCluster(net.JoinHostPort(e.spec.Name, e.spec.ClusterPort))
+	conn, err := e.t.DialClusterTimeout(net.JoinHostPort(e.spec.Name, e.spec.ClusterPort), d)
 	if err != nil {
 		low := strings.ToLower(err.Error())
 		if strings.Contains(low, "refused") {

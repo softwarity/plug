@@ -7,7 +7,9 @@
 //     agent. Names appear and disappear with the session — no stack redeploy.
 //   - Kubernetes (RBAC granted by deploy/plug-k8s.yaml): create a
 //     Service selecting the agent pod. Same lifecycle.
-//   - Neither: answer "static" — the CLI falls back to pre-declared aliases.
+//   - Neither: answer an error naming the access it is missing. There is no
+//     fallback mode: a name you must pre-declare cluster-side is the very
+//     coordination -s exists to remove.
 //
 // It is the ForceCommand of the `plug` SSH user, so it is ALSO the user's whole
 // exec surface: the verbs below or nothing (no shell — a lockdown compared to
@@ -15,18 +17,20 @@
 //
 // Verbs (via SSH_ORIGINAL_COMMAND):
 //
-//	serve-name <name> <port> [takeover]
+//	serve-name <name> <port> takeover
 //	                           provision name:port → this agent. One line out:
-//	                           "dynamic" | "dynamic parked" | "static" | "error: …"
-//	                           With `takeover`, a REAL workload owning the name is
+//	                           "dynamic" | "dynamic parked" | "error: …"
+//	                           A REAL workload owning the name is
 //	                           parked for the session (containers stopped, Swarm
 //	                           service scaled to 0, k8s Service repointed) — the
 //	                           parking receipt rides the signpost's labels (or a
 //	                           k8s annotation), and unserve-name/gc restore it.
 //	unserve-name <name>        drop it, restoring anything parked
-//	                           ("ok" | "static" | "error: …")
+//	                           ("ok" | "error: …")
 //
 // Direct argv modes (not reachable over SSH):
+//
+//	preflight                  refuse to boot without orchestrator access
 //
 //	plug-agent signpost <port> <target>   the signpost container's process
 //	plug-agent gc                         boot-time cleanup (entrypoint)
@@ -64,10 +68,32 @@ func main() {
 		case "gc":
 			gc()
 			return
+		case "preflight":
+			preflight()
+			return
 		}
 	}
 	// ForceCommand path: the client's command line arrives in SSH_ORIGINAL_COMMAND.
 	dispatch(strings.Fields(os.Getenv("SSH_ORIGINAL_COMMAND")))
+}
+
+// preflight refuses to start an agent that cannot do the job it is deployed
+// for. plug exists to plug services into a cluster: an agent with no way to
+// create a name can carry sessions but not serve one, and a deployment that
+// only reveals that the first time someone runs -s has hidden a missing mount
+// or a missing RBAC behind an otherwise healthy container. Fail here, once, at
+// the moment the stack file is in front of whoever wrote it.
+func preflight() {
+	if k8sAvailable() || dockerAvailable() {
+		return
+	}
+	fatal("plug-agent: no orchestrator access, so this agent cannot create cluster names.\n" +
+		"  Docker / Compose / Swarm: mount /var/run/docker.sock into the agent\n" +
+		"      volumes: [\"/var/run/docker.sock:/var/run/docker.sock\"]\n" +
+		"      (on Swarm, also run it as a service on a MANAGER node)\n" +
+		"  Kubernetes: apply the RBAC that lets it manage Services\n" +
+		"      kubectl apply -f deploy/plug-k8s.yaml\n" +
+		"  Full stack files: https://softwarity.github.io/plug/")
 }
 
 func fatal(format string, a ...any) {
@@ -94,12 +120,8 @@ func dispatch(cmd []string) {
 	}
 	switch cmd[0] {
 	case "serve-name":
-		// The optional trailing `takeover` is the 2.1 extension; a pre-2.1 agent
-		// answers "error: usage: …" to the 4-field form, which the CLI turns into
-		// a precise "upgrade the agent" message — the degradation contract.
-		takeover := len(cmd) == 4 && cmd[3] == "takeover"
-		if len(cmd) != 3 && !takeover {
-			answer("error: usage: serve-name <name> <port> [takeover]")
+		if len(cmd) != 4 || cmd[3] != "takeover" {
+			answer("error: usage: serve-name <name> <port> takeover")
 		}
 		name, port := cmd[1], cmd[2]
 		if !nameRe.MatchString(name) {
@@ -108,7 +130,7 @@ func dispatch(cmd []string) {
 		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
 			answer("error: %q is not a valid port", port)
 		}
-		serveName(name, port, takeover)
+		serveName(name, port)
 	case "unserve-name":
 		if len(cmd) != 2 || !nameRe.MatchString(cmd[1]) {
 			answer("error: usage: unserve-name <name>")
@@ -119,7 +141,7 @@ func dispatch(cmd []string) {
 		// dynamic -s backend THIS deployment actually has — the answer to "will
 		// -s be dynamic here, and is the image current?" asked from the outside.
 		ver := localVersion()
-		backend := "static"
+		backend := "none"
 		switch {
 		case k8sAvailable():
 			backend = "kubernetes"
@@ -165,6 +187,9 @@ func dispatch(cmd []string) {
 		}
 		answer("nxdomain")
 	case "self-update":
+		// An optional target names WHERE to go — a stream (latest, a branch) or
+		// the word `tag` for the newest release. Without it, follow the tag the
+		// deployment already carries.
 		// `plug update` — move THIS agent to the newest release, each backend its
 		// own way. A deployment pinned to a release tag has that tag REWRITTEN
 		// (2.3.0 → 2.4.0): plug is infrastructure, not an application dependency
@@ -178,9 +203,14 @@ func dispatch(cmd []string) {
 		//                not move — answered WITHOUT rolling anything, so the
 		//                CLI does not poll for a change that cannot come
 		//   pulled …     newer image pulled; recreating is the caller's move
-		//   static       no orchestrator access — redeploy by hand
-		//   error: …     precise failure (RBAC gap, not a manager, …)
-		selfUpdate()
+		//   error: …     no orchestrator access, RBAC gap, not a manager, …
+		want := ""
+		if len(cmd) == 2 {
+			want = cmd[1]
+		} else if len(cmd) > 2 {
+			answer("error: usage: self-update [<tag>|tag|latest]")
+		}
+		selfUpdate(want)
 	default:
 		answer("error: unknown command %q", cmd[0])
 	}
@@ -194,14 +224,18 @@ func localVersion() string {
 	return "unknown"
 }
 
-func serveName(name, port string, takeover bool) {
+func serveName(name, port string) {
 	if k8sAvailable() {
-		k8sServe(name, port, takeover)
+		k8sServe(name, port)
 	}
 	if dockerAvailable() {
-		dockerServe(name, port, takeover)
+		dockerServe(name, port)
 	}
-	answer("static")
+	// No orchestrator access: this agent cannot create the name. There is no
+	// half-mode to fall back to — pre-declaring an alias per name is the exact
+	// coordination -s removes — so say what is missing and let the session fail.
+	answer("error: this agent has no orchestrator access, so it cannot create cluster names. " +
+		"Mount /var/run/docker.sock on it (Compose/Swarm), or apply the Kubernetes RBAC (deploy/plug-k8s.yaml)")
 }
 
 func unserveName(name string) {
@@ -211,7 +245,7 @@ func unserveName(name string) {
 	if dockerAvailable() {
 		dockerUnserve(name)
 	}
-	answer("static")
+	answer("ok") // nothing provisioned here, nothing to drop
 }
 
 func gc() {
@@ -225,9 +259,9 @@ func gc() {
 
 // ---- self-update: refresh THIS agent from its registry, per backend ----
 
-func selfUpdate() {
+func selfUpdate(want string) {
 	if k8sAvailable() {
-		k8sSelfUpdate()
+		k8sSelfUpdate(want)
 	}
 	if dockerAvailable() {
 		self, err := dockerSelf()
@@ -235,11 +269,11 @@ func selfUpdate() {
 			answer("error: %v", err)
 		}
 		if self.service != "" {
-			swarmSelfUpdate(self)
+			swarmSelfUpdate(self, want)
 		}
-		dockerPlainSelfUpdate(self)
+		dockerPlainSelfUpdate(self, want)
 	}
-	answer("static")
+	answer("error: this agent has no orchestrator access, so it cannot update itself — redeploy it by hand")
 }
 
 // k8sSelfUpdate updates the agent's own Deployment. A pinned RELEASE tag is
@@ -247,7 +281,7 @@ func selfUpdate() {
 // same pin forever. A moving tag keeps the restart-only path (the annotation
 // patch `kubectl rollout restart` uses), which makes the node re-pull it per
 // its imagePullPolicy — Always in the official manifest.
-func k8sSelfUpdate() {
+func k8sSelfUpdate(want string) {
 	ns := k8sNamespace()
 	var list struct {
 		Items []struct {
@@ -292,7 +326,7 @@ func k8sSelfUpdate() {
 		img, container = dep.Spec.Template.Spec.Containers[0].Image, dep.Spec.Template.Spec.Containers[0].Name
 	}
 
-	target, plan, note := retarget(img)
+	target, plan, note := updatePlan(img, want)
 	if plan == planCurrent {
 		answer("current %s", note)
 	}
@@ -322,7 +356,7 @@ func k8sSelfUpdate() {
 // re-resolved. Either way the pinned digest is dropped from the image (stack
 // deploy pins one — with it, no update ever changes anything) and ForceUpdate
 // rolls the task even when the digest comes back unchanged.
-func swarmSelfUpdate(self selfInfo) {
+func swarmSelfUpdate(self selfInfo, want string) {
 	if !swarmManager() {
 		answer("error: the agent's node is not a swarm manager — from one, run: docker service update --image %s %s",
 			retargetImageOnly(self.image), self.service)
@@ -350,7 +384,7 @@ func swarmSelfUpdate(self selfInfo) {
 			img = img[:i]
 		}
 	}
-	target, plan, note := retarget(img)
+	target, plan, note := updatePlan(img, want)
 	// Already the newest release: say so NOW rather than roll the task and let
 	// the CLI poll 90s for a version that cannot change. The tag is a pin and
 	// the registry has nothing above it — there is nothing to re-resolve.
@@ -372,7 +406,7 @@ func swarmSelfUpdate(self selfInfo) {
 // and compare image ids. A container cannot recreate ITSELF, so when something
 // newer landed the answer carries the one command the caller runs — with the
 // image already local, that recreate is instant.
-func dockerPlainSelfUpdate(self selfInfo) {
+func dockerPlainSelfUpdate(self selfInfo, want string) {
 	ver := localVersion()
 	img := self.image
 	if strings.HasPrefix(img, "sha256:") {
@@ -381,7 +415,7 @@ func dockerPlainSelfUpdate(self selfInfo) {
 	if i := strings.Index(img, "@sha256:"); i > 0 {
 		img = img[:i]
 	}
-	target, plan, note := retarget(img)
+	target, plan, note := updatePlan(img, want)
 	if plan == planCurrent {
 		answer("current %s", note)
 	}
@@ -591,7 +625,7 @@ func containerIDFromMount() string {
 
 // dnsNetworks are the docker networks with a working embedded DNS (so an alias
 // resolves). The default `bridge`, `host` and `none` have none — an alias there
-// is silently dead, so treat "only those" as no dynamic backend (→ static).
+// is silently dead, so "only those" means the agent cannot carry a name at all.
 var undnsNetwork = map[string]bool{"bridge": true, "host": true, "none": true}
 
 // netKind classifies one of the agent's networks. app is false for the Swarm
@@ -967,27 +1001,27 @@ func scaleService(idOrName string, replicas int) error {
 // signpost is a SERVICE, which joins the stack's overlay whether or not it is
 // attachable. Otherwise (Compose, plain `docker run`, or a non-manager) it is a
 // standalone CONTAINER, which needs a bridge or an attachable overlay.
-func dockerServe(name, port string, takeover bool) {
+func dockerServe(name, port string) {
 	self, err := dockerSelf()
 	if err != nil {
 		answer("error: %v", err)
 	}
 	if self.service != "" && swarmManager() {
-		swarmServe(name, port, self, takeover)
+		swarmServe(name, port, self)
 	}
-	containerServe(name, port, self, takeover)
+	containerServe(name, port, self)
 }
 
 // containerServe runs the signpost as a standalone container — needs a network
 // it can actually join (a bridge, or an attachable overlay).
-func containerServe(name, port string, self selfInfo, takeover bool) {
+func containerServe(name, port string, self selfInfo) {
 	nets := self.attachableNets()
 	if len(nets) == 0 {
 		// Nothing a standalone container can join (only bridge/host, or a
-		// non-attachable overlay off a Swarm manager). Fall back to static: a
-		// pre-declared alias on the plug SERVICE still works, and Verify reports
-		// precisely if it's absent.
-		answer("static")
+		// non-attachable overlay off a Swarm manager), so the signpost has
+		// nowhere to carry the alias.
+		answer("error: the agent is on no network a signpost can join — put it on the " +
+			"application network (an attachable overlay, or the Compose network your services share)")
 	}
 	// A leftover signpost (a crashed session's, or a re-run) may carry a parking
 	// receipt: restore it FIRST, then re-detect. One restore path — the takeover
@@ -996,12 +1030,6 @@ func containerServe(name, port string, self selfInfo, takeover bool) {
 		answer("error: restoring what the previous %s session parked: %v", name, err)
 	}
 	owners := nameOwners(name, nets)
-	if len(owners) > 0 && !takeover {
-		// Only a pre-2.1 CLI sends the takeover-less verb — current ones always
-		// take over. Word the remedy for that audience: upgrade, or clear the name.
-		answer("error: %q already resolves to a container in the cluster — it owns the name. Upgrade plug (≥ 2.1 takes it over for the session automatically), or remove it (docker rm -f %s).", name, owners[0].name)
-	}
-
 	receipt := make([]string, 0, len(owners))
 	for _, o := range owners {
 		receipt = append(receipt, o.id)
@@ -1094,7 +1122,7 @@ func restartParkedContainers(receipt string) {
 // swarmServe runs the signpost as a Swarm SERVICE. A service joins the stack's
 // overlay whether or not it is `attachable` — the whole reason this backend
 // exists — and carries the alias there, relaying to the agent's service VIP.
-func swarmServe(name, port string, self selfInfo, takeover bool) {
+func swarmServe(name, port string, self selfInfo) {
 	// -s relays to the agent's service VIP, and the session's remote-forward
 	// lives on ONE task — so >1 replica makes the VIP miss it intermittently.
 	// Refuse loudly rather than ship a silent flaky path.
@@ -1106,7 +1134,9 @@ func swarmServe(name, port string, self selfInfo, takeover bool) {
 	}
 	nets := self.overlayNets()
 	if len(nets) == 0 {
-		answer("static") // agent only on ingress/bridge — nothing to publish an alias on
+		// Only ingress/bridge — nothing to publish an alias on.
+		answer("error: the agent is on no overlay network — attach it to the overlay your " +
+			"services use, otherwise the name cannot resolve for them")
 	}
 	// A leftover signpost service (a crashed session's, or a re-run) may carry a
 	// parking receipt: restore it FIRST, then re-detect — one restore path, and
@@ -1118,9 +1148,6 @@ func swarmServe(name, port string, self selfInfo, takeover bool) {
 	// container-scan nameOwners can't see Swarm services, so check them explicitly.
 	own := swarmNameOwner(name, self)
 	if own != nil {
-		if !takeover {
-			answer("error: %q is a service on your overlay — it owns the name. Upgrade plug (≥ 2.1 parks it for the session automatically), or remove it: docker service rm %s.", name, own.name)
-		}
 		if own.global {
 			answer("error: %q runs in GLOBAL mode — plug cannot park it (no replica count to restore). Remove it instead: docker service rm %s.", own.name, own.name)
 		}
@@ -1456,7 +1483,7 @@ func selectorPatch(target, current map[string]string) map[string]any {
 	return p
 }
 
-func k8sServe(name, port string, takeover bool) {
+func k8sServe(name, port string) {
 	ns := k8sNamespace()
 	p, _ := strconv.Atoi(port)
 	svc := map[string]any{
@@ -1475,8 +1502,8 @@ func k8sServe(name, port string, takeover bool) {
 	case err == nil:
 		answer("dynamic")
 	case code == 403:
-		// No RBAC → the opt-in isn't applied. Not an error: static mode.
-		answer("static")
+		// No RBAC → the opt-in was never applied, so it cannot create the name.
+		answer("error: the agent may not manage Services in namespace %s — apply the RBAC (deploy/plug-k8s.yaml)", ns)
 	case code == 409:
 		// The name exists. A previous plug session's leftover is replaced; a REAL
 		// Service keeps its name — unless takeover, which repoints it at the agent
@@ -1493,7 +1520,7 @@ func k8sServe(name, port string, takeover bool) {
 		}
 		_, gerr := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/services/"+name, nil, &existing)
 		if gerr != nil || existing.Metadata.Labels[k8sManaged] != "plug" {
-			if gerr == nil && takeover {
+			if gerr == nil {
 				receipt := existing.Metadata.Annotations[k8sParkedAnn]
 				if receipt == "" { // first takeover of this Service — save the way back
 					b, merr := json.Marshal(k8sReceipt{Selector: existing.Spec.Selector, Ports: existing.Spec.Ports})
@@ -1514,7 +1541,7 @@ func k8sServe(name, port string, takeover bool) {
 				}
 				answer("dynamic parked")
 			}
-			answer("error: the Service %q already exists and is not plug's — it owns the name. Upgrade plug (≥ 2.1 repoints it to your session automatically), or remove it: kubectl delete service %s.", name, name)
+			answer("error: the Service %q exists but plug cannot read it — remove it, or grant the agent access: kubectl delete service %s", name, name)
 		}
 		// It's ours: replace it. If the re-create fails, say SO — do not fall
 		// through to the "not plug's" lie (the name is now deleted; report the
@@ -1566,7 +1593,7 @@ func k8sUnserve(name string) {
 		} `json:"spec"`
 	}
 	if _, err := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/services/"+name, nil, &existing); err != nil {
-		answer("static") // absent (or RBAC absent) — nothing to drop
+		answer("ok") // absent (or no RBAC) — nothing to drop
 	}
 	if existing.Metadata.Labels[k8sManaged] == "plug" {
 		// Ours: the plug-created Service goes with the session.
@@ -1583,7 +1610,7 @@ func k8sUnserve(name string) {
 	if parked {
 		answer("ok")
 	}
-	answer("static") // not ours, not parked — nothing to drop
+	answer("ok") // not ours, not parked — nothing to drop
 }
 
 func k8sGC() {

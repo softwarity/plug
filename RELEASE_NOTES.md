@@ -2,6 +2,153 @@
 
 ## NEXT RELEASE
 
+### Fixed: `plug -s` no longer waits on the cluster before starting your command
+
+A session that exposed a name spent its first seconds doing nothing you asked
+for. Timed against a real agent, the phases of `-s` are: dial the agent 0.04s,
+bind the remote forward 0.00s, ask it to provision the name 0.03s — and then 6s,
+37s, 29s on three identical runs. All of it was the same wait: the agent creates
+the signpost and answers immediately, but Docker Swarm still has to schedule the
+task behind it, and plug blocked until traffic could cross it.
+
+Two things made that worse than the wait itself. A VIP whose task is not running
+yet **drops** the SYN rather than refusing it, so a probe sent too early cannot
+fail fast — it hangs for its full timeout. And the check spent its whole budget
+in one 10-second block, so even a cluster that converged in 3 seconds was noticed
+only 11.5 seconds in. That was the floor on **every** launch, on a perfectly
+healthy cluster.
+
+The path is now proven **in the background**. Everything decidable at once still
+fails the session, and still costs milliseconds: an agent that cannot provision
+names at all, a port another instance already exposes, a name the agent refuses,
+a workload it cannot park. Only the proof, which depends on someone else's
+scheduler, is deferred. Hand-back went from 11.5s to **0.06s**; the child starts
+immediately, and traffic reaches it the moment the cluster is ready (measured at
+4.2s, while the check was still running). A cluster that happens to be ready
+already answers the one upfront probe in 1–5ms, and the session is proven before
+it starts, exactly as before.
+
+Deferring is not a judgement call the error can make. A freshly created Swarm
+service has no VIP yet, so the cluster answers `Name does not resolve` in 75ms —
+word for word what it answers for a name that will never exist. Branching on
+that would fail every session at startup.
+
+The check itself was rebuilt around the same measurement. Short probes, close
+together and growing (0.75s → 8s), catch the path within a beat of it opening
+instead of paying a full timeout to learn it had not opened yet. The datapath
+keeps its own 10-second budget: there, a slow open is a slow service, not a race
+with provisioning.
+
+Two consequences worth stating. A name that never comes up is now a loud
+`WARNING` during the session, naming the command that shows why
+(`docker service ps plug-sp-<name>`, `kubectl get svc <name>`), instead of a
+refusal to start; the session keeps running, so a name that appears late still
+works. And while a check is in flight its self-test window is briefly armed on
+real connections: a **server-first** protocol (SMTP, some databases) can see one
+greeting delayed by ~500ms, once, right after the path opens. Client-first
+traffic — HTTP, so anything a web framework serves — is unaffected, measured at
+2–6ms throughout.
+
+### Added: `plug update <tag>` switches the channel a cluster follows
+
+`plug update` answered one question: is there something newer on the tag this
+deployment already carries? The other one — put this cluster on a different tag
+— had no answer, and meant editing the stack file and redeploying by hand.
+
+Now the command takes the target:
+
+```
+plug -p neo update tag        # the newest release published (2.4.1)
+plug -p neo update latest     # the latest stream
+plug -p neo update feat-09    # that branch's tag, at whatever it points to now
+plug -p neo update 2.3.0      # an exact release — downgrades included
+```
+
+Release and stream are told apart the way the images are published: a tag
+matching `x`, `x.y` or `x.y.z` is a release, anything else (`latest`, `main`, a
+branch name) is a stream that moves under you. So `update tag` asks the registry
+for the newest `x.y.z` and pins it, while `update feat-09` carries the tag and
+takes whatever it points at today.
+
+The tag is checked against the registry **before** anything is repointed. Moving
+a deployment to a tag nobody published replaces a working agent with one that
+cannot pull — on Swarm or Kubernetes, a rollout to unwind by hand. A typo is
+answered with the streams and the newest releases:
+
+```
+softwarity/plug has no tag "feat-9" — published: latest, main, 2.4.1, 2.4.0,
+2.3.1, 2.3.0 (+23 older)
+```
+
+Without a target the command is unchanged: follow the tag already deployed. And
+a switch that lands on the same version is reported as such rather than as a
+stalled rollout — `latest` and the newest release routinely name one build.
+
+One guard worth knowing about: an agent from before this feature runs
+`self-update <tag>` as a plain self-update — it ignores the word and refreshes
+along the tag it already carries, so the channel would silently not change while
+the command reported success. The CLI refuses on the agent's version instead,
+and says to update it first.
+
+### Removed: the "static" fallback
+
+`-s` used to degrade to a *static* mode when the agent had no way to create the
+name — no Docker socket, no Kubernetes RBAC, a Swarm agent off a manager node,
+an agent on no network able to carry an alias. You were then expected to
+pre-declare the name yourself and hope it was the right one.
+
+That mode is gone. Agreeing on a name cluster-side, one by one, before you can
+use it, is the exact coordination `-s` exists to remove: a half-working path
+that merely resembles the feature costs more than not having it. Provisioning is
+the feature.
+
+No access at all is caught at boot (below). The narrower gaps — an agent off a
+Swarm manager node, one on no overlay its services share, a Kubernetes RBAC that
+does not cover Services — only show up when a name is asked for, and there the
+agent names its own gap rather than leaving the CLI to guess from a single word.
+`plug doctor` reports it as a failure rather than a warning, since nothing about
+`-s` works without it.
+
+### Changed: the agent refuses to start without orchestrator access
+
+plug is there to plug services into a cluster. An agent that cannot create a
+name can still carry sessions, but it cannot do the thing it is deployed for —
+and a deployment that only reveals a missing mount the first time someone runs
+`-s` has hidden the mistake behind an otherwise healthy container.
+
+So it is now checked at boot. No Docker socket and no Kubernetes RBAC: the
+container exits 1, printing the stack-file lines that fix it and a link to the
+documentation. Swarm and Kubernetes surface it as a task that will not come up,
+which is exactly where a missing volume mount belongs.
+
+### Removed: fallbacks for agents older than this release
+
+The `-s` path carried compatibility shims: a pre-2.1 agent that rejected the
+`takeover` form got the bare verb retried, and a `static` reply was translated
+for `plug update` and `plug doctor`. They are gone. An agent that does not
+answer the current protocol is reported as answering off-protocol, and the
+remedy is the same one it has always been — redeploy the agent image.
+
+### Fixed: `-s` no longer fails on a cluster that is merely slow to provision
+
+`fpl-svc is not reachable inside the cluster (context deadline exceeded)`,
+intermittently, on a name that was fine a moment later. The retry budget totalled
+44.5 seconds — which sat squarely in the middle of the spread a real cluster
+produces. Provisioning the same signpost service on one Docker Desktop Swarm
+reached Running in 3s, 8s, 10s, 45s, 56s and 62s depending on how loaded the
+daemon was. Anything past 44.5s failed a session whose name was simply still
+coming up.
+
+The budget is now 90 seconds, and the error says how long it insisted and how
+many attempts it made — so a genuine misconfiguration still reads as one, and is
+no longer confused with a busy scheduler. Combined with the background check
+above, this wait is no longer charged to your command either way.
+
+If launches are consistently at the slow end of that spread, the cause is usually
+cluster-side rather than plug: a Swarm manager carrying a large history of dead
+tasks and stopped containers schedules noticeably slower. `docker system prune`
+and a daemon restart bring it back down.
+
 ---
 
 ## 2.4.1

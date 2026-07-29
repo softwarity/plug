@@ -123,9 +123,10 @@ ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@$
       set above. Your existing network needs no change (a non-attachable overlay is fine).
     </p>
     <div class="callout">
-      <strong>The socket is root on the host.</strong> Mount it only on a cluster you trust (the same
-      trust plug's no-auth transport already assumes). Too much? Skip it and declare the name
-      yourself as a static alias.
+      <strong>The socket is root on the host.</strong> It is required: plug is here to plug services
+      into the cluster, and creating a name takes that access — an agent without it refuses to start
+      rather than fail on your first <code>-s</code>. Mount it only on a cluster you trust (the same
+      trust plug's no-auth transport already assumes).
     </div>
     <div class="callout">
       <strong>Cluster on the same machine as plug (Docker Desktop)?</strong> Docker forwards

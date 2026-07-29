@@ -28,6 +28,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -90,6 +91,72 @@ func retargetPlan(img, running, newest string, listErr error) (target, plan, not
 	}
 	t := retagged(img, newest)
 	return t, planRetarget, fmt.Sprintf("moving the deployment from %s to %s", img, t)
+}
+
+// wantNewestRelease is the tag the operator asks for to mean "the newest
+// release", as opposed to naming one stream (latest, a branch) or one exact
+// version. It is a word, not a tag, because the newest release is a moving
+// answer the registry has to be asked for.
+const wantNewestRelease = "tag"
+
+// retargetTo is retarget when the operator NAMED where to go — `plug update
+// latest`, `plug update tag`, `plug update feat-09`. That is a channel switch,
+// not "is there something newer on the channel I am on", so the two questions
+// are answered by different code:
+//
+//   - retarget follows the deployment's own tag and only ever moves along it;
+//   - this one changes which tag the deployment carries, and the version that
+//     comes with it is whatever that tag currently points at — up or down.
+//
+// The tag is checked against the registry first. Repointing a deployment at a
+// tag that does not exist replaces a working agent with one that cannot pull,
+// and on Swarm/k8s that is a rollout you then have to unwind by hand.
+func retargetTo(img, want string) (target, plan, note string) {
+	host, repo, _ := parseImageRef(img)
+	tags, err := registryTags(host, repo)
+	return retargetToWith(img, want, tags, err)
+}
+
+// retargetToWith is that decision on its own, with the registry's listing
+// passed in — so every branch is exercisable without a network. An empty plan
+// means REFUSED, and note says why.
+func retargetToWith(img, want string, tags []string, listErr error) (target, plan, note string) {
+	_, repo, cur := parseImageRef(img)
+	if listErr != nil {
+		// Unlike retarget, there is no safe degradation here: the whole request
+		// is "move me to that tag", and moving without checking is the failure
+		// mode this function exists to avoid.
+		return "", "", fmt.Sprintf("cannot list the tags of %s (%v)", repo, listErr)
+	}
+	tag := want
+	if want == wantNewestRelease {
+		best, bestV := "", [3]int{-1, 0, 0}
+		for _, t := range tags {
+			v, ok := parseExactRelease(t)
+			if !ok {
+				continue
+			}
+			if versionLess(bestV, v) {
+				best, bestV = t, v
+			}
+		}
+		if best == "" {
+			return "", "", fmt.Sprintf("no x.y.z release among the %d tags of %s", len(tags), repo)
+		}
+		tag = best
+	} else if !slices.Contains(tags, want) {
+		return "", "", fmt.Sprintf("%s has no tag %q — published: %s", repo, want, tagHint(tags))
+	}
+	t := retagged(img, tag)
+	if tag == cur {
+		// Already carrying it. A release pin cannot move, so there is nothing to
+		// do; a moving tag may have been rebuilt since, so re-resolve it.
+		if isReleaseTag(tag) {
+			return t, planCurrent, fmt.Sprintf("already on %s", t)
+		}
+		return t, planResolve, fmt.Sprintf("re-resolving %s", t)
+	}
+	return t, planRetarget, fmt.Sprintf("switching the deployment from %s to %s", img, t)
 }
 
 // retargetImageOnly is retarget's first return, for messages that only need to
@@ -369,4 +436,52 @@ func parseNextLink(link string) string {
 		return strings.Trim(strings.TrimSpace(seg[0]), "<>")
 	}
 	return ""
+}
+
+// updatePlan is the single entry point the backends use: follow the tag the
+// deployment carries, or move to the one the operator named. A named target
+// that cannot be resolved is fatal here — the caller is being asked to repoint
+// a live deployment, and "I could not check" is not a reason to do it anyway.
+func updatePlan(img, want string) (target, plan, note string) {
+	if want == "" {
+		return retarget(img)
+	}
+	target, plan, note = retargetTo(img, want)
+	if plan == "" {
+		answer("error: %s", note)
+	}
+	return target, plan, note
+}
+
+// tagHint names the tags worth showing when someone mistypes one: every stream
+// (latest, main, a branch) plus the newest few releases. A repository accretes
+// one release tag per version forever — printing all of them buries the two or
+// three lines that answer "what could I have meant?".
+func tagHint(tags []string) string {
+	var streams, releases []string
+	for _, t := range tags {
+		if isReleaseTag(t) {
+			releases = append(releases, t)
+		} else {
+			streams = append(streams, t)
+		}
+	}
+	slices.SortFunc(releases, func(a, b string) int {
+		av, _ := parseExactRelease(a)
+		bv, _ := parseExactRelease(b)
+		switch {
+		case versionLess(av, bv):
+			return 1
+		case versionLess(bv, av):
+			return -1
+		}
+		return 0
+	})
+	const keep = 4
+	more := ""
+	if len(releases) > keep {
+		more = fmt.Sprintf(" (+%d older)", len(releases)-keep)
+		releases = releases[:keep]
+	}
+	return strings.Join(append(streams, releases...), ", ") + more
 }
