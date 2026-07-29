@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.5.0
+
 > **BREAKING — an agent without orchestrator access no longer starts.**
 > Deployed without the Docker socket mounted (or, on Kubernetes, without the
 > RBAC), the agent container now exits 1 instead of coming up. If one of your
