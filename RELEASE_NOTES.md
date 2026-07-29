@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.5.0
+
 > **BREAKING — an agent without orchestrator access no longer starts.** No Docker
 > socket mounted (or, on Kubernetes, no RBAC): the container now exits 1 instead
 > of coming up. A cluster running plug only for the outbound tunnel never needed
