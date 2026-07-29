@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.5.3
+
 ### Changed: `plug update` looks the registry up from your machine
 
 The lookup behind `update` — list the tags, pick the target — ran on the agent,
