@@ -160,12 +160,21 @@ jobs:
   # — real upstream Kubernetes, the agent from the published deploy/plug-k8s.yaml)
   # and swarm-for.yml (single-node Swarm — the agent as a Swarm service on a
   # non-attachable overlay). Part of CI, not a separate workflow; runs on EVERY
-  # branch push (so any branch gets its full mesh-blessed image), after the
-  # unit tests pass. Off PRs — it's heavy and needs the Tailscale/Docker
-  # secrets, absent on fork PRs. Needs TAILSCALE_CLIENT_ID/SECRET.
+  # branch push (so any branch gets its full mesh-blessed image). Off PRs — it's
+  # heavy and needs the Tailscale/Docker secrets, absent on fork PRs. Needs
+  # TAILSCALE_CLIENT_ID/SECRET.
+  #
+  # Deliberately NOT behind `needs: test`: this job only DISPATCHES the cluster
+  # workflows, and the e2e legs then wait for those clusters to come up inside
+  # their own setup step. Gating it on the unit tests put a full minute of pure
+  # sequence in front of every run (the Windows leg is the long pole) AND held
+  # the clusters' own build back by as much again. The gate that matters is kept
+  # where it belongs: the e2e jobs below need `test`, so nothing is ever
+  # exercised against code whose unit tests are red. The cost is that a red push
+  # dispatches clusters for nothing — kill-cluster still reaps them (it runs on
+  # always() as long as this job succeeded, e2e skipped or not).
   start-cluster:
     name: start clusters
-    needs: test
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
@@ -227,7 +236,7 @@ jobs:
 
   e2e-compose:
     name: e2e-compose (${{ matrix.os }}, by name over the mesh)
-    needs: start-cluster
+    needs: [test, start-cluster]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25 # a hung cell must not run the job (and the cluster) for hours
     env:
@@ -355,7 +364,7 @@ jobs:
   # already covered by the compose legs.
   e2e-k8s:
     name: e2e-k8s (${{ matrix.os }}, same chain on kind)
-    needs: start-cluster
+    needs: [test, start-cluster]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30 # compose's 25 + the extra wait for the kind rollout — a hung cell must still not run the cluster for hours
     env:
@@ -445,7 +454,7 @@ jobs:
   # What only the bench had proven for Swarm now runs on every push, ×3 OSes.
   e2e-swarm:
     name: e2e-swarm (${{ matrix.os }}, same chain on swarm)
-    needs: start-cluster
+    needs: [test, start-cluster]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:

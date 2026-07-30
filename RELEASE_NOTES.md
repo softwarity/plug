@@ -2,6 +2,35 @@
 
 ## NEXT RELEASE
 
+### Fixed: your command finds `npm` again when the agent's version differs
+
+2.6.1 narrowed plug's own `$PATH` while it holds root, and restored yours for
+the command it launches — but only in-process. When the agent runs a different
+version, plug hands over to the matching core, and that core inherited the
+narrowed `$PATH` as if it were yours: `plug -s app:8080:3000 npm run dev` died
+with `cannot start npm` on macOS, since neither Homebrew nor nvm is a root-owned
+system directory. The core is now given your `$PATH`, and narrows its own.
+
+### Fixed: a profile name can no longer name a file outside `~/.plug`
+
+`plug rm` and `plug rn` built `~/.plug/<name>.conf` from their argument without
+checking it, and `filepath.Join` resolves `..` rather than refusing it. Since
+plug is setuid root on macOS, `plug rm ../../../etc/…` deleted a root-owned file
+and `plug rn` moved a file you wrote into a root-only directory. Profile names
+are now validated where they become a path, once, so no call site can forget.
+
+### Fixed: one name, one live session — even with no signpost to prove it
+
+A fixed agent port per name used to make this impossible: a second session for
+the same name simply failed to bind. Allocated ports removed that, and the check
+that replaced it reads the *existing signpost* — so it did not run at all when
+there was none, which is exactly the state a restarted agent's boot GC leaves
+behind. Two sessions could then hold one name and overwrite each other's
+signpost on every reconnect, each leaving the other unreachable while everything
+looked healthy. The agent now leases the name to the session that owns it,
+independently of any signpost. A session refused this way says so instead of
+going quiet.
+
 ---
 
 ## 2.6.1
