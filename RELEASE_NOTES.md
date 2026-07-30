@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.5.4
+
 ### Fixed: two `-s` names can share a cluster port
 
 `plug -s neodps-mail:3000:PORT` bounced with `tcpip-forward request denied by
