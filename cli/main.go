@@ -685,7 +685,12 @@ func coreMinor(v string) int {
 // legacy PLUG_HOST/PLUG_PORT names so an older downloaded core still finds its
 // cluster, and coreMain reads the legacy names as a fallback for older launchers.
 func coreEnv(cfg config) []string {
-	env := append(os.Environ(), "PLUG_CORE=1",
+	// The core is a SECOND privileged process: it narrows its own $PATH on entry
+	// and resolves YOUR command against the one it inherits from here. But
+	// os.Environ() already carries the PATH securePath narrowed in THIS process,
+	// so handing it over straight would make the core take the narrowed one for
+	// the human's — and never find a node/npm that lives in nvm or Homebrew.
+	env := append(withUserPath(os.Environ()), "PLUG_CORE=1",
 		"PLUG_CORE_HOST="+cfg.host, "PLUG_CORE_PORT="+cfg.port,
 		"PLUG_HOST="+cfg.host, "PLUG_PORT="+cfg.port) // legacy channel for older cores
 	if len(cfg.forwards) > 0 {
