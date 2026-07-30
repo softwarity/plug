@@ -65,24 +65,36 @@ type Exposed struct {
 	nonce atomic.Pointer[[]byte]
 	hit   chan struct{}
 
+	// mu guards the two fields below. Both are genuinely shared: a name exposed
+	// on several ports has one Exposed per port, all re-arming at once when the
+	// transport dies, while the re-provisioning reads EVERY member's agentPort
+	// to rebuild the signpost. And rearmHook is set after Expose returns —
+	// after network round-trips — so a reconnect can land on it mid-write.
+	mu sync.Mutex
+
 	// agentPort is the sshd-allocated port the current forward listens on.
-	// Written by Expose and by serve() after each re-arm, read by the hook call
-	// that follows — same goroutine ordering, no lock needed.
 	agentPort string
 
 	// rearmHook re-provisions a DYNAMIC name after a reconnect: rearm re-binds
-	// only the sshd forward — on a NEW allocated port, which is the argument —
-	// but a restarted agent GC's the signpost, so the name must be re-created
-	// (and re-verified) pointing at that port. Set once before serve() starts
-	// re-arming, so no lock is needed.
-	rearmHook func(agentPort string) error
+	// only the sshd forward — on a NEW allocated port — but a restarted agent
+	// GC's the signpost, so the name must be re-created (and re-verified)
+	// pointing at that port. It only SIGNALS: one re-provisioner per name
+	// coalesces the whole wave (see socks_run.go), because a name's members
+	// re-arm independently and rebuilding the signpost once per member would
+	// both read half-stale ports and pay the rebuild N times.
+	rearmHook func()
 }
 
-// OnRearm registers a hook run after every reconnect re-binds the forward — used
-// to re-provision a dynamic name a restarted agent may have swept. Must be set
-// before the first reconnect (right after Expose), which the single-threaded
-// startExposes guarantees.
-func (e *Exposed) OnRearm(hook func(agentPort string) error) { e.rearmHook = hook }
+// OnRearm registers a hook signalled after every reconnect re-binds the
+// forward — used to re-provision a dynamic name a restarted agent may have
+// swept. Safe to call at any time: a reconnect racing this write sees either
+// no hook (nothing to re-provision yet — the name is not even created) or the
+// complete one.
+func (e *Exposed) OnRearm(hook func()) {
+	e.mu.Lock()
+	e.rearmHook = hook
+	e.mu.Unlock()
+}
 
 // Expose arms spec on the transport: it binds 0.0.0.0:<ClusterPort> agent-side
 // and relays every connection to 127.0.0.1:<LocalPort>. The first bind failure
@@ -110,9 +122,13 @@ func (t *Transport) Expose(spec ExposeSpec) (*Exposed, error) {
 func (e *Exposed) Spec() ExposeSpec { return e.spec }
 
 // AgentPort is the sshd-allocated port this session's forward listens on —
-// what the signpost must relay to. Valid right after Expose; a reconnect
-// re-allocates, and the OnRearm hook receives the NEW port.
-func (e *Exposed) AgentPort() string { return e.agentPort }
+// what the signpost must relay to. A reconnect re-allocates it, so read it
+// when building the verb, never cache it.
+func (e *Exposed) AgentPort() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.agentPort
+}
 
 func listenRemote(cl *ssh.Client, spec ExposeSpec) (net.Listener, string, error) {
 	ln, err := cl.Listen("tcp", "0.0.0.0:0")
@@ -151,15 +167,11 @@ func (e *Exposed) serve(ln net.Listener, cl *ssh.Client) {
 		// must be re-provisioned to relay to the new port, and re-verified. Run
 		// it in the background: the Accept loop above must be live to catch
 		// Verify's nonce.
-		if e.rearmHook != nil {
-			port := e.agentPort
-			go func() {
-				if err := e.rearmHook(port); err != nil {
-					e.t.note("expose %s: re-provision after reconnect FAILED (%v) — the name may be unreachable", e.spec, err)
-				} else {
-					e.t.note("expose %s: name re-provisioned and re-verified after reconnect", e.spec)
-				}
-			}()
+		e.mu.Lock()
+		hook := e.rearmHook
+		e.mu.Unlock()
+		if hook != nil {
+			hook()
 		}
 	}
 }
@@ -177,7 +189,9 @@ func (e *Exposed) rearm(dead *ssh.Client) (net.Listener, *ssh.Client, error) {
 		if err == nil {
 			ln, port, lerr := listenRemote(cl, e.spec)
 			if lerr == nil {
+				e.mu.Lock()
 				e.agentPort = port
+				e.mu.Unlock()
 				e.t.note("expose %s re-armed", e.spec)
 				return ln, cl, nil
 			}

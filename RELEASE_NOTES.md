@@ -2,6 +2,75 @@
 
 ## NEXT RELEASE
 
+### Fixed: plug no longer trusts the caller's environment while it holds root
+
+plug is setuid root on macOS and carries ambient capabilities on Linux — root
+once at install, never a prompt afterwards. That contract is unchanged. What
+changes is that it no longer takes the caller's `$HOME` and `$PATH` at face
+value while holding that privilege:
+
+- **`$PATH`** — plug drives system helpers by bare name (`ip`, `ifconfig`,
+  `route`, `scutil`, `sudo`, `lsof`…). A `PATH=/tmp/evil:$PATH` carrying a fake
+  `ip` therefore ran as root, or with the `CAP_SYS_ADMIN` Linux hands the child
+  explicitly. plug now resolves its own helpers against root-owned system
+  directories only. **Your command keeps your `$PATH`** — it is restored in full
+  for the process plug launches, so `npm`, `nest` and everything else resolve
+  exactly as before. Unprivileged, nothing is narrowed at all.
+- **`$HOME`** — every path plug writes under your home is derived from it, and
+  `os.Chown` followed symlinks. A relocated `$HOME` pointing into a root-owned
+  tree turned each of those writes into an arbitrary root write. Writes are now
+  refused when the path *resolves* somewhere you do not own. Symlinked dotfiles
+  keep working (`~/.plug` → `~/Dropbox/config/plug` lands in your own tree);
+  only a link out of it is refused, with a message that says so.
+- The version an agent reports becomes a directory name under
+  `~/.plug/versions`, and then an executable plug runs. It is now validated
+  before being used as a path.
+
+### Fixed: a name's ports are re-provisioned once, not once per port
+
+After a reconnect, every mapping of a name re-armed on its own freshly allocated
+port and each one rebuilt the signpost — reading the other mappings' ports while
+they were still being reallocated, and paying the rebuild N times (~8.5s each on
+Swarm). One re-provisioner per name now coalesces the whole wave and sends a
+single `serve-name` carrying every port. The state they share is properly
+guarded; a race test covers it.
+
+### Fixed: three silent failures around parked workloads
+
+The invariant `-s` rests on is that whatever a session parks, it restores. Three
+paths could break it without a word:
+
+- releasing a name on Kubernetes answered `ok` on *any* error from the API — a
+  timeout or a revoked RBAC read as success, leaving a Service repointed at a
+  dead forward. Only an absent Service means "nothing to drop" now;
+- the session teardown swallowed a failed release entirely. The likeliest moment
+  for it to fail is a network already gone — exactly when you hit Ctrl-C — and
+  you would walk away believing a workload came back up. It now says so, and
+  what to do about it;
+- the agent's boot GC, which restores what a crashed session parked, returned
+  silently when it could not reach Docker or Kubernetes. It logs.
+
+### Fixed: a signpost no longer dies on a transient accept error
+
+One failed `Accept()` (a peer vanishing mid-handshake, a momentary fd
+exhaustion) killed the signpost process — and since one signpost carries all of
+a name's ports, the whole cluster name went down for the rest of the session.
+Transient errors are retried; only a listener that is truly gone ends it. The
+standalone container signpost also gained a restart policy, which the Swarm and
+Kubernetes ones always had.
+
+### Fixed: assorted
+
+macOS now shows *why* a tunnel could not open (the daemon recorded it; only
+Windows read it). The registry helpers mirrored between CLI and agent had
+drifted: an absolute `rel="next"` truncated the agent's tag listing, and an
+agent stamped `x.y.z+<rev>` (every release before 2.4.1) was mistaken for a dev
+build and denied the fast client-side lookup. The CI clusters for Kubernetes and
+Swarm now shut down as soon as their caller is done instead of idling out their
+full TTL. The documentation site's dependencies went from 24 known
+vulnerabilities to 3, all in dev-only tooling.
+
+
 ---
 
 ## 2.6.0

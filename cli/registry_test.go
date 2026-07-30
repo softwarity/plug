@@ -54,3 +54,21 @@ func TestParseImageRefCLI(t *testing.T) {
 		}
 	}
 }
+
+// An agent stamped x.y.z+<rev> (every release before 2.4.1) must take the
+// client-side fast path, not be mistaken for a dev build and delegated.
+func TestDecideClientHandlesBuildMetadata(t *testing.T) {
+	tags := []string{"latest", "2.5.4", "2.4.0"}
+	apply, current, errMsg, delegate := decideClient("softwarity/plug:2.4.0", "2.4.0+983761c", "", tags)
+	if delegate || errMsg != "" || current != "" || apply != "2.5.4" {
+		t.Errorf("got (apply=%q current=%q err=%q delegate=%v), want apply=2.5.4", apply, current, errMsg, delegate)
+	}
+	// and when it is already the newest, say so instead of delegating
+	_, current, _, delegate = decideClient("softwarity/plug:2.5.4", "2.5.4+abc1234", "", tags)
+	if delegate || current == "" {
+		t.Errorf("already-newest with +rev: current=%q delegate=%v", current, delegate)
+	}
+	if strings.Contains(current, "+abc1234") {
+		t.Errorf("build metadata leaked into the message: %q", current)
+	}
+}

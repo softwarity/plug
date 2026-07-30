@@ -42,6 +42,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -552,6 +553,14 @@ func dockerPull(ref string) error {
 // per-connection so it survives agent restarts). It is the whole job of the
 // signpost container: carry the DNS alias, hand the bytes to the agent's sshd
 // remote-forward listener.
+// How stubborn a signpost is about a failing Accept before it gives up: enough
+// to ride out a burst of transient errors, few enough that a listener which is
+// truly gone still terminates the process (and, on Swarm, gets restarted).
+const (
+	signpostAcceptRetries = 20
+	signpostAcceptBackoff = 200 * time.Millisecond
+)
+
 func signpost(pairs []string) {
 	for i := 0; i+1 < len(pairs); i += 2 {
 		port, target := pairs[i], pairs[i+1]
@@ -561,11 +570,28 @@ func signpost(pairs []string) {
 		}
 		fmt.Printf("signpost: :%s -> %s\n", port, target)
 		go func() {
+			// A signpost carries a name for a whole session — and, since one
+			// signpost serves ALL of a name's ports, every port of it. Accept
+			// can fail transiently (ECONNABORTED on a peer that vanished
+			// mid-handshake, EMFILE under load): dying there would take the
+			// cluster name down until the session ends, silently. So retry the
+			// temporary ones and only give up when the listener itself is gone.
+			fails := 0
 			for {
 				c, err := ln.Accept()
 				if err != nil {
-					fatal("signpost: %v", err)
+					var ne net.Error
+					if errors.As(err, &ne) && ne.Timeout() {
+						continue
+					}
+					if fails++; fails > signpostAcceptRetries {
+						fatal("signpost: :%s stopped accepting: %v", port, err)
+					}
+					fmt.Fprintf(os.Stderr, "signpost: :%s accept failed (%v) — retrying\n", port, err)
+					time.Sleep(signpostAcceptBackoff)
+					continue
 				}
+				fails = 0
 				go func() {
 					t, err := net.DialTimeout("tcp", target, 5*time.Second)
 					if err != nil {
@@ -1127,7 +1153,14 @@ func containerServe(name string, pairs []portPair, self selfInfo) {
 			"plug.signpost.owner": self.owner(),
 			parkedContainersLabel: strings.Join(receipt, ","),
 		},
-		"HostConfig":       map[string]any{"NetworkMode": nets[0]},
+		// Restart it if it ever dies: the Swarm signpost has RestartPolicy any
+		// and a k8s pod is restarted by its Deployment — a standalone container
+		// had nothing, so one crash took the cluster name down for the rest of
+		// the session. `unless-stopped` so the session teardown's stop is final.
+		"HostConfig": map[string]any{
+			"NetworkMode":   nets[0],
+			"RestartPolicy": map[string]any{"Name": "unless-stopped"},
+		},
 		"NetworkingConfig": map[string]any{"EndpointsConfig": map[string]any{nets[0]: endpoints[nets[0]]}},
 	}
 	var created struct {
@@ -1449,9 +1482,19 @@ func dockerUnserve(name string) {
 // the old signposts' owner never equals the new name but their owner container
 // is gone. This leaves a CO-LOCATED other agent's live signposts (owner still
 // running) untouched — the pure-shared-network scan used to wipe those.
+// gcNote reports a boot-gc failure on stderr — the container's log, which is
+// where anyone hunting "why is my service still scaled to 0" will look. gc is
+// best-effort by design (a crashed session's leftovers), but best-effort must
+// not mean invisible: its whole job is restoring workloads a dead session
+// parked.
+func gcNote(format string, a ...any) {
+	fmt.Fprintf(os.Stderr, "plug-agent gc: "+format+"\n", a...)
+}
+
 func dockerGC() {
 	self, err := dockerSelf()
 	if err != nil {
+		gcNote("cannot identify this agent (%v) — leftovers from crashed sessions were NOT swept", err)
 		return
 	}
 	mine := self.owner()
@@ -1800,8 +1843,16 @@ func k8sUnserve(name string) {
 			Selector map[string]string `json:"selector"`
 		} `json:"spec"`
 	}
-	if _, err := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/services/"+name, nil, &existing); err != nil {
-		answer("ok") // absent (or no RBAC) — nothing to drop
+	if code, err := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/services/"+name, nil, &existing); err != nil {
+		// ONLY an absent Service means "nothing to drop". Any other failure —
+		// 500, timeout, RBAC revoked mid-session — must not read as success: a
+		// Service this session PARKED (selector repointed at the agent) would
+		// stay repointed at a dead forward while the CLI reports the name
+		// released, and nothing would restore it until the agent's boot gc.
+		if code == 404 {
+			answer("ok")
+		}
+		answer("error: reading the Service %q to release it: %v — anything this session parked is still parked", name, err)
 	}
 	if existing.Metadata.Labels[k8sManaged] == "plug" {
 		// Ours: the plug-created Service goes with the session.
@@ -1811,14 +1862,10 @@ func k8sUnserve(name string) {
 		answer("ok")
 	}
 	// A REAL Service we parked (takeover): restore it from its receipt.
-	parked, err := k8sRestoreParked(ns, name, existing.Metadata.Annotations, existing.Spec.Selector)
-	if err != nil {
+	if _, err := k8sRestoreParked(ns, name, existing.Metadata.Annotations, existing.Spec.Selector); err != nil {
 		answer("error: restoring the Service %q: %v", name, err)
 	}
-	if parked {
-		answer("ok")
-	}
-	answer("ok") // not ours, not parked — nothing to drop
+	answer("ok") // restored, or never ours to begin with
 }
 
 func k8sGC() {
@@ -1838,6 +1885,7 @@ func k8sGC() {
 	// One un-filtered list serves both sweeps: parked REAL Services (annotation —
 	// restore them) and plug-created ones (label — delete them).
 	if _, err := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/services", nil, &list); err != nil {
+		gcNote("cannot list Services in %s (%v) — leftovers from crashed sessions were NOT swept", ns, err)
 		return
 	}
 	for _, s := range list.Items {

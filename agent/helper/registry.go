@@ -349,7 +349,14 @@ func registryTags(host, repo string) ([]string, error) {
 		next = ""
 		if link != "" {
 			if u := parseNextLink(link); u != "" {
-				next = "https://" + host + u
+				// A registry may answer rel="next" as a path OR as an absolute
+				// URL; prefixing the latter builds "https://host https://…" and
+				// truncates the listing. Same guard as the CLI twin.
+				if strings.HasPrefix(u, "http") {
+					next = u
+				} else {
+					next = "https://" + host + u
+				}
 			}
 		}
 	}
@@ -474,11 +481,15 @@ func splitChallenge(s string) []string {
 // parseNextLink extracts the URL of a rel="next" Link header.
 func parseNextLink(link string) string {
 	for _, part := range strings.Split(link, ",") {
-		seg := strings.Split(strings.TrimSpace(part), ";")
-		if len(seg) < 2 || !strings.Contains(seg[1], `rel="next"`) {
+		// rel="next" can sit in ANY parameter, not just the first after the
+		// URL: `<url>; type=…; rel="next"` is valid. Looking only at seg[1]
+		// dropped those and silently truncated the listing to one page.
+		if !strings.Contains(part, `rel="next"`) {
 			continue
 		}
-		return strings.Trim(strings.TrimSpace(seg[0]), "<>")
+		if i, j := strings.Index(part, "<"), strings.Index(part, ">"); i >= 0 && j > i {
+			return part[i+1 : j]
+		}
 	}
 	return ""
 }

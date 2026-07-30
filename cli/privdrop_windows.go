@@ -11,3 +11,7 @@ import "os/exec"
 func applyPrivDrop(*exec.Cmd) {}
 
 func chownToUser(string) {}
+
+// Windows never runs plug from an inherited root euid (it elevates per launch),
+// so there is no privileged write to guard.
+func guardUserPath(string) {}

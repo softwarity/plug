@@ -267,6 +267,9 @@ type options struct {
 }
 
 func main() {
+	// Before anything else: plug may hold a privilege the caller does not, and
+	// everything below can exec a system helper by name. See securePath.
+	securePath()
 	// Mount-namespace shim: a re-exec of ourselves (inside the child's new mount
 	// ns) that bind-mounts its private resolv.conf and execs the real command.
 	// Checked first — it inherits PLUG_CORE=1 and must not fall into coreMain.
@@ -554,6 +557,75 @@ func shortVersion(v string) string {
 	return v
 }
 
+// safeVersionRe is what an agent version may contain before plug turns it into
+// a directory name under ~/.plug/versions. Deliberately narrow: no separator,
+// no dot-dot, nothing shell- or path-significant. Covers both shapes plug
+// publishes — "2.5.4" and "dev+9f2a1c".
+var safeVersionRe = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$`)
+
+// userPath is $PATH exactly as the human set it, captured before securePath
+// narrows the one plug uses for its own privileged helper lookups. Your command
+// — and anything it spawns — is resolved and run with THIS one.
+var userPath = os.Getenv("PATH")
+
+// securePath narrows $PATH to root-owned system directories while plug holds a
+// privilege the caller does not.
+//
+// plug is setuid root on macOS and carries ambient caps on Linux, on purpose:
+// root once at install, never a prompt afterwards. But it then drives system
+// helpers by BARE NAME — ip, ifconfig, route, scutil, sudo, lsof… — resolved
+// through the caller's $PATH. A `PATH=/tmp/evil:$PATH` with a fake `ip` is
+// therefore a fake `ip` running as root (macOS) or with CAP_SYS_ADMIN (Linux,
+// which withPrivCaps hands to the child explicitly).
+//
+// The list is not a hardcoded /sbin/ip: NixOS has no /sbin at all, and pinning
+// one layout would break those machines. These are the root-owned directories
+// where system tooling lives across mainstream distros, macOS and NixOS.
+//
+// Unprivileged, this is a no-op: the caller's $PATH is their own business, and
+// narrowing it would break the very setups (Nix, Homebrew, asdf) plug should
+// stay out of the way of.
+func securePath() {
+	if euid, ruid := os.Geteuid(), os.Getuid(); euid == ruid {
+		return
+	}
+	_ = os.Setenv("PATH", "/usr/sbin:/usr/bin:/sbin:/bin:/run/current-system/sw/bin:/run/wrappers/bin")
+}
+
+// withUserPath returns env with $PATH forced back to the human's — plug's
+// narrowed one must never leak into the command it launches.
+func withUserPath(env []string) []string {
+	if env == nil {
+		env = os.Environ()
+	}
+	out := make([]string, 0, len(env)+1)
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, "PATH=") {
+			out = append(out, kv)
+		}
+	}
+	return append(out, "PATH="+userPath)
+}
+
+// lookPathIn resolves file against an explicit path list instead of the
+// process's $PATH — how the child's command is found with the human's PATH
+// while plug's own is narrowed.
+func lookPathIn(file, path string) (string, error) {
+	if strings.ContainsRune(file, os.PathSeparator) {
+		return file, nil // already a path: exec.Command handles it
+	}
+	for _, dir := range filepath.SplitList(path) {
+		if dir == "" {
+			dir = "."
+		}
+		cand := filepath.Join(dir, file)
+		if fi, err := os.Stat(cand); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
+			return cand, nil
+		}
+	}
+	return "", fmt.Errorf("%s not found in PATH", file)
+}
+
 func versionBefore(v string, maj, min int) bool {
 	parts := strings.SplitN(v, ".", 3)
 	if len(parts) < 2 {
@@ -649,6 +721,14 @@ func versionsDir() string {
 }
 
 func ensureVersion(v string, cfg config) (string, error) {
+	// v is whatever the AGENT answered to `version` — a remote string, and this
+	// is the one place it becomes a filesystem path (and then an executable we
+	// run, on macOS as root). filepath.Join cleans "..", it does not confine:
+	// only this charset does. Releases are "2.5.4", branch builds "dev+9f2a1c".
+	if !safeVersionRe.MatchString(v) {
+		return "", fmt.Errorf("the agent reports version %q, which is not a version plug will use as a cache path — "+
+			"redeploy the softwarity/plug image", v)
+	}
 	dir := filepath.Join(versionsDir(), v)
 	name := "plug"
 	if runtime.GOOS == "windows" {
@@ -671,6 +751,7 @@ func ensureVersion(v string, cfg config) (string, error) {
 	if len(data) < 1<<20 || !looksLikeBinary(data) {
 		return "", fmt.Errorf("downloaded binary looks invalid (%d bytes)", len(data))
 	}
+	guardUserPath(dir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
@@ -1217,10 +1298,11 @@ func wizard(defaultName string, confirmOverwrite bool) string {
 // writeProfile saves ~/.plug/<name>.conf with host/port and returns name. Shared
 // by the wizard and the non-interactive `plug -p <name> -H <host> [--port <p>]`.
 func writeProfile(name, host, port string) string {
+	path := filepath.Join(plugDir(), name+".conf")
+	guardUserPath(path)
 	if err := os.MkdirAll(plugDir(), 0o700); err != nil {
 		fatal("%v", err)
 	}
-	path := filepath.Join(plugDir(), name+".conf")
 	content := fmt.Sprintf("host = %s\nport = %s\n", host, port)
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		fatal("%v", err)
@@ -1293,13 +1375,16 @@ func runChild(cmdArgs []string) int {
 // runChildEnv runs the command, optionally with an explicit environment
 // (nil = inherit the current one).
 func runChildEnv(cmdArgs []string, env []string) int {
+	// YOUR command is resolved and run with YOUR $PATH — plug narrows its own
+	// only for the system helpers it drives as root (see securePath).
 	child := exec.Command(cmdArgs[0], cmdArgs[1:]...)
+	if p, err := lookPathIn(cmdArgs[0], userPath); err == nil {
+		child.Path = p
+	}
+	child.Env = withUserPath(env)
 	child.Stdin = os.Stdin
 	child.Stdout = os.Stdout
 	child.Stderr = os.Stderr
-	if env != nil {
-		child.Env = env
-	}
 	// When plug is the macOS setuid-root helper, this process runs with euid 0 so
 	// it can hold the utun + DNS — but YOUR command must not. Drop the child back to
 	// the human user (no-op on the Linux caps path). See privdrop_unix.go.

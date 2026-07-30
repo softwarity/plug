@@ -67,11 +67,20 @@ func releaseNewerThan(tag, current string) bool {
 	if !ok {
 		return false
 	}
-	cv, ok := parseExactRelease(current)
+	cv, ok := parseExactRelease(runningRelease(current))
 	if !ok {
 		return false
 	}
 	return versionLess(cv, tv)
+}
+
+// runningRelease strips the build metadata an agent's version may carry —
+// releases before 2.4.1 were stamped `x.y.z+<rev>`. Without this, such an agent
+// reads as unparseable and every lookup is delegated to it, which is exactly
+// the slow path this file exists to avoid. Mirrors the agent twin.
+func runningRelease(v string) string {
+	base, _, _ := strings.Cut(v, "+")
+	return base
 }
 
 // newestOf picks the newest x.y.z among tags, or "" when none is published.
@@ -314,7 +323,7 @@ func decideClient(img, before, want string, tags []string) (apply, current, errM
 		if imageHasTag(img) && !isReleaseTag(cur) {
 			return "", "", "", true
 		}
-		if _, ok := parseExactRelease(before); !ok {
+		if _, ok := parseExactRelease(runningRelease(before)); !ok {
 			return "", "", "", true // a dev/unversioned agent: let it decide
 		}
 		newest := newestOf(tags)
@@ -322,7 +331,7 @@ func decideClient(img, before, want string, tags []string) (apply, current, errM
 			return "", "", "", true
 		}
 		if !releaseNewerThan(newest, before) {
-			return "", fmt.Sprintf("v%s — already the newest release published for %s (checked from this machine)", before, img), "", false
+			return "", fmt.Sprintf("v%s — already the newest release published for %s (checked from this machine)", runningRelease(before), img), "", false
 		}
 		return newest, "", "", false
 	case wantNewestReleaseCLI:

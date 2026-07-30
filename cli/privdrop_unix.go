@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"syscall"
@@ -114,7 +115,10 @@ func chownToUser(path string) {
 	if !ok {
 		return
 	}
-	_ = os.Chown(path, uid, gid)
+	// Lchown, not Chown: on a symlink, Chown follows it and would hand the
+	// TARGET to the user — with euid 0 and a caller-controlled $HOME, that is
+	// an arbitrary chown. Lchown retargets the link itself, which is harmless.
+	_ = os.Lchown(path, uid, gid)
 }
 
 func atoiOr(s string, def int) int {
@@ -122,4 +126,51 @@ func atoiOr(s string, def int) int {
 		return n
 	}
 	return def
+}
+
+// guardUserPath refuses a privileged write whose target resolves somewhere the
+// invoking user does not own.
+//
+// The macOS launcher is setuid root and keeps euid 0 for its whole life (only
+// the CHILD is dropped, see applyPrivDrop) — deliberately: root once at
+// install, never a prompt afterwards. But every path it writes under the user's
+// home is derived from $HOME, which the caller controls. Left unchecked, a
+// `HOME=/tmp/x` with `/tmp/x/.plug` symlinked to a root-owned directory turns
+// each of those writes into an arbitrary root write.
+//
+// The check is deliberately NOT "reject symlinks": people symlink their dotfiles
+// (~/.plug -> ~/Dropbox/config/plug) and that must keep working. What matters is
+// where the path LANDS — os.Stat resolves the whole chain, so a dotfile symlink
+// into the user's own tree passes, while one into /etc does not. In other words:
+// plug as root only writes where the user could have written unprivileged.
+//
+// Unprivileged (euid == ruid), this is a no-op: the kernel already enforces the
+// user's own rights, and $HOME is theirs to point wherever they like.
+func guardUserPath(path string) {
+	uid, _, ok := resolveDropTarget(os.Geteuid(), os.Getuid(), os.Getgid(),
+		os.Getenv("SUDO_UID"), os.Getenv("SUDO_GID"))
+	if !ok {
+		return
+	}
+	// Walk up to the deepest component that exists: writing creates the rest,
+	// and the ancestor's ownership is what decides whether we may.
+	p := path
+	for {
+		fi, err := os.Stat(p) // follows the chain on purpose — see above
+		if err == nil {
+			st, okStat := fi.Sys().(*syscall.Stat_t)
+			if okStat && int(st.Uid) != uid {
+				fatal("refusing to write %s as root: it resolves to %s, owned by uid %d, not by you (uid %d).\n"+
+					"      plug runs setuid so it never has to ask for a password again — it will not use that\n"+
+					"      privilege to touch a file outside your own tree. Check $HOME and any symlink under it.",
+					path, p, st.Uid, uid)
+			}
+			return
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return // reached the root without finding anything: nothing to judge
+		}
+		p = parent
+	}
 }

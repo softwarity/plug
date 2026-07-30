@@ -65,6 +65,10 @@ jobs:
           hostname: plug-swarm-${{ inputs.corr }}
       - name: Serve the cluster (idle until cancelled)
         env:
+          # idle-until-caller-done.sh watches the CALLER run with gh; without a
+          # token it cannot, and the cluster idles out its whole TTL instead of
+          # freeing the runner as soon as the caller is done or cancelled.
+          GH_TOKEN: ${{ github.token }}
           # Backstop only — kill-cluster cancels this run when the e2e jobs
           # finish. Same margin as k8s-for's (the legs of the three families
           # run concurrently and finish on the same horizon).

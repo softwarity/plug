@@ -35,6 +35,11 @@ func dialTunnel(cfg config) (*tunnel.Transport, error) {
 			knownHosts = filepath.Join(home, ".plug", "known_hosts")
 		}
 	}
+	// The pin file is written by the tunnel package, possibly with euid 0 — same
+	// rule as every other write under the user's home (see guardUserPath).
+	if knownHosts != "" {
+		guardUserPath(knownHosts)
+	}
 	tr, err := tunnel.Dial(cfg.host, cfg.port, sshUser, embeddedKey, knownHosts, info)
 	// The host key is pinned into knownHosts on first connect. Off localhost the
 	// dialer may be the setuid daemon (euid 0), which would leave the pin file
@@ -83,6 +88,11 @@ var (
 	// answering "that name resolves nowhere" — 75ms measured, and it is the
 	// answer worth blocking for), not to outlast provisioning.
 	exposeVerifyUpfront = 1 * time.Second
+	// How long a re-provisioner waits for the rest of a name's mappings to
+	// re-arm before rebuilding the signpost. Re-arms of one wave land within
+	// milliseconds of each other (one listenRemote each, on the connection the
+	// first one restored); this only has to outlast that.
+	rearmSettle = 300 * time.Millisecond
 )
 
 // pathVerifier is what verifyExposed needs of an armed mapping — *tunnel.Exposed
@@ -167,7 +177,22 @@ func startExposes(cfg config) (func(), error) {
 	var dynamic []string
 	drop := func() {
 		for _, name := range dynamic {
-			_, _ = tr.Exec("unserve-name " + name)
+			// Say it when this fails. Releasing a name is not just removing a
+			// signpost: on a takeover it RESTORES what the session parked
+			// (containers restarted, service scaled back, k8s Service
+			// repointed). The likeliest moment for the Exec to fail is a
+			// network already gone — which is exactly when you Ctrl-C — and
+			// leaving silently would let you walk away believing a workload
+			// came back up when it is still down.
+			out, err := tr.Exec("unserve-name " + name)
+			switch {
+			case err != nil:
+				info("WARNING could not release %s (%v) — anything this session parked is STILL parked.\n"+
+					"      Re-run the session to restore it, or restart the agent (its boot gc restores).", name, err)
+			case strings.HasPrefix(out, "error:"):
+				info("WARNING releasing %s: %s — anything this session parked is STILL parked.",
+					name, strings.TrimSpace(strings.TrimPrefix(out, "error:")))
+			}
 		}
 	}
 	fail := func(err error) (func(), error) {
@@ -194,21 +219,60 @@ func startExposes(cfg config) (func(), error) {
 	// takeover, restored the parked workload — so re-run the SAME verb (re-park
 	// included) and re-verify: the name must not be silently dead (or silently
 	// back on the deployed version) while the forward reports re-armed.
-	armRearm := func(ex *tunnel.Exposed, spec tunnel.ExposeSpec, group []*tunnel.Exposed) {
-		ex.OnRearm(func(string) error {
-			m, err := tr.Exec(verb(group))
-			if err != nil {
-				return err
+	//
+	// ONE re-provisioner per NAME, fed by every member's hook. A transport death
+	// re-arms all of a name's mappings independently, each on a freshly
+	// allocated port: re-provisioning per member would read the others' ports
+	// while they are still being reallocated, and rebuild the signpost once per
+	// member — on Swarm, ~8.5s of delete+recreate each time. So the hooks only
+	// signal, and this goroutine coalesces the wave: it waits for it to settle,
+	// then sends ONE serve-name carrying every member's current port.
+	armRearm := func(group []*tunnel.Exposed) {
+		name := group[0].Spec().Name
+		trigger := make(chan struct{}, 1)
+		for _, ex := range group {
+			ex.OnRearm(func() {
+				select {
+				case trigger <- struct{}{}:
+				default: // a wave is already pending; it will read our port too
+				}
+			})
+		}
+		go func() {
+			for range trigger {
+				// Let the rest of the wave land, then drain what it queued: the
+				// verb below reads every member's port at call time, so one pass
+				// covers them all.
+				time.Sleep(rearmSettle)
+				select {
+				case <-trigger:
+				default:
+				}
+				if done.Load() {
+					return
+				}
+				m, err := tr.Exec(verb(group))
+				switch {
+				case err != nil:
+					info("WARNING %s: re-provisioning after reconnect failed (%v) — the name may be unreachable", name, err)
+					continue
+				case strings.HasPrefix(m, "error:"):
+					info("WARNING %s: agent refused to re-provision after reconnect: %s", name, strings.TrimSpace(strings.TrimPrefix(m, "error:")))
+					continue
+				}
+				// Same race as at startup, and worse to get wrong here: the verb
+				// above just re-created the signpost, so a single early probe
+				// would time out and report the name dead while it was merely
+				// coming up — a scary note about a path that then works.
+				if verr := verifyExposed(group[0], name, done.Load); verr != nil {
+					if !errors.Is(verr, errStopped) && !done.Load() {
+						info("WARNING %s: re-provisioned after reconnect but nothing reached it (%v)", name, verr)
+					}
+					continue
+				}
+				info("%s: re-provisioned and verified after reconnect", name)
 			}
-			if strings.HasPrefix(m, "error:") {
-				return fmt.Errorf("agent: %s", strings.TrimSpace(strings.TrimPrefix(m, "error:")))
-			}
-			// Same race as at startup, and worse to get wrong here: the verb
-			// above just re-created the signpost, so a single early probe would
-			// time out and report the name dead while it was merely coming up —
-			// a scary note about a path that then works.
-			return verifyExposed(ex, spec.Name, done.Load)
-		})
+		}()
 	}
 	// Arm every forward first — each -s gets its own sshd-allocated port — and
 	// group the mappings by NAME: one signpost carries a name, so a name's
@@ -277,7 +341,6 @@ func startExposes(cfg config) (func(), error) {
 			// it starts — and otherwise the wait moves off the critical path.
 			if verr := ex.Verify(exposeVerifyUpfront); verr == nil {
 				info("serving %s (path verified through the cluster)", spec)
-				armRearm(ex, spec, group)
 				continue
 			}
 			info("serving %s (proving the path in the background)", spec)
@@ -298,8 +361,9 @@ func startExposes(cfg config) (func(), error) {
 					"      Check it cluster-side: docker service ps plug-sp-%s / kubectl get svc %s",
 					verr, spec.Name, spec.Name, spec.Name)
 			}()
-			armRearm(ex, spec, group)
 		}
+		// One re-provisioner for the whole name, once its mappings are armed.
+		armRearm(group)
 	}
 	return func() {
 		done.Store(true)

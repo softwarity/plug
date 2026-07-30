@@ -78,5 +78,12 @@ func waitClusterReady(key string) {
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
+	// The daemon records WHY it could not open the tunnel (agent unreachable,
+	// host key…). Windows already surfaced it; here it sat in a file nobody
+	// read, and every failure looked the same.
+	if msg := tun.ClusterError(key); msg != "" {
+		info("cluster %s: %s", key, msg)
+		return
+	}
 	info("cluster %s: tunnel not ready yet — starting anyway", key)
 }
