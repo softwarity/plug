@@ -34,3 +34,22 @@ func TestLookPathIn(t *testing.T) {
 		t.Errorf("an explicit path must pass through, got %q", got)
 	}
 }
+
+// The CI-caught regression: with $PATH narrowed, exec.Command parks its failed
+// resolution in child.Err, which Start() returns EVEN after child.Path is
+// corrected — the child must still start off the human's PATH.
+func TestRunChildEnvStartsACommandOnlyTheHumansPathKnows(t *testing.T) {
+	dir := t.TempDir()
+	tool := filepath.Join(dir, "humans-tool")
+	if err := os.WriteFile(tool, []byte("#!/bin/sh\nexit 42\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	savedNarrowed, savedUser := pathNarrowed, userPath
+	defer func() { pathNarrowed, userPath = savedNarrowed, savedUser }()
+	pathNarrowed, userPath = true, dir
+	t.Setenv("PATH", "/nonexistent") // the narrowed PATH: the tool is NOT on it
+
+	if got := runChildEnv([]string{"humans-tool"}, nil); got != 42 {
+		t.Errorf("child exit = %d, want 42 (did child.Err survive the Path fix?)", got)
+	}
+}

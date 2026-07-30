@@ -1388,6 +1388,10 @@ func runChildEnv(cmdArgs []string, env []string) int {
 	if pathNarrowed {
 		if p, err := lookPathIn(cmdArgs[0], userPath); err == nil {
 			child.Path = p
+			// exec.Command already failed to resolve the name via the narrowed
+			// $PATH and parked that error in child.Err — which Start() would
+			// return even with Path corrected. This resolution supersedes it.
+			child.Err = nil
 		}
 		env = withUserPath(env)
 	}
