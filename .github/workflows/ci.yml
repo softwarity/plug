@@ -302,6 +302,10 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh collision "$A" "$B" 2222
+      - name: Name lease — a swept signpost must not free a live name
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh lease "$A" "$B" 2222
       - name: Same cluster port — two names, both reachable
         if: always()
         shell: bash
@@ -504,6 +508,10 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh collision "$A" "$B" 2222
+      - name: Name lease — a swept signpost must not free a live name
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh lease "$A" "$B" 2222
       - name: Same cluster port — two names, both reachable
         if: always()
         shell: bash

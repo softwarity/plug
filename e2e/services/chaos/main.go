@@ -81,5 +81,35 @@ func main() {
 			}
 		}()
 	})
+	// /rm-signpost?name=<n> deletes the signpost a LIVE session created, without
+	// touching the session itself. That is precisely the state a rebooted
+	// agent's boot gc leaves behind — session alive, signpost gone — and the
+	// only way to test that the name stays its owner's. Name ownership used to
+	// be read off the signpost, so "no signpost" meant "free".
+	mux.HandleFunc("/rm-signpost", func(w http.ResponseWriter, r *http.Request) {
+		name := r.URL.Query().Get("name")
+		if name == "" {
+			http.Error(w, "name required", 400)
+			return
+		}
+		sp, gone := "plug-sp-"+name, false
+		// Swarm shape first, then the standalone container one — a given cluster
+		// has exactly one of them, and the other simply 404s.
+		for _, path := range []string{"/services/" + sp, "/containers/" + sp + "?force=1"} {
+			resp, err := docker("DELETE", path)
+			if err != nil {
+				continue
+			}
+			if resp.StatusCode < 300 {
+				gone = true
+			}
+			resp.Body.Close()
+		}
+		if !gone {
+			http.Error(w, "no signpost for "+name, 404)
+			return
+		}
+		fmt.Fprint(w, "removed")
+	})
 	panic(http.ListenAndServe(":8095", mux))
 }

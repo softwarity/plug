@@ -49,6 +49,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -275,7 +276,74 @@ func localVersion() string {
 // sshd-allocated agent port the signpost relays it to.
 type portPair struct{ cluster, agent string }
 
+// One name, one live session — and the proof of that must not depend on a
+// signpost existing.
+//
+// The sshd bind USED to be the proof: one FIXED agent port per name, so a
+// second session for the same name simply failed to bind and the kernel
+// refused it, statelessly and always. Allocated ports removed that guarantee
+// (port 0 always succeeds), and the replacement — read the existing signpost's
+// target port, ask whether it still answers — only fires WHEN A SIGNPOST
+// EXISTS. It does not right after the boot gc swept one, which is exactly when
+// a still-live session is re-provisioning: both sessions then hold the name and
+// take turns overwriting the signpost on every reconnect, each leaving the
+// other silently unreachable.
+//
+// The lease records name → agent port when the name is served, independently of
+// any signpost. It needs no cleanup to stay correct: it refuses only while the
+// port it recorded still ANSWERS, and every agent port dies with its session.
+const nameLeaseDir = "/tmp/plug-names"
+
+// leaseHolder returns the agent port recorded for name, "" when none is. name
+// is a validated DNS label by the time it gets here (nameRe, at dispatch), so
+// it cannot walk out of the directory.
+func leaseHolder(name string) string {
+	b, err := os.ReadFile(filepath.Join(nameLeaseDir, name))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// takeNameLease records this session as the owner of name. Best-effort: if the
+// lease cannot be written, the backend checks still apply — we lose the extra
+// guard, not the serve.
+func takeNameLease(name, port string) {
+	if err := os.MkdirAll(nameLeaseDir, 0o700); err != nil {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(nameLeaseDir, name), []byte(port), 0o600)
+}
+
+func dropNameLease(name string) { _ = os.Remove(filepath.Join(nameLeaseDir, name)) }
+
+// clearNameLeases wipes every lease at agent boot: a container that restarted
+// took all of its forward ports down with it, so every lease it may still carry
+// on a preserved writable layer names a dead port.
+func clearNameLeases() { _ = os.RemoveAll(nameLeaseDir) }
+
+// nameTaken reports whether a DIFFERENT live session already holds the name.
+// held is the leased agent port, ours the ports this request brings, live
+// probes one. Pure, so the decision is testable without a socket.
+func nameTaken(held string, ours []portPair, live func(string) bool) bool {
+	if held == "" {
+		return false
+	}
+	for _, p := range ours {
+		if p.agent == held {
+			return false // our own lease, re-provisioned after a reconnect
+		}
+	}
+	return live(held)
+}
+
 func serveName(name string, pairs []portPair) {
+	if nameTaken(leaseHolder(name), pairs, agentPortLive) {
+		answer("error: %q is already exposed by another live session — one -s per name at a time", name)
+	}
+	if len(pairs) > 0 {
+		takeNameLease(name, pairs[0].agent)
+	}
 	if k8sAvailable() {
 		k8sServe(name, pairs)
 	}
@@ -290,6 +358,7 @@ func serveName(name string, pairs []portPair) {
 }
 
 func unserveName(name string) {
+	dropNameLease(name)
 	if k8sAvailable() {
 		k8sUnserve(name)
 	}
@@ -300,6 +369,7 @@ func unserveName(name string) {
 }
 
 func gc() {
+	clearNameLeases()
 	if k8sAvailable() {
 		k8sGC()
 	}

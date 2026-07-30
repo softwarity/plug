@@ -610,6 +610,67 @@ do_collision() {
   sum "**collision refused** ❌"; return 1
 }
 
+# lease: a live session keeps its name even when its SIGNPOST is gone. That
+# state is not exotic — it is what a rebooted agent's boot-gc leaves behind, and
+# what any failed re-provision leaves behind. Ownership used to be read off the
+# signpost, so "no signpost" read as "name is free": a second session took a
+# name its owner was still serving, and from then on the two overwrote each
+# other's signpost on every reconnect, each leaving the other silently
+# unreachable while everything LOOKED healthy. do_collision cannot catch this —
+# there, A's signpost is present when B asks, which is the easy half.
+do_lease() {
+  local lname lport lloc
+  case "$(uname -s)" in
+    Darwin)               lname=lease-mac   lport=18131 lloc=18134 ;;
+    MINGW*|MSYS*|CYGWIN*) lname=lease-win   lport=18132 lloc=18135 ;;
+    *)                    lname=lease-linux lport=18130 lloc=18133 ;;
+  esac
+  echo "=== lease: $lname stays its own session's after the signpost is swept ==="
+  if ! ( cd "$root/e2e/echo-local" && go build -o "$root/echo-local$ext" . ); then
+    echo "--- lease FAIL — echo-local did not build"; sum "**name survives a swept signpost** ❌ (build)"; return 1
+  fi
+  # A holds the name for ~45s (natural end via -ttl — see do_takeover for why
+  # kill is not an option on Windows).
+  "$PLUG" --host "$ip" --port "$port" -s "$lname:$lport:$lloc" \
+    "$root/echo-local$ext" -addr 127.0.0.1:$lloc -text "lease-a" -ttl 45s >/tmp/lease-a.out 2>&1 &
+  local a_pid=$!
+  sleep 8 # arm + verify
+
+  # Baseline: A really is serving, so a later refusal means something.
+  local base=""
+  for _ in 1 2 3; do
+    base="$(plug curl -s --max-time 10 "http://prober:8097/fetch?url=http://$lname:$lport/" 2>/dev/null | tr -d '\r' | tail -1)"
+    [ "$base" = "lease-a" ] && break
+    sleep 3
+  done
+  if [ "$base" != "lease-a" ]; then
+    echo "--- lease FAIL — baseline: prober said '${base:-nothing}' (want lease-a)"
+    tail -8 /tmp/lease-a.out 2>/dev/null | sed 's/^/    /'
+    wait $a_pid 2>/dev/null; sum "**name survives a swept signpost** ❌ — baseline"; return 1
+  fi
+
+  # Sweep A's signpost behind its back — exactly what a boot-gc does.
+  local swept
+  swept="$(plug curl -s --max-time 15 "http://chaos:8095/rm-signpost?name=$lname" 2>/dev/null | tr -d '\r' | tail -1)"
+  if [ "$swept" != "removed" ]; then
+    echo "--- lease FAIL — chaos could not sweep $lname's signpost (said '${swept:-nothing}')"
+    wait $a_pid 2>/dev/null; sum "**name survives a swept signpost** ❌ — sweep"; return 1
+  fi
+
+  # B, same name, while A is still very much alive: must bounce.
+  local co
+  co="$("$PLUG" --host "$ip" --port "$port" -s "$lname:$lport:9" curl --version 2>&1 || true)"
+  wait $a_pid 2>/dev/null
+  if printf '%s' "$co" | grep -qiE "another live session|another session|already"; then
+    echo "lease OK — $lname stayed its session's with no signpost to prove it"
+    sum "**name survives a swept signpost** ✅"; return 0
+  fi
+  echo "--- lease FAIL — B took $lname while A held it (no signpost to read); got:"
+  printf '%s\n' "$co" | tail -5 | sed 's/^/    /'
+  echo "    --- session A output ---"; tail -6 /tmp/lease-a.out 2>/dev/null | sed 's/^/    /'
+  sum "**name survives a swept signpost** ❌"; return 1
+}
+
 # resilience: the M5 bench's crash-recovery chain, replayed in CI — on cluster
 # B, against a PER-LEG crash-test agent (res-agent-<leg>, its own published
 # port): the three legs run concurrently, and interleaved restarts of a SHARED
@@ -849,11 +910,12 @@ case "$phase" in
   gateway)      do_gateway ;;
   takeover)     do_takeover ;;
   collision)    do_collision ;;
+  lease)        do_lease ;;
   sameport)     do_sameport ;;
   multiport)    do_multiport ;;
   resilience)   do_resilience ;;
   update)       do_update ;;
   updatejump)   do_update_jump ;;
   updatetag)    do_update_tag ;;
-  *) echo "unknown phase: $phase (want setup|env|matrix|multicluster|outage|expose|exposevar|gateway|takeover|collision|resilience|update)" >&2; exit 2 ;;
+  *) echo "unknown phase: $phase (want setup|env|matrix|multicluster|outage|expose|exposevar|gateway|takeover|collision|lease|resilience|update)" >&2; exit 2 ;;
 esac

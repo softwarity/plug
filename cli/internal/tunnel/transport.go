@@ -406,8 +406,17 @@ func (t *Transport) Exec(cmd string) (string, error) {
 		return "", err
 	}
 	defer s.Close()
-	out, _ := s.CombinedOutput(cmd)
+	out, cerr := s.CombinedOutput(cmd)
 	line := strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
+	// The agent answers its own errors as an "error: …" line and exits non-zero,
+	// so a non-empty line IS the answer — cerr adds nothing. But an empty line
+	// with an error means the session died before the agent said anything (a
+	// teardown over a network that is already gone, typically): reporting that
+	// as ("", nil) makes a command that never ran indistinguishable from one
+	// that succeeded, and the caller then skips the warning it exists to print.
+	if cerr != nil && line == "" {
+		return "", cerr
+	}
 	return line, nil
 }
 
