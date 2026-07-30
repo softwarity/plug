@@ -495,6 +495,48 @@ do_takeover() {
 # refused (it is parked — do_takeover proves that), so the cell holds a session
 # of its own open and asserts a second one on the same name bounces. Name and
 # cluster port are per-leg (the legs run concurrently on the shared cluster).
+# --- same cluster port, several names: the collision this build removed --------
+#
+# Inside the cluster every service has its own IP, so two services on :3000 are
+# the NORMAL world (a NestJS fleet, say) — but every -s converges on the one
+# agent, where a fixed port could bind only once: the second session bounced
+# with "tcpip-forward request denied". The agent-side port is now allocated per
+# session (the signpost relays <name>:<port> to it), so the cluster port stops
+# being unique. Both names must answer THEIR OWN local service, from inside the
+# cluster, at the same time.
+do_sameport() {
+  local na nb pa pb
+  case "$(uname -s)" in
+    Darwin)               na=samep-a-mac   nb=samep-b-mac   pa=18123 pb=18124 ;;
+    MINGW*|MSYS*|CYGWIN*) na=samep-a-win   nb=samep-b-win   pa=18125 pb=18126 ;;
+    *)                    na=samep-a-linux nb=samep-b-linux pa=18121 pb=18122 ;;
+  esac
+  echo "=== same-port: $na:18120 AND $nb:18120, both live, both reachable ==="
+  if ! ( cd "$root/e2e/echo-local" && go build -o "$root/echo-local$ext" . ); then
+    echo "--- same-port FAIL — echo-local did not build"; sum "**same cluster port ×2** ❌ (build)"; return 1
+  fi
+  "$PLUG" --host "$ip" --port "$port" -s "$na:18120:$pa"     "$root/echo-local$ext" -addr 127.0.0.1:$pa -text "same-$na" >/tmp/samep-a.out 2>&1 &
+  local a_pid=$!
+  "$PLUG" --host "$ip" --port "$port" -s "$nb:18120:$pb"     "$root/echo-local$ext" -addr 127.0.0.1:$pb -text "same-$nb" >/tmp/samep-b.out 2>&1 &
+  local b_pid=$!
+  sleep 8 # arm + verify, both
+  local ra="" rb=""
+  for _ in 1 2 3; do
+    ra="$(plug curl -s --max-time 10 "http://prober:8097/fetch?url=http://$na:18120/" 2>/dev/null | tr -d '\r' | tail -1)"
+    rb="$(plug curl -s --max-time 10 "http://prober:8097/fetch?url=http://$nb:18120/" 2>/dev/null | tr -d '\r' | tail -1)"
+    [ "$ra" = "same-$na" ] && [ "$rb" = "same-$nb" ] && break
+    sleep 3
+  done
+  kill $a_pid $b_pid 2>/dev/null; wait $a_pid $b_pid 2>/dev/null
+  if [ "$ra" = "same-$na" ] && [ "$rb" = "same-$nb" ]; then
+    echo "same-port OK — $na and $nb share :18120, each answered its own backend"
+    sum "**same cluster port ×2 (no collision, no cross-talk)** ✅"; return 0
+  fi
+  echo "--- same-port FAIL — $na said '${ra:-nothing}', $nb said '${rb:-nothing}'"
+  tail -8 /tmp/samep-a.out /tmp/samep-b.out 2>/dev/null | sed 's/^/    /'
+  sum "**same cluster port ×2** ❌ — a='\`${ra:-nothing}\`' b='\`${rb:-nothing}\`'"; return 1
+}
+
 do_collision() {
   local cname cport
   case "$(uname -s)" in
@@ -766,6 +808,7 @@ case "$phase" in
   gateway)      do_gateway ;;
   takeover)     do_takeover ;;
   collision)    do_collision ;;
+  sameport)     do_sameport ;;
   resilience)   do_resilience ;;
   update)       do_update ;;
   updatejump)   do_update_jump ;;

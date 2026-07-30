@@ -175,18 +175,20 @@ func startExposes(cfg config) (func(), error) {
 		tr.Close()
 		return nil, err
 	}
-	// The serve-name verb. Taking over a deployed workload owning the name is
-	// the DEFAULT — parked for the session, restored on exit.
-	verb := func(spec tunnel.ExposeSpec) string {
-		return "serve-name " + spec.Name + " " + spec.ClusterPort + " takeover"
+	// The serve-name verb: name, the port workloads dial, the sshd-ALLOCATED
+	// port the signpost must relay to (see tunnel/expose.go — allocation is
+	// what lets many names share one cluster port), takeover (parking a
+	// deployed workload owning the name is the DEFAULT — restored on exit).
+	verb := func(spec tunnel.ExposeSpec, agentPort string) string {
+		return "serve-name " + spec.Name + " " + spec.ClusterPort + " " + agentPort + " takeover"
 	}
 	// After a reconnect, a restarted agent has GC'd the signpost — AND, on a
 	// takeover, restored the parked workload — so re-run the SAME verb (re-park
 	// included) and re-verify: the name must not be silently dead (or silently
 	// back on the deployed version) while the forward reports re-armed.
 	armRearm := func(ex *tunnel.Exposed, spec tunnel.ExposeSpec) {
-		ex.OnRearm(func() error {
-			m, err := tr.Exec(verb(spec))
+		ex.OnRearm(func(agentPort string) error {
+			m, err := tr.Exec(verb(spec, agentPort))
 			if err != nil {
 				return err
 			}
@@ -209,7 +211,7 @@ func startExposes(cfg config) (func(), error) {
 		// service, a k8s Service — whatever the deployment has). Provisioning is
 		// the whole point of -s: you name a service and it exists, with nothing
 		// to agree cluster-side beforehand.
-		reply, err := tr.Exec(verb(spec))
+		reply, err := tr.Exec(verb(spec, ex.AgentPort()))
 		if err != nil {
 			return fail(err)
 		}

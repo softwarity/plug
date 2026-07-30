@@ -120,17 +120,24 @@ func dispatch(cmd []string) {
 	}
 	switch cmd[0] {
 	case "serve-name":
-		if len(cmd) != 4 || cmd[3] != "takeover" {
-			answer("error: usage: serve-name <name> <port> takeover")
+		// <agent-port> is the sshd-allocated port THIS session's forward
+		// listens on — the signpost relays <name>:<port> to it. Allocated, not
+		// the cluster port itself: many names share one cluster port (every
+		// service has its own IP in the cluster), but they all converge on ONE
+		// agent, where a fixed port could bind only once.
+		if len(cmd) != 5 || cmd[4] != "takeover" {
+			answer("error: usage: serve-name <name> <port> <agent-port> takeover")
 		}
-		name, port := cmd[1], cmd[2]
+		name, port, agentPort := cmd[1], cmd[2], cmd[3]
 		if !nameRe.MatchString(name) {
 			answer("error: %q is not a valid DNS label", name)
 		}
-		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
-			answer("error: %q is not a valid port", port)
+		for _, p := range []string{port, agentPort} {
+			if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 {
+				answer("error: %q is not a valid port", p)
+			}
 		}
-		serveName(name, port)
+		serveName(name, port, agentPort)
 	case "unserve-name":
 		if len(cmd) != 2 || !nameRe.MatchString(cmd[1]) {
 			answer("error: usage: unserve-name <name>")
@@ -250,12 +257,12 @@ func localVersion() string {
 	return "unknown"
 }
 
-func serveName(name, port string) {
+func serveName(name, port, agentPort string) {
 	if k8sAvailable() {
-		k8sServe(name, port)
+		k8sServe(name, port, agentPort)
 	}
 	if dockerAvailable() {
-		dockerServe(name, port)
+		dockerServe(name, port, agentPort)
 	}
 	// No orchestrator access: this agent cannot create the name. There is no
 	// half-mode to fall back to — pre-declaring an alias per name is the exact
@@ -1030,20 +1037,20 @@ func scaleService(idOrName string, replicas int) error {
 // signpost is a SERVICE, which joins the stack's overlay whether or not it is
 // attachable. Otherwise (Compose, plain `docker run`, or a non-manager) it is a
 // standalone CONTAINER, which needs a bridge or an attachable overlay.
-func dockerServe(name, port string) {
+func dockerServe(name, port, agentPort string) {
 	self, err := dockerSelf()
 	if err != nil {
 		answer("error: %v", err)
 	}
 	if self.service != "" && swarmManager() {
-		swarmServe(name, port, self)
+		swarmServe(name, port, self, agentPort)
 	}
-	containerServe(name, port, self)
+	containerServe(name, port, self, agentPort)
 }
 
 // containerServe runs the signpost as a standalone container — needs a network
 // it can actually join (a bridge, or an attachable overlay).
-func containerServe(name, port string, self selfInfo) {
+func containerServe(name, port string, self selfInfo, agentPort string) {
 	nets := self.attachableNets()
 	if len(nets) == 0 {
 		// Nothing a standalone container can join (only bridge/host, or a
@@ -1051,6 +1058,19 @@ func containerServe(name, port string, self selfInfo) {
 		// nowhere to carry the alias.
 		answer("error: the agent is on no network a signpost can join — put it on the " +
 			"application network (an attachable overlay, or the Compose network your services share)")
+	}
+	// A signpost already carrying this name may belong to a LIVE session — its
+	// relay port still answers on this agent — and then the name is taken; a
+	// dead port is a crashed session's leftover, swept below.
+	var insp struct {
+		Config struct {
+			Entrypoint []string `json:"Entrypoint"`
+		} `json:"Config"`
+	}
+	if code, err := dockerAPI("GET", "/containers/"+signpostName(name)+"/json", nil, &insp); err == nil && code == 200 {
+		if ap := signpostAgentPort(insp.Config.Entrypoint); ap != "" && agentPortLive(ap) {
+			answer("error: %q is already exposed by another live session — one -s per name at a time", name)
+		}
 	}
 	// A leftover signpost (a crashed session's, or a re-run) may carry a parking
 	// receipt: restore it FIRST, then re-detect. One restore path — the takeover
@@ -1069,7 +1089,7 @@ func containerServe(name, port string, self selfInfo) {
 	}
 	body := map[string]any{
 		"Image":      self.image,
-		"Entrypoint": []string{"/usr/local/bin/plug-agent", "signpost", port, self.relayTarget() + ":" + port},
+		"Entrypoint": []string{"/usr/local/bin/plug-agent", "signpost", port, self.relayTarget() + ":" + agentPort},
 		"Labels": map[string]string{
 			"plug.signpost":       "1",
 			"plug.signpost.owner": self.owner(),
@@ -1119,6 +1139,51 @@ func containerServe(name, port string, self selfInfo) {
 // (its receipt label), then removes that signpost. No signpost → nothing to do.
 // Restore-then-delete keeps the name resolving throughout: the real containers
 // come back while the signpost still answers, then the signpost goes.
+// agentPortLive reports whether something still listens on an agent-side port
+// of THIS container — i.e. the session owning an existing signpost is alive.
+// The sshd bind used to BE the collision check (one fixed port per name); with
+// allocated ports, asking the port directly is what keeps "same name, live
+// session" refused while a crashed session's leftover is still swept.
+func agentPortLive(port string) bool {
+	conn, err := net.DialTimeout("tcp", "127.0.0.1:"+port, 500*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}
+
+// signpostAgentPort digs the agent-side port out of an existing signpost's
+// command — […, "signpost", "<cluster-port>", "<target>:<agent-port>"]. ""
+// when the shape is not a signpost's.
+func signpostAgentPort(cmd []string) string {
+	if len(cmd) < 2 {
+		return ""
+	}
+	last := cmd[len(cmd)-1]
+	if i := strings.LastIndex(last, ":"); i > 0 && cmd[len(cmd)-3] == "signpost" {
+		return last[i+1:]
+	}
+	return ""
+}
+
+// k8sTargetPort reads the targetPort out of a plug Service's ports.
+func k8sTargetPort(raw json.RawMessage) string {
+	var ports []struct {
+		TargetPort any `json:"targetPort"`
+	}
+	if json.Unmarshal(raw, &ports) != nil || len(ports) == 0 {
+		return ""
+	}
+	switch v := ports[0].TargetPort.(type) {
+	case float64:
+		return strconv.Itoa(int(v))
+	case string:
+		return v
+	}
+	return ""
+}
+
 func restoreContainerParked(name string) error {
 	var insp struct {
 		Config struct {
@@ -1195,7 +1260,7 @@ func digestFor(img string, repoDigests []string) string {
 	return ""
 }
 
-func swarmServe(name, port string, self selfInfo) {
+func swarmServe(name, port string, self selfInfo, agentPort string) {
 	// -s relays to the agent's service VIP, and the session's remote-forward
 	// lives on ONE task — so >1 replica makes the VIP miss it intermittently.
 	// Refuse loudly rather than ship a silent flaky path.
@@ -1210,6 +1275,23 @@ func swarmServe(name, port string, self selfInfo) {
 		// Only ingress/bridge — nothing to publish an alias on.
 		answer("error: the agent is on no overlay network — attach it to the overlay your " +
 			"services use, otherwise the name cannot resolve for them")
+	}
+	// A signpost service already carrying this name may belong to a LIVE
+	// session — its relay port still answers on this agent — and then the name
+	// is taken; a dead port is a crashed session's leftover, swept below.
+	var sp struct {
+		Spec struct {
+			TaskTemplate struct {
+				ContainerSpec struct {
+					Command []string `json:"Command"`
+				} `json:"ContainerSpec"`
+			} `json:"TaskTemplate"`
+		} `json:"Spec"`
+	}
+	if code, err := dockerAPI("GET", "/services/"+signpostName(name), nil, &sp); err == nil && code == 200 {
+		if ap := signpostAgentPort(sp.Spec.TaskTemplate.ContainerSpec.Command); ap != "" && agentPortLive(ap) {
+			answer("error: %q is already exposed by another live session — one -s per name at a time", name)
+		}
 	}
 	// A leftover signpost service (a crashed session's, or a re-run) may carry a
 	// parking receipt: restore it FIRST, then re-detect — one restore path, and
@@ -1251,7 +1333,7 @@ func swarmServe(name, port string, self selfInfo) {
 		"TaskTemplate": map[string]any{
 			"ContainerSpec": map[string]any{
 				"Image":   pinnedImage(self.image),
-				"Command": []string{"/usr/local/bin/plug-agent", "signpost", port, self.relayTarget() + ":" + port},
+				"Command": []string{"/usr/local/bin/plug-agent", "signpost", port, self.relayTarget() + ":" + agentPort},
 			},
 			"Networks":      attach,
 			"RestartPolicy": map[string]any{"Condition": "any"},
@@ -1556,18 +1638,20 @@ func selectorPatch(target, current map[string]string) map[string]any {
 	return p
 }
 
-func k8sServe(name, port string) {
+func k8sServe(name, port, agentPort string) {
 	ns := k8sNamespace()
 	p, _ := strconv.Atoi(port)
+	ap, _ := strconv.Atoi(agentPort)
 	svc := map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Service",
 		"metadata":   map[string]any{"name": name, "labels": map[string]string{k8sManaged: "plug"}},
 		"spec": map[string]any{
 			// The official manifest labels the agent `app: plug` — the Service
-			// (the k8s "signpost") points the name at it.
+			// (the k8s "signpost") points the name at it, on the sshd-allocated
+			// port this session's forward listens on.
 			"selector": map[string]string{"app": "plug"},
-			"ports":    []map[string]any{{"port": p, "targetPort": p}},
+			"ports":    []map[string]any{{"port": p, "targetPort": ap}},
 		},
 	}
 	code, err := k8sAPI("POST", "/api/v1/namespaces/"+ns+"/services", svc, nil)
@@ -1606,7 +1690,7 @@ func k8sServe(name, port string) {
 					"metadata": map[string]any{"annotations": map[string]any{k8sParkedAnn: receipt}},
 					"spec": map[string]any{
 						"selector": selectorPatch(map[string]string{"app": "plug"}, existing.Spec.Selector),
-						"ports":    []map[string]any{{"port": p, "targetPort": p}},
+						"ports":    []map[string]any{{"port": p, "targetPort": ap}},
 					},
 				}
 				if _, perr := k8sMergePatch("/api/v1/namespaces/"+ns+"/services/"+name, patch); perr != nil {
@@ -1616,9 +1700,17 @@ func k8sServe(name, port string) {
 			}
 			answer("error: the Service %q exists but plug cannot read it — remove it, or grant the agent access: kubectl delete service %s", name, name)
 		}
-		// It's ours: replace it. If the re-create fails, say SO — do not fall
-		// through to the "not plug's" lie (the name is now deleted; report the
-		// real cause so the session aborts with an accurate remedy).
+		// It's ours — but "ours" may be ANOTHER LIVE SESSION's. The sshd bind
+		// used to be the collision check (one fixed port per name); with
+		// allocated ports, ask the port itself: if the existing Service's
+		// targetPort still answers on this agent, its session is alive and the
+		// name is taken. A dead port is a crashed session's leftover — replaced.
+		if tp := k8sTargetPort(existing.Spec.Ports); tp != "" && agentPortLive(tp) {
+			answer("error: %q is already exposed by another live session — one -s per name at a time", name)
+		}
+		// Replace it. If the re-create fails, say SO — do not fall through to
+		// the "not plug's" lie (the name is now deleted; report the real cause
+		// so the session aborts with an accurate remedy).
 		_, _ = k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/services/"+name, nil, nil)
 		if _, rerr := k8sAPI("POST", "/api/v1/namespaces/"+ns+"/services", svc, nil); rerr != nil {
 			answer("error: re-provisioning the Service %q failed (a stale plug Service was removed): %v", name, rerr)

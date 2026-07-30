@@ -2,6 +2,22 @@
 
 ## NEXT RELEASE
 
+### Fixed: two `-s` names can share a cluster port
+
+`plug -s neodps-mail:3000:PORT` bounced with `tcpip-forward request denied by
+peer` whenever another session already exposed ANY name on `:3000`. Inside the
+cluster that port is not unique — every service has its own IP, and a NestJS
+fleet all on `:3000` is the normal world — but every `-s` converges on the one
+agent container, where a fixed port could bind only once.
+
+The agent-side port is now allocated by sshd per session (a remote forward on
+port 0) and the signpost relays `<name>:<port>` to it, so the cluster port
+stops being a bottleneck. Nothing changes in the command, for the callers, or
+in what the cluster sees. Same name twice is still refused — the check moved
+from the bind to the agent, which asks the existing signpost's relay port
+whether its session is alive (a crashed session's leftover is still swept).
+
+
 ---
 
 ## 2.5.3

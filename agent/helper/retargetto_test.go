@@ -96,3 +96,22 @@ func TestHasTag(t *testing.T) {
 		}
 	}
 }
+
+// signpostAgentPort digs the relay port out of the two signpost shapes the
+// backends create — the collision guard depends on it.
+func TestSignpostAgentPort(t *testing.T) {
+	for _, c := range []struct {
+		cmd  []string
+		want string
+	}{
+		{[]string{"/usr/local/bin/plug-agent", "signpost", "3000", "neo_plug:41234"}, "41234"},
+		{[]string{"/usr/local/bin/plug-agent", "signpost", "3000", "10.0.1.5:52801"}, "52801"},
+		{[]string{"sleep", "60"}, ""},
+		{nil, ""},
+		{[]string{"signpost"}, ""},
+	} {
+		if got := signpostAgentPort(c.cmd); got != c.want {
+			t.Errorf("signpostAgentPort(%v) = %q, want %q", c.cmd, got, c.want)
+		}
+	}
+}

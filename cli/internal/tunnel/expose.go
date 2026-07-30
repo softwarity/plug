@@ -15,13 +15,21 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// The reverse direction: the agent listens on 0.0.0.0:<ClusterPort> (reached by
-// the other workloads through a cluster DNS name the agent provisions for the
-// session — a signpost container in Compose, a signpost service in Swarm, a
-// Service in Kubernetes) and every connection is relayed down this session's SSH
-// connection to 127.0.0.1:<LocalPort>. sshd does all the server-side work
-// (standard remote forward), so the listener lives and dies with the session:
-// Ctrl-C and the port closes, nothing to clean up cluster-side.
+// The reverse direction: the agent's sshd listens on an ALLOCATED port (a
+// standard remote forward on 0.0.0.0:0 — sshd picks a free one and reports
+// it), the signpost the agent provisions for the session carries the DNS name
+// and relays <Name>:<ClusterPort> to that port, and every connection is relayed
+// down this session's SSH connection to 127.0.0.1:<LocalPort>. The listener
+// lives and dies with the session: Ctrl-C and the port closes, nothing to
+// clean up cluster-side.
+//
+// The agent-side port is ALLOCATED, never the cluster port itself, because the
+// cluster port is not unique on the agent: inside the cluster every service
+// has its own IP, so fpl-svc:3000 and neodps-mail:3000 coexist naturally — but
+// through plug all the names converge on ONE agent container, where a fixed
+// :3000 could bind only once and the second session bounced with "tcpip-forward
+// request denied". The port is plumbing between the signpost and this session;
+// nothing outside ever sees it.
 
 // ExposeSpec is one -s mapping: <Name>:<ClusterPort>:<LocalPort>.
 type ExposeSpec struct {
@@ -57,18 +65,24 @@ type Exposed struct {
 	nonce atomic.Pointer[[]byte]
 	hit   chan struct{}
 
+	// agentPort is the sshd-allocated port the current forward listens on.
+	// Written by Expose and by serve() after each re-arm, read by the hook call
+	// that follows — same goroutine ordering, no lock needed.
+	agentPort string
+
 	// rearmHook re-provisions a DYNAMIC name after a reconnect: rearm re-binds
-	// only the sshd forward, but a restarted agent GC's the signpost, so the
-	// name must be re-created (and re-verified). Set once before serve() starts
+	// only the sshd forward — on a NEW allocated port, which is the argument —
+	// but a restarted agent GC's the signpost, so the name must be re-created
+	// (and re-verified) pointing at that port. Set once before serve() starts
 	// re-arming, so no lock is needed.
-	rearmHook func() error
+	rearmHook func(agentPort string) error
 }
 
 // OnRearm registers a hook run after every reconnect re-binds the forward — used
 // to re-provision a dynamic name a restarted agent may have swept. Must be set
 // before the first reconnect (right after Expose), which the single-threaded
 // startExposes guarantees.
-func (e *Exposed) OnRearm(hook func() error) { e.rearmHook = hook }
+func (e *Exposed) OnRearm(hook func(agentPort string) error) { e.rearmHook = hook }
 
 // Expose arms spec on the transport: it binds 0.0.0.0:<ClusterPort> agent-side
 // and relays every connection to 127.0.0.1:<LocalPort>. The first bind failure
@@ -82,22 +96,33 @@ func (t *Transport) Expose(spec ExposeSpec) (*Exposed, error) {
 			return nil, err
 		}
 	}
-	ln, err := listenRemote(cl, spec)
+	ln, port, err := listenRemote(cl, spec)
 	if err != nil {
 		return nil, err
 	}
-	e := &Exposed{t: t, spec: spec, hit: make(chan struct{}, 1)}
+	e := &Exposed{t: t, spec: spec, agentPort: port, hit: make(chan struct{}, 1)}
 	go e.serve(ln, cl)
 	return e, nil
 }
 
-func listenRemote(cl *ssh.Client, spec ExposeSpec) (net.Listener, error) {
-	ln, err := cl.Listen("tcp", net.JoinHostPort("0.0.0.0", spec.ClusterPort))
+// AgentPort is the sshd-allocated port this session's forward listens on —
+// what the signpost must relay to. Valid right after Expose; a reconnect
+// re-allocates, and the OnRearm hook receives the NEW port.
+func (e *Exposed) AgentPort() string { return e.agentPort }
+
+func listenRemote(cl *ssh.Client, spec ExposeSpec) (net.Listener, string, error) {
+	ln, err := cl.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
-		return nil, fmt.Errorf("agent refused to open %s:%s (already exposed by another session?): %w",
+		return nil, "", fmt.Errorf("agent refused to open a forward for %s:%s: %w",
 			spec.Name, spec.ClusterPort, err)
 	}
-	return ln, nil
+	_, port, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil || port == "0" {
+		ln.Close()
+		return nil, "", fmt.Errorf("agent allocated no usable port for %s:%s (sshd too old for port 0?): %v",
+			spec.Name, spec.ClusterPort, err)
+	}
+	return ln, port, nil
 }
 
 // serve accepts until the SSH connection under ln dies, then re-arms the
@@ -117,12 +142,15 @@ func (e *Exposed) serve(ln net.Listener, cl *ssh.Client) {
 		if ln, cl, err = e.rearm(cl); err != nil {
 			return
 		}
-		// The sshd forward is re-bound; but if the agent restarted it GC'd the
-		// dynamic signpost, so re-provision the name and re-verify. Run it in the
-		// background: the Accept loop above must be live to catch Verify's nonce.
+		// The sshd forward is re-bound ON A NEW ALLOCATED PORT; and if the agent
+		// restarted it GC'd the dynamic signpost too. Either way the signpost
+		// must be re-provisioned to relay to the new port, and re-verified. Run
+		// it in the background: the Accept loop above must be live to catch
+		// Verify's nonce.
 		if e.rearmHook != nil {
+			port := e.agentPort
 			go func() {
-				if err := e.rearmHook(); err != nil {
+				if err := e.rearmHook(port); err != nil {
 					e.t.note("expose %s: re-provision after reconnect FAILED (%v) — the name may be unreachable", e.spec, err)
 				} else {
 					e.t.note("expose %s: name re-provisioned and re-verified after reconnect", e.spec)
@@ -143,8 +171,9 @@ func (e *Exposed) rearm(dead *ssh.Client) (net.Listener, *ssh.Client, error) {
 	for attempt := 0; ; attempt++ {
 		cl, err := e.t.reconnectFrom(dead)
 		if err == nil {
-			ln, lerr := listenRemote(cl, e.spec)
+			ln, port, lerr := listenRemote(cl, e.spec)
 			if lerr == nil {
+				e.agentPort = port
 				e.t.note("expose %s re-armed", e.spec)
 				return ln, cl, nil
 			}
