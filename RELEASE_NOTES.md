@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.6.0
+
 ### Fixed: one `-s` name can expose several cluster ports
 
 `-s mail-gateway:80:HTTP -s mail-gateway:425:POP3 -s mail-gateway:25:SMTP`: one
