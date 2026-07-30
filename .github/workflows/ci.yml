@@ -306,6 +306,10 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh sameport "$A" "$B" 2222
+      - name: Multi-port — one name, three cluster ports
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh multiport "$A" "$B" 2222
 
       - name: Takeover — park the deployed service, serve ours, restore it
         if: always()
@@ -414,6 +418,10 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh sameport "$A" "$B" 2222
+      - name: Multi-port — one name, three cluster ports
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh multiport "$A" "$B" 2222
       - name: Takeover — repoint the deployed Service, serve ours, restore it
         if: always()
         shell: bash
@@ -500,6 +508,10 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh sameport "$A" "$B" 2222
+      - name: Multi-port — one name, three cluster ports
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh multiport "$A" "$B" 2222
       - name: Takeover — scale the deployed service to 0, serve ours, restore it
         if: always()
         shell: bash

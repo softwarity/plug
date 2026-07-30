@@ -9,12 +9,17 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
 func main() {
-	addr := flag.String("addr", "127.0.0.1:18086", "listen address")
-	text := flag.String("text", "echo-local", "response body")
+	// Comma-separated, index-matched: ONE process listening on several ports,
+	// each answering its own text — how the multiport cell asserts that one
+	// name's cluster ports route to the right local listener and not to each
+	// other.
+	addr := flag.String("addr", "127.0.0.1:18086", "listen address(es), comma-separated")
+	text := flag.String("text", "echo-local", "response body per address, comma-separated")
 	// -ttl lets a cell end the plug session NATURALLY (child exits → plug tears
 	// down and restores) instead of `kill`, which on Windows/Git Bash is a brutal
 	// TerminateProcess that never runs the teardown — the takeover cell needs the
@@ -24,7 +29,18 @@ func main() {
 	if *ttl > 0 {
 		time.AfterFunc(*ttl, func() { os.Exit(0) })
 	}
-	panic(http.ListenAndServe(*addr, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, *text)
-	})))
+	addrs := strings.Split(*addr, ",")
+	texts := strings.Split(*text, ",")
+	for i, ad := range addrs {
+		t := texts[0]
+		if i < len(texts) {
+			t = texts[i]
+		}
+		go func(ad, t string) {
+			panic(http.ListenAndServe(ad, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				fmt.Fprint(w, t)
+			})))
+		}(ad, t)
+	}
+	select {}
 }

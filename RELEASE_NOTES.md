@@ -2,6 +2,13 @@
 
 ## NEXT RELEASE
 
+### Fixed: one `-s` name can expose several cluster ports
+
+`-s mail-gateway:80:HTTP -s mail-gateway:425:POP3 -s mail-gateway:25:SMTP`: one
+signpost now carries the name and listens on ALL its ports, each relayed to its
+own session forward. Before, the last `-s` silently won the name and the other
+ports fell through to nothing.
+
 ---
 
 ## 2.5.4

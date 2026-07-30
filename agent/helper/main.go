@@ -60,10 +60,13 @@ func main() {
 	if len(args) > 0 {
 		switch args[0] {
 		case "signpost":
-			if len(args) != 3 {
-				fatal("usage: plug-agent signpost <port> <target>")
+			// Pairs, because ONE container carries the DNS alias: a service
+			// exposing several ports (HTTP+SMTP+POP3 on one name) still gets
+			// one signpost, listening on all of them.
+			if len(args) < 3 || len(args)%2 == 0 {
+				fatal("usage: plug-agent signpost <port> <target> [<port> <target> …]")
 			}
-			signpost(args[1], args[2])
+			signpost(args[1:])
 			return
 		case "gc":
 			gc()
@@ -120,24 +123,34 @@ func dispatch(cmd []string) {
 	}
 	switch cmd[0] {
 	case "serve-name":
-		// <agent-port> is the sshd-allocated port THIS session's forward
-		// listens on — the signpost relays <name>:<port> to it. Allocated, not
+		// One verb per NAME, all its ports at once — a service exposing
+		// HTTP+SMTP+POP3 on one name is one signpost listening on all three.
+		// Each pair is <cluster-port>:<agent-port>; the agent port is the
+		// sshd-allocated port that session's forward listens on. Allocated, not
 		// the cluster port itself: many names share one cluster port (every
 		// service has its own IP in the cluster), but they all converge on ONE
 		// agent, where a fixed port could bind only once.
-		if len(cmd) != 5 || cmd[4] != "takeover" {
-			answer("error: usage: serve-name <name> <port> <agent-port> takeover")
+		if len(cmd) != 4 || cmd[3] != "takeover" {
+			answer("error: usage: serve-name <name> <cluster-port>:<agent-port>[,…] takeover")
 		}
-		name, port, agentPort := cmd[1], cmd[2], cmd[3]
+		name := cmd[1]
 		if !nameRe.MatchString(name) {
 			answer("error: %q is not a valid DNS label", name)
 		}
-		for _, p := range []string{port, agentPort} {
-			if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 {
-				answer("error: %q is not a valid port", p)
+		var pairs []portPair
+		for _, pp := range strings.Split(cmd[2], ",") {
+			c, a, ok := strings.Cut(pp, ":")
+			if !ok {
+				answer("error: %q is not <cluster-port>:<agent-port>", pp)
 			}
+			for _, p := range []string{c, a} {
+				if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 {
+					answer("error: %q is not a valid port", p)
+				}
+			}
+			pairs = append(pairs, portPair{cluster: c, agent: a})
 		}
-		serveName(name, port, agentPort)
+		serveName(name, pairs)
 	case "unserve-name":
 		if len(cmd) != 2 || !nameRe.MatchString(cmd[1]) {
 			answer("error: usage: unserve-name <name>")
@@ -257,12 +270,16 @@ func localVersion() string {
 	return "unknown"
 }
 
-func serveName(name, port, agentPort string) {
+// portPair is one of a name's exposures: the port workloads dial, and the
+// sshd-allocated agent port the signpost relays it to.
+type portPair struct{ cluster, agent string }
+
+func serveName(name string, pairs []portPair) {
 	if k8sAvailable() {
-		k8sServe(name, port, agentPort)
+		k8sServe(name, pairs)
 	}
 	if dockerAvailable() {
-		dockerServe(name, port, agentPort)
+		dockerServe(name, pairs)
 	}
 	// No orchestrator access: this agent cannot create the name. There is no
 	// half-mode to fall back to — pre-declaring an alias per name is the exact
@@ -535,26 +552,32 @@ func dockerPull(ref string) error {
 // per-connection so it survives agent restarts). It is the whole job of the
 // signpost container: carry the DNS alias, hand the bytes to the agent's sshd
 // remote-forward listener.
-func signpost(port, target string) {
-	ln, err := net.Listen("tcp", ":"+port)
-	if err != nil {
-		fatal("signpost: %v", err)
-	}
-	fmt.Printf("signpost: :%s -> %s\n", port, target)
-	for {
-		c, err := ln.Accept()
+func signpost(pairs []string) {
+	for i := 0; i+1 < len(pairs); i += 2 {
+		port, target := pairs[i], pairs[i+1]
+		ln, err := net.Listen("tcp", ":"+port)
 		if err != nil {
 			fatal("signpost: %v", err)
 		}
+		fmt.Printf("signpost: :%s -> %s\n", port, target)
 		go func() {
-			t, err := net.DialTimeout("tcp", target, 5*time.Second)
-			if err != nil {
-				c.Close()
-				return
+			for {
+				c, err := ln.Accept()
+				if err != nil {
+					fatal("signpost: %v", err)
+				}
+				go func() {
+					t, err := net.DialTimeout("tcp", target, 5*time.Second)
+					if err != nil {
+						c.Close()
+						return
+					}
+					relay(c, t)
+				}()
 			}
-			relay(c, t)
 		}()
 	}
+	select {} // the listeners are the process
 }
 
 func relay(a, b net.Conn) {
@@ -1037,20 +1060,29 @@ func scaleService(idOrName string, replicas int) error {
 // signpost is a SERVICE, which joins the stack's overlay whether or not it is
 // attachable. Otherwise (Compose, plain `docker run`, or a non-manager) it is a
 // standalone CONTAINER, which needs a bridge or an attachable overlay.
-func dockerServe(name, port, agentPort string) {
+func dockerServe(name string, pairs []portPair) {
 	self, err := dockerSelf()
 	if err != nil {
 		answer("error: %v", err)
 	}
 	if self.service != "" && swarmManager() {
-		swarmServe(name, port, self, agentPort)
+		swarmServe(name, pairs, self)
 	}
-	containerServe(name, port, self, agentPort)
+	containerServe(name, pairs, self)
+}
+
+// signpostArgs renders the pairs as the signpost's argv: port target port target…
+func signpostArgs(pairs []portPair, target string) []string {
+	args := []string{"/usr/local/bin/plug-agent", "signpost"}
+	for _, p := range pairs {
+		args = append(args, p.cluster, target+":"+p.agent)
+	}
+	return args
 }
 
 // containerServe runs the signpost as a standalone container — needs a network
 // it can actually join (a bridge, or an attachable overlay).
-func containerServe(name, port string, self selfInfo, agentPort string) {
+func containerServe(name string, pairs []portPair, self selfInfo) {
 	nets := self.attachableNets()
 	if len(nets) == 0 {
 		// Nothing a standalone container can join (only bridge/host, or a
@@ -1089,7 +1121,7 @@ func containerServe(name, port string, self selfInfo, agentPort string) {
 	}
 	body := map[string]any{
 		"Image":      self.image,
-		"Entrypoint": []string{"/usr/local/bin/plug-agent", "signpost", port, self.relayTarget() + ":" + agentPort},
+		"Entrypoint": signpostArgs(pairs, self.relayTarget()),
 		"Labels": map[string]string{
 			"plug.signpost":       "1",
 			"plug.signpost.owner": self.owner(),
@@ -1153,16 +1185,16 @@ func agentPortLive(port string) bool {
 	return true
 }
 
-// signpostAgentPort digs the agent-side port out of an existing signpost's
-// command — […, "signpost", "<cluster-port>", "<target>:<agent-port>"]. ""
-// when the shape is not a signpost's.
+// signpostAgentPort digs an agent-side port out of an existing signpost's
+// command — [bin, "signpost", p1, t1, p2, t2, …]. The FIRST pair's is enough:
+// all of a signpost's ports belong to one session, so one live port means the
+// session is alive. "" when the shape is not a signpost's.
 func signpostAgentPort(cmd []string) string {
-	if len(cmd) < 2 {
+	if len(cmd) < 4 || cmd[1] != "signpost" {
 		return ""
 	}
-	last := cmd[len(cmd)-1]
-	if i := strings.LastIndex(last, ":"); i > 0 && cmd[len(cmd)-3] == "signpost" {
-		return last[i+1:]
+	if i := strings.LastIndex(cmd[3], ":"); i > 0 {
+		return cmd[3][i+1:]
 	}
 	return ""
 }
@@ -1260,7 +1292,7 @@ func digestFor(img string, repoDigests []string) string {
 	return ""
 }
 
-func swarmServe(name, port string, self selfInfo, agentPort string) {
+func swarmServe(name string, pairs []portPair, self selfInfo) {
 	// -s relays to the agent's service VIP, and the session's remote-forward
 	// lives on ONE task — so >1 replica makes the VIP miss it intermittently.
 	// Refuse loudly rather than ship a silent flaky path.
@@ -1333,7 +1365,7 @@ func swarmServe(name, port string, self selfInfo, agentPort string) {
 		"TaskTemplate": map[string]any{
 			"ContainerSpec": map[string]any{
 				"Image":   pinnedImage(self.image),
-				"Command": []string{"/usr/local/bin/plug-agent", "signpost", port, self.relayTarget() + ":" + agentPort},
+				"Command": signpostArgs(pairs, self.relayTarget()),
 			},
 			"Networks":      attach,
 			"RestartPolicy": map[string]any{"Condition": "any"},
@@ -1623,6 +1655,19 @@ type k8sReceipt struct {
 	Ports    json.RawMessage   `json:"ports"`
 }
 
+// k8sPorts renders the pairs as a Service's ports. The per-port name is
+// REQUIRED by k8s as soon as there is more than one — a multi-port service
+// (HTTP+SMTP+POP3 on one name) is exactly the case this serves.
+func k8sPorts(pairs []portPair) []map[string]any {
+	out := make([]map[string]any, 0, len(pairs))
+	for _, pp := range pairs {
+		c, _ := strconv.Atoi(pp.cluster)
+		a, _ := strconv.Atoi(pp.agent)
+		out = append(out, map[string]any{"name": "p" + pp.cluster, "port": c, "targetPort": a})
+	}
+	return out
+}
+
 // selectorPatch builds the merge-patch value that REPLACES a selector: RFC 7386
 // merges maps key-by-key, so every key of the current selector that the target
 // doesn't carry must be explicitly nulled or it would survive the patch (and a
@@ -1638,20 +1683,18 @@ func selectorPatch(target, current map[string]string) map[string]any {
 	return p
 }
 
-func k8sServe(name, port, agentPort string) {
+func k8sServe(name string, pairs []portPair) {
 	ns := k8sNamespace()
-	p, _ := strconv.Atoi(port)
-	ap, _ := strconv.Atoi(agentPort)
 	svc := map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Service",
 		"metadata":   map[string]any{"name": name, "labels": map[string]string{k8sManaged: "plug"}},
 		"spec": map[string]any{
 			// The official manifest labels the agent `app: plug` — the Service
-			// (the k8s "signpost") points the name at it, on the sshd-allocated
-			// port this session's forward listens on.
+			// (the k8s "signpost") points the name at it, each cluster port on
+			// the sshd-allocated port that session's forward listens on.
 			"selector": map[string]string{"app": "plug"},
-			"ports":    []map[string]any{{"port": p, "targetPort": ap}},
+			"ports":    k8sPorts(pairs),
 		},
 	}
 	code, err := k8sAPI("POST", "/api/v1/namespaces/"+ns+"/services", svc, nil)
@@ -1690,7 +1733,7 @@ func k8sServe(name, port, agentPort string) {
 					"metadata": map[string]any{"annotations": map[string]any{k8sParkedAnn: receipt}},
 					"spec": map[string]any{
 						"selector": selectorPatch(map[string]string{"app": "plug"}, existing.Spec.Selector),
-						"ports":    []map[string]any{{"port": p, "targetPort": ap}},
+						"ports":    k8sPorts(pairs),
 					},
 				}
 				if _, perr := k8sMergePatch("/api/v1/namespaces/"+ns+"/services/"+name, patch); perr != nil {

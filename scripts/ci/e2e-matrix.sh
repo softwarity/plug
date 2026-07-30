@@ -495,6 +495,47 @@ do_takeover() {
 # refused (it is parked — do_takeover proves that), so the cell holds a session
 # of its own open and asserts a second one on the same name bounces. Name and
 # cluster port are per-leg (the legs run concurrently on the shared cluster).
+# --- one name, several cluster ports: the mail-gateway shape -------------------
+#
+# One process, one -s name, three cluster ports (HTTP+SMTP+POP3 style): one
+# signpost carries the name and listens on ALL of them, each relayed to its own
+# sshd-allocated agent port. Every port must reach ITS OWN local listener from
+# inside the cluster — reaching the wrong one is the bug this cell pins down.
+do_multiport() {
+  local name p1 p2 p3
+  case "$(uname -s)" in
+    Darwin)               name=multip-mac   p1=18143 p2=18144 p3=18145 ;;
+    MINGW*|MSYS*|CYGWIN*) name=multip-win   p1=18146 p2=18147 p3=18148 ;;
+    *)                    name=multip-linux p1=18140 p2=18141 p3=18142 ;;
+  esac
+  echo "=== multi-port: $name:18131+18132+18133, one process, each port its own backend ==="
+  if ! ( cd "$root/e2e/echo-local" && go build -o "$root/echo-local$ext" . ); then
+    echo "--- multi-port FAIL — echo-local did not build"; sum "**one name, three ports** ❌ (build)"; return 1
+  fi
+  "$PLUG" --host "$ip" --port "$port" \
+    -s "$name:18131:$p1" -s "$name:18132:$p2" -s "$name:18133:$p3" \
+    "$root/echo-local$ext" -addr "127.0.0.1:$p1,127.0.0.1:$p2,127.0.0.1:$p3" \
+    -text "mp-a-$name,mp-b-$name,mp-c-$name" >/tmp/multiport.out 2>&1 &
+  local mp_pid=$!
+  sleep 8 # arm + verify
+  local ra="" rb="" rc=""
+  for _ in 1 2 3; do
+    ra="$(plug curl -s --max-time 10 "http://prober:8097/fetch?url=http://$name:18131/" 2>/dev/null | tr -d '\r' | tail -1)"
+    rb="$(plug curl -s --max-time 10 "http://prober:8097/fetch?url=http://$name:18132/" 2>/dev/null | tr -d '\r' | tail -1)"
+    rc="$(plug curl -s --max-time 10 "http://prober:8097/fetch?url=http://$name:18133/" 2>/dev/null | tr -d '\r' | tail -1)"
+    [ "$ra" = "mp-a-$name" ] && [ "$rb" = "mp-b-$name" ] && [ "$rc" = "mp-c-$name" ] && break
+    sleep 3
+  done
+  kill $mp_pid 2>/dev/null; wait $mp_pid 2>/dev/null
+  if [ "$ra" = "mp-a-$name" ] && [ "$rb" = "mp-b-$name" ] && [ "$rc" = "mp-c-$name" ]; then
+    echo "multi-port OK — $name answers on 18131/18132/18133, each port its own backend"
+    sum "**one name, three ports (no cross-talk)** ✅"; return 0
+  fi
+  echo "--- multi-port FAIL — got a='${ra:-nothing}' b='${rb:-nothing}' c='${rc:-nothing}'"
+  tail -10 /tmp/multiport.out 2>/dev/null | sed 's/^/    /'
+  sum "**one name, three ports** ❌"; return 1
+}
+
 # --- same cluster port, several names: the collision this build removed --------
 #
 # Inside the cluster every service has its own IP, so two services on :3000 are
@@ -809,6 +850,7 @@ case "$phase" in
   takeover)     do_takeover ;;
   collision)    do_collision ;;
   sameport)     do_sameport ;;
+  multiport)    do_multiport ;;
   resilience)   do_resilience ;;
   update)       do_update ;;
   updatejump)   do_update_jump ;;

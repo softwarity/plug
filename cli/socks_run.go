@@ -175,20 +175,28 @@ func startExposes(cfg config) (func(), error) {
 		tr.Close()
 		return nil, err
 	}
-	// The serve-name verb: name, the port workloads dial, the sshd-ALLOCATED
-	// port the signpost must relay to (see tunnel/expose.go — allocation is
-	// what lets many names share one cluster port), takeover (parking a
-	// deployed workload owning the name is the DEFAULT — restored on exit).
-	verb := func(spec tunnel.ExposeSpec, agentPort string) string {
-		return "serve-name " + spec.Name + " " + spec.ClusterPort + " " + agentPort + " takeover"
+	// The serve-name verb: ONE per NAME, all its cluster ports at once — a
+	// service exposing HTTP+SMTP+POP3 on one name is ONE signpost listening on
+	// all three, each relayed to that mapping's sshd-ALLOCATED port (see
+	// tunnel/expose.go — allocation is what lets many names share one cluster
+	// port). takeover: parking a deployed workload owning the name is the
+	// DEFAULT — restored on exit. The pairs read the groupmates' CURRENT
+	// AgentPort at call time, so a re-arm that re-allocated one forward's port
+	// re-provisions the signpost with every port fresh.
+	verb := func(group []*tunnel.Exposed) string {
+		pairs := make([]string, 0, len(group))
+		for _, g := range group {
+			pairs = append(pairs, g.Spec().ClusterPort+":"+g.AgentPort())
+		}
+		return "serve-name " + group[0].Spec().Name + " " + strings.Join(pairs, ",") + " takeover"
 	}
 	// After a reconnect, a restarted agent has GC'd the signpost — AND, on a
 	// takeover, restored the parked workload — so re-run the SAME verb (re-park
 	// included) and re-verify: the name must not be silently dead (or silently
 	// back on the deployed version) while the forward reports re-armed.
-	armRearm := func(ex *tunnel.Exposed, spec tunnel.ExposeSpec) {
-		ex.OnRearm(func(agentPort string) error {
-			m, err := tr.Exec(verb(spec, agentPort))
+	armRearm := func(ex *tunnel.Exposed, spec tunnel.ExposeSpec, group []*tunnel.Exposed) {
+		ex.OnRearm(func(string) error {
+			m, err := tr.Exec(verb(group))
 			if err != nil {
 				return err
 			}
@@ -202,22 +210,35 @@ func startExposes(cfg config) (func(), error) {
 			return verifyExposed(ex, spec.Name, done.Load)
 		})
 	}
+	// Arm every forward first — each -s gets its own sshd-allocated port — and
+	// group the mappings by NAME: one signpost carries a name, so a name's
+	// ports must reach the agent in one verb (a second one would read as a
+	// second SESSION on the name and bounce on the liveness check).
+	var order []string
+	groups := map[string][]*tunnel.Exposed{}
 	for _, spec := range cfg.exposes {
 		ex, err := tr.Expose(spec)
 		if err != nil {
 			return fail(err)
 		}
+		if _, seen := groups[spec.Name]; !seen {
+			order = append(order, spec.Name)
+		}
+		groups[spec.Name] = append(groups[spec.Name], ex)
+	}
+	for _, name := range order {
+		group := groups[name]
 		// Ask the agent to provision the NAME (a docker signpost, a Swarm
 		// service, a k8s Service — whatever the deployment has). Provisioning is
 		// the whole point of -s: you name a service and it exists, with nothing
 		// to agree cluster-side beforehand.
-		reply, err := tr.Exec(verb(spec, ex.AgentPort()))
+		reply, err := tr.Exec(verb(group))
 		if err != nil {
 			return fail(err)
 		}
 		if strings.HasPrefix(reply, "error:") {
 			msg := strings.TrimSpace(strings.TrimPrefix(reply, "error:"))
-			return fail(fmt.Errorf("%s: agent: %s", spec.Name, msg))
+			return fail(fmt.Errorf("%s: agent: %s", name, msg))
 		}
 		// "dynamic" may carry the "parked" note: a deployed workload was parked
 		// (stopped / scaled to 0 / repointed) and will be restored on teardown.
@@ -226,56 +247,59 @@ func startExposes(cfg config) (func(), error) {
 		// protocol — an agent that failed says so above, with the access it is
 		// missing, so there is nothing to add here beyond refusing to continue.
 		if len(fields) == 0 || fields[0] != "dynamic" {
-			return fail(fmt.Errorf("%s: agent answered %q, expected \"dynamic\"", spec.Name, strings.TrimSpace(reply)))
+			return fail(fmt.Errorf("%s: agent answered %q, expected \"dynamic\"", name, strings.TrimSpace(reply)))
 		}
 		parked := len(fields) > 1 && fields[1] == "parked"
 		// Provisioned — register for cleanup BEFORE the check, so a failure
 		// below still tears the name down.
-		dynamic = append(dynamic, spec.Name)
+		dynamic = append(dynamic, name)
 		if parked {
-			info("took over %s — the deployed workload is parked for this session (restored on exit)", spec.Name)
+			info("took over %s — the deployed workload is parked for this session (restored on exit)", name)
 		}
-		// -s was asked for explicitly: an unproven path must never pass silently
-		// (fix the cluster side, run again). But proving it is NOT always the
-		// user's wait to bear. Measured on one Docker Desktop Swarm, the phases
-		// of this loop are: dial 0.04s, remote bind 0.00s, serve-name 0.03s —
-		// and then 6s, 37s, 29s on three identical runs, all of it Swarm
-		// scheduling the signpost task. That wait belongs to the cluster, not to
-		// the command the user is launching.
-		//
-		// The name was created a moment ago, so a probe that fails now means
-		// "not scheduled yet" far more often than anything else — and the two
-		// are indistinguishable from the error alone: a freshly created Swarm
-		// service has no VIP yet, so the cluster answers "Name does not resolve"
-		// (75ms) word for word as it would for a name that will never exist.
-		// Branching on that failed every session at startup (one regression's
-		// worth of learning). So: one short probe, because a cluster that is
-		// already ready answers in 1-5ms and the session is then proven before
-		// it starts — and otherwise the wait moves off the critical path.
-		if verr := ex.Verify(exposeVerifyUpfront); verr == nil {
-			info("serving %s (path verified through the cluster)", spec)
-			armRearm(ex, spec)
-			continue
+		for _, ex := range group {
+			spec := ex.Spec()
+			// -s was asked for explicitly: an unproven path must never pass silently
+			// (fix the cluster side, run again). But proving it is NOT always the
+			// user's wait to bear. Measured on one Docker Desktop Swarm, the phases
+			// of this loop are: dial 0.04s, remote bind 0.00s, serve-name 0.03s —
+			// and then 6s, 37s, 29s on three identical runs, all of it Swarm
+			// scheduling the signpost task. That wait belongs to the cluster, not to
+			// the command the user is launching.
+			//
+			// The name was created a moment ago, so a probe that fails now means
+			// "not scheduled yet" far more often than anything else — and the two
+			// are indistinguishable from the error alone: a freshly created Swarm
+			// service has no VIP yet, so the cluster answers "Name does not resolve"
+			// (75ms) word for word as it would for a name that will never exist.
+			// Branching on that failed every session at startup (one regression's
+			// worth of learning). So: one short probe, because a cluster that is
+			// already ready answers in 1-5ms and the session is then proven before
+			// it starts — and otherwise the wait moves off the critical path.
+			if verr := ex.Verify(exposeVerifyUpfront); verr == nil {
+				info("serving %s (path verified through the cluster)", spec)
+				armRearm(ex, spec, group)
+				continue
+			}
+			info("serving %s (proving the path in the background)", spec)
+			go func() {
+				verr := verifyExposed(ex, spec.Name, done.Load)
+				// Teardown closes the transport, which fails an in-flight probe.
+				// That is the session ending, not a broken path: don't diagnose it.
+				if errors.Is(verr, errStopped) || done.Load() {
+					return
+				}
+				if verr == nil {
+					info("%s: path verified through the cluster", spec.Name)
+					return
+				}
+				info("WARNING %v\n"+
+					"      %s is armed but nothing ever reached it. The session keeps running — a name that "+
+					"comes up later still works — but as it stands the cluster cannot see this process.\n"+
+					"      Check it cluster-side: docker service ps plug-sp-%s / kubectl get svc %s",
+					verr, spec.Name, spec.Name, spec.Name)
+			}()
+			armRearm(ex, spec, group)
 		}
-		info("serving %s (proving the path in the background)", spec)
-		go func() {
-			verr := verifyExposed(ex, spec.Name, done.Load)
-			// Teardown closes the transport, which fails an in-flight probe.
-			// That is the session ending, not a broken path: don't diagnose it.
-			if errors.Is(verr, errStopped) || done.Load() {
-				return
-			}
-			if verr == nil {
-				info("%s: path verified through the cluster", spec.Name)
-				return
-			}
-			info("WARNING %v\n"+
-				"      %s is armed but nothing ever reached it. The session keeps running — a name that "+
-				"comes up later still works — but as it stands the cluster cannot see this process.\n"+
-				"      Check it cluster-side: docker service ps plug-sp-%s / kubectl get svc %s",
-				verr, spec.Name, spec.Name, spec.Name)
-		}()
-		armRearm(ex, spec)
 	}
 	return func() {
 		done.Store(true)

@@ -105,6 +105,10 @@ func (t *Transport) Expose(spec ExposeSpec) (*Exposed, error) {
 	return e, nil
 }
 
+// Spec is the mapping this Exposed arms — the grouping key for the one
+// serve-name per NAME that a multi-port name needs.
+func (e *Exposed) Spec() ExposeSpec { return e.spec }
+
 // AgentPort is the sshd-allocated port this session's forward listens on —
 // what the signpost must relay to. Valid right after Expose; a reconnect
 // re-allocates, and the OnRearm hook receives the NEW port.

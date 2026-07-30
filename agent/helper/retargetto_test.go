@@ -106,6 +106,8 @@ func TestSignpostAgentPort(t *testing.T) {
 	}{
 		{[]string{"/usr/local/bin/plug-agent", "signpost", "3000", "neo_plug:41234"}, "41234"},
 		{[]string{"/usr/local/bin/plug-agent", "signpost", "3000", "10.0.1.5:52801"}, "52801"},
+		// multi-port signpost (HTTP+SMTP+POP3 on one name): first pair decides
+		{[]string{"/usr/local/bin/plug-agent", "signpost", "80", "neo_plug:41001", "25", "neo_plug:41002", "425", "neo_plug:41003"}, "41001"},
 		{[]string{"sleep", "60"}, ""},
 		{nil, ""},
 		{[]string{"signpost"}, ""},
