@@ -1177,7 +1177,7 @@ func resolveConfig(o options) config {
 	case o.profile != "":
 		// An unknown -p profile isn't an error: offer the wizard to create it, so
 		// reaching a new cluster is just `plug -p <newname> <cmd>` (no re-install).
-		if _, err := os.Stat(filepath.Join(plugDir(), o.profile+".conf")); err != nil {
+		if _, err := os.Stat(profilePath(o.profile)); err != nil {
 			info("profile %q doesn't exist yet — let's create it", o.profile)
 			cfg = loadProfile(wizard(o.profile, false))
 		} else {
@@ -1233,7 +1233,7 @@ func listProfiles() []string {
 
 func loadProfile(name string) config {
 	var cfg config
-	data, err := os.ReadFile(filepath.Join(plugDir(), name+".conf"))
+	data, err := os.ReadFile(profilePath(name))
 	if err != nil {
 		fatal("profile %q not found in %s", name, plugDir())
 	}
@@ -1290,7 +1290,7 @@ func wizard(defaultName string, confirmOverwrite bool) string {
 	in := bufio.NewReader(tty)
 
 	name := prompt(in, "profile name", defaultName)
-	path := filepath.Join(plugDir(), name+".conf")
+	path := profilePath(name)
 	if confirmOverwrite {
 		if _, err := os.Stat(path); err == nil {
 			if !strings.EqualFold(prompt(in, name+" already exists, overwrite? (y/N)", "n"), "y") {
@@ -1310,7 +1310,7 @@ func wizard(defaultName string, confirmOverwrite bool) string {
 // writeProfile saves ~/.plug/<name>.conf with host/port and returns name. Shared
 // by the wizard and the non-interactive `plug -p <name> -H <host> [--port <p>]`.
 func writeProfile(name, host, port string) string {
-	path := filepath.Join(plugDir(), name+".conf")
+	path := profilePath(name)
 	guardUserPath(path)
 	if err := os.MkdirAll(plugDir(), 0o700); err != nil {
 		fatal("%v", err)

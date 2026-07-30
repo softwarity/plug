@@ -245,6 +245,9 @@ func doctorProfile(name string, add func(check)) {
 // readProfileSoft reads a profile without loadProfile's fatal — doctor reports
 // a broken profile as a finding, it must not die on it.
 func readProfileSoft(name string) (host, port string, err error) {
+	if err := checkProfileName(name); err != nil {
+		return "", "", err
+	}
 	data, err := os.ReadFile(filepath.Join(plugDir(), name+".conf"))
 	if err != nil {
 		return "", "", fmt.Errorf("unreadable: %v", err)

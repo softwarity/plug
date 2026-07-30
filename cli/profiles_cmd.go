@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 )
 
 // cmdListProfiles implements `plug ls`: one line per profile with its host:port.
@@ -29,7 +30,9 @@ func cmdRemoveProfile(args []string) {
 		fatal("usage: plug rm <profile>")
 	}
 	name := args[0]
-	if err := os.Remove(profilePath(name)); err != nil {
+	path := profilePath(name)
+	guardUserPath(path) // plug may hold root here — never act outside the caller's tree
+	if err := os.Remove(path); err != nil {
 		if os.IsNotExist(err) {
 			fatal("no profile %q in %s", name, plugDir())
 		}
@@ -44,13 +47,16 @@ func cmdRenameProfile(args []string) {
 		fatal("usage: plug rn <old> <new>")
 	}
 	old, name := args[0], args[1]
-	if _, err := os.Stat(profilePath(old)); err != nil {
+	oldPath, newPath := profilePath(old), profilePath(name)
+	guardUserPath(oldPath) // plug may hold root here — never act outside the caller's tree
+	guardUserPath(newPath)
+	if _, err := os.Stat(oldPath); err != nil {
 		fatal("no profile %q in %s", old, plugDir())
 	}
-	if _, err := os.Stat(profilePath(name)); err == nil {
+	if _, err := os.Stat(newPath); err == nil {
 		fatal("profile %q already exists", name)
 	}
-	if err := os.Rename(profilePath(old), profilePath(name)); err != nil {
+	if err := os.Rename(oldPath, newPath); err != nil {
 		fatal("%v", err)
 	}
 	info("renamed profile %q → %q", old, name)
@@ -86,6 +92,28 @@ func cmdTestProfile(args []string) {
 	info("✓ %s:%s reachable — agent v%s", cfg.host, cfg.port, v)
 }
 
+// profileName is what a profile may be called. Deliberately narrow, because the
+// name becomes a FILE NAME under ~/.plug and plug may be holding root while it
+// acts on it: filepath.Join RESOLVES a leading "../.." instead of refusing it,
+// so an unchecked name walks straight out of the directory — `plug rn mine
+// ../../../etc/ssh/sshd_config.d/x` would drop a file whose content the caller
+// wrote into a root-only directory.
+var profileName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`)
+
+func checkProfileName(name string) error {
+	if !profileName.MatchString(name) {
+		return fmt.Errorf("%q is not a valid profile name — start with a letter or digit, "+
+			"then letters, digits, dot, dash or underscore (63 max)", name)
+	}
+	return nil
+}
+
+// profilePath is the ONLY way to turn a profile name into a path: it validates
+// first, so no caller can forget. Fatal on a bad name — every caller but
+// doctor's soft read wants to stop there anyway.
 func profilePath(name string) string {
+	if err := checkProfileName(name); err != nil {
+		fatal("%v", err)
+	}
 	return filepath.Join(plugDir(), name+".conf")
 }
