@@ -596,8 +596,12 @@ func securePath() {
 		return
 	}
 	pathNarrowed = true
-	_ = os.Setenv("PATH", "/usr/sbin:/usr/bin:/sbin:/bin:/run/current-system/sw/bin:/run/wrappers/bin")
+	_ = os.Setenv("PATH", securePathList)
 }
+
+// securePathList is the $PATH plug gives itself while privileged. Named because
+// the core also COMPARES against it: see runChildEnv.
+const securePathList = "/usr/sbin:/usr/bin:/sbin:/bin:/run/current-system/sw/bin:/run/wrappers/bin"
 
 // withUserPath returns env with $PATH forced back to the human's — plug's
 // narrowed one must never leak into the command it launches.
@@ -1414,6 +1418,16 @@ func runChildEnv(cmdArgs []string, env []string) int {
 	defer signal.Stop(sigs)
 
 	if err := child.Start(); err != nil {
+		// A core is exec'd by the launcher and captures $PATH at startup as the
+		// human's. A launcher older than this core narrowed it FIRST and handed
+		// that over, so what we hold is the narrow list itself — no human's
+		// $PATH has ever looked like that, and the real one is unrecoverable
+		// here. Name the skew instead of blaming a command that IS installed.
+		if pathNarrowed && userPath == securePathList {
+			fatal("cannot start %q: it is not in the system directories, and this core was handed a\n"+
+				"      narrowed $PATH by a launcher older than itself — your own $PATH never reached it.\n"+
+				"      Reinstall the launcher from the agent to pair them:  plug update", cmdArgs[0])
+		}
 		info("cannot start %q: %v", cmdArgs[0], err)
 		return 127
 	}
