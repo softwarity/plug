@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.6.2
+
 ### Fixed: your command finds `npm` again when the agent's version differs
 
 2.6.1 narrowed plug's own `$PATH` while it holds root, and restored yours for
