@@ -568,6 +568,12 @@ var safeVersionRe = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$`)
 // — and anything it spawns — is resolved and run with THIS one.
 var userPath = os.Getenv("PATH")
 
+// pathNarrowed records that securePath actually replaced $PATH this run.
+// False on every unprivileged invocation and always on Windows (no setuid;
+// euid == ruid there) — in those cases the process $PATH IS the human's and
+// there is nothing to restore.
+var pathNarrowed bool
+
 // securePath narrows $PATH to root-owned system directories while plug holds a
 // privilege the caller does not.
 //
@@ -589,6 +595,7 @@ func securePath() {
 	if euid, ruid := os.Geteuid(), os.Getuid(); euid == ruid {
 		return
 	}
+	pathNarrowed = true
 	_ = os.Setenv("PATH", "/usr/sbin:/usr/bin:/sbin:/bin:/run/current-system/sw/bin:/run/wrappers/bin")
 }
 
@@ -1378,10 +1385,13 @@ func runChildEnv(cmdArgs []string, env []string) int {
 	// YOUR command is resolved and run with YOUR $PATH — plug narrows its own
 	// only for the system helpers it drives as root (see securePath).
 	child := exec.Command(cmdArgs[0], cmdArgs[1:]...)
-	if p, err := lookPathIn(cmdArgs[0], userPath); err == nil {
-		child.Path = p
+	if pathNarrowed {
+		if p, err := lookPathIn(cmdArgs[0], userPath); err == nil {
+			child.Path = p
+		}
+		env = withUserPath(env)
 	}
-	child.Env = withUserPath(env)
+	child.Env = env
 	child.Stdin = os.Stdin
 	child.Stdout = os.Stdout
 	child.Stderr = os.Stderr
