@@ -618,6 +618,11 @@ do_collision() {
 # other's signpost on every reconnect, each leaving the other silently
 # unreachable while everything LOOKED healthy. do_collision cannot catch this —
 # there, A's signpost is present when B asks, which is the easy half.
+#
+# COMPOSE ONLY, like do_resilience and for the same reason: the sweep goes
+# through the chaos service, which only the compose cluster deploys. No loss of
+# meaning — the lease is taken in serveName, ABOVE the k8s/docker split, so it
+# is the same code on all three families.
 do_lease() {
   local lname lport lloc
   case "$(uname -s)" in
