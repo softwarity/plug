@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.6.1
+
 ### Fixed: plug no longer trusts the caller's environment while it holds root
 
 plug is setuid root on macOS and carries ambient capabilities on Linux — root
