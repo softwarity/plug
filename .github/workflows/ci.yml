@@ -36,7 +36,17 @@ jobs:
         run: go vet ./...
       - name: Test
         working-directory: cli
-        run: go test ./...
+        shell: bash
+        env:
+          # -race, or the concurrency tests prove nothing: rearm_race_test.go is
+          # written to fail OUTRIGHT under the detector and merely to be flaky
+          # without it, so a plain `go test` would let a dropped mutex through.
+          # Not on Windows: the detector needs cgo and a C toolchain the runner
+          # does not guarantee, and none of this concurrency is OS-specific.
+          # Written this way round on purpose: in GitHub expressions '' is FALSY,
+          # so `windows && '' || '-race'` would hand Windows the -race it excludes.
+          RACE: ${{ matrix.os != 'windows-latest' && '-race' || '' }}
+        run: go test $RACE ./...
       - name: Record result
         if: always()
         shell: bash
@@ -115,7 +125,7 @@ jobs:
       # unit tests).
       - name: Vet & test the agent helper
         working-directory: agent/helper
-        run: go vet ./... && go build ./... && go test ./...
+        run: go vet ./... && go build ./... && go test -race ./...
       - name: Cross-compile
         working-directory: cli
         env:

@@ -187,6 +187,21 @@ do_env() {
 do_matrix() {
   echo "=== matrix: each client UNDER plug → service by name ==="
   local fails=0 results="" entry proto target l r out _attempt
+  # A client that never built is NOT a cell to skip quietly. do_setup reports the
+  # build failure and still exits 0, so those cells used to render as "·" and the
+  # step went GREEN having proven nothing — 8 of 32 cells unrun for one language,
+  # all 32 if Maven and pip were both down. Name them and fail here, where the
+  # grid is rendered, rather than shipping a matrix that tested less than it says.
+  local missing=""
+  for l in $LANGS; do
+    case " $built " in *" $l "*) : ;; *) missing="$missing $l" ;; esac
+  done
+  if [ -n "$missing" ]; then
+    echo "--- matrix FAIL — client(s) never built:$missing"
+    echo "    the build log is in the setup step (/tmp/build-<lang>.log)"
+    sum "**protocol matrix** ❌ — client(s) that never built:$missing"
+    return 1
+  fi
   for entry in $PROTOS; do
     proto="${entry%%:*}"; target="${entry#*:}"
     for l in $LANGS; do
