@@ -32,13 +32,13 @@ kind create cluster --config "$root/e2e/kind-config.yaml" --wait 120s
 
 echo "=== build + load the local service images ==="
 cd "$root/e2e"
-for svc in grpc prober flaky gateway; do
+for svc in grpc prober flaky gateway chaos; do
   docker build -q -t "plug-e2e/$svc:e2e" -f "services/$svc/Dockerfile" . >/dev/null
 done
 docker build -q -t plug-e2e/wsserver:e2e -f services/websocket/Dockerfile . >/dev/null
 kind load docker-image softwarity/plug:e2e \
   plug-e2e/grpc:e2e plug-e2e/wsserver:e2e plug-e2e/prober:e2e \
-  plug-e2e/flaky:e2e plug-e2e/gateway:e2e
+  plug-e2e/flaky:e2e plug-e2e/gateway:e2e plug-e2e/chaos:e2e
 
 echo "=== deploy the agent (the PUBLISHED manifest, branch image) ==="
 sed -e 's|image: docker.io/softwarity/plug:latest|image: softwarity/plug:e2e|' \
@@ -55,6 +55,9 @@ PREV_RELEASE="$(bash "$root/scripts/ci/previous-release.sh")" || exit 1
 echo "previous release = $PREV_RELEASE"
 export PREV_RELEASE
 envsubst '$PREV_RELEASE' < "$root/e2e/k8s.prev-agents.yaml" | kubectl apply -f -
+
+echo "=== deploy the per-leg crash-test agents + chaos (resilience, lease) ==="
+kubectl apply -f "$root/e2e/k8s.res-agents.yaml"
 
 echo "=== deploy the services ==="
 kubectl create configmap rabbitmq-config \
@@ -78,7 +81,7 @@ for d in $(kubectl get deploy -o name); do
   kubectl rollout status --timeout=180s "$d" || failed="$failed $d"
 done
 # The previous-release agents live in their own namespaces, which the loop above does not see.
-for ns in plug-prev-linux plug-prev-mac plug-prev-win; do
+for ns in plug-prev-linux plug-prev-mac plug-prev-win plug-res-linux plug-res-mac plug-res-win; do
   kubectl -n "$ns" rollout status --timeout=180s deploy/plug || failed="$failed $ns/plug"
 done
 kubectl get deploy,svc -o wide

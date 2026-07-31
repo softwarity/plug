@@ -17,6 +17,12 @@ nodes:
         hostPort: 2222
       - containerPort: 31890
         hostPort: 18090
+      - containerPort: 32223
+        hostPort: 2223
+      - containerPort: 32224
+        hostPort: 2224
+      - containerPort: 32225
+        hostPort: 2225
       - containerPort: 32226
         hostPort: 2226
       - containerPort: 32227

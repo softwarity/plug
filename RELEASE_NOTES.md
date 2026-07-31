@@ -2,16 +2,22 @@
 
 ## NEXT RELEASE
 
-### Changed: the Swarm family runs the same e2e chain as Compose
+### Changed: all three cluster families run the same e2e chain
 
 Four cells — the name lease, the two `plug update` cells and the agent-crash
 resilience chain — only ever ran against Compose, because the crash simulator
-and the per-leg crash-test agents lived only in that cluster. Swarm now has
-them, so it proves the same things: that a name survives a swept signpost, that
-`plug update` behaves, and that an agent restarted mid-session restores what the
-session had parked and re-takes its name on reconnect. Kubernetes is next, and
-matters most — its boot-GC is a different implementation and nothing exercises
-it today.
+and the per-leg crash-test agents lived in that cluster alone. Swarm and
+Kubernetes now have them too, so each family proves the same things: that a name
+survives a swept signpost, that `plug update` behaves, and that an agent
+restarted mid-session restores what the session had parked and re-takes its name
+on reconnect.
+
+That last one closes a real hole rather than adding ceremony. Restoring a parked
+workload after an agent restart is a *different implementation* per backend, and
+only the Docker one was ever exercised: nothing checked that a Kubernetes agent,
+coming back from a crash, puts back the Service a session had repointed. Running
+the same cells everywhere also makes the per-family timings comparable, which
+they were not while each family ran a different chain.
 
 ---
 
