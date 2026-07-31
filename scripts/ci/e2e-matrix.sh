@@ -848,8 +848,17 @@ do_update_jump() {
   # container from inside it, so it stops at "pulled" plus the command that
   # finishes the job. Assert whichever this cluster is, from the CLI's own line
   # — never skip: a backend that silently did nothing would look identical.
-  local now
-  now="$(ssh -n -p "$oldport" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "get@$ip_b" version 2>/dev/null | tr -d '\r')"
+  # A rollout is ASYNCHRONOUS — the old pod/task goes, the new image is pulled,
+  # the new one becomes ready — so reading the version ONCE, the instant the CLI
+  # reports the move, measures the rollout's speed rather than its outcome. It
+  # duly failed on one leg while the other two passed the same assert. Wait for
+  # the version to land, with a bound, and report honestly if it never does.
+  local now=""
+  for _ in $(seq 1 40); do
+    now="$(ssh -n -p "$oldport" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "get@$ip_b" version 2>/dev/null | tr -d '\r')"
+    [ "$now" = "$target" ] && break
+    sleep 5
+  done
   if printf '%s' "$out" | grep -q "agent updated: v2.4.1"; then
     if [ "$now" != "$target" ]; then
       echo "--- update-jump FAIL — reported a move to $target but the agent answers v$now"
