@@ -18,15 +18,6 @@ concluded all was well. It now re-resolves the primary on every tick, hands the
 old service its original DNS back, moves the override onto the new one, and says
 so in the log.
 
-### Fixed: a DNS lookup the agent could not perform is no longer an answer
-
-Asked whether a name exists, the agent replied `nxdomain` on *any* failure —
-including a 3-second timeout. The cluster's own resolver is briefly unreachable
-every time a laptop wakes, so a running service could be declared absent, and the
-CLI caches that verdict for 30 seconds before handing the application NXDOMAIN.
-Only a resolver actually saying "no such name" means absent now; anything else is
-reported as an error, which makes the CLI fail open and mint as it always did.
-
 
 ### Changed: all three cluster families run the same e2e chain
 

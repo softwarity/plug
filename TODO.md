@@ -7,6 +7,27 @@ désormais dans `RELEASE_NOTES.md` et la roadmap publique dans
 
 ## 🔴 Ouvert — issu de l'audit du 30/07
 
+- [ ] **`resolve` répond `nxdomain` sur un lookup qui a ÉCHOUÉ** (agent/helper/main.go).
+      Corrigé puis **annulé le 31/07** : distinguer par le type d'erreur ne marche
+      pas. Dans un réseau de cluster isolé, un nom **absent** expire exactement
+      comme un résolveur injoignable, donc le correctif a fait minter une IP au
+      lieu du NXDOMAIN honnête — la cellule `dns honesty` l'a attrapé sur 6 legs.
+      La bonne réponse est une **sonde de santé** : sur erreur, re-résoudre un nom
+      dont on sait qu'il existe ; s'il répond, le résolveur va bien et le premier
+      nom est vraiment absent ; s'il ne répond pas, échouer ouvert. Reste à
+      trouver le nom témoin portable (Docker embarqué vs CoreDNS).
+
+- [ ] **Cellule `resilience` sur k8s** : écrite et déployée (manifestes
+      `e2e/k8s.res-agents.yaml`, chaos avec mode Kubernetes), mais **désactivée**
+      le 31/07. Le prober vit dans `default` et joint `res-tko-<leg>` par son nom
+      nu, alors que le service déployé et l'agent par leg vivent dans
+      `plug-res-<leg>` — la résolution ne traverse pas les namespaces. Compose et
+      Swarm n'ont pas ce problème (un seul espace de noms). À trancher : FQDN
+      dans la cellule (mais elle est partagée par les 3 familles), ou tout mettre
+      dans `default` (mais trois agents `app=plug` y entreraient en conflit avec
+      l'agent principal). C'est la dernière marche vers `k8sGC` couvert.
+
+
 - [ ] **Le core en cache est écrit par l'utilisateur et exécuté en root**
       (`cli/main.go`, `chownToUser(bin)`). Setuid, donc tout code tournant sous
       ton identité (un postinstall npm) peut réécrire `~/.plug/versions/<v>/plug`
