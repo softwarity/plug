@@ -13,6 +13,7 @@ require (
 require (
 	github.com/google/btree v1.1.2 // indirect
 	golang.org/x/net v0.55.0 // indirect
+	golang.org/x/term v0.44.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 )

@@ -23,6 +23,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"golang.org/x/term"
 )
 
 func servedDir() string { return filepath.Join(plugDir(), "served") }
@@ -133,9 +135,19 @@ func holderIsOurs(r *servedRecord, refusal string) bool {
 }
 
 // askToStop asks whether to stop the holder. No terminal — a script, a CI job,
-// a detached run — means no question and no kill: hanging on a prompt nobody
-// can answer would be worse than the refusal it replaces.
+// a detached run — means no question and no kill: a prompt nobody can answer
+// blocks the session for ever, which is far worse than the refusal it replaces.
+//
+// Being able to OPEN the terminal device is not the test. On Windows, CONIN$
+// opens quite happily in a CI job with no console attached, and the read that
+// follows never returns — 16 minutes of a Windows e2e leg went that way before
+// this was written. Ask the OS whether stdin IS a terminal, which is the real
+// question, and keep a backstop deadline for any context neither of us thought
+// of: an unanswered question falls back to reporting, never to killing.
 func askToStop(r *servedRecord) bool {
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return false
+	}
 	tty, err := os.Open(ttyDevice)
 	if err != nil {
 		return false
@@ -143,16 +155,27 @@ func askToStop(r *servedRecord) bool {
 	defer tty.Close()
 	fmt.Fprintf(os.Stderr, "[plug] that name is served by another session of yours:\n        %s\n", r.describe())
 	fmt.Fprint(os.Stderr, "[plug] stop it and take the name? [Y/n]: ")
-	line, rerr := bufio.NewReader(tty).ReadString('\n')
-	if rerr != nil {
+	answer := make(chan string, 1)
+	go func() {
+		line, rerr := bufio.NewReader(tty).ReadString('\n')
+		if rerr != nil {
+			line = "n"
+		}
+		answer <- strings.ToLower(strings.TrimSpace(line))
+	}()
+	select {
+	case a := <-answer:
+		return a == "" || a == "y" || a == "yes" || a == "o" || a == "oui"
+	case <-time.After(askToStopDeadline):
+		fmt.Fprintln(os.Stderr, "\n[plug] no answer — leaving that session alone")
 		return false
 	}
-	switch strings.ToLower(strings.TrimSpace(line)) {
-	case "", "y", "yes", "o", "oui":
-		return true
-	}
-	return false
 }
+
+// askToStopDeadline is long enough that someone reading the command line before
+// deciding is never cut off, and short enough that a context we mistook for
+// interactive cannot wedge a session.
+const askToStopDeadline = 2 * time.Minute
 
 // stopHolder asks the holder to stop and waits for it to let the name go.
 //

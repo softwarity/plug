@@ -613,7 +613,11 @@ do_collision() {
   # Session B, same name, while A lives: must bounce (the agent-side port is
   # held by A's remote-forward; the signpost also answers to A).
   local co
-  co="$("$PLUG" --host "$ip" --port "$port" -s "$cname:$cport:9" curl --version 2>&1 || true)"
+  # perl's alarm, like every other cell: a plug that hangs here must fail the
+  # cell in seconds, not sit until the job's 25-minute timeout. It did exactly
+  # that once — a prompt on a Windows runner with no console to answer it.
+  co="$(perl -e 'alarm 60; exec @ARGV or exit 127' \
+        "$PLUG" --host "$ip" --port "$port" -s "$cname:$cport:9" curl --version 2>&1 || true)"
   wait $a_pid 2>/dev/null
   if printf '%s' "$co" | grep -qiE "another session|denied by peer|already"; then
     # The refusal must NAME the holder's agent port. That port is what lets a
