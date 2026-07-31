@@ -175,7 +175,13 @@ func startExposes(cfg config) (func(), error) {
 	// Names provisioned so far — dropped on teardown AND on any error below (a
 	// signpost/Service created for spec N must not survive a failure on N or N+1).
 	var dynamic []string
+	// Forgets this session's ~/.plug/served records — the breadcrumb that lets a
+	// LATER session name whoever holds a name it is refused.
+	var unmark []func()
 	drop := func() {
+		for _, f := range unmark {
+			f()
+		}
 		for _, name := range dynamic {
 			// Say it when this fails. Releasing a name is not just removing a
 			// signpost: on a takeover it RESTORES what the session parked
@@ -302,6 +308,18 @@ func startExposes(cfg config) (func(), error) {
 		}
 		if strings.HasPrefix(reply, "error:") {
 			msg := strings.TrimSpace(strings.TrimPrefix(reply, "error:"))
+			// "already exposed by another live session" is correct and unhelpful
+			// on its own: the holder is a process you may have no window onto
+			// (an editor closed, its terminal panes gone, what ran in them still
+			// running). If it is on this machine, we know which one.
+			if strings.Contains(msg, "another live session") {
+				if holder := servedHolder(name); holder != "" {
+					return fail(fmt.Errorf("%s: agent: %s\n      %s", name, msg, holder))
+				}
+				return fail(fmt.Errorf("%s: agent: %s\n"+
+					"      No session of yours on this machine is recorded for it — the holder is on\n"+
+					"      another machine or another account. It frees itself once that session ends.", name, msg))
+			}
 			return fail(fmt.Errorf("%s: agent: %s", name, msg))
 		}
 		// "dynamic" may carry the "parked" note: a deployed workload was parked
@@ -317,6 +335,7 @@ func startExposes(cfg config) (func(), error) {
 		// Provisioned — register for cleanup BEFORE the check, so a failure
 		// below still tears the name down.
 		dynamic = append(dynamic, name)
+		unmark = append(unmark, markServed(name, os.Args[1:]))
 		if parked {
 			info("took over %s — the deployed workload is parked for this session (restored on exit)", name)
 		}

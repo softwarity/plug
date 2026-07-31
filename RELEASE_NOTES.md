@@ -2,6 +2,16 @@
 
 ## NEXT RELEASE
 
+### Changed: a name that is already taken says who is holding it
+
+`"web" is already exposed by another live session` was correct and unhelpful:
+the holder is often a process you have no window onto — close an editor and its
+terminal panes go with it, while what ran in them keeps running. plug now
+records which local process serves a name, and the refusal names it, with the
+directory and command line so you can recognise it, and the PID to stop it. When
+nothing local matches, it says so — the holder is on another machine, and it
+frees itself when that session ends.
+
 ---
 
 ## 2.6.2
