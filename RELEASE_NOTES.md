@@ -2,6 +2,24 @@
 
 ## NEXT RELEASE
 
+### Fixed: plug checks the binary it is about to run with privilege
+
+plug caches the core matching your agent's version under `~/.plug/versions` and
+runs it with the privilege it holds. It now asks the agent, over the same
+authenticated channel the binary arrived on, what that file must hash to — and
+checks it before every launch, not just after the download. A copy that no
+longer matches is discarded and fetched again.
+
+Two things follow. A published release names one build, so a mismatch there is
+corruption or tampering and is said out loud. A `dev` or branch build
+legitimately covers different bytes over time, so it is simply re-fetched — which
+also ends the stale-cache surprise where a rebuilt image kept running the core
+you already had.
+
+The check needs an agent that can answer, so redeploy the `softwarity/plug`
+image; plug says so plainly rather than skipping the verification. Kubernetes and
+Docker desktops are unaffected in behaviour otherwise — the cost is ~30ms.
+
 ---
 
 ## 2.7.1

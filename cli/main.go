@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	_ "embed"
 	"errors"
 	"fmt"
@@ -755,17 +756,46 @@ func ensureVersion(v string, cfg config) (string, error) {
 	// without this it lands root-owned (can't be listed/cleaned without sudo). Also
 	// self-heals a cache an earlier privileged run already left root-owned.
 	own := func() { chownToUser(versionsDir()); chownToUser(dir); chownToUser(bin) }
-	if fi, err := os.Stat(bin); err == nil && fi.Size() > 1<<20 {
-		own()
-		ensureWintunBeside(bin)
-		return bin, nil
+	osArch := fmt.Sprintf("%s-%s", runtime.GOOS, runtime.GOARCH)
+	// What the agent says this binary must hash to. Asked EVERY launch, because
+	// the tamper we are guarding against happens after the download: the cached
+	// core is executed with the privilege plug holds (root on macOS, ambient
+	// caps on Linux), so anything able to rewrite it — a postinstall in the very
+	// project plug is launching — would be running with it. ~30ms for 9MB.
+	want, derr := fetchDigest(cfg, osArch)
+	if fi, err := os.Stat(bin); err == nil && fi.Size() > 1<<20 && derr == nil {
+		got, herr := fileSHA256(bin)
+		switch {
+		case herr == nil && got == want:
+			own()
+			ensureWintunBeside(bin)
+			return bin, nil
+		case herr == nil:
+			// A RELEASE version names one commit, so the same version can only
+			// mean the same bytes: a mismatch there is corruption or tampering
+			// and is worth saying out loud. A dev or branch build legitimately
+			// covers different bytes over time — re-fetching is routine.
+			if releaseVersionRe.MatchString(shortVersion(v)) {
+				info("WARNING the cached v%s does not match what the agent serves — discarding it and fetching again.\n"+
+					"      A published release names one build, so this is corruption or tampering, not a new version.", v)
+			}
+			_ = os.Remove(bin)
+		}
 	}
-	data, err := getDownload(cfg, fmt.Sprintf("%s-%s", runtime.GOOS, runtime.GOARCH), "v"+v)
+	if derr != nil {
+		return "", fmt.Errorf("the agent could not tell what v%s should hash to (%v).\n"+
+			"      plug verifies the cached binary before running it with privilege, and will not skip that.\n"+
+			"      Redeploy the softwarity/plug image so the agent can answer", v, derr)
+	}
+	data, err := getDownload(cfg, osArch, "v"+v)
 	if err != nil {
 		return "", err
 	}
 	if len(data) < 1<<20 || !looksLikeBinary(data) {
 		return "", fmt.Errorf("downloaded binary looks invalid (%d bytes)", len(data))
+	}
+	if got := fmt.Sprintf("%x", sha256.Sum256(data)); got != want {
+		return "", fmt.Errorf("the downloaded v%s does not hash to what the agent announced — refusing to install it", v)
 	}
 	guardUserPath(dir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -971,7 +1001,11 @@ func dialGetUser(cfg config) (*ssh.Client, error) {
 	})
 }
 
-func agentVersion(cfg config) (string, error) {
+func agentVersion(cfg config) (string, error) { return getExec(cfg, "version") }
+
+// getExec runs one verb on the agent's download channel and returns its output.
+// The `get` user has a ForceCommand, so the verb is all it will ever run.
+func getExec(cfg config, verb string) (string, error) {
 	client, err := dialGetUser(cfg)
 	if err != nil {
 		return "", err
@@ -982,7 +1016,7 @@ func agentVersion(cfg config) (string, error) {
 		return "", err
 	}
 	defer sess.Close()
-	out, err := sess.Output("version")
+	out, err := sess.Output(verb)
 	if err != nil {
 		return "", err
 	}
@@ -1002,6 +1036,51 @@ var minBarDuration = 2 * time.Second
 // terminal it animates a progress bar so a version update is actually visible —
 // the transfer is quick and the child usually wipes the screen right after.
 // label is the version being fetched, for the display.
+// fileSHA256 hashes a file on disk, streaming it — the core is ~9MB and there is
+// no reason to hold a second copy in memory to check it.
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
+// fetchDigest is the digest lookup, indirected so a test can exercise the cache
+// paths without a cluster.
+var fetchDigest = getDigest
+
+// getDigest asks the agent what the binary for osArch must hash to.
+//
+// The answer travels the same authenticated channel the binary itself came from
+// (host key pinned in ~/.plug/known_hosts), which is what makes it worth
+// anything: it proves the copy on disk is still the one that arrived, not that
+// the source was honest. A forged AGENT would announce a matching hash for a
+// forged binary — that is the threat a signature answers, and it is a separate
+// layer this one is shaped to accept later.
+//
+// key=value lines, so a later `sig=` costs nothing here.
+func getDigest(cfg config, osArch string) (string, error) {
+	out, err := getExec(cfg, "digest "+osArch)
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "sha256="); ok {
+			if len(v) != 64 {
+				return "", fmt.Errorf("agent answered a malformed sha256 (%d chars)", len(v))
+			}
+			return v, nil
+		}
+	}
+	return "", fmt.Errorf("agent answered no sha256 for %s", osArch)
+}
+
 func getDownload(cfg config, osArch, label string) ([]byte, error) {
 	client, err := dialGetUser(cfg)
 	if err != nil {

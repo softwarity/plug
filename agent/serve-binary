@@ -144,6 +144,38 @@ TAIL
   exit 0
 fi
 
+# digest <os>-<arch>: the SHA-256 of the binary this agent would serve, so the
+# launcher can check the copy it CACHED is still the one it downloaded — the
+# tamper it cannot otherwise see, since that cached file is executed with
+# privilege on macOS and Linux.
+#
+# key=value lines, deliberately: a signature (sig=, key=) can be added later
+# without breaking a parser written today. A bare hash would have forced a new
+# verb and a compatibility dance the first time we needed a second field.
+if [ "$verb" = "digest" ]; then
+  do=${2%%-*}
+  da=${2#*-}
+  case "$da" in x86_64|amd64) da=amd64 ;; aarch64|arm64) da=arm64 ;; esac
+  dext=""
+  [ "$do" = windows ] && dext=".exe"
+  df="/opt/plug/bin/plug-$do-$da$dext"
+  if [ ! -f "$df" ]; then
+    echo "plug: no binary for $2 on this agent" >&2
+    exit 1
+  fi
+  # sha256sum (coreutils) on Alpine; keep the busybox/openssl fallbacks so the
+  # verb never silently reports nothing.
+  if command -v sha256sum >/dev/null 2>&1; then
+    echo "sha256=$(sha256sum "$df" | cut -d' ' -f1)"
+  elif command -v openssl >/dev/null 2>&1; then
+    echo "sha256=$(openssl dgst -sha256 "$df" | awk '{print $NF}')"
+  else
+    echo "plug: no sha256 tool in this agent image" >&2
+    exit 1
+  fi
+  exit 0
+fi
+
 # raw binary (used by the launcher's version fetch and manual downloads)
 o=${verb%%-*}
 a=${verb#*-}

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -30,12 +31,33 @@ func TestEnsureVersionCacheHit(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The cached core is verified against what the agent says it must hash to —
+	// it is executed with privilege, so "it is already there" is not enough.
+	sum, err := fileSHA256(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := fetchDigest
+	fetchDigest = func(config, string) (string, error) { return sum, nil }
+	defer func() { fetchDigest = saved }()
+
 	got, err := ensureVersion("9.9.9", config{})
 	if err != nil {
-		t.Fatalf("cache hit must not error (no network expected): %v", err)
+		t.Fatalf("a cache hit that MATCHES must not error: %v", err)
 	}
 	if got != bin {
 		t.Fatalf("ensureVersion = %q, want the cached %q", got, bin)
+	}
+
+	// Same file, a digest that no longer matches: the cache must be discarded
+	// rather than executed. The download that follows fails fast here (no
+	// cluster), which is exactly how we know it did not reuse the file.
+	fetchDigest = func(config, string) (string, error) { return strings.Repeat("a", 64), nil }
+	if _, err := ensureVersion("9.9.9", config{}); err == nil {
+		t.Fatal("a cached core whose hash does not match was accepted")
+	}
+	if _, serr := os.Stat(bin); serr == nil {
+		t.Error("the mismatching cached core is still on disk — it must be removed, not left to be run")
 	}
 }
 
