@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.7.0
+
 ### Changed: a name already taken by one of your own sessions offers to free it
 
 `"web" is already exposed by another live session` was correct and unhelpful:
