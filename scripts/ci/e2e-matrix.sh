@@ -798,8 +798,19 @@ do_update() {
   if [ "$rc" != 0 ]; then
     echo "--- update FAIL — exit $rc"; sum "**plug update** ❌ — exit $rc"; return 1
   fi
-  if ! printf '%s' "$out" | grep -Eq "agent: (current|pulled)"; then
-    echo "--- update FAIL — no agent verdict (want current/pulled)"; sum "**plug update** ❌ — no agent verdict"; return 1
+  # The verdict is backend-shaped, and all three are a working `update`:
+  #   current  — already on the newest thing its tag can mean
+  #   pulled   — Compose fetched it and handed back the recreate, since a
+  #              container cannot recreate itself
+  #   updating — Swarm rewrites the service image / k8s patches the Deployment,
+  #              and the task rolls for real
+  # The crash-test agents run a tag built INTO the cluster, with no registry
+  # behind it, so on Swarm and k8s the roll lands on the same image and plug
+  # says so rather than claiming a move. That report is the honest answer, not
+  # a failure — what this cell asserts is that the verb ran, said which of the
+  # three happened, and left the agent standing.
+  if ! printf '%s' "$out" | grep -Eq "agent: (current|pulled|updating)"; then
+    echo "--- update FAIL — no agent verdict (want current/pulled/updating)"; sum "**plug update** ❌ — no agent verdict"; return 1
   fi
   if ! printf '%s' "$out" | grep -Eq "launcher (already matches|is a dev build)"; then
     echo "--- update FAIL — no launcher line"; sum "**plug update** ❌ — no launcher line"; return 1
