@@ -28,13 +28,17 @@ désormais dans `RELEASE_NOTES.md` et la roadmap publique dans
       l'agent principal). C'est la dernière marche vers `k8sGC` couvert.
 
 
-- [ ] **Le core en cache est écrit par l'utilisateur et exécuté en root**
-      (`cli/main.go`, `chownToUser(bin)`). Setuid, donc tout code tournant sous
-      ton identité (un postinstall npm) peut réécrire `~/.plug/versions/<v>/plug`
-      et se faire exécuter en root au lancement suivant. Distinct de la signature
-      de binaires : signer protège le téléchargement, pas le fichier posé.
-      Correctif = cache root-owned, répertoires compris — demande un arbitrage
-      sur le nettoyage sans sudo.
+- [ ] **Durcissement de l'exécution du core mis en cache** — suivi en PRIVÉ
+      (avis de sécurité GitHub, brouillon), pas ici : ce dépôt est public, et
+      décrire par le menu un défaut non corrigé revient à en publier le mode
+      d'emploi. Ce qui peut se dire sans rien donner : la piste retenue est une
+      **empreinte servie par l'agent** sur le canal SSH déjà authentifié,
+      vérifiée avant exécution ; la signature de binaires reste souhaitable
+      ensuite, pour une menace différente (une source usurpée plutôt qu'une
+      altération locale). Le détail, l'impact et la reproduction vivent dans
+      l'avis. À publier dans les notes de version **une fois le correctif
+      livré** — c'est là qu'un défaut se raconte, pas avant.
+
 - [ ] **Les requêtes DNS non-A répondent NODATA** (`cli/internal/tun/dns.go`, le
       `case qtype != 1`). Sur macOS le stub est le résolveur de TOUTE la machine,
       donc SRV/MX/PTR cassent à l'échelle du poste pendant une session — clients
