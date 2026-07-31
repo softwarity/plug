@@ -30,3 +30,27 @@ func TestHeldPort(t *testing.T) {
 		}
 	}
 }
+
+// The offer to stop a process is only safe when the record provably IS the
+// holder. Getting this wrong points "stop it?" at whatever the OS has since
+// given that PID to.
+func TestHolderIsOurs(t *testing.T) {
+	const refusal = `"web" is already exposed by another live session (agent port 40001) — one -s per name at a time`
+	for _, tc := range []struct {
+		why  string
+		rec  *servedRecord
+		msg  string
+		want bool
+	}{
+		{"our own session, same port", &servedRecord{pid: 42, port: "40001"}, refusal, true},
+		{"someone else's — a different port", &servedRecord{pid: 42, port: "40002"}, refusal, false},
+		{"nothing recorded here", nil, refusal, false},
+		{"a record from before ports were recorded", &servedRecord{pid: 42, port: ""}, refusal, false},
+		{"an agent too old to name the port", &servedRecord{pid: 42, port: "40001"},
+			`"web" is already exposed by another live session`, false},
+	} {
+		if got := holderIsOurs(tc.rec, tc.msg); got != tc.want {
+			t.Errorf("%s: holderIsOurs = %v, want %v", tc.why, got, tc.want)
+		}
+	}
+}

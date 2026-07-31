@@ -120,6 +120,18 @@ func heldPort(msg string) string {
 	return rest[:end]
 }
 
+// holderIsOurs reports whether the session the agent refused us for is the one
+// this machine recorded — the check that makes stopping it safe to OFFER.
+//
+// Identity is the agent port: the refusal names the port the holder serves on,
+// and the record names the port we served on. Equal means it IS that session.
+// Without this a stale record — a session killed with -9, never cleaned up —
+// would put an innocent process behind the question, since the OS reuses PIDs.
+// An agent too old to name a port simply never gets the offer.
+func holderIsOurs(r *servedRecord, refusal string) bool {
+	return r != nil && r.port != "" && r.port == heldPort(refusal)
+}
+
 // askToStop asks whether to stop the holder. No terminal — a script, a CI job,
 // a detached run — means no question and no kill: hanging on a prompt nobody
 // can answer would be worse than the refusal it replaces.

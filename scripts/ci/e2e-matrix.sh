@@ -616,8 +616,24 @@ do_collision() {
   co="$("$PLUG" --host "$ip" --port "$port" -s "$cname:$cport:9" curl --version 2>&1 || true)"
   wait $a_pid 2>/dev/null
   if printf '%s' "$co" | grep -qiE "another session|denied by peer|already"; then
-    echo "collision OK — the second session on $cname was refused while the first held it"
-    sum "**collision refused** ✅"; return 0
+    # The refusal must NAME the holder's agent port. That port is what lets a
+    # session tell ITS OWN forgotten holder from a stranger's, and so what
+    # decides whether it may offer to stop it — without it the offer would be
+    # made on a record alone, i.e. possibly on a PID the OS has since reused.
+    if ! printf '%s' "$co" | grep -q "agent port [0-9]"; then
+      echo "--- collision FAIL — refused, but the refusal names no agent port; got:"
+      printf '%s\n' "$co" | tail -5 | sed 's/^/    /'
+      sum "**collision refused** ❌ — no agent port named"; return 1
+    fi
+    # And with NO TERMINAL — which is every CI job, every script — it must
+    # refuse outright: never prompt (nothing could answer, so the session would
+    # hang forever) and never stop the holder unasked.
+    if printf '%s' "$co" | grep -qi "stop it and take the name"; then
+      echo "--- collision FAIL — prompted for confirmation with no terminal to answer on"
+      sum "**collision refused** ❌ — prompted without a tty"; return 1
+    fi
+    echo "collision OK — the second session on $cname was refused (port named, no prompt without a tty)"
+    sum "**collision refused (names the holder's port, never prompts headless)** ✅"; return 0
   fi
   echo "--- collision FAIL — the second -s on $cname was not refused; got:"
   printf '%s\n' "$co" | tail -5 | sed 's/^/    /'

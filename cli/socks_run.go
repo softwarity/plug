@@ -323,7 +323,7 @@ func startExposes(cfg config) (func(), error) {
 		// naming a recycled PID — offer to stop it. A terminal is required to
 		// ask: no prompt in a script or a CI job.
 		if err == nil && strings.Contains(reply, "another live session") {
-			if h := servedHolder(name); h != nil && h.port != "" && h.port == heldPort(reply) && askToStop(h) {
+			if h := servedHolder(name); holderIsOurs(h, reply) && askToStop(h) {
 				if serr := stopHolder(h); serr != nil {
 					return fail(fmt.Errorf("%s: could not stop the session holding it: %w", name, serr))
 				}
