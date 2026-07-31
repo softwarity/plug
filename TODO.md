@@ -1,8 +1,61 @@
 # plug — TODO / plan de travail
 
-_État : 19 juillet 2026 — **2.2.0 publiée** (`-c`, NXDOMAIN honnête, drop-loud
-UDP) ; `plug doctor`, `plug update` + gate des images de release en route vers
-la 2.3._
+_État : 31 juillet 2026 — **2.6.2 publiée**. L'historique des livraisons vit
+désormais dans `RELEASE_NOTES.md` et la roadmap publique dans
+`docs/src/app/pages/roadmap.component.ts` ; ce fichier ne garde que ce qui est
+**ouvert** et le contexte qui ne tient pas ailleurs._
+
+## 🔴 Ouvert — issu de l'audit du 30/07
+
+- [ ] **Le core en cache est écrit par l'utilisateur et exécuté en root**
+      (`cli/main.go`, `chownToUser(bin)`). Setuid, donc tout code tournant sous
+      ton identité (un postinstall npm) peut réécrire `~/.plug/versions/<v>/plug`
+      et se faire exécuter en root au lancement suivant. Distinct de la signature
+      de binaires : signer protège le téléchargement, pas le fichier posé.
+      Correctif = cache root-owned, répertoires compris — demande un arbitrage
+      sur le nettoyage sans sudo.
+- [ ] **Les requêtes DNS non-A répondent NODATA** (`cli/internal/tun/dns.go`, le
+      `case qtype != 1`). Sur macOS le stub est le résolveur de TOUTE la machine,
+      donc SRV/MX/PTR cassent à l'échelle du poste pendant une session — clients
+      AD, seedlists MongoDB, Consul. À relayer vers l'upstream.
+- [ ] **La map `tunnels` du daemon n'est pas protégée** (`cli/daemon_shared.go`) :
+      `close(stop)` ne synchronise rien, donc `closeAll` itère pendant que
+      `reconcileLoop` écrit. Tue le daemon root en plein `plug down`, avant la
+      restauration du resolver. Le `-race` activé le 31/07 pourra le prouver.
+- [ ] **Le /24 de noms mintés n'est jamais purgé** et le contrôle d'existence
+      échoue ouvert : un daemon qui vit longtemps peut l'épuiser (sondes Chrome).
+- [ ] **DNS : upstream figé au démarrage** (pas de failover si le VPN tombe) et
+      **8.8.8.8 en dur sous Windows** (`route_windows.go` retourne `nil`) — noms
+      internes cassés et requêtes d'entreprise exfiltrées.
+- [ ] **Le sweep de `serve` ignore le label owner** : deux agents co-localisés se
+      détruisent mutuellement leurs signposts vivants (le gc, lui, le respecte).
+- [ ] **`restartParkedContainers` avale ses erreurs** puis le signpost — qui
+      porte le reçu — est supprimé : un conteneur parké qui ne redémarre pas est
+      perdu même pour le gc de boot.
+- [ ] **La feature `forward` des profils** est parsée et transportée
+      (`PLUG_CORE_FORWARDS`) mais jamais armée : zéro appelant en production.
+      Câbler ou retirer.
+
+## 🟢 Ouvert — produit
+
+- [ ] **`plug status` + verbes d'action hors bande** (roadmap publiée le 31/07) :
+      lister les sessions vivantes, l'état de leur chemin, les arrêter ou
+      re-provisionner leur nom depuis n'importe quel terminal. Les
+      enregistrements `~/.plug/served` (PID, port agent, répertoire, commande)
+      existent déjà depuis le 31/07 — c'est la matière première. **Pas** de
+      raccourci clavier : la commande lancée possède `stdin`, et aucune touche
+      n'est libre sur tous les runtimes.
+- [ ] **`--force` réhabilité** — retiré le 31/07 : il laissait la session évincée
+      vivante et muette. Pour exister, il faut que le déchu **meure** : l'agent
+      retrouve dans son `/proc` le processus tenant le port du bail et tue sa
+      session SSH, ce qui force la reconnexion, donc le refus par le bail, donc
+      la sortie du client. Vérifié au banc le 31/07 : ni supprimer le signpost ni
+      tuer la session SSH ne termine le client — il se reconnecte. La pièce
+      manquante est **sortir sur re-provision refusée**.
+- [ ] **Info du détenteur distant** : l'agent peut enregistrer `SSH_CLIENT` dans
+      le bail (aucun changement de protocole — il lit déjà `SSH_ORIGINAL_COMMAND`
+      du même environnement). Limite : derrière un NAT tous les devs partagent
+      une IP ; un nom de machine lisible demanderait un champ côté client.
 
 **Contexte.** La **2.0.0** est publiée. Elle apporte le **sens retour** : `plug -s
 name:cluster-port:local-port` publie ton process dans le cluster sous un nom

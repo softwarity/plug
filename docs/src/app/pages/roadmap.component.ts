@@ -85,6 +85,24 @@ import { MatIconModule } from '@angular/material/icon';
       deliberate non-goal.
     </div>
 
+    <h3>Talking to a running session</h3>
+    <p>
+      A session prints what it does and otherwise stays out of the way, which leaves two questions
+      unanswered while it runs: <em>is my name actually reachable right now</em>, and <em>what is
+      that other session of mine still holding</em>. Planned: a separate command —
+      <code>plug status</code> — listing the sessions alive on this machine, the names they serve
+      and the state of each path, plus verbs to act on one (stop it, re-provision its name) from
+      any terminal.
+    </p>
+    <p>
+      <strong>Deliberately not keystrokes in the running session.</strong> Your command owns
+      <code>stdin</code>: Vite reads <code>r</code>, <code>u</code> and <code>q</code>, nodemon
+      reads <code>rs</code>, a REPL reads everything. Any key plug claimed would be a key stolen
+      from the program it launched, and there is no key that is free across every runtime someone
+      might run under it. An out-of-band command has none of that problem, works from a terminal
+      you still have, and — unlike a keystroke — reaches the session whose terminal you closed.
+    </p>
+
     <h3>Status</h3>
     <table>
       <thead>
@@ -103,6 +121,7 @@ import { MatIconModule } from '@angular/material/icon';
         <tr><td>Multicluster on macOS (same PID-at-connect design)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
         <tr><td>Reverse direction: serve a local port to the cluster under a cluster name (<code>-s</code>), name provisioned dynamically (docker-sock / k8s-RBAC)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
         <tr><td>Takeover (default): a deployed service owning a <code>-s</code> name is parked for the session and restored on exit</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
+        <tr><td><code>plug status</code> and verbs to act on a running session, out of band (never a keystroke: your command owns stdin)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
         <tr><td><code>kubectl exec</code> transport (no exposed port)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
         <tr><td>Gateway hosting the tunnel + install surface (<a href="https://softwarity.github.io/meerkat/" target="_blank" rel="noopener">Meerkat</a>)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
         <tr><td>IPv6 fake-pool + v6-literal tunnelling (overlays are IPv4 today)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
