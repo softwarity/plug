@@ -48,6 +48,23 @@ wait_cluster() {
   return 1
 }
 
+# --- wait for a PER-LEG agent to answer on its own published port ---------------
+# The resilience cell crashes one of these by design, and the update cells reuse
+# the SAME agent right after. Without this they fail on "connection refused" for
+# a reason that has nothing to do with what they assert — a cascade seen once on
+# a loaded macOS runner, where ubuntu passed the identical cells.
+wait_agent() {
+  wa_ip="$1"; wa_port="$2"
+  for _ in $(seq 1 40); do
+    if ssh -n -p "$wa_port" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+         -o LogLevel=ERROR -o BatchMode=yes -o ConnectTimeout=5 "get@$wa_ip" version >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 3
+  done
+  return 1
+}
+
 # -s is mandatory: every `plug <cmd>` names itself in the cluster. The UPWARD
 # families serve nothing, so they publish a throwaway name — ONE per OS leg (the
 # three legs share cluster A's agent and a remote-forward port binds once on it;
@@ -791,6 +808,10 @@ do_update() {
   echo "=== update (cluster B): plug update against $ragent ==="
   local ip_b
   ip_b="$(wait_cluster "$peer_b")" || { echo "cluster $peer_b unreachable" >&2; sum "**plug update** ❌ (cluster B)"; return 1; }
+  wait_agent "$ip_b" "$rsshport" || {
+    echo "--- update FAIL — $rsshport never came back (the resilience cell crashes this agent)"
+    sum "**plug update** ❌ — per-leg agent never came back"; return 1
+  }
 
   local out rc=0
   out="$("$PLUG" --host "$ip_b" --port "$rsshport" update </dev/null 2>&1)" || rc=$?
@@ -951,6 +972,10 @@ do_update_tag() {
   echo "=== update-tag (cluster B): an unpublished tag, and an agent too old for the argument ==="
   local ip_b
   ip_b="$(wait_cluster "$peer_b")" || { echo "cluster $peer_b unreachable" >&2; sum "**update tag** ❌ (cluster B)"; return 1; }
+  wait_agent "$ip_b" "$rsshport" || {
+    echo "--- update_tag FAIL — $rsshport never came back (the resilience cell crashes this agent)"
+    sum "**update tag** ❌ — per-leg agent never came back"; return 1
+  }
 
   # 1) A tag the registry does not have: refused, and the agent left standing.
   local out rc=0
