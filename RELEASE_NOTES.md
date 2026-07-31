@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.7.1
+
 ### Fixed: cluster names stopped resolving after a sleep, a network change or a VPN drop
 
 macOS decides which network service is "primary", and that is where plug points
