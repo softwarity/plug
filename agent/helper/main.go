@@ -1230,10 +1230,21 @@ func containerServe(name string, pairs []portPair, self selfInfo) {
 	// dead port is a crashed session's leftover, swept below.
 	var insp struct {
 		Config struct {
-			Entrypoint []string `json:"Entrypoint"`
+			Entrypoint []string          `json:"Entrypoint"`
+			Labels     map[string]string `json:"Labels"`
 		} `json:"Config"`
 	}
 	if code, err := dockerAPI("GET", "/containers/"+signpostName(name)+"/json", nil, &insp); err == nil && code == 200 {
+		// Whose signpost is this? A container name is HOST-wide, so two agents
+		// on one host — two Compose stacks, each with its own plug — collide on
+		// `plug-sp-<name>`. The liveness probe below cannot tell them apart: it
+		// dials 127.0.0.1 in OUR netns, where the other agent's port never
+		// answers, so its LIVE signpost reads as a leftover and gets swept. The
+		// gc has always checked this label; the serve path never did.
+		if o := insp.Config.Labels["plug.signpost.owner"]; o != "" && o != self.owner() && ownerAlive(o, false) {
+			answer("error: %q is served here by another plug agent (%s), which is still running — "+
+				"two agents on one host cannot both own a name. Use a different name, or stop that agent.", name, o)
+		}
 		if ap := signpostAgentPort(insp.Config.Entrypoint); ap != "" && agentPortLive(ap) {
 			answer("error: %q is already exposed by another live session (agent port %s) — one -s per name at a time", name, ap)
 		}
@@ -1475,6 +1486,7 @@ func swarmServe(name string, pairs []portPair, self selfInfo) {
 	// is taken; a dead port is a crashed session's leftover, swept below.
 	var sp struct {
 		Spec struct {
+			Labels       map[string]string `json:"Labels"`
 			TaskTemplate struct {
 				ContainerSpec struct {
 					Command []string `json:"Command"`
@@ -1483,6 +1495,13 @@ func swarmServe(name string, pairs []portPair, self selfInfo) {
 		} `json:"Spec"`
 	}
 	if code, err := dockerAPI("GET", "/services/"+signpostName(name), nil, &sp); err == nil && code == 200 {
+		// Same rule as the container shape: a service name is cluster-wide, so
+		// another agent's LIVE signpost must not read as our leftover just
+		// because its port does not answer in our netns.
+		if o := sp.Spec.Labels["plug.signpost.owner"]; o != "" && o != self.owner() && ownerAlive(o, true) {
+			answer("error: %q is served here by another plug agent (%s), which is still running — "+
+				"two agents on one cluster cannot both own a name. Use a different name, or stop that agent.", name, o)
+		}
 		if ap := signpostAgentPort(sp.Spec.TaskTemplate.ContainerSpec.Command); ap != "" && agentPortLive(ap) {
 			answer("error: %q is already exposed by another live session (agent port %s) — one -s per name at a time", name, ap)
 		}

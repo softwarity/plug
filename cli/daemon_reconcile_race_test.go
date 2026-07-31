@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/softwarity/plug/cli/internal/tun"
 	"github.com/softwarity/plug/cli/internal/tunnel"
 )
 
@@ -20,9 +21,13 @@ import (
 // and the teardown goes back to racing it. Without -race it is merely flaky,
 // which is exactly why CI runs the detector.
 func TestTeardownWaitsForTheReconcileLoop(t *testing.T) {
+	// A real registry, not nil: a tick fires against whatever clusters this
+	// machine has marked active — real ones, if a session is running here — and
+	// reconcileOnce writes into it. The point of the test is the JOIN, and it
+	// must not depend on the state of the box it runs on.
 	tunnels := map[string]*tunnel.Transport{}
 	stop := make(chan struct{})
-	done := reconcileLoop(nil, tunnels, stop)
+	done := reconcileLoop(tun.NewClusterTransports(), tunnels, stop)
 
 	// Let the loop reach its select and tick at least once (300ms period).
 	time.Sleep(400 * time.Millisecond)

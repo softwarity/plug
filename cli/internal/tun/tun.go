@@ -154,6 +154,16 @@ func startDatapathDF(df dialFunc, dialers func() []Dialer, logf func(string, ...
 	// connected cluster (asked through the agent, cached) — an absent name gets
 	// an honest NXDOMAIN. See newNameChecker for the fallbacks.
 	check := newNameChecker(dialers, log)
+	// No captured upstream means every DOTTED name — everything that is not a
+	// cluster service — goes to a public resolver we picked. That is a real
+	// change to where this machine's DNS traffic goes, and it happens silently
+	// on Windows today because configure() there returns none. Say it: a user on
+	// a corporate network needs to know their internal names will not resolve
+	// and their lookups are leaving.
+	if len(upstreams) == 0 {
+		log("tun: no system resolver was captured — dotted names will be forwarded to a PUBLIC resolver.\n" +
+			"      Internal names may stop resolving, and those lookups leave your network.")
+	}
 	st, ep := buildStack(tab, df, upstreamResolver(upstreams), check, log)
 
 	ctx, cancel := context.WithCancel(context.Background())

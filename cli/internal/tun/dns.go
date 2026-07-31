@@ -34,11 +34,18 @@ type faketab struct {
 	mu   sync.Mutex
 	base uint32 // 198.18.<N>.0 — this instance's subnet
 	byIP map[uint32]string
-	next uint32 // next host byte to hand out (1..254)
+	seen map[uint32]time.Time // last time each fake was minted or dialled
+	next uint32               // next host byte to hand out (1..254)
 }
 
+// reuseFloor is how long a fake must have gone untouched before it can be handed
+// to a different name. The A answers carry a 30s TTL, so anything past that is
+// not in a client's cache any more; a minute is several times that, and still
+// short enough that a long-lived daemon recovers its whole subnet.
+const reuseFloor = time.Minute
+
 func newFaketab(base uint32) *faketab {
-	return &faketab{base: base, byIP: map[uint32]string{}, next: 1}
+	return &faketab{base: base, byIP: map[uint32]string{}, seen: map[uint32]time.Time{}, next: 1}
 }
 
 // dnsIP is this instance's reserved DNS address (198.18.<N>.53). It is never
@@ -51,8 +58,10 @@ func (t *faketab) dnsIP() uint32 { return t.base | dnsHost }
 func (t *faketab) mint(name string) uint32 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	now := time.Now()
 	for ip, n := range t.byIP {
 		if n == name {
+			t.seen[ip] = now
 			return ip
 		}
 	}
@@ -60,25 +69,63 @@ func (t *faketab) mint(name string) uint32 {
 		t.next++
 	}
 	if t.next > 254 {
-		return 0 // subnet full — the caller NXDOMAINs rather than alias an IP
+		// The subnet was a one-way street: 254 names and every later one got
+		// NXDOMAIN for ever, even after the tunnel came back. On a daemon that
+		// lives for days that is not exotic — macOS routes EVERY single-label
+		// lookup here, and a browser's anti-hijack probes alone are three random
+		// names per network change. Recycle the coldest fake instead, but only
+		// one nobody has touched in a while: reassigning an address a client
+		// still has cached would send its traffic to another service.
+		ip := t.coldest(now)
+		if ip == 0 {
+			return 0 // every fake is in recent use — refusing is the honest answer
+		}
+		delete(t.byIP, ip)
+		t.byIP[ip] = name
+		t.seen[ip] = now
+		return ip
 	}
 	ip := t.base | t.next
 	t.next++
 	t.byIP[ip] = name
+	t.seen[ip] = now
 	return ip
 }
 
+// coldest returns the fake untouched longest, or 0 when none is past reuseFloor.
+// Caller holds the lock.
+func (t *faketab) coldest(now time.Time) uint32 {
+	var pick uint32
+	oldest := now.Add(-reuseFloor)
+	for ip := range t.byIP {
+		if at, ok := t.seen[ip]; ok && at.Before(oldest) {
+			oldest, pick = at, ip
+		}
+	}
+	return pick
+}
+
+// lookup resolves a fake back to its name — called on every connect to it, so
+// it is also what marks the entry as still in use.
 func (t *faketab) lookup(ip uint32) (string, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	n, ok := t.byIP[ip]
+	if ok {
+		t.seen[ip] = time.Now()
+	}
 	return n, ok
 }
 
 // upstreamResolver returns a resolver that dials the child's ORIGINAL
 // nameservers directly (bypassing the resolver we just repointed at ourselves),
-// so our dotted-name lookups don't loop. Falls back to a public resolver if the
-// child had none.
+// so our dotted-name lookups don't loop.
+//
+// With none captured it falls back to a public resolver, which keeps dotted
+// names working but sends them somewhere the user did not choose — the caller
+// warns when that happens. The real fix is to capture the system servers on
+// every platform; Windows does not yet (configure() returns none there), which
+// is why this path is reached at all in practice.
 func upstreamResolver(servers []string) *net.Resolver {
 	if len(servers) == 0 {
 		servers = []string{"8.8.8.8"}

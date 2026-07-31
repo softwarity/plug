@@ -2,6 +2,34 @@
 
 ## NEXT RELEASE
 
+### Fixed: a long-lived daemon no longer runs out of cluster addresses
+
+plug answers a cluster name with an address from a private /24 it owns, and that
+pool was handed out once and never reclaimed. Past 254 names every later one got
+NXDOMAIN — permanently, cluster services included, until the daemon was
+restarted. That is not a corner case on macOS, where EVERY single-label lookup on
+the machine reaches plug: a browser's anti-hijack probes alone are three random
+names per network change. The pool now recycles the address left untouched
+longest, and only once it is well past the TTL handed to clients, so an address
+someone still holds is never reassigned under them. When everything really is in
+use, plug refuses rather than aliasing two services onto one address.
+
+### Fixed: a signpost belonging to another agent is no longer swept
+
+Two plug agents on one host or cluster — two stacks, each with its own — collide
+on the object naming a service. The liveness probe cannot tell them apart: it
+asks inside its own network, where the other agent's port never answers, so a
+LIVE signpost read as leftover and was deleted. The boot GC has always checked
+which agent owns one; the serve path now does too, and says so instead.
+
+### Changed: plug says when it has to forward DNS to a public resolver
+
+With no system resolver captured, every dotted name goes to a public one — which
+still resolves the internet, but not your internal names, and sends those lookups
+off your network. It happened silently, and on Windows it happens by default.
+Now it is announced. Capturing the real servers there is the actual fix and is
+still to come.
+
 ### Fixed: a workload that fails to come back is no longer forgotten
 
 Releasing a `-s` name restores whatever the session parked, then deletes the
