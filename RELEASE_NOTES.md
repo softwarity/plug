@@ -12,6 +12,15 @@ directory and command line so you can recognise it, and the PID to stop it. When
 nothing local matches, it says so — the holder is on another machine, and it
 frees itself when that session ends.
 
+### Added: `--force` takes a name its holder will not give back
+
+On a shared agent, two developers can want the same name at once, and the
+holder is then a process on a machine you have no way to reach — the one case
+naming it cannot solve. `plug -s web:8080:3000 --force <cmd>` takes it anyway.
+Its cost is real and yours to accept: the displaced session keeps running, stops
+receiving traffic, and only finds out when it next re-provisions. Say so in your
+team chat before using it.
+
 ---
 
 ## 2.6.2

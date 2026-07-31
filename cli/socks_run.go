@@ -219,7 +219,11 @@ func startExposes(cfg config) (func(), error) {
 		for _, g := range group {
 			pairs = append(pairs, g.Spec().ClusterPort+":"+g.AgentPort())
 		}
-		return "serve-name " + group[0].Spec().Name + " " + strings.Join(pairs, ",") + " takeover"
+		v := "serve-name " + group[0].Spec().Name + " " + strings.Join(pairs, ",") + " takeover"
+		if cfg.force {
+			v += " force"
+		}
+		return v
 	}
 	// After a reconnect, a restarted agent has GC'd the signpost — AND, on a
 	// takeover, restored the parked workload — so re-run the SAME verb (re-park

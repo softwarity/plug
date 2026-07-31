@@ -132,8 +132,12 @@ func dispatch(cmd []string) {
 		// the cluster port itself: many names share one cluster port (every
 		// service has its own IP in the cluster), but they all converge on ONE
 		// agent, where a fixed port could bind only once.
-		if len(cmd) != 4 || cmd[3] != "takeover" {
-			answer("error: usage: serve-name <name> <cluster-port>:<agent-port>[,…] takeover")
+		// An optional 5th word, `force`, takes the name even when another LIVE
+		// session holds it. Only a shared agent needs it — two developers, one
+		// name, and the holder on a machine you cannot reach.
+		force, ok := serveNameShape(cmd)
+		if !ok {
+			answer("error: usage: serve-name <name> <cluster-port>:<agent-port>[,…] takeover [force]")
 		}
 		name := cmd[1]
 		if !nameRe.MatchString(name) {
@@ -152,7 +156,7 @@ func dispatch(cmd []string) {
 			}
 			pairs = append(pairs, portPair{cluster: c, agent: a})
 		}
-		serveName(name, pairs)
+		serveName(name, pairs, force)
 	case "unserve-name":
 		if len(cmd) != 2 || !nameRe.MatchString(cmd[1]) {
 			answer("error: usage: unserve-name <name>")
@@ -337,18 +341,38 @@ func nameTaken(held string, ours []portPair, live func(string) bool) bool {
 	return live(held)
 }
 
-func serveName(name string, pairs []portPair) {
-	if nameTaken(leaseHolder(name), pairs, agentPortLive) {
+// serveNameShape validates a serve-name command line and reports whether it
+// carries the optional trailing `force`. Extracted from the dispatch because
+// the length arithmetic is exactly the kind that silently accepts one word too
+// many — and a wrong answer here either breaks every session or hands out
+// force to callers that never asked for it.
+func serveNameShape(cmd []string) (force bool, ok bool) {
+	if len(cmd) < 4 || len(cmd) > 5 || cmd[3] != "takeover" {
+		return false, false
+	}
+	if len(cmd) == 5 {
+		return cmd[4] == "force", cmd[4] == "force"
+	}
+	return false, true
+}
+
+func serveName(name string, pairs []portPair, force bool) {
+	// force skips every "someone else holds it" refusal below. It exists for the
+	// one case nothing else can serve: a SHARED agent, where the holder is on a
+	// machine you have no way to reach. Its cost is real and it is the caller's
+	// to accept — the displaced session keeps running and stops receiving
+	// traffic, and only learns it lost the name when it next re-provisions.
+	if !force && nameTaken(leaseHolder(name), pairs, agentPortLive) {
 		answer("error: %q is already exposed by another live session — one -s per name at a time", name)
 	}
 	if len(pairs) > 0 {
 		takeNameLease(name, pairs[0].agent)
 	}
 	if k8sAvailable() {
-		k8sServe(name, pairs)
+		k8sServe(name, pairs, force)
 	}
 	if dockerAvailable() {
-		dockerServe(name, pairs)
+		dockerServe(name, pairs, force)
 	}
 	// No orchestrator access: this agent cannot create the name. There is no
 	// half-mode to fall back to — pre-declaring an alias per name is the exact
@@ -1156,15 +1180,15 @@ func scaleService(idOrName string, replicas int) error {
 // signpost is a SERVICE, which joins the stack's overlay whether or not it is
 // attachable. Otherwise (Compose, plain `docker run`, or a non-manager) it is a
 // standalone CONTAINER, which needs a bridge or an attachable overlay.
-func dockerServe(name string, pairs []portPair) {
+func dockerServe(name string, pairs []portPair, force bool) {
 	self, err := dockerSelf()
 	if err != nil {
 		answer("error: %v", err)
 	}
 	if self.service != "" && swarmManager() {
-		swarmServe(name, pairs, self)
+		swarmServe(name, pairs, self, force)
 	}
-	containerServe(name, pairs, self)
+	containerServe(name, pairs, self, force)
 }
 
 // signpostArgs renders the pairs as the signpost's argv: port target port target…
@@ -1178,7 +1202,7 @@ func signpostArgs(pairs []portPair, target string) []string {
 
 // containerServe runs the signpost as a standalone container — needs a network
 // it can actually join (a bridge, or an attachable overlay).
-func containerServe(name string, pairs []portPair, self selfInfo) {
+func containerServe(name string, pairs []portPair, self selfInfo, force bool) {
 	nets := self.attachableNets()
 	if len(nets) == 0 {
 		// Nothing a standalone container can join (only bridge/host, or a
@@ -1195,7 +1219,7 @@ func containerServe(name string, pairs []portPair, self selfInfo) {
 			Entrypoint []string `json:"Entrypoint"`
 		} `json:"Config"`
 	}
-	if code, err := dockerAPI("GET", "/containers/"+signpostName(name)+"/json", nil, &insp); err == nil && code == 200 {
+	if code, err := dockerAPI("GET", "/containers/"+signpostName(name)+"/json", nil, &insp); err == nil && code == 200 && !force {
 		if ap := signpostAgentPort(insp.Config.Entrypoint); ap != "" && agentPortLive(ap) {
 			answer("error: %q is already exposed by another live session — one -s per name at a time", name)
 		}
@@ -1395,7 +1419,7 @@ func digestFor(img string, repoDigests []string) string {
 	return ""
 }
 
-func swarmServe(name string, pairs []portPair, self selfInfo) {
+func swarmServe(name string, pairs []portPair, self selfInfo, force bool) {
 	// -s relays to the agent's service VIP, and the session's remote-forward
 	// lives on ONE task — so >1 replica makes the VIP miss it intermittently.
 	// Refuse loudly rather than ship a silent flaky path.
@@ -1423,7 +1447,7 @@ func swarmServe(name string, pairs []portPair, self selfInfo) {
 			} `json:"TaskTemplate"`
 		} `json:"Spec"`
 	}
-	if code, err := dockerAPI("GET", "/services/"+signpostName(name), nil, &sp); err == nil && code == 200 {
+	if code, err := dockerAPI("GET", "/services/"+signpostName(name), nil, &sp); err == nil && code == 200 && !force {
 		if ap := signpostAgentPort(sp.Spec.TaskTemplate.ContainerSpec.Command); ap != "" && agentPortLive(ap) {
 			answer("error: %q is already exposed by another live session — one -s per name at a time", name)
 		}
@@ -1796,7 +1820,7 @@ func selectorPatch(target, current map[string]string) map[string]any {
 	return p
 }
 
-func k8sServe(name string, pairs []portPair) {
+func k8sServe(name string, pairs []portPair, force bool) {
 	ns := k8sNamespace()
 	svc := map[string]any{
 		"apiVersion": "v1",
@@ -1861,7 +1885,7 @@ func k8sServe(name string, pairs []portPair) {
 		// allocated ports, ask the port itself: if the existing Service's
 		// targetPort still answers on this agent, its session is alive and the
 		// name is taken. A dead port is a crashed session's leftover — replaced.
-		if tp := k8sTargetPort(existing.Spec.Ports); tp != "" && agentPortLive(tp) {
+		if tp := k8sTargetPort(existing.Spec.Ports); !force && tp != "" && agentPortLive(tp) {
 			answer("error: %q is already exposed by another live session — one -s per name at a time", name)
 		}
 		// Replace it. If the re-create fails, say SO — do not fall through to
