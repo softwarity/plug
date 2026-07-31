@@ -68,7 +68,7 @@ func (s *plugService) Execute(_ []string, r <-chan svc.ChangeRequest, changes ch
 	info("service: global datapath up (multicluster), %d cluster(s)", len(tunnels))
 
 	stop := make(chan struct{})
-	go reconcileLoop(ct, tunnels, stop)
+	reconciled := reconcileLoop(ct, tunnels, stop)
 	go reapGlobal(dp, stop)
 
 	dpDone := make(chan struct{})
@@ -93,6 +93,7 @@ loop:
 	changes <- svc.Status{State: svc.StopPending}
 	close(stop)
 	dp.Stop()
+	<-reconciled // a tick in flight still writes to `tunnels` — let it finish
 	closeAll(ct, tunnels)
 	changes <- svc.Status{State: svc.Stopped}
 	info("service: global datapath down")

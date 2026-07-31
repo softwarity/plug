@@ -355,38 +355,6 @@ func (t *Transport) Resolver() *net.Resolver {
 	}
 }
 
-// Forward opens a local TCP listener that relays every connection to target (a
-// cluster host:port) through the tunnel. Used for raw-TCP services whose
-// drivers can't be intercepted. Returns the bound local address.
-func (t *Transport) Forward(ctx context.Context, listenAddr, target string, logf Logf) (string, error) {
-	ln, err := net.Listen("tcp", listenAddr)
-	if err != nil {
-		return "", err
-	}
-	go func() {
-		<-ctx.Done()
-		ln.Close()
-	}()
-	go func() {
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			go func() {
-				remote, err := t.DialCluster(target)
-				if err != nil {
-					logf("forward %s: %v", target, err)
-					c.Close()
-					return
-				}
-				relay(c, remote)
-			}()
-		}
-	}()
-	return ln.Addr().String(), nil
-}
-
 // Exec runs one agent-side command over an SSH session and returns the first
 // line of its combined output. Used by the -s provisioning verbs (serve-name /
 // unserve-name): the agent's ForceCommand answers the one-line protocol; an

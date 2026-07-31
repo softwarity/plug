@@ -78,17 +78,32 @@ func reconcileOnce(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transpo
 // reconcileLoop re-syncs the tunnel set with the active clusters. It polls often so a
 // just-registered client's tunnel opens near-instantly (that open is what the launcher
 // waits on); tunnelGrace, not the tick, governs how long an idle tunnel lives.
-func reconcileLoop(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transport, stop <-chan struct{}) {
-	tk := time.NewTicker(300 * time.Millisecond)
-	defer tk.Stop()
-	for {
-		select {
-		case <-stop:
-			return
-		case <-tk.C:
-			reconcileOnce(ct, tunnels)
+// reconcileLoop keeps the tunnel set matching the live clusters until stop is
+// closed. It returns a channel closed when the loop has REALLY finished, which
+// the teardown must wait on before touching `tunnels`.
+//
+// Closing stop is not enough: a tick already in flight can sit inside
+// dialTunnel for the whole dial timeout, and it writes to the map on the way
+// out. Tearing down concurrently was a plain data race — "concurrent map
+// iteration and map write" kills the process, and this one runs as root holding
+// the machine's DNS, so it died before restoring the resolver. The race
+// detector, now on in CI, is what keeps this honest.
+func reconcileLoop(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transport, stop <-chan struct{}) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		tk := time.NewTicker(300 * time.Millisecond)
+		defer tk.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-tk.C:
+				reconcileOnce(ct, tunnels)
+			}
 		}
-	}
+	}()
+	return done
 }
 
 // reapGlobal stops the datapath once no cluster has had a live client for grace —
@@ -119,6 +134,8 @@ func reapGlobal(dp *tun.Datapath, stop <-chan struct{}) {
 	}
 }
 
+// closeAll drops every tunnel. The caller MUST have waited for reconcileLoop's
+// done channel first — nothing else guards this map.
 func closeAll(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transport) {
 	for key, tr := range tunnels {
 		tun.UnmarkClusterReady(key)

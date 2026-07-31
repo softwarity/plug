@@ -263,7 +263,11 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: stable
-          cache: false
+          # Keyed on the e2e go client's own go.sum — the module fetch is the
+          # slow half of building it on Windows. The CLI jobs stay uncached on
+          # purpose: they compile far more than they download.
+          cache: true
+          cache-dependency-path: e2e/clients/go/go.sum
       - uses: actions/setup-java@v4 # pin the JDK — the runners' ambient Java differs by OS
         with:
           distribution: temurin
@@ -271,6 +275,25 @@ jobs:
           # The e2e builds a Maven client on every leg; without this each one
           # re-downloads the same dependency tree over the network.
           cache: maven
+      # Building the four language clients is the single biggest slice of a leg:
+      # 7m50 of a 10m20 setup on a Windows runner, against under a minute on
+      # Linux — npm, pip and the Go module fetch are simply that much slower
+      # there, and every leg paid it from scratch. These caches are dependency
+      # fetches only: a miss costs a normal build, never a wrong one.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('e2e/clients/node/package.json') }}
+          restore-keys: npm-${{ runner.os }}-
+      - uses: actions/cache@v4
+        with:
+          # One path per OS; actions/cache ignores the ones that do not exist.
+          path: |
+            ~/.cache/pip
+            ~/Library/Caches/pip
+            ~\AppData\Local\pip\Cache
+          key: pip-${{ runner.os }}-${{ hashFiles('e2e/clients/python/requirements.txt') }}
+          restore-keys: pip-${{ runner.os }}-
       - name: Join the tailnet
         uses: tailscale/github-action@v3
         with:
@@ -392,7 +415,11 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: stable
-          cache: false
+          # Keyed on the e2e go client's own go.sum — the module fetch is the
+          # slow half of building it on Windows. The CLI jobs stay uncached on
+          # purpose: they compile far more than they download.
+          cache: true
+          cache-dependency-path: e2e/clients/go/go.sum
       - uses: actions/setup-java@v4 # pin the JDK — the runners' ambient Java differs by OS
         with:
           distribution: temurin
@@ -400,6 +427,25 @@ jobs:
           # The e2e builds a Maven client on every leg; without this each one
           # re-downloads the same dependency tree over the network.
           cache: maven
+      # Building the four language clients is the single biggest slice of a leg:
+      # 7m50 of a 10m20 setup on a Windows runner, against under a minute on
+      # Linux — npm, pip and the Go module fetch are simply that much slower
+      # there, and every leg paid it from scratch. These caches are dependency
+      # fetches only: a miss costs a normal build, never a wrong one.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('e2e/clients/node/package.json') }}
+          restore-keys: npm-${{ runner.os }}-
+      - uses: actions/cache@v4
+        with:
+          # One path per OS; actions/cache ignores the ones that do not exist.
+          path: |
+            ~/.cache/pip
+            ~/Library/Caches/pip
+            ~\AppData\Local\pip\Cache
+          key: pip-${{ runner.os }}-${{ hashFiles('e2e/clients/python/requirements.txt') }}
+          restore-keys: pip-${{ runner.os }}-
       - name: Join the tailnet
         uses: tailscale/github-action@v3
         with:
@@ -501,7 +547,11 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: stable
-          cache: false
+          # Keyed on the e2e go client's own go.sum — the module fetch is the
+          # slow half of building it on Windows. The CLI jobs stay uncached on
+          # purpose: they compile far more than they download.
+          cache: true
+          cache-dependency-path: e2e/clients/go/go.sum
       - uses: actions/setup-java@v4 # pin the JDK — the runners' ambient Java differs by OS
         with:
           distribution: temurin
@@ -509,6 +559,25 @@ jobs:
           # The e2e builds a Maven client on every leg; without this each one
           # re-downloads the same dependency tree over the network.
           cache: maven
+      # Building the four language clients is the single biggest slice of a leg:
+      # 7m50 of a 10m20 setup on a Windows runner, against under a minute on
+      # Linux — npm, pip and the Go module fetch are simply that much slower
+      # there, and every leg paid it from scratch. These caches are dependency
+      # fetches only: a miss costs a normal build, never a wrong one.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('e2e/clients/node/package.json') }}
+          restore-keys: npm-${{ runner.os }}-
+      - uses: actions/cache@v4
+        with:
+          # One path per OS; actions/cache ignores the ones that do not exist.
+          path: |
+            ~/.cache/pip
+            ~/Library/Caches/pip
+            ~\AppData\Local\pip\Cache
+          key: pip-${{ runner.os }}-${{ hashFiles('e2e/clients/python/requirements.txt') }}
+          restore-keys: pip-${{ runner.os }}-
       - name: Join the tailnet
         uses: tailscale/github-action@v3
         with:

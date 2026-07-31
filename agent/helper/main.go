@@ -1369,21 +1369,42 @@ func restoreContainerParked(name string) error {
 		}
 		return err
 	}
-	restartParkedContainers(insp.Config.Labels[parkedContainersLabel])
+	// The receipt lives in the SIGNPOST's labels, and the signpost is deleted
+	// two lines down. So a container that fails to restart here is lost to the
+	// boot gc as well — there is nothing left telling anyone it was parked. Say
+	// which ones, and do NOT delete the receipt that could still restore them.
+	if failed := restartParkedContainers(insp.Config.Labels[parkedContainersLabel]); len(failed) > 0 {
+		return fmt.Errorf("could not restart what this session parked (%s) — leaving the %s signpost in place "+
+			"so its receipt survives; start them by hand, or restart the agent (its boot gc retries)",
+			strings.Join(failed, ", "), name)
+	}
 	if code, err := dockerAPI("DELETE", "/containers/"+signpostName(name)+"?force=1", nil, nil); err != nil && code != 404 {
 		return err
 	}
 	return nil
 }
 
-// restartParkedContainers starts every id in a receipt, best-effort: a container
-// that was removed meanwhile (404) or is already running (304) is fine.
-func restartParkedContainers(receipt string) {
+// restartParkedContainers starts every id in a receipt and returns the ids it
+// could NOT bring back.
+//
+// A container removed meanwhile (404) or already running (304) is not a
+// failure — the workload is where it should be either way. Anything else is:
+// the host port taken over in the meantime, a daemon hiccup, a 409. Those used
+// to be swallowed, and since the caller then deleted the signpost carrying the
+// receipt, the workload stayed down with nothing left to say it had been parked.
+func restartParkedContainers(receipt string) []string {
+	var failed []string
 	for _, id := range strings.Split(receipt, ",") {
-		if id = strings.TrimSpace(id); id != "" {
-			_, _ = dockerAPI("POST", "/containers/"+id+"/start", nil, nil)
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if code, err := dockerAPI("POST", "/containers/"+id+"/start", nil, nil); err != nil &&
+			code != 404 && code != 304 {
+			failed = append(failed, id)
 		}
 	}
+	return failed
 }
 
 // swarmServe runs the signpost as a Swarm SERVICE. A service joins the stack's
@@ -1544,7 +1565,15 @@ func restoreServiceParked(name string) error {
 		}
 		return err
 	}
-	scaleBackParkedService(s.Spec.Labels)
+	// Same rule as the container shape: the receipt is in the SIGNPOST's labels
+	// and the signpost goes next, so a scale-back that failed must stop us —
+	// otherwise the service stays at 0 replicas with nothing left recording that
+	// a session put it there.
+	if err := scaleBackParkedService(s.Spec.Labels); err != nil {
+		return fmt.Errorf("could not scale %q back up (%v) — leaving the %s signpost in place so its "+
+			"receipt survives; scale it by hand, or restart the agent (its boot gc retries)",
+			s.Spec.Labels[parkedServiceLabel], err, name)
+	}
 	if code, err := dockerAPI("DELETE", "/services/"+signpostName(name), nil, nil); err != nil && code != 404 {
 		return err
 	}
@@ -1553,16 +1582,16 @@ func restoreServiceParked(name string) error {
 
 // scaleBackParkedService restores the replica count a receipt recorded,
 // best-effort: a service removed meanwhile is fine.
-func scaleBackParkedService(labels map[string]string) {
+func scaleBackParkedService(labels map[string]string) error {
 	svc := labels[parkedServiceLabel]
 	if svc == "" {
-		return
+		return nil
 	}
 	n, err := strconv.Atoi(labels[parkedReplicasLabel])
 	if err != nil || n < 1 {
 		n = 1
 	}
-	_ = scaleService(svc, n)
+	return scaleService(svc, n)
 }
 
 func dockerUnserve(name string) {
@@ -1620,7 +1649,10 @@ func dockerGC() {
 				// An orphaned signpost's receipt is a takeover that never got
 				// restored (the session died with the agent) — restore it now,
 				// then sweep the signpost.
-				restartParkedContainers(c.Labels[parkedContainersLabel])
+				if failed := restartParkedContainers(c.Labels[parkedContainersLabel]); len(failed) > 0 {
+					gcNote("could not restart %s while cleaning up %s — start them by hand",
+						strings.Join(failed, ", "), c.Labels[parkedContainersLabel])
+				}
 				_, _ = dockerAPI("DELETE", "/containers/"+c.Id+"?force=1", nil, nil)
 			}
 		}
@@ -1639,7 +1671,10 @@ func dockerGC() {
 		for _, s := range slist {
 			o := s.Spec.Labels["plug.signpost.owner"]
 			if o == mine || !ownerAlive(o, swarm) {
-				scaleBackParkedService(s.Spec.Labels) // undo the orphan's takeover
+				if err := scaleBackParkedService(s.Spec.Labels); err != nil { // undo the orphan's takeover
+					gcNote("could not scale %q back up while cleaning up: %v",
+						s.Spec.Labels[parkedServiceLabel], err)
+				}
 				_, _ = dockerAPI("DELETE", "/services/"+s.ID, nil, nil)
 			}
 		}

@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 // Holding a name is not forever: sleep past the keepalive and the forward dies,
 // the lease frees the name, and the next session is granted it. The first
@@ -27,3 +30,29 @@ func TestUnserveMayAct(t *testing.T) {
 		}
 	}
 }
+
+// A workload that fails to come back must NOT be forgotten: the receipt lives in
+// the signpost's labels, and the signpost is deleted right after the restore. So
+// a swallowed failure left the workload down with nothing recording it had been
+// parked — not even for the boot gc.
+func TestRestartParkedContainersReportsWhatItCouldNotBringBack(t *testing.T) {
+	for _, tc := range []struct {
+		why  string
+		code int
+		err  error
+		want bool // reported as failed?
+	}{
+		{"started fine", 204, nil, false},
+		{"already running", 304, errStub, false},
+		{"removed meanwhile", 404, errStub, false},
+		{"host port taken over", 500, errStub, true},
+		{"conflict", 409, errStub, true},
+	} {
+		got := tc.err != nil && tc.code != 404 && tc.code != 304
+		if got != tc.want {
+			t.Errorf("%s (HTTP %d): reported=%v want %v", tc.why, tc.code, got, tc.want)
+		}
+	}
+}
+
+var errStub = fmt.Errorf("docker said no")

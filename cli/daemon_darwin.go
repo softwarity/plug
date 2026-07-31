@@ -55,7 +55,7 @@ func daemonMain(_ []string) int {
 	dinfo("daemon: global datapath up (multicluster), %d cluster(s)", len(tunnels))
 
 	stop := make(chan struct{})
-	go reconcileLoop(ct, tunnels, stop)
+	reconciled := reconcileLoop(ct, tunnels, stop)
 	go reapGlobal(dp, stop)
 
 	sigs := make(chan os.Signal, 1)
@@ -64,7 +64,8 @@ func daemonMain(_ []string) int {
 
 	dp.Wait()
 	close(stop)
-	dp.Stop() // idempotent
+	dp.Stop()    // idempotent
+	<-reconciled // a tick in flight still writes to `tunnels` — let it finish
 	closeAll(ct, tunnels)
 	tun.ClearDNSBackup(globalKey)
 	dinfo("daemon: global datapath down")

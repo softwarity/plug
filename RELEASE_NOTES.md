@@ -2,6 +2,32 @@
 
 ## NEXT RELEASE
 
+### Fixed: a workload that fails to come back is no longer forgotten
+
+Releasing a `-s` name restores whatever the session parked, then deletes the
+signpost — and the signpost is where the receipt lives. A restore that failed was
+swallowed, so the workload stayed down with nothing left recording it had ever
+been parked: not even the agent's boot GC could put it back. plug now says which
+containers or service it could not bring back, and leaves the signpost in place
+so its receipt survives for the next attempt. Both Docker shapes and Swarm, and
+the boot GC reports its own failures the same way.
+
+### Fixed: the macOS and Windows daemon no longer races itself on shutdown
+
+Its teardown emptied the tunnel map while a reconcile tick could still be inside
+a dial and about to write to it — a data race that kills the process outright.
+That process is the root daemon holding the machine's DNS, so it died before
+restoring the resolver. The teardown now waits for the loop to finish.
+
+### Removed: the `forward` profile key
+
+It declared a local port-forward for drivers that ignored the SOCKS proxy, and
+the userspace TUN made it unnecessary — capture happens at the IP layer, so
+`amqp://rabbitmq:5672` works as-is in every runtime. It had been parsed and
+carried all the way to the core while doing nothing at all, which is worse than
+absent: it read as configured. A profile still carrying one now says it can be
+deleted.
+
 ---
 
 ## 2.7.2

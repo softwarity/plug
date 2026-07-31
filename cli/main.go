@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -125,10 +124,9 @@ Docs: https://softwarity.github.io/plug/
 }
 
 type config struct {
-	host     string
-	port     string
-	forwards []forwardSpec
-	exposes  []tunnel.ExposeSpec
+	host    string
+	port    string
+	exposes []tunnel.ExposeSpec
 }
 
 // parseExpose parses one -s value, <name>:<cluster-port>:<local-port> — the
@@ -205,58 +203,6 @@ func stripLeadingExposes(args []string) ([]tunnel.ExposeSpec, bool, []string, er
 			return specs, client, args, nil
 		}
 	}
-}
-
-// forwardSpec declares a local port-forward for a raw-TCP service whose driver
-// ignores the SOCKS proxy. Declared in a profile as:
-//
-//	forward = AMQP_URL=amqp://rabbitmq:5672, MONGO_URL=mongodb://mongodb:27017
-//
-// plug opens a per-session local port to target and injects env=<local URL>.
-type forwardSpec struct {
-	env    string // env var to set for the child
-	target string // cluster host:port to dial through the tunnel
-	rawURL string // original URL (with scheme) if the value was one, else ""
-}
-
-func parseForward(s string) (forwardSpec, bool) {
-	name, val, ok := strings.Cut(s, "=")
-	if !ok {
-		return forwardSpec{}, false
-	}
-	name, val = strings.TrimSpace(name), strings.TrimSpace(val)
-	if name == "" || val == "" {
-		return forwardSpec{}, false
-	}
-	if strings.Contains(val, "://") {
-		u, err := url.Parse(val)
-		if err != nil || u.Host == "" {
-			return forwardSpec{}, false
-		}
-		return forwardSpec{env: name, target: u.Host, rawURL: val}, true
-	}
-	return forwardSpec{env: name, target: val}, true
-}
-
-// decl reconstructs the "NAME=VALUE" declaration, for passing across the
-// launcher→core exec boundary.
-func (f forwardSpec) decl() string {
-	if f.rawURL != "" {
-		return f.env + "=" + f.rawURL
-	}
-	return f.env + "=" + f.target
-}
-
-// localValue is the env value pointing the child at the local forward: the
-// original URL with its host rewritten to localAddr, or just localAddr.
-func (f forwardSpec) localValue(localAddr string) string {
-	if f.rawURL != "" {
-		if u, err := url.Parse(f.rawURL); err == nil {
-			u.Host = localAddr
-			return u.String()
-		}
-	}
-	return localAddr
 }
 
 type options struct {
@@ -698,14 +644,6 @@ func coreEnv(cfg config) []string {
 	env := append(withUserPath(os.Environ()), "PLUG_CORE=1",
 		"PLUG_CORE_HOST="+cfg.host, "PLUG_CORE_PORT="+cfg.port,
 		"PLUG_HOST="+cfg.host, "PLUG_PORT="+cfg.port) // legacy channel for older cores
-	if len(cfg.forwards) > 0 {
-		var decls []string
-		for _, f := range cfg.forwards {
-			decls = append(decls, f.decl())
-		}
-		env = append(env, "PLUG_CORE_FORWARDS="+strings.Join(decls, "\n"),
-			"PLUG_FORWARDS="+strings.Join(decls, "\n"))
-	}
 	return env
 }
 
@@ -1336,11 +1274,13 @@ func loadProfile(name string) config {
 		case "port":
 			cfg.port = val
 		case "forward":
-			for _, s := range strings.Split(val, ",") {
-				if f, ok := parseForward(strings.TrimSpace(s)); ok {
-					cfg.forwards = append(cfg.forwards, f)
-				}
-			}
+			// Removed: it declared a local port-forward for drivers that ignored
+			// the SOCKS proxy, and the userspace TUN made that unnecessary — it
+			// captures at the IP layer, so `amqp://rabbitmq:5672` works as-is in
+			// every runtime. It was parsed and carried to the core and then did
+			// NOTHING, which is worse than absent: it read as configured.
+			info("profile %s: `forward` no longer does anything and can be deleted — "+
+				"cluster names work directly now (see the release notes)", name)
 		}
 	}
 	return cfg
@@ -1444,13 +1384,6 @@ func coreMain() {
 	}
 	if cfg.port == "" {
 		cfg.port = defaultPort
-	}
-	if s := coreGetenv("PLUG_CORE_FORWARDS", "PLUG_FORWARDS"); s != "" {
-		for _, line := range strings.Split(s, "\n") {
-			if f, ok := parseForward(line); ok {
-				cfg.forwards = append(cfg.forwards, f)
-			}
-		}
 	}
 	specs, _, cmdArgs, err := stripLeadingExposes(os.Args[1:]) // -c strips to an empty exposes list — exactly the pure-outbound datapath
 	if err != nil {
