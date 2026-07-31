@@ -35,7 +35,13 @@ docker build -q -t plug-e2e/wsserver:e2e -f services/websocket/Dockerfile . >/de
 
 echo "=== deploy the stack ==="
 PLUG_CLUSTER_IDENT="${PLUG_CLUSTER_IDENT:-solo}" \
-  docker stack deploy --resolve-image never -c swarm.cluster.yml plug-e2e
+# The update cells start from the PREVIOUS published release, resolved here
+  # rather than pinned: a pinned tag re-tests bugs fixed several releases ago and
+  # takes the family down the day it leaves the registry.
+  PREV_RELEASE="$(bash "$root/scripts/ci/previous-release.sh")" || exit 1
+  echo "previous release (update-cell agents) = $PREV_RELEASE"
+  export PREV_RELEASE
+  PREV_RELEASE="$PREV_RELEASE" docker stack deploy --resolve-image never -c swarm.cluster.yml plug-e2e
 
 echo "=== wait for convergence (every service at its full replica count) ==="
 # 0/1 or 1/2 → not there yet; 1/1 and 2/2 are converged. awk, not a grep

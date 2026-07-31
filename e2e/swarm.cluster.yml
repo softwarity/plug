@@ -37,14 +37,14 @@ services:
       placement:
         constraints: [node.role == manager]
 
-  # Per-leg agents deployed from a PUBLISHED RELEASE, for the update cells. 2.4.1
+  # Per-leg agents on the PREVIOUS published release, for the update cells. It is
   # is the oldest agent that can retarget itself. Here the retarget is APPLIED:
   # swarmSelfUpdate rewrites the service's image and the task rolls, so the jump
   # is observable as a version change — the Compose backend can only pull and
   # hand back the command. Manager placement for the same reason as the agent
   # above: a service update needs the manager API.
-  old-agent-linux:
-    image: softwarity/plug:2.4.1
+  prev-agent-linux:
+    image: softwarity/plug:${PREV_RELEASE:?}
     ports:
       - "2226:22"
     volumes:
@@ -54,8 +54,8 @@ services:
       replicas: 1
       placement:
         constraints: [node.role == manager]
-  old-agent-mac:
-    image: softwarity/plug:2.4.1
+  prev-agent-mac:
+    image: softwarity/plug:${PREV_RELEASE:?}
     ports:
       - "2227:22"
     volumes:
@@ -65,8 +65,8 @@ services:
       replicas: 1
       placement:
         constraints: [node.role == manager]
-  old-agent-win:
-    image: softwarity/plug:2.4.1
+  prev-agent-win:
+    image: softwarity/plug:${PREV_RELEASE:?}
     ports:
       - "2228:22"
     volumes:

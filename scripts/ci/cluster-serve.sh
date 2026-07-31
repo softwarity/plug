@@ -22,6 +22,13 @@ docker image inspect softwarity/plug:e2e >/dev/null 2>&1 || {
 
 echo "=== up agent + all services ==="
 cd "$root/e2e"
+# The update cells start from the PREVIOUS published release, resolved here
+# rather than pinned: a pinned tag re-tests bugs fixed several releases ago and
+# takes the family down the day it leaves the registry.
+PREV_RELEASE="$(bash "$root/scripts/ci/previous-release.sh")" || exit 1
+echo "previous release (update-cell agents) = $PREV_RELEASE"
+export PREV_RELEASE
+
 compose="docker compose -f compose.yml -f compose.cluster.yml"
 # The full protocol matrix: one service per protocol, plus `ident` (answers this
 # cluster's PLUG_CLUSTER_IDENT — the multicluster assert). grpc/wsserver are built
@@ -31,7 +38,7 @@ $compose up -d --build --wait \
   flaky-linux flaky-mac flaky-win tko-linux tko-mac tko-win prober gateway \
   chaos res-tko-linux res-tko-mac res-tko-win \
   res-agent-linux res-agent-mac res-agent-win \
-  old-agent-linux old-agent-mac old-agent-win
+  prev-agent-linux prev-agent-mac prev-agent-win
 $compose ps
 
 bash "$root/scripts/ci/idle-until-caller-done.sh"

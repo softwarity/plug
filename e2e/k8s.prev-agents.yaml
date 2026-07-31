@@ -17,21 +17,21 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: plug-old-linux
+  name: plug-prev-linux
   labels: { app: plug }
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: plug
-  namespace: plug-old-linux
+  namespace: plug-prev-linux
   labels: { app: plug }
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: plug
-  namespace: plug-old-linux
+  namespace: plug-prev-linux
   labels: { app: plug }
 spec:
   replicas: 1
@@ -47,7 +47,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: plug
-          image: docker.io/softwarity/plug:2.4.1
+          image: docker.io/softwarity/plug:$PREV_RELEASE
           # A pin, not a stream: never re-resolve it, or the cell would start
           # from whatever the tag means today rather than from 2.4.1.
           imagePullPolicy: IfNotPresent
@@ -66,7 +66,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: plug
-  namespace: plug-old-linux
+  namespace: plug-prev-linux
   labels: { app: plug }
 spec:
   type: NodePort
@@ -81,7 +81,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: plug-serve-names
-  namespace: plug-old-linux
+  namespace: plug-prev-linux
   labels: { app: plug }
 rules:
   - apiGroups: [""]
@@ -95,7 +95,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: plug-serve-names
-  namespace: plug-old-linux
+  namespace: plug-prev-linux
   labels: { app: plug }
 roleRef:
   apiGroup: rbac.authorization.k8s.io
@@ -104,26 +104,26 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: plug
-    namespace: plug-old-linux
+    namespace: plug-prev-linux
 ---
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: plug-old-mac
+  name: plug-prev-mac
   labels: { app: plug }
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: plug
-  namespace: plug-old-mac
+  namespace: plug-prev-mac
   labels: { app: plug }
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: plug
-  namespace: plug-old-mac
+  namespace: plug-prev-mac
   labels: { app: plug }
 spec:
   replicas: 1
@@ -139,7 +139,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: plug
-          image: docker.io/softwarity/plug:2.4.1
+          image: docker.io/softwarity/plug:$PREV_RELEASE
           # A pin, not a stream: never re-resolve it, or the cell would start
           # from whatever the tag means today rather than from 2.4.1.
           imagePullPolicy: IfNotPresent
@@ -158,7 +158,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: plug
-  namespace: plug-old-mac
+  namespace: plug-prev-mac
   labels: { app: plug }
 spec:
   type: NodePort
@@ -173,7 +173,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: plug-serve-names
-  namespace: plug-old-mac
+  namespace: plug-prev-mac
   labels: { app: plug }
 rules:
   - apiGroups: [""]
@@ -187,7 +187,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: plug-serve-names
-  namespace: plug-old-mac
+  namespace: plug-prev-mac
   labels: { app: plug }
 roleRef:
   apiGroup: rbac.authorization.k8s.io
@@ -196,26 +196,26 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: plug
-    namespace: plug-old-mac
+    namespace: plug-prev-mac
 ---
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: plug-old-win
+  name: plug-prev-win
   labels: { app: plug }
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: plug
-  namespace: plug-old-win
+  namespace: plug-prev-win
   labels: { app: plug }
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: plug
-  namespace: plug-old-win
+  namespace: plug-prev-win
   labels: { app: plug }
 spec:
   replicas: 1
@@ -231,7 +231,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: plug
-          image: docker.io/softwarity/plug:2.4.1
+          image: docker.io/softwarity/plug:$PREV_RELEASE
           # A pin, not a stream: never re-resolve it, or the cell would start
           # from whatever the tag means today rather than from 2.4.1.
           imagePullPolicy: IfNotPresent
@@ -250,7 +250,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: plug
-  namespace: plug-old-win
+  namespace: plug-prev-win
   labels: { app: plug }
 spec:
   type: NodePort
@@ -265,7 +265,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: plug-serve-names
-  namespace: plug-old-win
+  namespace: plug-prev-win
   labels: { app: plug }
 rules:
   - apiGroups: [""]
@@ -279,7 +279,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: plug-serve-names
-  namespace: plug-old-win
+  namespace: plug-prev-win
   labels: { app: plug }
 roleRef:
   apiGroup: rbac.authorization.k8s.io
@@ -288,4 +288,4 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: plug
-    namespace: plug-old-win
+    namespace: plug-prev-win

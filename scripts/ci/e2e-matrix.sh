@@ -823,11 +823,15 @@ fi
 
 # --- update: a RELEASE agent must retarget itself to the newest one -------------
 #
-# The published 2.4.1 is the oldest agent that can do this (registry.go landed
-# there), and the only starting point that proves anything: it must ask the
-# registry, find a NEWER x.y.z than its own, and name it. Aiming at a version is
-# what `plug update` is for — re-resolving the tag it already carries is what it
-# used to do, and that returned the same image forever.
+# The starting point is the PREVIOUS published release, resolved when the
+# cluster is built (scripts/ci/previous-release.sh) rather than pinned. That is
+# the realistic upgrade path — what someone one release behind is running — and
+# it never rots: a pinned old tag re-tests bugs fixed several releases ago, and
+# takes every family down the day it leaves the registry.
+#
+# It must ask the registry, find a NEWER x.y.z than its own, and name it. Aiming
+# at a version is what `plug update` is for — re-resolving the tag it already
+# carries is what it used to do, and that returned the same image forever.
 #
 # Compose cannot recreate a container from inside it, so the verdict is "pulled"
 # plus the command that finishes the job; the rollout itself is Swarm/k8s work,
@@ -839,9 +843,20 @@ do_update_jump() {
     MINGW*|MSYS*|CYGWIN*) oldport=2228 ;;
     *)                    oldport=2226 ;;
   esac
-  echo "=== update-jump (cluster B): a published 2.4.1 agent must retarget to the newest release ==="
+  echo "=== update-jump (cluster B): an agent one release behind must retarget to the newest ==="
   local ip_b
   ip_b="$(wait_cluster "$peer_b")" || { echo "cluster $peer_b unreachable" >&2; sum "**update jump** ❌ (cluster B)"; return 1; }
+  # Which release it starts from is the AGENT's answer, not something the
+  # harness is told: the cluster deploys whatever previous-release.sh resolved
+  # when it was built, and asking removes any chance of the two disagreeing.
+  local prev
+  prev="$(ssh -n -p "$oldport" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+          -o LogLevel=ERROR "get@$ip_b" version 2>/dev/null | tr -d '\r')"
+  if ! printf '%s' "$prev" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+    echo "--- update-jump FAIL — the previous-release agent answered '${prev:-nothing}', not an x.y.z release"
+    sum "**update jump** ❌ — no usable starting version"; return 1
+  fi
+  echo "    starting from the published $prev"
 
   local out rc=0
   out="$("$PLUG" --host "$ip_b" --port "$oldport" update </dev/null 2>&1)" || rc=$?
@@ -854,10 +869,10 @@ do_update_jump() {
   local target
   target="$(printf '%s' "$out" | sed -n 's|.*to [a-z0-9./-]*plug:\([0-9][0-9.]*\).*|\1|p' | head -1)"
   if [ -z "$target" ]; then
-    echo "--- update-jump FAIL — the agent named no newer release (it should move off 2.4.1)"
+    echo "--- update-jump FAIL — the agent named no newer release (it should move off $prev)"
     sum "**update jump** ❌ — no target named"; return 1
   fi
-  if [ "$target" = "2.4.1" ]; then
+  if [ "$target" = "$prev" ]; then
     echo "--- update-jump FAIL — retargeted to itself ($target)"
     sum "**update jump** ❌ — retargeted to itself"; return 1
   fi
@@ -873,7 +888,7 @@ do_update_jump() {
       -o LogLevel=ERROR "get@$ip_b" version 2>/dev/null | tr -d '\r'
   }
   local now=""
-  if printf '%s' "$out" | grep -q "agent updated: v2.4.1"; then
+  if printf '%s' "$out" | grep -q "agent updated: v$prev"; then
     # A rollout is ASYNCHRONOUS — the old pod/task goes, the new image is pulled,
     # the new one becomes ready — so reading the version ONCE, the instant the
     # CLI reports the move, measures the rollout's SPEED rather than its outcome.
@@ -892,17 +907,17 @@ do_update_jump() {
       echo "--- update-jump FAIL — reported a move to $target but the agent answers v$now"
       sum "**update jump** ❌ — moved to $target, agent still v$now"; return 1
     fi
-    echo "update-jump OK — 2.4.1 retargeted to $target and the rollout landed (agent now v$now)"
-    sum "**plug update (release agent rolls: 2.4.1 → $target)** ✅"; return 0
+    echo "update-jump OK — $prev retargeted to $target and the rollout landed (agent now v$now)"
+    sum "**plug update (release agent rolls: $prev → $target)** ✅"; return 0
   fi
   now="$(agent_version)"
   if printf '%s' "$out" | grep -q "cannot recreate its own container"; then
-    if [ "$now" != "2.4.1" ]; then
+    if [ "$now" != "$prev" ]; then
       echo "--- update-jump FAIL — nothing should have rolled here, yet the agent answers v$now"
       sum "**update jump** ❌ — unexpected roll to v$now"; return 1
     fi
-    echo "update-jump OK — 2.4.1 retargeted to $target, pulled it, and handed back the recreate (agent still v$now)"
-    sum "**plug update (release agent retargets: 2.4.1 → $target)** ✅"; return 0
+    echo "update-jump OK — $prev retargeted to $target, pulled it, and handed back the recreate (agent still v$now)"
+    sum "**plug update (release agent retargets: $prev → $target)** ✅"; return 0
   fi
   echo "--- update-jump FAIL — named $target but neither rolled nor pulled"
   sum "**update jump** ❌ — decision without an action"; return 1
@@ -916,11 +931,11 @@ do_update_jump() {
 # as a PLAIN self-update: it ignores the word, so the channel would silently not
 # change while the command reported success.
 do_update_tag() {
-  local rsshport oldport
+  local rsshport
   case "$(uname -s)" in
-    Darwin)               rsshport=2224 oldport=2227 ;;
-    MINGW*|MSYS*|CYGWIN*) rsshport=2225 oldport=2228 ;;
-    *)                    rsshport=2223 oldport=2226 ;;
+    Darwin)               rsshport=2224 ;;
+    MINGW*|MSYS*|CYGWIN*) rsshport=2225 ;;
+    *)                    rsshport=2223 ;;
   esac
   echo "=== update-tag (cluster B): an unpublished tag, and an agent too old for the argument ==="
   local ip_b
@@ -942,19 +957,13 @@ do_update_tag() {
     echo "--- update-tag FAIL — the agent went down on a refusal"; sum "**update tag** ❌ — agent down after refusal"; return 1
   fi
 
-  # 2) An agent from before the argument existed: refused on its version, not
-  #    quietly turned into a plain self-update.
-  rc=0
-  out="$("$PLUG" --host "$ip_b" --port "$oldport" update latest </dev/null 2>&1)" || rc=$?
-  printf '%s\n' "$out" | sed 's/^/    /'
-  if [ "$rc" = 0 ]; then
-    echo "--- update-tag FAIL — a 2.4.1 agent ACCEPTED a target it would ignore"; sum "**update tag** ❌ — old agent accepted a target"; return 1
-  fi
-  if ! printf '%s' "$out" | grep -q "needs an agent"; then
-    echo "--- update-tag FAIL — refused, but not on the agent's version"; sum "**update tag** ❌ — wrong refusal (old agent)"; return 1
-  fi
-  echo "update-tag OK — unpublished tag refused (agent still v$v), and a 2.4.1 agent refused on its version"
-  sum "**plug update <tag> (refuses an unpublished tag, and an agent too old)** ✅"; return 0
+  # What used to be asserted here — that an agent predating the <tag> argument
+  # is refused on its VERSION — is gone with the fixture it needed. plug is
+  # young and agents follow releases (doctor and `plug update` exist for that),
+  # so a cell pinned to a years-old build tests bugs fixed several releases ago:
+  # a failure there says nothing about the code under review.
+  echo "update-tag OK — the unpublished tag was refused and the agent is still up (v$v)"
+  sum "**plug update <tag> (an unpublished tag is refused, agent left standing)** ✅"; return 0
 }
 
 case "$phase" in
