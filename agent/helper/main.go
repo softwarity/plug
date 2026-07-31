@@ -158,10 +158,19 @@ func dispatch(cmd []string) {
 		}
 		serveName(name, pairs, force)
 	case "unserve-name":
-		if len(cmd) != 2 || !nameRe.MatchString(cmd[1]) {
-			answer("error: usage: unserve-name <name>")
+		// The optional agent port says WHICH session is releasing the name, so a
+		// session displaced by `force` cannot tear down its successor's.
+		if len(cmd) < 2 || len(cmd) > 3 || !nameRe.MatchString(cmd[1]) {
+			answer("error: usage: unserve-name <name> [<agent-port>]")
 		}
-		unserveName(cmd[1])
+		mine := ""
+		if len(cmd) == 3 {
+			if n, err := strconv.Atoi(cmd[2]); err != nil || n < 1 || n > 65535 {
+				answer("error: %q is not a valid port", cmd[2])
+			}
+			mine = cmd[2]
+		}
+		unserveName(cmd[1], mine)
 	case "info":
 		// One parsable line for `plug doctor`: the agent's version and which
 		// dynamic -s backend THIS deployment actually has — the answer to "will
@@ -381,7 +390,29 @@ func serveName(name string, pairs []portPair, force bool) {
 		"Mount /var/run/docker.sock on it (Compose/Swarm), or apply the Kubernetes RBAC (deploy/plug-k8s.yaml)")
 }
 
-func unserveName(name string) {
+// unserveName releases a name — and everything releasing it implies: the
+// signpost goes, and whatever the session parked comes back.
+//
+// mine is the agent port the CALLER believes it holds the name on. It is what
+// makes `force` survivable: the displaced session keeps running and will
+// eventually tear down, and without this check that teardown would delete its
+// SUCCESSOR's signpost and restore a workload the successor had parked — the
+// displaced session running a teardown it no longer has the right to run. A
+// caller that sends no port (or a name nothing is leased for) is trusted, which
+// is the pre-lease behaviour.
+// unserveMayAct reports whether a caller releasing a name may act on it. held
+// is what the lease records, mine is the port the caller believes it holds the
+// name on. Trusting an empty either side keeps the pre-lease behaviour: no
+// lease means nothing to arbitrate, and no port means a caller that predates
+// the check.
+func unserveMayAct(held, mine string) bool {
+	return held == "" || mine == "" || held == mine
+}
+
+func unserveName(name, mine string) {
+	if !unserveMayAct(leaseHolder(name), mine) {
+		answer("ok reassigned") // another session owns it now — touch nothing
+	}
 	dropNameLease(name)
 	if k8sAvailable() {
 		k8sUnserve(name)

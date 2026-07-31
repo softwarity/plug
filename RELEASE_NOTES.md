@@ -19,7 +19,10 @@ holder is then a process on a machine you have no way to reach — the one case
 naming it cannot solve. `plug -s web:8080:3000 --force <cmd>` takes it anyway.
 Its cost is real and yours to accept: the displaced session keeps running, stops
 receiving traffic, and only finds out when it next re-provisions. Say so in your
-team chat before using it.
+team chat before using it. What it will *not* do is damage the session that took
+over from it — releasing a name now says which session is releasing it, so a
+displaced session's teardown leaves its successor's signpost, and its successor's
+parked workload, alone.
 
 ---
 

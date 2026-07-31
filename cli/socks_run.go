@@ -175,6 +175,10 @@ func startExposes(cfg config) (func(), error) {
 	// Names provisioned so far — dropped on teardown AND on any error below (a
 	// signpost/Service created for spec N must not survive a failure on N or N+1).
 	var dynamic []string
+	// The mappings of each name, by name. Declared here — before drop — because
+	// the teardown has to tell the agent WHICH session is releasing the name,
+	// and that identity is the current agent port of the name's first mapping.
+	groups := map[string][]*tunnel.Exposed{}
 	// Forgets this session's ~/.plug/served records — the breadcrumb that lets a
 	// LATER session name whoever holds a name it is refused.
 	var unmark []func()
@@ -190,8 +194,19 @@ func startExposes(cfg config) (func(), error) {
 			// network already gone — which is exactly when you Ctrl-C — and
 			// leaving silently would let you walk away believing a workload
 			// came back up when it is still down.
-			out, err := tr.Exec("unserve-name " + name)
+			// Name the port we hold it on: an agent whose name was taken from
+			// us by another session's --force must NOT act on our teardown, or
+			// we would delete the signpost our successor is now serving and
+			// restore a workload it had parked.
+			mine := ""
+			if g := groups[name]; len(g) > 0 {
+				mine = " " + g[0].AgentPort()
+			}
+			out, err := tr.Exec("unserve-name " + name + mine)
 			switch {
+			case out == "ok reassigned":
+				info("%s was taken over by another session while this one ran (--force) — "+
+					"left alone, it belongs to that session now.", name)
 			case err != nil:
 				info("WARNING could not release %s (%v) — anything this session parked is STILL parked.\n"+
 					"      Re-run the session to restore it, or restart the agent (its boot gc restores).", name, err)
@@ -289,7 +304,6 @@ func startExposes(cfg config) (func(), error) {
 	// ports must reach the agent in one verb (a second one would read as a
 	// second SESSION on the name and bounce on the liveness check).
 	var order []string
-	groups := map[string][]*tunnel.Exposed{}
 	for _, spec := range cfg.exposes {
 		ex, err := tr.Expose(spec)
 		if err != nil {
