@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.7.2
+
 ### Fixed: plug checks the binary it is about to run with privilege
 
 plug caches the core matching your agent's version under `~/.plug/versions` and
