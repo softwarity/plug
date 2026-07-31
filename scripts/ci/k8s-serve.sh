@@ -78,7 +78,7 @@ for d in $(kubectl get deploy -o name); do
   kubectl rollout status --timeout=180s "$d" || failed="$failed $d"
 done
 # The previous-release agents live in their own namespaces, which the loop above does not see.
-for ns in plug-old-linux plug-old-mac plug-old-win; do
+for ns in plug-prev-linux plug-prev-mac plug-prev-win; do
   kubectl -n "$ns" rollout status --timeout=180s deploy/plug || failed="$failed $ns/plug"
 done
 kubectl get deploy,svc -o wide
