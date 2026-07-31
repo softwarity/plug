@@ -485,7 +485,7 @@ do_takeover() {
   # TerminateProcess that would skip the teardown, and the restore is exactly
   # what this cell asserts.
   "$PLUG" --host "$ip" --port "$port" -s "$tname:$tport:18096" \
-    "$root/echo-local$ext" -addr 127.0.0.1:18096 -text "local-$tname" -ttl 50s >/tmp/takeover.out 2>&1 &
+    "$root/echo-local$ext" -addr 127.0.0.1:18096 -text "local-$tname" -ttl 36s >/tmp/takeover.out 2>&1 &
   local tko_pid=$! during=""
   sleep 8 # arm + park + end-to-end verify
   for _ in 1 2 3; do during="$(probe)"; [ "$during" = "local-$tname" ] && break; sleep 3; done
@@ -607,7 +607,7 @@ do_collision() {
   # Session A holds the name for ~35s (natural end via -ttl — see do_takeover
   # for why kill is not an option on Windows).
   "$PLUG" --host "$ip" --port "$port" -s "$cname:$cport:18098" \
-    "$root/echo-local$ext" -addr 127.0.0.1:18098 -text "col-a" -ttl 35s >/tmp/collision-a.out 2>&1 &
+    "$root/echo-local$ext" -addr 127.0.0.1:18098 -text "col-a" -ttl 24s >/tmp/collision-a.out 2>&1 &
   local a_pid=$!
   sleep 8 # arm + verify
   # Session B, same name, while A lives: must bounce (the agent-side port is
@@ -672,7 +672,7 @@ do_lease() {
   # A holds the name for ~45s (natural end via -ttl — see do_takeover for why
   # kill is not an option on Windows).
   "$PLUG" --host "$ip" --port "$port" -s "$lname:$lport:$lloc" \
-    "$root/echo-local$ext" -addr 127.0.0.1:$lloc -text "lease-a" -ttl 45s >/tmp/lease-a.out 2>&1 &
+    "$root/echo-local$ext" -addr 127.0.0.1:$lloc -text "lease-a" -ttl 34s >/tmp/lease-a.out 2>&1 &
   local a_pid=$!
   sleep 8 # arm + verify
 

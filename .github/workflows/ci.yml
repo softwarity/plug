@@ -268,6 +268,9 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+          # The e2e builds a Maven client on every leg; without this each one
+          # re-downloads the same dependency tree over the network.
+          cache: maven
       - name: Join the tailnet
         uses: tailscale/github-action@v3
         with:
@@ -394,6 +397,9 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+          # The e2e builds a Maven client on every leg; without this each one
+          # re-downloads the same dependency tree over the network.
+          cache: maven
       - name: Join the tailnet
         uses: tailscale/github-action@v3
         with:
@@ -484,6 +490,9 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+          # The e2e builds a Maven client on every leg; without this each one
+          # re-downloads the same dependency tree over the network.
+          cache: maven
       - name: Join the tailnet
         uses: tailscale/github-action@v3
         with:
