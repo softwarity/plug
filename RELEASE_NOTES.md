@@ -2,6 +2,17 @@
 
 ## NEXT RELEASE
 
+### Changed: the Swarm family runs the same e2e chain as Compose
+
+Four cells — the name lease, the two `plug update` cells and the agent-crash
+resilience chain — only ever ran against Compose, because the crash simulator
+and the per-leg crash-test agents lived only in that cluster. Swarm now has
+them, so it proves the same things: that a name survives a swept signpost, that
+`plug update` behaves, and that an agent restarted mid-session restores what the
+session had parked and re-takes its name on reconnect. Kubernetes is next, and
+matters most — its boot-GC is a different implementation and nothing exercises
+it today.
+
 ---
 
 ## 2.7.0

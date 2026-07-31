@@ -28,7 +28,7 @@ docker node ls
 
 echo "=== build the local service images ==="
 cd "$root/e2e"
-for svc in grpc prober flaky gateway; do
+for svc in grpc prober flaky gateway chaos; do
   docker build -q -t "plug-e2e/$svc:e2e" -f "services/$svc/Dockerfile" . >/dev/null
 done
 docker build -q -t plug-e2e/wsserver:e2e -f services/websocket/Dockerfile . >/dev/null

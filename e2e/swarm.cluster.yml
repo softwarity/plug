@@ -77,6 +77,73 @@ services:
       placement:
         constraints: [node.role == manager]
 
+  # Agent-crash simulator, same image as the Compose family: GET
+  # chaos:8095/restart-agent?svc=<service> restarts an agent task through the
+  # mounted socket, and /rm-signpost?name=<n> deletes a live session's signpost.
+  # Manager placement — both reach the Swarm API. The service lookup matches on
+  # the swarm label here rather than the compose one; chaos tries both.
+  chaos:
+    image: plug-e2e/chaos:e2e
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [internal]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+
+  # Per-leg CRASH-TEST agents. The resilience cell restarts an agent mid-session
+  # and the three OS legs run CONCURRENTLY: crashing a SHARED agent interleaved
+  # three ways tore the sessions' teardowns apart, so each leg gets its own.
+  res-agent-linux:
+    image: softwarity/plug:e2e
+    ports:
+      - "2223:22"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [internal]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+  res-agent-mac:
+    image: softwarity/plug:e2e
+    ports:
+      - "2224:22"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [internal]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+  res-agent-win:
+    image: softwarity/plug:e2e
+    ports:
+      - "2225:22"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [internal]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+
+  # The DEPLOYED services the resilience cell takes over, one per leg — it parks
+  # them, the agent is crashed under it, and they must come back.
+  res-tko-linux:
+    image: hashicorp/http-echo
+    command: ["-listen=:8115", "-text=deployed-res-linux"]
+    networks: [internal]
+  res-tko-mac:
+    image: hashicorp/http-echo
+    command: ["-listen=:8116", "-text=deployed-res-mac"]
+    networks: [internal]
+  res-tko-win:
+    image: hashicorp/http-echo
+    command: ["-listen=:8117", "-text=deployed-res-win"]
+    networks: [internal]
+
   # ---- protocol matrix services (same set as compose.yml) ----
   httpbin:
     image: mccutchen/go-httpbin:v2.15.0

@@ -38,27 +38,37 @@ func docker(method, path string) (*http.Response, error) {
 	return c.Do(req)
 }
 
-// agentID finds a running agent container by its compose labels — service AND
-// project, so a same-named service from another compose project on the host
-// can never be the target. svc selects WHICH agent (the per-leg crash-test
-// ones, or the main one by default).
+// agentID finds a running agent container by the labels its orchestrator gave
+// it. Both schemes are scoped to the e2e stack, so a same-named service from
+// anything else on the host can never be the target. svc selects WHICH agent
+// (the per-leg crash-test ones, or the main one by default).
+//
+// Two schemes because the same chaos image serves both families: Compose labels
+// a container with its service and project, Swarm labels a task with the
+// stack-qualified service name. Trying Compose first and Swarm second means a
+// cluster only ever matches its own.
 func agentID(svc string) (string, error) {
-	filters := url.QueryEscape(`{"label":["com.docker.compose.service=` + svc + `","com.docker.compose.project=plug-e2e"]}`)
-	resp, err := docker("GET", "/containers/json?filters="+filters)
-	if err != nil {
-		return "", err
+	for _, label := range []string{
+		`"com.docker.compose.service=` + svc + `","com.docker.compose.project=plug-e2e"`,
+		`"com.docker.swarm.service.name=plug-e2e_` + svc + `"`,
+	} {
+		resp, err := docker("GET", "/containers/json?filters="+url.QueryEscape(`{"label":[`+label+`]}`))
+		if err != nil {
+			return "", err
+		}
+		var out []struct {
+			ID string `json:"Id"`
+		}
+		derr := json.NewDecoder(resp.Body).Decode(&out)
+		resp.Body.Close()
+		if derr != nil {
+			return "", derr
+		}
+		if len(out) > 0 {
+			return out[0].ID, nil
+		}
 	}
-	defer resp.Body.Close()
-	var out []struct {
-		ID string `json:"Id"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", err
-	}
-	if len(out) == 0 {
-		return "", fmt.Errorf("no running container labeled compose service=agent")
-	}
-	return out[0].ID, nil
+	return "", fmt.Errorf("no running container for agent %q under compose or swarm labels", svc)
 }
 
 func main() {

@@ -551,6 +551,22 @@ jobs:
       # The retarget DECISION is backend-independent, but applying it is not:
       # Swarm rewrites the service image, k8s patches the Deployment — both roll
       # the agent for real, where Compose can only pull. Run it on all three.
+      - name: Name lease — a swept signpost must not free a live name
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh lease "$A" "$B" 2222
+      - name: Update — plug update verb + launcher path (per-leg agent)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh update "$A" "$B" 2222
+      - name: Update — <tag> refuses an unpublished tag
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh updatetag "$A" "$B" 2222
+      - name: Resilience — agent restarted mid-session (self-heal, boot-gc, re-park)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh resilience "$A" "$B" 2222
       - name: Update — a release agent retargets to the newest release
         if: always()
         shell: bash
