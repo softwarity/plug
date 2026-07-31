@@ -780,7 +780,12 @@ do_resilience() {
   done
   wait $res_pid 2>/dev/null # the -ttl fires; teardown restores the deployed service
 
-  for _ in 1 2 3 4 5; do after="$(bprobe)"; [ "$after" = "deployed-res-$leg" ] && break; sleep 3; done
+  # The deployed workload is coming back from a stop, on a runner that has just
+  # restarted an agent under it — a "connection reset by peer" here is that
+  # container answering mid-restart, not a failure to restore. 15s was enough
+  # until it wasn't (macOS, while ubuntu passed the same cell in that run). Same
+  # assertion, room to land.
+  for _ in $(seq 1 15); do after="$(bprobe)"; [ "$after" = "deployed-res-$leg" ] && break; sleep 3; done
 
   if [ "$during" = "local-res-$leg" ] && [ "$after_crash" = "local-res-$leg" ] && [ "$after" = "deployed-res-$leg" ]; then
     echo "resilience OK — parked, agent restarted, RE-parked (self-heal + boot-gc + re-arm), restored"
