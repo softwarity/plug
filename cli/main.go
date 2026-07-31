@@ -97,11 +97,6 @@ Options:
                          name, no port reserved on the agent. For GUI DB tools
                          (DBeaver, Compass…), one-off scripts, batch consumers.
                          Mutually exclusive with -s.
-      --force            take a -s name even if a live session already holds it.
-                         For a SHARED agent, where the holder is on someone
-                         else's machine and you cannot reach it. The displaced
-                         session keeps running and stops receiving traffic — say
-                         so in your team chat before using this.
   -h, --help             show this help
 `
 }
@@ -133,7 +128,6 @@ type config struct {
 	port     string
 	forwards []forwardSpec
 	exposes  []tunnel.ExposeSpec
-	force    bool // --force: take a name even from a live session
 }
 
 // parseExpose parses one -s value, <name>:<cluster-port>:<local-port> — the
@@ -191,26 +185,23 @@ func attachExposes(cfg *config, raw []string) {
 // stripLeadingExposes pops the -s/--serve pairs (and a -c/--client flag) a
 // launcher left at the head of the core's argv (see launcherRun) and parses
 // them — an old launcher forwards them there without understanding them.
-func stripLeadingExposes(args []string) ([]tunnel.ExposeSpec, bool, bool, []string, error) {
+func stripLeadingExposes(args []string) ([]tunnel.ExposeSpec, bool, []string, error) {
 	var specs []tunnel.ExposeSpec
-	client, force := false, false
+	client := false
 	for {
 		switch {
 		case len(args) >= 2 && (args[0] == "-s" || args[0] == "--serve"):
 			spec, err := parseExpose(args[1])
 			if err != nil {
-				return nil, false, false, nil, err
+				return nil, false, nil, err
 			}
 			specs = append(specs, spec)
 			args = args[2:]
 		case len(args) >= 1 && (args[0] == "-c" || args[0] == "--client"):
 			client = true
 			args = args[1:]
-		case len(args) >= 1 && args[0] == "--force":
-			force = true
-			args = args[1:]
 		default:
-			return specs, client, force, args, nil
+			return specs, client, args, nil
 		}
 	}
 }
@@ -273,7 +264,6 @@ type options struct {
 	port    string
 	exposes []string // raw -s values; validated once, re-prefixed on the core exec
 	client  bool     // -c/--client: pure consumer — no name, nothing served
-	force   bool     // --force: take a name a live session already holds
 }
 
 func main() {
@@ -364,10 +354,7 @@ func main() {
 // name and no port to reserve on the agent). One or the other, never both,
 // never neither. Run before connecting, so a wrong shape fails instantly.
 // Subcommands never reach here: main() dispatches ls/test/about/… first.
-func serveRequired(exposes []string, client bool, force bool) error {
-	if force && len(exposes) == 0 {
-		return errors.New("--force only means something with -s: it takes a NAME from whoever holds it")
-	}
+func serveRequired(exposes []string, client bool) error {
 	if client && len(exposes) > 0 {
 		return errors.New("-s and -c are mutually exclusive: a process either serves a name in the cluster or is a pure client")
 	}
@@ -448,7 +435,7 @@ func launcherRun(args []string) {
 		}
 		fatal("no command given\n\n" + usage())
 	}
-	if err := serveRequired(opts.exposes, opts.client, opts.force); err != nil {
+	if err := serveRequired(opts.exposes, opts.client); err != nil {
 		hint := ""
 		if hasServeFlag(cmdArgs) {
 			// A -s after the command word was passed TO the command (plug stops
@@ -523,12 +510,6 @@ func launcherRun(args []string) {
 	}
 	if opts.client {
 		cmdArgs = append([]string{"-c"}, cmdArgs...) // same wire format as -s: the core strips it back
-	}
-	// Through argv like -s/-c, NOT through the environment: a core too old to
-	// know --force must fail loudly on it rather than quietly not force, which
-	// would leave you believing you had taken the name.
-	if opts.force {
-		cmdArgs = append([]string{"--force"}, cmdArgs...)
 	}
 	child := exec.Command(bin, cmdArgs...)
 	child.Stdin, child.Stdout, child.Stderr = os.Stdin, os.Stdout, os.Stderr
@@ -1168,8 +1149,6 @@ func parseArgs(args []string) (options, []string) {
 			o.exposes = append(o.exposes, flagValue(args, &i))
 		case "-c", "--client":
 			o.client = true
-		case "--force":
-			o.force = true
 		default:
 			return o, args[i:]
 		}
@@ -1394,12 +1373,11 @@ func coreMain() {
 			}
 		}
 	}
-	specs, _, force, cmdArgs, err := stripLeadingExposes(os.Args[1:]) // -c strips to an empty exposes list — exactly the pure-outbound datapath
+	specs, _, cmdArgs, err := stripLeadingExposes(os.Args[1:]) // -c strips to an empty exposes list — exactly the pure-outbound datapath
 	if err != nil {
 		fatal("%v", err)
 	}
 	cfg.exposes = specs
-	cfg.force = force
 	if len(cmdArgs) == 0 {
 		fatal("core: no command")
 	}

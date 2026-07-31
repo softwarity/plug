@@ -270,7 +270,7 @@ func TestFreeLocalPort(t *testing.T) {
 // launcher resolved it instead, an old core would receive a number it never
 // asked for and the {…} references would already be gone.
 func TestStripLeadingExposesKeepsPortVar(t *testing.T) {
-	specs, client, _, rest, err := stripLeadingExposes(
+	specs, client, rest, err := stripLeadingExposes(
 		[]string{"-s", "web:8080:PORT", "npm", "run", "dev", "--", "--port={PORT}"})
 	if err != nil || client || len(specs) != 1 {
 		t.Fatalf("specs = %+v, client = %v, err = %v", specs, client, err)
@@ -287,10 +287,10 @@ func TestStripLeadingExposesKeepsPortVar(t *testing.T) {
 // serveRequired runs before connecting; a named port must pass it, or the
 // feature would be rejected before the core ever sees it.
 func TestServeRequiredAcceptsPortVar(t *testing.T) {
-	if err := serveRequired([]string{"web:8080:PORT"}, false, false); err != nil {
+	if err := serveRequired([]string{"web:8080:PORT"}, false); err != nil {
 		t.Fatalf("a named local port must be accepted: %v", err)
 	}
-	if err := serveRequired([]string{"web:8080:9PORT"}, false, false); err == nil {
+	if err := serveRequired([]string{"web:8080:9PORT"}, false); err == nil {
 		t.Fatal("an invalid third field must still be rejected")
 	}
 }

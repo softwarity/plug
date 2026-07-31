@@ -2,11 +2,12 @@ package main
 
 import "testing"
 
-// A session displaced by `force` keeps running and tears down eventually. That
-// teardown must not touch the name it no longer holds — otherwise it deletes
-// its SUCCESSOR's signpost and restores a workload the successor had parked,
-// which is exactly the "two sessions, one name" damage the lease exists to
-// stop. --force would have reintroduced it through the back door.
+// Holding a name is not forever: sleep past the keepalive and the forward dies,
+// the lease frees the name, and the next session is granted it. The first
+// session tears down eventually, and that teardown must not touch a name it no
+// longer holds — it would delete its SUCCESSOR's signpost and restore a
+// workload that session had parked, which is exactly the "two sessions, one
+// name" damage the lease exists to stop.
 func TestUnserveMayAct(t *testing.T) {
 	for _, tc := range []struct {
 		why  string
@@ -14,7 +15,7 @@ func TestUnserveMayAct(t *testing.T) {
 		mine string // what the caller says it holds
 		want bool
 	}{
-		{"the displaced session, on the port it used to hold", "40002", "40001", false},
+		{"a session that lost the name while it was away", "40002", "40001", false},
 		{"the session that really holds it", "40002", "40002", true},
 		{"a caller too old to name its port", "40002", "", true},
 		{"no lease recorded: nothing to arbitrate", "", "40001", true},

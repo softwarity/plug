@@ -7,20 +7,20 @@ import "testing"
 // (ls/test/…) bypass launcherRun, so this rule only ever gates the run path.
 func TestServeRequired(t *testing.T) {
 	for _, empty := range [][]string{nil, {}} {
-		if err := serveRequired(empty, false, false); err == nil {
+		if err := serveRequired(empty, false); err == nil {
 			t.Fatalf("a command with neither -s nor -c must be rejected (exposes=%v)", empty)
 		}
 	}
-	if err := serveRequired([]string{"web:8080:3000"}, false, false); err != nil {
+	if err := serveRequired([]string{"web:8080:3000"}, false); err != nil {
 		t.Fatalf("one -s must be accepted, got %v", err)
 	}
-	if err := serveRequired([]string{"a:1:2", "b:3:4"}, false, false); err != nil {
+	if err := serveRequired([]string{"a:1:2", "b:3:4"}, false); err != nil {
 		t.Fatalf("multiple -s must be accepted, got %v", err)
 	}
-	if err := serveRequired(nil, true, false); err != nil {
+	if err := serveRequired(nil, true); err != nil {
 		t.Fatalf("-c alone must be accepted, got %v", err)
 	}
-	if err := serveRequired([]string{"web:8080:3000"}, true, false); err == nil {
+	if err := serveRequired([]string{"web:8080:3000"}, true); err == nil {
 		t.Fatal("-s and -c together must be rejected")
 	}
 }

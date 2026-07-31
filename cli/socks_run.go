@@ -194,10 +194,11 @@ func startExposes(cfg config) (func(), error) {
 			// network already gone — which is exactly when you Ctrl-C — and
 			// leaving silently would let you walk away believing a workload
 			// came back up when it is still down.
-			// Name the port we hold it on: an agent whose name was taken from
-			// us by another session's --force must NOT act on our teardown, or
-			// we would delete the signpost our successor is now serving and
-			// restore a workload it had parked.
+			// Name the port we hold it on. If this name went to another session
+			// while we were away (a sleep past the keepalive frees it — the
+			// lease only holds while the port answers), the agent must NOT act
+			// on our teardown, or we would delete the signpost our successor is
+			// now serving and restore a workload it had parked.
 			mine := ""
 			if g := groups[name]; len(g) > 0 {
 				mine = " " + g[0].AgentPort()
@@ -205,8 +206,8 @@ func startExposes(cfg config) (func(), error) {
 			out, err := tr.Exec("unserve-name " + name + mine)
 			switch {
 			case out == "ok reassigned":
-				info("%s was taken over by another session while this one ran (--force) — "+
-					"left alone, it belongs to that session now.", name)
+				info("%s went to another session while this one was running — left alone, "+
+					"it belongs to that session now.", name)
 			case err != nil:
 				info("WARNING could not release %s (%v) — anything this session parked is STILL parked.\n"+
 					"      Re-run the session to restore it, or restart the agent (its boot gc restores).", name, err)
@@ -234,11 +235,7 @@ func startExposes(cfg config) (func(), error) {
 		for _, g := range group {
 			pairs = append(pairs, g.Spec().ClusterPort+":"+g.AgentPort())
 		}
-		v := "serve-name " + group[0].Spec().Name + " " + strings.Join(pairs, ",") + " takeover"
-		if cfg.force {
-			v += " force"
-		}
-		return v
+		return "serve-name " + group[0].Spec().Name + " " + strings.Join(pairs, ",") + " takeover"
 	}
 	// After a reconnect, a restarted agent has GC'd the signpost — AND, on a
 	// takeover, restored the parked workload — so re-run the SAME verb (re-park

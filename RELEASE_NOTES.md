@@ -12,17 +12,14 @@ directory and command line so you can recognise it, and the PID to stop it. When
 nothing local matches, it says so — the holder is on another machine, and it
 frees itself when that session ends.
 
-### Added: `--force` takes a name its holder will not give back
+### Fixed: releasing a name you no longer hold leaves its new owner alone
 
-On a shared agent, two developers can want the same name at once, and the
-holder is then a process on a machine you have no way to reach — the one case
-naming it cannot solve. `plug -s web:8080:3000 --force <cmd>` takes it anyway.
-Its cost is real and yours to accept: the displaced session keeps running, stops
-receiving traffic, and only finds out when it next re-provisions. Say so in your
-team chat before using it. What it will *not* do is damage the session that took
-over from it — releasing a name now says which session is releasing it, so a
-displaced session's teardown leaves its successor's signpost, and its successor's
-parked workload, alone.
+Holding a name is not forever — sleep past the keepalive and your forward dies,
+the name frees itself, and the next session is granted it. When the first
+session was finally stopped, its teardown deleted the signpost the SECOND one
+was serving and restored a workload that session had parked, leaving it running
+and unreachable. Releasing a name now says which session is releasing it, and an
+agent that has since given it to someone else does nothing and says so.
 
 ---
 
