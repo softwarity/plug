@@ -177,6 +177,45 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, log logfn) ([]string, s
 			case <-stopWatch:
 				return
 			case <-t.C:
+				// WHICH service is primary is not settled once and for all. A
+				// laptop that wakes, joins another network or drops a corporate
+				// VPN gets a NEW primary service, and the old one's DNS dict —
+				// which is where we faithfully keep writing — stops being what
+				// resolution consumes. Everything then looks healthy from here:
+				// the key we watch still holds our IP, so the checks below pass
+				// and nothing is logged, while single-label names quietly go to
+				// the DHCP resolver and come back NXDOMAIN, machine-wide, until
+				// the daemon is restarted. Re-resolve it every tick, and move.
+				if cur, cerr := primaryService(); cerr == nil && cur != svc {
+					log.f("tun[mac]: the primary network service changed (%s → %s) — moving the DNS override; "+
+						"cluster names resolved through the old one until now", svc, cur)
+					if restore != "" {
+						_ = scutilSet(dnsKey, restore) // hand the old service back
+					}
+					if setupOverridden && setupRestore != "" {
+						_ = scutilSet(setupKey, setupRestore)
+					}
+					svc = cur
+					dnsKey = "State:/Network/Service/" + svc + "/DNS"
+					setupKey = "Setup:/Network/Service/" + svc + "/DNS"
+					var newSearch, newSetupSearch, newSetupServers []string
+					restore, _, newSearch = readDNSDict(dnsKey)
+					setupRestore, newSetupServers, newSetupSearch = readDNSDict(setupKey)
+					setupOverridden = len(newSetupServers) > 0
+					set = "d.init\nd.add ServerAddresses * " + dnsIP + "\nd.add SearchDomains * " +
+						strings.Join(append(append([]string{}, newSearch...), searchSuffix), " ") + "\n"
+					if setupOverridden {
+						setupSet = "d.init\nd.add ServerAddresses * " + dnsIP + "\nd.add SearchDomains * " +
+							strings.Join(append(append([]string{}, newSetupSearch...), searchSuffix), " ") + "\n"
+					}
+					// The teardown below follows: it restores whatever dnsKey now
+					// names. The on-disk crash net still snapshots the service
+					// that was primary at startup, so a HARD crash after a move
+					// leaves the new service pointed at us — `plug doctor` calls
+					// that out (a plug resolver with no session) and `plug down`
+					// clears it.
+					gate.request()
+				}
 				input := false     // Service key — configd's composition input only
 				effective := false // what resolution consumes: Global, Setup, the files
 				if _, cur, _ := readDNSDict(dnsKey); len(cur) != 1 || cur[0] != dnsIP {

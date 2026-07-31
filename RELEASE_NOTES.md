@@ -2,6 +2,32 @@
 
 ## NEXT RELEASE
 
+### Fixed: cluster names stopped resolving after a sleep, a network change or a VPN drop
+
+macOS decides which network service is "primary", and that is where plug points
+the system DNS. It resolved that service **once**, at startup, and kept writing
+there for the life of the daemon — so the moment the primary changed (a laptop
+waking, joining another network, a corporate VPN going down) plug was faithfully
+maintaining the DNS of a service nothing resolved through any more. Single-label
+cluster names went to the DHCP resolver and came back `ENOTFOUND`, for every
+application on the machine at once, until the daemon was restarted.
+
+Nothing reported it, either: the watchdog exists precisely to survive this, but
+it re-checked the *old* service's key, still found plug's address there and
+concluded all was well. It now re-resolves the primary on every tick, hands the
+old service its original DNS back, moves the override onto the new one, and says
+so in the log.
+
+### Fixed: a DNS lookup the agent could not perform is no longer an answer
+
+Asked whether a name exists, the agent replied `nxdomain` on *any* failure —
+including a 3-second timeout. The cluster's own resolver is briefly unreachable
+every time a laptop wakes, so a running service could be declared absent, and the
+CLI caches that verdict for 30 seconds before handing the application NXDOMAIN.
+Only a resolver actually saying "no such name" means absent now; anything else is
+reported as an error, which makes the CLI fail open and mint as it always did.
+
+
 ### Changed: all three cluster families run the same e2e chain
 
 Four cells — the name lease, the two `plug update` cells and the agent-crash

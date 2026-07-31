@@ -219,6 +219,19 @@ func dispatch(cmd []string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		addrs, err := net.DefaultResolver.LookupHost(ctx, cmd[1])
 		cancel()
+		// A lookup that FAILED is not an answer. Only a resolver saying "no such
+		// name" means the name is absent; a timeout, a refused connection, a
+		// "server misbehaving" mean we could not tell — and the difference is
+		// not academic. The cluster's own resolver is briefly unreachable every
+		// time a laptop wakes and the VM around it comes back, and answering
+		// "nxdomain" there is authoritative: the CLI caches it for 30s and hands
+		// the application ENOTFOUND for services that are running perfectly
+		// well. Reported as an error instead, the CLI fails OPEN and mints as it
+		// always did — the safe direction, and the one a session survives.
+		var dnsErr *net.DNSError
+		if err != nil && !(errors.As(err, &dnsErr) && dnsErr.IsNotFound) {
+			answer("error: resolving %q: %v", cmd[1], err)
+		}
 		for _, a := range addrs {
 			// 198.18.0.0/15 is the range plug itself mints fakes from — an
 			// answer there can only be an ECHO of a plug resolver upstream
@@ -228,9 +241,7 @@ func dispatch(cmd []string) {
 			if ip := net.ParseIP(a).To4(); ip != nil && ip[0] == 198 && ip[1]&0xFE == 18 {
 				continue
 			}
-			if err == nil {
-				answer("found")
-			}
+			answer("found")
 		}
 		answer("nxdomain")
 	case "self-update":
