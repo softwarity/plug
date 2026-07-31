@@ -4,6 +4,9 @@ package main
 
 import "os"
 
+// ttyDevice is the console input handle — the Windows equivalent of /dev/tty.
+const ttyDevice = "CONIN$"
+
 // processAlive reports whether pid is a live process. Windows has no signal 0:
 // os.FindProcess opens the process and fails when there is nothing to open,
 // which is the check. It is the weaker of the two — a terminated process whose

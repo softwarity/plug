@@ -22,31 +22,38 @@ func sandboxHome(t *testing.T) {
 func TestMarkServedThenHolderNamesThisProcess(t *testing.T) {
 	sandboxHome(t)
 
-	forget := markServed("fpl-svc", []string{"-s", "fpl-svc:3000:PORT", "nest", "start", "--watch"})
-	holder := servedHolder("fpl-svc")
-	if holder == "" {
+	forget := markServed("fpl-svc", "40001", []string{"-s", "fpl-svc:3000:PORT", "nest", "start", "--watch"})
+	h := servedHolder("fpl-svc")
+	if h == nil {
 		t.Fatal("servedHolder found nothing right after markServed")
+	}
+	if h.pid != os.Getpid() {
+		t.Errorf("record names PID %d, want this process (%d)", h.pid, os.Getpid())
+	}
+	// The port is what proves this record IS the holder rather than a leftover
+	// naming a recycled PID — without it we could offer to kill an innocent one.
+	if h.port != "40001" {
+		t.Errorf("record port = %q, want 40001", h.port)
 	}
 	for _, want := range []string{
 		strconv.Itoa(os.Getpid()), // which process to look at
 		"nest start --watch",      // and how to recognise it as yours
-		"kill ",                   // and how to free the name
 	} {
-		if !strings.Contains(holder, want) {
-			t.Errorf("holder text is missing %q:\n%s", want, holder)
+		if !strings.Contains(h.describe(), want) {
+			t.Errorf("description is missing %q:\n%s", want, h.describe())
 		}
 	}
 
 	// A name this session never served says nothing about anyone.
-	if other := servedHolder("fpl-ui"); other != "" {
-		t.Errorf("servedHolder(unserved name) = %q, want empty", other)
+	if other := servedHolder("fpl-ui"); other != nil {
+		t.Errorf("servedHolder(unserved name) = %+v, want nil", other)
 	}
 
 	// Teardown forgets it: the next session must not be told about a name that
 	// is now free.
 	forget()
-	if after := servedHolder("fpl-svc"); after != "" {
-		t.Errorf("record survived teardown: %q", after)
+	if after := servedHolder("fpl-svc"); after != nil {
+		t.Errorf("record survived teardown: %+v", after)
 	}
 }
 
@@ -54,12 +61,12 @@ func TestMarkServedThenHolderNamesThisProcess(t *testing.T) {
 func TestMarkServedSurvivesAnUnwritableHome(t *testing.T) {
 	t.Setenv("HOME", "/nonexistent/plug-test/nowhere")
 	t.Setenv("USERPROFILE", "/nonexistent/plug-test/nowhere")
-	forget := markServed("fpl-svc", []string{"-s", "fpl-svc:3000:PORT", "true"})
+	forget := markServed("fpl-svc", "40001", []string{"-s", "fpl-svc:3000:PORT", "true"})
 	if forget == nil {
 		t.Fatal("markServed returned a nil cleanup")
 	}
 	forget() // must not panic
-	if h := servedHolder("fpl-svc"); h != "" {
-		t.Errorf("holder from an unwritable home = %q, want empty", h)
+	if h := servedHolder("fpl-svc"); h != nil {
+		t.Errorf("holder from an unwritable home = %+v, want nil", h)
 	}
 }

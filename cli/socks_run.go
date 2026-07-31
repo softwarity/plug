@@ -318,6 +318,19 @@ func startExposes(cfg config) (func(), error) {
 		// the whole point of -s: you name a service and it exists, with nothing
 		// to agree cluster-side beforehand.
 		reply, err := tr.Exec(verb(group))
+		// Refused because a live session holds the name? If that session is one
+		// of OURS — same agent port, so it is the holder and not a leftover
+		// naming a recycled PID — offer to stop it. A terminal is required to
+		// ask: no prompt in a script or a CI job.
+		if err == nil && strings.Contains(reply, "another live session") {
+			if h := servedHolder(name); h != nil && h.port != "" && h.port == heldPort(reply) && askToStop(h) {
+				if serr := stopHolder(h); serr != nil {
+					return fail(fmt.Errorf("%s: could not stop the session holding it: %w", name, serr))
+				}
+				info("%s released — taking it", name)
+				reply, err = tr.Exec(verb(group))
+			}
+		}
 		if err != nil {
 			return fail(err)
 		}
@@ -328,8 +341,9 @@ func startExposes(cfg config) (func(), error) {
 			// (an editor closed, its terminal panes gone, what ran in them still
 			// running). If it is on this machine, we know which one.
 			if strings.Contains(msg, "another live session") {
-				if holder := servedHolder(name); holder != "" {
-					return fail(fmt.Errorf("%s: agent: %s\n      %s", name, msg, holder))
+				if h := servedHolder(name); h != nil {
+					return fail(fmt.Errorf("%s: agent: %s\n      held on this machine by %s\n"+
+						"      Check it is yours, then free the name with:  kill %d", name, msg, h.describe(), h.pid))
 				}
 				return fail(fmt.Errorf("%s: agent: %s\n"+
 					"      No session of yours on this machine is recorded for it — the holder is on\n"+
@@ -350,7 +364,7 @@ func startExposes(cfg config) (func(), error) {
 		// Provisioned — register for cleanup BEFORE the check, so a failure
 		// below still tears the name down.
 		dynamic = append(dynamic, name)
-		unmark = append(unmark, markServed(name, os.Args[1:]))
+		unmark = append(unmark, markServed(name, group[0].AgentPort(), os.Args[1:]))
 		if parked {
 			info("took over %s — the deployed workload is parked for this session (restored on exit)", name)
 		}

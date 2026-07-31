@@ -2,15 +2,31 @@
 
 ## NEXT RELEASE
 
-### Changed: a name that is already taken says who is holding it
+### Changed: a name already taken by one of your own sessions offers to free it
 
 `"web" is already exposed by another live session` was correct and unhelpful:
 the holder is often a process you have no window onto — close an editor and its
 terminal panes go with it, while what ran in them keeps running. plug now
-records which local process serves a name, and the refusal names it, with the
-directory and command line so you can recognise it, and the PID to stop it. When
-nothing local matches, it says so — the holder is on another machine, and it
-frees itself when that session ends.
+records which local process serves a name. When the holder is one of yours, it
+shows you what it is and offers to stop it:
+
+```
+[plug] that name is served by another session of yours:
+        PID 24939, started 12m ago
+        dir: /home/you/projects/web
+        cmd: -s web:8080:PORT npm run dev
+[plug] stop it and take the name? [Y/n]:
+```
+
+Answer yes and the session is asked to stop — its command ends, its name is
+released and whatever it had parked is restored — then yours takes the name. The
+offer is only made when the recorded session really is the holder (same agent
+port), so a stale record can never point the question at an unrelated process,
+and only ever at a session of your own: the record lives in your own `~/.plug`.
+
+With no terminal to ask on — a script, a CI job — nothing is killed and the
+refusal is simply reported. Same when the holder is elsewhere: it is on another
+machine or another account, and it frees itself when that session ends.
 
 ### Fixed: releasing a name you no longer hold leaves its new owner alone
 

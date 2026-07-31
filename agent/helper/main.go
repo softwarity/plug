@@ -347,8 +347,11 @@ func nameTaken(held string, ours []portPair, live func(string) bool) bool {
 }
 
 func serveName(name string, pairs []portPair) {
-	if nameTaken(leaseHolder(name), pairs, agentPortLive) {
-		answer("error: %q is already exposed by another live session — one -s per name at a time", name)
+	// The port is named so the CLI can tell OUR OWN forgotten session from
+	// someone else's: it records the port it holds a name on, and only a match
+	// proves its record is the holder rather than a leftover on a recycled PID.
+	if held := leaseHolder(name); nameTaken(held, pairs, agentPortLive) {
+		answer("error: %q is already exposed by another live session (agent port %s) — one -s per name at a time", name, held)
 	}
 	if len(pairs) > 0 {
 		takeNameLease(name, pairs[0].agent)
@@ -1229,7 +1232,7 @@ func containerServe(name string, pairs []portPair, self selfInfo) {
 	}
 	if code, err := dockerAPI("GET", "/containers/"+signpostName(name)+"/json", nil, &insp); err == nil && code == 200 {
 		if ap := signpostAgentPort(insp.Config.Entrypoint); ap != "" && agentPortLive(ap) {
-			answer("error: %q is already exposed by another live session — one -s per name at a time", name)
+			answer("error: %q is already exposed by another live session (agent port %s) — one -s per name at a time", name, ap)
 		}
 	}
 	// A leftover signpost (a crashed session's, or a re-run) may carry a parking
@@ -1457,7 +1460,7 @@ func swarmServe(name string, pairs []portPair, self selfInfo) {
 	}
 	if code, err := dockerAPI("GET", "/services/"+signpostName(name), nil, &sp); err == nil && code == 200 {
 		if ap := signpostAgentPort(sp.Spec.TaskTemplate.ContainerSpec.Command); ap != "" && agentPortLive(ap) {
-			answer("error: %q is already exposed by another live session — one -s per name at a time", name)
+			answer("error: %q is already exposed by another live session (agent port %s) — one -s per name at a time", name, ap)
 		}
 	}
 	// A leftover signpost service (a crashed session's, or a re-run) may carry a
@@ -1894,7 +1897,7 @@ func k8sServe(name string, pairs []portPair) {
 		// targetPort still answers on this agent, its session is alive and the
 		// name is taken. A dead port is a crashed session's leftover — replaced.
 		if tp := k8sTargetPort(existing.Spec.Ports); tp != "" && agentPortLive(tp) {
-			answer("error: %q is already exposed by another live session — one -s per name at a time", name)
+			answer("error: %q is already exposed by another live session (agent port %s) — one -s per name at a time", name, tp)
 		}
 		// Replace it. If the re-create fails, say SO — do not fall through to
 		// the "not plug's" lie (the name is now deleted; report the real cause

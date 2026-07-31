@@ -81,18 +81,23 @@ import { CodeComponent } from '../code/code.component';
       is refused rather than silently taking it over. The usual culprit is a session of your own
       you can no longer see: <strong>closing an editor takes its terminal panes away without
       killing what ran in them</strong>, so the session stays alive, invisible, and reachable by no
-      window. plug names it for you — the PID, the directory and the command line, so you can
-      recognise it before stopping anything:
+      window. When the holder is one of yours, plug shows you what it is and offers to free it:
     </p>
-    <pre><code>[plug] expose: web: agent: "web" is already exposed by another live session
-      held on this machine by PID 24939, started 12m ago
+    <pre><code>[plug] that name is served by another session of yours:
+        PID 24939, started 12m ago
         dir: /home/you/projects/web
         cmd: -s web:8080:PORT npm run dev
-      Check it is yours, then free the name with:  kill 24939</code></pre>
+[plug] stop it and take the name? [Y/n]:</code></pre>
     <p>
-      A plain <code>kill</code> is enough and is the right way: plug stops your command, releases
-      the name and <strong>restores whatever the session had parked</strong> on the way out.
-      When nothing of yours matches, the message says so — the holder is on another machine or
+      Answering yes asks that session to stop — its command ends, the name is released and
+      <strong>whatever it had parked is restored</strong> — then yours takes the name. The question
+      is only asked when the recorded session really is the holder, so a stale record can never
+      point it at an unrelated process; and only ever at a session of your own, since the record
+      lives in your own <code>~/.plug</code>.
+    </p>
+    <p>
+      With <strong>no terminal to ask on</strong> — a script, a CI job — nothing is stopped and the
+      refusal is simply reported. Same when the holder is elsewhere: it is on another machine or
       another account, and the name frees itself when that session ends.
     </p>
     <p>
