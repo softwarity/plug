@@ -184,7 +184,12 @@ import { RouterLink } from '@angular/router';
       loop at startup through the cluster's own DNS. A <strong>deployed</strong> service owning the
       name is <strong>parked</strong> for the session (containers stopped / Swarm scaled to 0 / k8s
       Service repointed) and <strong>restored on exit</strong> — your process substitutes for it; a
-      name held by another live plug session is refused.
+      name held by another live plug session is refused, and the refusal
+      <a routerLink="/troubleshooting">names the process holding it</a>. That claim is the agent's,
+      not the signpost's: it leases the name to the session serving it, so the name stays that
+      session's even in the moments no signpost exists — right after an agent restart, for
+      instance. A session is only ever held to be alive while its own forward still answers, so
+      nothing stays locked after a session dies.
       See <a routerLink="/swarm">Swarm</a> and
       <a routerLink="/kubernetes">Kubernetes</a>.
     </p>

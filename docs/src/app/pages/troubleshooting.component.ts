@@ -75,6 +75,33 @@ import { CodeComponent } from '../code/code.component';
       and the name is yours again.
     </p>
 
+    <h3>"<code>&lt;name&gt;</code> is already exposed by another live session"</h3>
+    <p>
+      One name, one live session — so a second <code>-s</code> on a name someone is still serving
+      is refused rather than silently taking it over. The usual culprit is a session of your own
+      you can no longer see: <strong>closing an editor takes its terminal panes away without
+      killing what ran in them</strong>, so the session stays alive, invisible, and reachable by no
+      window. plug names it for you — the PID, the directory and the command line, so you can
+      recognise it before stopping anything:
+    </p>
+    <pre><code>[plug] expose: web: agent: "web" is already exposed by another live session
+      held on this machine by PID 24939, started 12m ago
+        dir: /home/you/projects/web
+        cmd: -s web:8080:PORT npm run dev
+      Check it is yours, then free the name with:  kill 24939</code></pre>
+    <p>
+      A plain <code>kill</code> is enough and is the right way: plug stops your command, releases
+      the name and <strong>restores whatever the session had parked</strong> on the way out.
+      When nothing of yours matches, the message says so — the holder is on another machine or
+      another account, and the name frees itself when that session ends.
+    </p>
+    <p>
+      <strong>There is no permanent lock.</strong> A name is held only while its session's forward
+      still answers, so a session killed outright frees it within seconds, and a laptop that sleeps
+      frees it once the keepalive gives up. If that laptop comes back and you have taken the name
+      meanwhile, its own teardown leaves yours alone.
+    </p>
+
     <h3>A name that exists nowhere answers "unknown host"</h3>
     <p>
       That is intended (since 2.2): plug asks the cluster before answering, so a typo or a
