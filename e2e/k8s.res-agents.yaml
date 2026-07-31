@@ -680,3 +680,134 @@ spec:
   ports:
     - port: 8095
       targetPort: 8095
+---
+# The prober lives in `default` and dials res-tko-linux by BARE NAME, like it
+# does on Compose and Swarm where there is one flat namespace. Kubernetes DNS
+# does not cross namespaces, so an ExternalName alias in `default` forwards the
+# bare name to the real Service. The takeover repoints that real Service, and
+# the alias follows it — nothing here needs to know the session happened.
+apiVersion: v1
+kind: Service
+metadata:
+  name: res-tko-linux
+  namespace: default
+  labels: { app: res-tko-linux }
+spec:
+  type: ExternalName
+  externalName: res-tko-linux.plug-res-linux.svc.cluster.local
+---
+# chaos runs in `default` (that is where a session reaches it by name), but the
+# agent it must crash lives here. Grant exactly that, in this namespace only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: chaos-crash
+  namespace: plug-res-linux
+  labels: { app: chaos }
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: chaos-crash
+  namespace: plug-res-linux
+  labels: { app: chaos }
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: chaos-crash
+subjects:
+  - kind: ServiceAccount
+    name: chaos
+    namespace: default
+
+---
+# The prober lives in `default` and dials res-tko-mac by BARE NAME, like it
+# does on Compose and Swarm where there is one flat namespace. Kubernetes DNS
+# does not cross namespaces, so an ExternalName alias in `default` forwards the
+# bare name to the real Service. The takeover repoints that real Service, and
+# the alias follows it — nothing here needs to know the session happened.
+apiVersion: v1
+kind: Service
+metadata:
+  name: res-tko-mac
+  namespace: default
+  labels: { app: res-tko-mac }
+spec:
+  type: ExternalName
+  externalName: res-tko-mac.plug-res-mac.svc.cluster.local
+---
+# chaos runs in `default` (that is where a session reaches it by name), but the
+# agent it must crash lives here. Grant exactly that, in this namespace only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: chaos-crash
+  namespace: plug-res-mac
+  labels: { app: chaos }
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: chaos-crash
+  namespace: plug-res-mac
+  labels: { app: chaos }
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: chaos-crash
+subjects:
+  - kind: ServiceAccount
+    name: chaos
+    namespace: default
+
+---
+# The prober lives in `default` and dials res-tko-win by BARE NAME, like it
+# does on Compose and Swarm where there is one flat namespace. Kubernetes DNS
+# does not cross namespaces, so an ExternalName alias in `default` forwards the
+# bare name to the real Service. The takeover repoints that real Service, and
+# the alias follows it — nothing here needs to know the session happened.
+apiVersion: v1
+kind: Service
+metadata:
+  name: res-tko-win
+  namespace: default
+  labels: { app: res-tko-win }
+spec:
+  type: ExternalName
+  externalName: res-tko-win.plug-res-win.svc.cluster.local
+---
+# chaos runs in `default` (that is where a session reaches it by name), but the
+# agent it must crash lives here. Grant exactly that, in this namespace only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: chaos-crash
+  namespace: plug-res-win
+  labels: { app: chaos }
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: chaos-crash
+  namespace: plug-res-win
+  labels: { app: chaos }
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: chaos-crash
+subjects:
+  - kind: ServiceAccount
+    name: chaos
+    namespace: default

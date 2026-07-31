@@ -470,6 +470,10 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh updatetag "$A" "$B" 2222
+      - name: Resilience — agent restarted mid-session (self-heal, boot-gc, re-park)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh resilience "$A" "$B" 2222
       - name: Update — a release agent retargets to the newest release
         if: always()
         shell: bash

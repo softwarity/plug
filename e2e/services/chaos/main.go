@@ -60,8 +60,7 @@ func k8sDo(method, path string) (int, []byte, error) {
 	return resp.StatusCode, b, nil
 }
 
-// k8sNamespace is the namespace this pod runs in — the per-leg crash-test
-// agents each live in their own, so chaos must act where it is deployed.
+// k8sNamespace is the namespace this pod runs in.
 func k8sNamespace() string {
 	ns, err := os.ReadFile(k8sSA + "/namespace")
 	if err != nil {
@@ -70,12 +69,29 @@ func k8sNamespace() string {
 	return strings.TrimSpace(string(ns))
 }
 
+// agentNamespace says WHERE to look for the agent named svc.
+//
+// chaos answers in `default`, because that is where a session reaches it by
+// name — but the per-leg crash-test agents live one namespace each, so that
+// three OS legs crashing agents concurrently cannot tear down each other's
+// sessions. They keep the label `app: plug` (their own self-update looks for
+// it, and the update cells drive them), so they cannot be told apart by label:
+// the fixture naming is the mapping, and it is a fixture, so that is fair —
+// res-agent-<leg> is deployed in plug-res-<leg>. Anything else is looked for
+// here, which is what the main agent needs.
+func agentNamespace(svc string) string {
+	if leg, ok := strings.CutPrefix(svc, "res-agent-"); ok {
+		return "plug-res-" + leg
+	}
+	return k8sNamespace()
+}
+
 // k8sRestartAgent deletes the agent's pod. The Deployment recreates it, which
 // is what "the agent died mid-session" looks like on Kubernetes — and unlike a
 // container restart it also exercises a genuinely new pod, so the boot-gc runs
 // exactly as it would after a node event.
 func k8sRestartAgent(svc string) error {
-	ns := k8sNamespace()
+	ns := agentNamespace(svc)
 	code, body, err := k8sDo("GET", "/api/v1/namespaces/"+ns+"/pods?labelSelector=app%3D"+url.QueryEscape(svc))
 	if err != nil {
 		return err

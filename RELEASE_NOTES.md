@@ -19,7 +19,7 @@ old service its original DNS back, moves the override onto the new one, and says
 so in the log.
 
 
-### Changed: Swarm and Kubernetes run the e2e chain Compose had to itself
+### Changed: all three cluster families run the same e2e chain
 
 Four cells — the name lease, the two `plug update` cells and the agent-crash
 resilience chain — only ever ran against Compose, because the crash simulator and
@@ -27,12 +27,11 @@ the per-leg crash-test agents lived in that cluster alone. Swarm and Kubernetes
 now have them, so each family proves the same things about itself instead of
 inheriting Compose's word for it, and the per-family timings become comparable.
 
-The resilience cell is the exception, and worth naming: it runs on Compose and
-Swarm, not yet on Kubernetes. Restoring a parked workload after an agent restart
-is a *different implementation* per backend, so the Kubernetes one is still
-unexercised — its fixtures are written and deployed, but the cell reaches the
-deployed service by bare name across namespaces, which Kubernetes DNS does not
-do and the flat Compose and Swarm networks never had to care about.
+The resilience one closes a real hole rather than adding ceremony: restoring a
+parked workload after an agent restart is a *different implementation* per
+backend, and only the Docker one was ever exercised. Nothing checked that a
+Kubernetes agent coming back from a crash puts back the Service a session had
+repointed — now something does.
 
 ---
 
