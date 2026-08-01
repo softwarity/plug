@@ -53,15 +53,21 @@ désormais dans `RELEASE_NOTES.md` et la roadmap publique dans
       « notify avec choix » demande un prompt, donc `term.IsTerminal` + une
       échéance — le piège `askToStop` qui a bloqué une jambe Windows 16 min.
 
-- [ ] **Cellule e2e pour `auto`** — `notify` est **couvert** depuis le 01/08
-      (`update_check_notices`, greffée dans `do_update_jump` juste avant que
-      celle-ci ne fasse rouler l'agent : à cet instant précis l'agent est une
-      release en retard sur une **vraie image du registre**, ce que la cellule
-      vient de vérifier elle-même). `auto` n'est pas couvert et ne peut pas
-      l'être au même endroit — il ferait rouler le `prev-agent-*` dont la suite
-      de `do_update_jump` dépend. Il faudrait un agent N-1 dédié, donc trois
-      services de plus par famille ; à peser contre le fait que la décision est
-      déjà testée unitairement et l'application par `plug update`.
+- [ ] **Cellules e2e pour l'auto-update** — **impossible tant que la version qui
+      porte le check n'est pas elle-même publiée**. Tenté le 01/08 contre les
+      `prev-agent-*`, 9 jambes rouges, retiré : le check tourne dans le CORE, et
+      le core vient de l'AGENT (`ensureVersion`). Face à un agent N-1, c'est le
+      core N-1 qui s'exécute — le code testé n'est jamais atteint (`using
+      cluster version v2.7.3` dans le log). François l'avait dit dès le départ ;
+      la condition est bien que N-1 embarque la feature, pas l'inverse.
+      **Conséquence produit, pas seulement de test** : le check ne commence à
+      voir quoi que ce soit qu'à partir de la version qui l'introduit. Quelqu'un
+      en 2.8.x ne sera pas averti de 2.9.0 ; en 2.9.0 il verra 2.9.1. Normal
+      pour un auto-updater, mais à dire dans les notes.
+      Quand ce sera possible : `notify` se greffe dans `do_update_jump` (la
+      précondition y est déjà établie et vérifiée) ; `auto` demande un agent
+      dédié, puisqu'il ferait rouler le `prev-agent-*` dont la suite de cette
+      cellule dépend.
 
 - [ ] **`plug status` + verbes d'action hors bande** (roadmap publiée le 31/07) :
       lister les sessions vivantes, l'état de leur chemin, les arrêter ou

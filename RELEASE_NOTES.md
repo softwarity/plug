@@ -56,9 +56,12 @@ started with and the next launch picks up the new one. That is also why a
 reconnect cannot upgrade anything — the version is chosen once, before the core
 starts.
 
-A deployment following a moving tag (`latest`, a branch) is left alone: whether
-such a tag has moved is a digest question only the cluster can settle. `plug
-update` remains the explicit path there.
+Two things it cannot see. A deployment following a moving tag (`latest`, a
+branch) is left alone: whether such a tag has moved is a digest question only the
+cluster can settle. And the check runs in the core, which is the version your
+AGENT serves — so it starts working once the agent is on a version that has it.
+From an older agent nothing is announced, including the release that first
+brought this. `plug update` remains the explicit path in both cases.
 
 ### Fixed: SRV, MX, PTR and TXT lookups work again during a session
 
