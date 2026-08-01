@@ -37,15 +37,26 @@ RUN CGO_ENABLED=0 go build -C /src/helper -trimpath -ldflags "-s -w" -o /out/plu
 # installer (the installer pulls it from us — no run-time dependency on wintun.net,
 # and no more intermittent fetch).
 ARG WINTUN_VERSION=0.14.1
-RUN apk add --no-cache curl unzip && \
-    curl -fsSL "https://www.wintun.net/builds/wintun-${WINTUN_VERSION}.zip" -o /tmp/wintun.zip && \
+RUN for i in 1 2 3; do apk add --no-cache curl unzip && break; \
+      echo "apk failed (attempt $i/3) — retrying"; sleep $((i * 5)); \
+    done; [ -x /usr/bin/curl ] && \
+    curl -fsSL --retry 3 --retry-connrefused "https://www.wintun.net/builds/wintun-${WINTUN_VERSION}.zip" -o /tmp/wintun.zip && \
     unzip -j /tmp/wintun.zip 'wintun/bin/amd64/wintun.dll' -d /out
 
 FROM alpine:3.24
 
 # openssh only: the CLI tunnels via SSH direct-tcpip, sshd resolves cluster
 # names and forwards connections itself — no other server-side tooling needed.
-RUN apk add --no-cache openssh-server \
+#
+# The apk fetch is the one step here that fails on someone else's bad minute: a
+# single TLS error on dl-cdn left the index unreadable, so openssh-server was
+# "no such package", so the swarm-A cluster never came up, so three e2e legs
+# timed out, so CI was red and the 2.7.3 image never shipped. Retry, and assert
+# the binary is really there — without the test the loop would fall through with
+# the exit status of sleep and the failure would surface as a confusing adduser.
+RUN for i in 1 2 3; do apk add --no-cache openssh-server && break; \
+      echo "apk failed (attempt $i/3) — retrying"; sleep $((i * 5)); \
+    done; [ -x /usr/sbin/sshd ] \
     && adduser -D -s /bin/sh plug \
     && sed -i 's/^plug:!/plug:*/' /etc/shadow \
     # anonymous download user: empty password, locked to the serve-binary ForceCommand
