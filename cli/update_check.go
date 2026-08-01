@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,9 +26,14 @@ const updateCheckEvery = 24 * time.Hour
 
 // One state file PER CLUSTER: the policy is per profile, so two clusters must
 // not overwrite each other's answer. Keyed by host:port, which is all the core
-// knows about the cluster it serves.
+// knows about the cluster it serves — hashed rather than used raw, since a host
+// can carry anything a filename cannot.
+//
+// Hashed here rather than with tun.ClusterHash, which is a darwin||windows file:
+// this path runs on all three.
 func updateStatePath(cfg config) string {
-	return filepath.Join(plugDir(), "update-"+tun.ClusterHash(cfg.host+":"+cfg.port))
+	sum := sha256.Sum256([]byte(cfg.host + ":" + cfg.port))
+	return filepath.Join(plugDir(), "update-"+hex.EncodeToString(sum[:8]))
 }
 
 // shouldCheck is the whole policy, kept apart from the network so it can be
