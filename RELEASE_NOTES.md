@@ -2,10 +2,6 @@
 
 ## NEXT RELEASE
 
----
-
-## 2.7.3
-
 ### Fixed: a long-lived daemon no longer runs out of cluster addresses
 
 plug answers a cluster name with an address from a private /24 it owns, and that
