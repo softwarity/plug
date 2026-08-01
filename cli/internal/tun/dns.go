@@ -3,6 +3,7 @@ package tun
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"net"
 	"strings"
 	"sync"
@@ -117,26 +118,85 @@ func (t *faketab) lookup(ip uint32) (string, bool) {
 	return n, ok
 }
 
-// upstreamResolver returns a resolver that dials the child's ORIGINAL
-// nameservers directly (bypassing the resolver we just repointed at ourselves),
-// so our dotted-name lookups don't loop.
+// upstreamDNS is the child's ORIGINAL nameservers, kept in the two forms this
+// package needs: a resolver for the A path — which builds its own answer — and
+// the raw server list for the relay path, which forwards a query verbatim and
+// so cannot go through net.Resolver at all.
+//
+// Dialling them directly bypasses the resolver we just repointed at ourselves,
+// so our own lookups don't loop.
 //
 // With none captured it falls back to a public resolver, which keeps dotted
 // names working but sends them somewhere the user did not choose — the caller
 // warns when that happens. The real fix is to capture the system servers on
 // every platform; Windows does not yet (configure() returns none there), which
 // is why this path is reached at all in practice.
-func upstreamResolver(servers []string) *net.Resolver {
+type upstreamDNS struct {
+	addrs    []string // "host:port", port defaulted once at construction
+	resolver *net.Resolver
+	timeout  time.Duration // how long relay waits; tests shorten it
+}
+
+func newUpstream(servers []string) *upstreamDNS {
 	if len(servers) == 0 {
 		servers = []string{"8.8.8.8"}
 	}
-	return &net.Resolver{
-		PreferGo: true,
-		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			var d net.Dialer
-			return d.DialContext(ctx, network, net.JoinHostPort(servers[0], "53"))
+	addrs := make([]string, 0, len(servers))
+	for _, s := range servers {
+		// The captured servers are bare addresses; SplitHostPort failing is how we
+		// tell one from an address that already carries a port.
+		if _, _, err := net.SplitHostPort(s); err != nil {
+			s = net.JoinHostPort(s, "53")
+		}
+		addrs = append(addrs, s)
+	}
+	return &upstreamDNS{
+		addrs: addrs,
+		// Long enough for a slow corporate resolver, short enough to answer before
+		// the client's own patience runs out — the A path above uses the same 4s.
+		timeout: 4 * time.Second,
+		resolver: &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, network, addrs[0])
+			},
 		},
 	}
+}
+
+// relay forwards a query verbatim to the upstream and returns its reply
+// verbatim. Verbatim is the whole point: SRV, MX, PTR, TXT, NS, CAA and
+// everything else stay whatever the upstream said, with no record type this
+// package has to learn how to parse or rebuild.
+//
+// Returns nil if the upstream said nothing in time — the caller turns that into
+// SERVFAIL rather than an invented empty answer.
+func (u *upstreamDNS) relay(q []byte) []byte {
+	c, err := net.DialTimeout("udp", u.addrs[0], u.timeout)
+	if err != nil {
+		return nil
+	}
+	defer c.Close()
+	deadline := time.Now().Add(u.timeout)
+	_ = c.SetDeadline(deadline)
+	if _, err := c.Write(q); err != nil {
+		return nil
+	}
+	buf := make([]byte, 4096)
+	// The socket is connected, so only the upstream's packets arrive — but an
+	// off-path spoof still has to guess the id, and dropping mismatches is one
+	// line. Keep reading until the deadline rather than trusting the first.
+	for time.Now().Before(deadline) {
+		n, err := c.Read(buf)
+		if err != nil {
+			return nil
+		}
+		if n >= 12 && buf[0] == q[0] && buf[1] == q[1] {
+			return buf[:n]
+		}
+	}
+	return nil
 }
 
 // answerDNS parses the first question and builds a minimal response: A for a
@@ -144,7 +204,7 @@ func upstreamResolver(servers []string) *net.Resolver {
 // connected cluster (check; nil skips the check and always mints); A for a
 // dotted name → the real address via the saved upstream; AAAA → NODATA (force
 // IPv4); localhost → 127.0.0.1.
-func answerDNS(q []byte, tab *faketab, upstream *net.Resolver, check nameChecker) []byte {
+func answerDNS(q []byte, tab *faketab, upstream *upstreamDNS, check nameChecker) []byte {
 	if len(q) < 13 {
 		return nil
 	}
@@ -159,7 +219,23 @@ func answerDNS(q []byte, tab *faketab, upstream *net.Resolver, check nameChecker
 	rcode := byte(0)
 	switch {
 	case qtype == 28: // AAAA → NODATA (force v4)
-	case qtype != 1: // non-A → NODATA
+	case qtype != 1:
+		// Everything that is not an address: SRV, MX, PTR, TXT, NS… On macOS this
+		// stub is the resolver for the WHOLE machine, so answering NODATA broke
+		// them host-wide for the length of a session — AD clients, MongoDB
+		// seedlists, Consul. Relay them to the upstream instead.
+		//
+		// Only for names we do not own. A single-label name is a cluster service
+		// and a .plug name is our own suffix: neither exists upstream, and asking
+		// would leak an internal name to a public resolver to be told so. Our
+		// reverse zone is ours by definition. Those stay NODATA, as before.
+		if !relayable(name, tab) {
+			break
+		}
+		if reply := upstream.relay(q); reply != nil {
+			return capReply(reply, q, qend)
+		}
+		rcode = 2 // SERVFAIL: the upstream said nothing — say that, don't invent an empty answer
 	case strings.EqualFold(name, "localhost") || strings.HasSuffix(strings.ToLower(name), ".localhost"):
 		answerIP = net.IPv4(127, 0, 0, 1)
 	case strings.HasSuffix(strings.ToLower(name), "."+searchSuffix):
@@ -188,7 +264,7 @@ func answerDNS(q []byte, tab *faketab, upstream *net.Resolver, check nameChecker
 	default: // dotted → resolve for real via the saved upstream
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 		defer cancel()
-		if ips, e := upstream.LookupIP(ctx, "ip4", name); e == nil && len(ips) > 0 {
+		if ips, e := upstream.resolver.LookupIP(ctx, "ip4", name); e == nil && len(ips) > 0 {
 			answerIP = ips[0].To4()
 		} else {
 			rcode = 3 // NXDOMAIN
@@ -209,19 +285,24 @@ func answerDNS(q []byte, tab *faketab, upstream *net.Resolver, check nameChecker
 	} else {
 		r = append(r, 0, 0)
 	}
-	if answerIP != nil {
+	switch {
+	case answerIP != nil:
 		r = append(r, 0, 0, 0, 0) // NS/AR counts
-	} else {
+	case rcode == 2:
+		r = append(r, 0, 0, 0, 0) // SERVFAIL asserts nothing, so it carries no SOA
+	default:
 		r = append(r, 0, 1, 0, 0) // one AUTHORITY record: the negative-TTL SOA
 	}
 	r = append(r, q[12:qend]...) // question
-	if answerIP != nil {
+	switch {
+	case answerIP != nil:
 		r = append(r, 0xC0, 0x0C)  // name ptr
 		r = append(r, 0, 1, 0, 1)  // A, IN
 		r = append(r, 0, 0, 0, 30) // TTL
 		r = append(r, 0, 4)
 		r = append(r, answerIP.To4()...)
-	} else {
+	case rcode == 2: // SERVFAIL — header and question only
+	default:
 		// Negative answers carry a synthetic SOA whose MINIMUM bounds the
 		// client's NEGATIVE cache (RFC 2308). Without it the client picks its
 		// own duration — and macOS's mDNSResponder held one NXDOMAIN long
@@ -242,6 +323,44 @@ func answerDNS(q []byte, tab *faketab, upstream *net.Resolver, check nameChecker
 		r = append(r, 0, 0, 0, 5) // MINIMUM — the negative TTL
 	}
 	return r
+}
+
+// relayable reports whether a name belongs to somebody else, and so may be asked
+// upstream. Ours are the ones that only exist here: a single-label cluster
+// service, the .plug suffix Windows appends to one, and the reverse zone of this
+// instance's own /24. Sending any of them out would leak an internal name to a
+// resolver the user may not control, to be told what we already know.
+func relayable(name string, tab *faketab) bool {
+	n := strings.ToLower(strings.TrimSuffix(name, "."))
+	if !strings.Contains(n, ".") || n == searchSuffix || strings.HasSuffix(n, "."+searchSuffix) {
+		return false
+	}
+	// 198.18.<N>.<h> reverses to <h>.<N>.18.198.in-addr.arpa
+	base := tab.base
+	return !strings.HasSuffix(n, fmt.Sprintf(".%d.%d.%d.in-addr.arpa",
+		(base>>8)&0xff, (base>>16)&0xff, (base>>24)&0xff))
+}
+
+// maxRelayReply is the largest reply we hand back over the TUN. 1232 is the EDNS0
+// payload size the DNS flag day settled on — it clears the 1500-byte MTU with
+// room for headers and never fragments.
+const maxRelayReply = 1232
+
+// capReply passes the upstream's reply through untouched when it fits, and
+// otherwise replaces it with an empty TRUNCATED answer. A datagram over the MTU
+// would be fragmented or dropped, and a silently clipped one is a malformed
+// message; TC=1 is the protocol's own way to say "too big", which is at least a
+// thing the client knows how to read.
+func capReply(reply, q []byte, qend int) []byte {
+	if len(reply) <= maxRelayReply {
+		return reply
+	}
+	r := make([]byte, 0, qend+2)
+	r = append(r, q[0], q[1])             // id
+	r = append(r, 0x83)                   // QR=1, TC=1, RD=1
+	r = append(r, 0x80)                   // RA, RCODE 0
+	r = append(r, 0, 1, 0, 0, 0, 0, 0, 0) // QD=1, no records
+	return append(r, q[12:qend]...)       // question
 }
 
 func parseName(q []byte, off int) (string, int) {

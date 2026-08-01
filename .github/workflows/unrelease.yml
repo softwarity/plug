@@ -1,0 +1,144 @@
+name: Unrelease
+
+# Withdraw a release that should never have been one — the CI of the tagged
+# commit went red, so the image was never published and the tag names a version
+# nobody can install. Undoes exactly what Release did, in reverse: deletes the
+# GitHub release, deletes the tag, and lifts the notes back under NEXT RELEASE.
+#
+# It refuses to touch a release that actually shipped. A published image is out
+# in the world and people's launchers point at it; deleting its tag would leave
+# an image nobody can trace back to a commit. `force` is there for the case where
+# you really do mean it, and it makes you say so.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to withdraw (e.g. v2.7.3)
+        required: true
+        type: string
+      force:
+        description: Withdraw even if the image was already published
+        type: boolean
+        default: false
+
+jobs:
+  unrelease:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: main
+          # Same PAT as Release: this pushes to main and deletes a tag.
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Check what we are about to withdraw
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          tag="${TAG#v}"; tag="v${tag}"          # accept 2.7.3 or v2.7.3
+          ver="${tag#v}"
+          case "$ver" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::'$tag' is not a version tag"; exit 1 ;;
+          esac
+
+          git fetch --tags --force --quiet
+          if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "::error::tag $tag does not exist"
+            exit 1
+          fi
+
+          # Only the newest release can be withdrawn. Pulling an older one out
+          # would leave the ones after it describing a history that never
+          # happened, and its notes would have to be spliced back into the
+          # middle of the file rather than under NEXT RELEASE.
+          newest="$(git tag --list 'v[0-9]*' | sort -V | tail -1)"
+          if [ "$newest" != "$tag" ]; then
+            echo "::error::$tag is not the newest tag ($newest is) — withdrawing it would rewrite published history"
+            exit 1
+          fi
+
+          # The one thing that must not be undone silently.
+          if curl -fsS -o /dev/null "https://hub.docker.com/v2/repositories/softwarity/plug/tags/$ver" 2>/dev/null; then
+            if [ "$FORCE" != "true" ]; then
+              echo "::error::the image softwarity/plug:$ver IS published — this release shipped. Re-run with force if you really mean to withdraw it."
+              exit 1
+            fi
+            echo "::warning::softwarity/plug:$ver is published and is being withdrawn anyway (force)"
+          else
+            echo "no published image for $ver — this release never shipped, as expected"
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Lift the notes back under NEXT RELEASE
+        env:
+          VER: ${{ steps.check.outputs.ver }}
+        run: |
+          set -euo pipefail
+          python3 - "$VER" <<'PY'
+          import re, sys, pathlib
+
+          ver = sys.argv[1]
+          p = pathlib.Path("RELEASE_NOTES.md")
+          text = p.read_text()
+
+          # Release turns "## NEXT RELEASE\n\n" into
+          # "## NEXT RELEASE\n\n---\n\n## <ver>\n\n". Undo precisely that, and
+          # only when the section right under the placeholder is the one asked
+          # for — anything else means the file is not in the shape we think.
+          pattern = re.compile(
+              r"(^## NEXT RELEASE[ \t]*\n)\s*\n---[ \t]*\n\s*\n## "
+              + re.escape(ver) + r"[ \t]*\n\s*\n",
+              re.MULTILINE,
+          )
+          new, n = pattern.subn(r"\1\n", text, count=1)
+          if n != 1:
+              print(f"::error::no '## {ver}' section directly under '## NEXT RELEASE' "
+                    f"— RELEASE_NOTES.md is not in the shape Release leaves it in; fix it by hand")
+              sys.exit(1)
+          p.write_text(new)
+          print(f"lifted the {ver} notes back under NEXT RELEASE")
+          PY
+
+      - name: Withdraw
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.check.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          # The notes first: if anything below fails, the tag still points at a
+          # commit and the state is recoverable.
+          if ! git diff --quiet -- RELEASE_NOTES.md; then
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add RELEASE_NOTES.md
+            git commit -m "[ci skip] withdraw $TAG — restore its notes to NEXT RELEASE"
+            git push origin HEAD:main
+          else
+            echo "RELEASE_NOTES.md already restored — nothing to commit"
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release delete "$TAG" --yes
+            echo "deleted the GitHub release $TAG"
+          else
+            echo "no GitHub release $TAG — skipping"
+          fi
+
+          git push --delete origin "$TAG"
+          git tag -d "$TAG" || true
+          echo "deleted the tag $TAG"
+
+          echo "### Withdrew $TAG" >> "$GITHUB_STEP_SUMMARY"
+          echo "The notes are back under NEXT RELEASE. Fix what broke, then run Release again." >> "$GITHUB_STEP_SUMMARY"

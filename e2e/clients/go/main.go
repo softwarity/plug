@@ -11,10 +11,13 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -73,6 +76,8 @@ func main() {
 		doGRPC(target)
 	case "websocket":
 		doWebSocket(target)
+	case "dns":
+		doDNS(target)
 	default:
 		die("proto %q not implemented in the go client", proto)
 	}
@@ -283,4 +288,50 @@ func doGRPC(target string) {
 		die("grpc status %v", status)
 	}
 	ok("grpc", fmt.Sprintf("%s → health SERVING", target))
+}
+
+// doDNS proves the resolver still answers questions that are not addresses.
+// plug used to reply NODATA to every SRV, MX, PTR and TXT — and on macOS its
+// stub is the resolver for the WHOLE machine while a session runs, so that broke
+// AD clients, mongodb+srv:// URIs and Consul host-wide. Invoked as
+// `eclient dns mx:google.com` or `eclient dns srv:_sip._udp.sip.voice.google.com`.
+//
+// Only ONE outcome fails: a not-found. NODATA is what the bug looked like from a
+// client, and nothing but plug can produce it for a name that plainly has these
+// records. A transport error (SERVFAIL, timeout, a CI runner with no route out)
+// is reported and passed over — it says nothing either way, and failing on it
+// would make the cell depend on somebody else's network.
+func doDNS(target string) {
+	kind, name, found := strings.Cut(target, ":")
+	if !found {
+		die("dns: want <mx|srv>:<name>, got %q", target)
+	}
+
+	var n int
+	var err error
+	switch kind {
+	case "mx":
+		var recs []*net.MX
+		recs, err = net.LookupMX(name)
+		n = len(recs)
+	case "srv":
+		var recs []*net.SRV
+		// Empty service and proto: look the name up exactly as given.
+		_, recs, err = net.LookupSRV("", "", name)
+		n = len(recs)
+	default:
+		die("dns: unknown record kind %q", kind)
+	}
+
+	var dnsErr *net.DNSError
+	switch {
+	case n > 0:
+		ok("dns", fmt.Sprintf("%s %s → %d record(s) relayed to the upstream", kind, name, n))
+	case errors.As(err, &dnsErr) && dnsErr.IsNotFound:
+		die("dns: %s %s came back empty — the non-A relay is not working (this is the NODATA bug)", kind, name)
+	case err != nil:
+		ok("dns", fmt.Sprintf("%s %s — upstream unreachable (%v); not a verdict, skipped", kind, name, err))
+	default:
+		die("dns: %s %s returned no records and no error", kind, name)
+	}
 }

@@ -71,7 +71,7 @@ func TestNameCheckerAnyClusterWins(t *testing.T) {
 func TestAnswerDNSHonestNXDOMAIN(t *testing.T) {
 	tab := newFaketab(fakeBase)
 	deny := nameChecker(func(string) bool { return false })
-	resp := answerDNS(query("ghost", 1), tab, upstreamResolver(nil), deny)
+	resp := answerDNS(query("ghost", 1), tab, newUpstream(nil), deny)
 	if resp == nil {
 		t.Fatal("no response")
 	}

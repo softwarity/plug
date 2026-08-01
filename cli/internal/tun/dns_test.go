@@ -91,7 +91,7 @@ func answerIPv4(resp []byte) (uint32, bool) {
 
 func TestAnswerSingleLabelMintsFake(t *testing.T) {
 	tab := newFaketab(fakeBase)
-	resp := answerDNS(query("grpc", 1), tab, upstreamResolver(nil), nil)
+	resp := answerDNS(query("grpc", 1), tab, newUpstream(nil), nil)
 	ip, ok := answerIPv4(resp)
 	if !ok {
 		t.Fatal("expected an A answer for a single-label name")
@@ -105,7 +105,7 @@ func TestAnswerSingleLabelMintsFake(t *testing.T) {
 }
 
 func TestAnswerLocalhostIsLoopback(t *testing.T) {
-	resp := answerDNS(query("localhost", 1), newFaketab(fakeBase), upstreamResolver(nil), nil)
+	resp := answerDNS(query("localhost", 1), newFaketab(fakeBase), newUpstream(nil), nil)
 	ip, ok := answerIPv4(resp)
 	if !ok || ip != 0x7F000001 {
 		t.Fatalf("localhost → %08x,%v; want 127.0.0.1", ip, ok)
@@ -113,7 +113,7 @@ func TestAnswerLocalhostIsLoopback(t *testing.T) {
 }
 
 func TestAnswerAAAAIsNodata(t *testing.T) {
-	resp := answerDNS(query("grpc", 28), newFaketab(fakeBase), upstreamResolver(nil), nil)
+	resp := answerDNS(query("grpc", 28), newFaketab(fakeBase), newUpstream(nil), nil)
 	if _, ok := answerIPv4(resp); ok {
 		t.Fatal("AAAA must be NODATA (no answer) to force IPv4")
 	}
@@ -124,8 +124,8 @@ func TestAnswerAAAAIsNodata(t *testing.T) {
 // answerDNS strips it, and the connect must map back to "svc" for the agent.
 func TestAnswerDNSStripsSearchSuffix(t *testing.T) {
 	tab := newFaketab(fakeBase)
-	bare := answerDNS(query("svc", 1), tab, upstreamResolver(nil), nil)
-	suffixed := answerDNS(query("svc."+searchSuffix, 1), tab, upstreamResolver(nil), nil)
+	bare := answerDNS(query("svc", 1), tab, newUpstream(nil), nil)
+	suffixed := answerDNS(query("svc."+searchSuffix, 1), tab, newUpstream(nil), nil)
 	if bare == nil || suffixed == nil {
 		t.Fatal("nil response")
 	}
@@ -151,8 +151,8 @@ func TestNegativeAnswersCarryShortSOA(t *testing.T) {
 		resp  []byte
 		rcode byte
 	}{
-		{"NXDOMAIN (honest check)", answerDNS(query("gone", 1), tab, upstreamResolver(nil), deny), 3},
-		{"NODATA (AAAA)", answerDNS(query("grpc", 28), tab, upstreamResolver(nil), nil), 0},
+		{"NXDOMAIN (honest check)", answerDNS(query("gone", 1), tab, newUpstream(nil), deny), 3},
+		{"NODATA (AAAA)", answerDNS(query("grpc", 28), tab, newUpstream(nil), nil), 0},
 	} {
 		r := c.resp
 		if r == nil {

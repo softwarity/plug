@@ -2,6 +2,26 @@
 
 ## NEXT RELEASE
 
+### Fixed: SRV, MX, PTR and TXT lookups work again during a session
+
+plug answered every query that was not an address with "no such record". On macOS
+that is not a detail: while a session runs, plug's stub is the resolver for the
+WHOLE machine, so anything relying on those records broke host-wide — Active
+Directory clients, MongoDB seedlist URIs (`mongodb+srv://`), Consul, mail tools.
+They are now relayed to the same upstream that already served dotted names, and
+the answer is handed back exactly as it arrived, whatever record type it carries.
+
+Names that only exist here are still answered locally and never leave: a
+single-label cluster service, the `.plug` suffix Windows appends to one, and
+plug's own reverse zone. Asking a public resolver about those would leak an
+internal name to be told what plug already knows. AAAA also stays as it was — the
+addresses plug hands out are v4, and a real v6 answer would route the client
+straight around the tunnel.
+
+When the upstream says nothing, plug now answers SERVFAIL instead of an empty
+record. "I could not ask" and "there is no such record" are different things, and
+only one of them is safe for a client to cache.
+
 ---
 
 ## 2.7.3

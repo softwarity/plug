@@ -85,7 +85,7 @@ func SelfTest(logf func(string, ...any)) error {
 
 	tab := newFaketab(base)
 
-	st, ep := buildStack(tab, constDial(loopbackDialer{addr: echo.Addr().String()}), upstreamResolver(upstreams), nil, log)
+	st, ep := buildStack(tab, constDial(loopbackDialer{addr: echo.Addr().String()}), newUpstream(upstreams), nil, log)
 	defer st.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

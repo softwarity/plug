@@ -1,6 +1,6 @@
 # plug — TODO / plan de travail
 
-_État : 31 juillet 2026 — **2.6.2 publiée**. L'historique des livraisons vit
+_État : 1er août 2026 — **2.7.3 publiée**. L'historique des livraisons vit
 désormais dans `RELEASE_NOTES.md` et la roadmap publique dans
 `docs/src/app/pages/roadmap.component.ts` ; ce fichier ne garde que ce qui est
 **ouvert** et le contexte qui ne tient pas ailleurs._
@@ -17,49 +17,24 @@ désormais dans `RELEASE_NOTES.md` et la roadmap publique dans
       nom est vraiment absent ; s'il ne répond pas, échouer ouvert. Reste à
       trouver le nom témoin portable (Docker embarqué vs CoreDNS).
 
-- [ ] **Cellule `resilience` sur k8s** : écrite et déployée (manifestes
-      `e2e/k8s.res-agents.yaml`, chaos avec mode Kubernetes), mais **désactivée**
-      le 31/07. Le prober vit dans `default` et joint `res-tko-<leg>` par son nom
-      nu, alors que le service déployé et l'agent par leg vivent dans
-      `plug-res-<leg>` — la résolution ne traverse pas les namespaces. Compose et
-      Swarm n'ont pas ce problème (un seul espace de noms). À trancher : FQDN
-      dans la cellule (mais elle est partagée par les 3 familles), ou tout mettre
-      dans `default` (mais trois agents `app=plug` y entreraient en conflit avec
-      l'agent principal). C'est la dernière marche vers `k8sGC` couvert.
-
-
 - [ ] **Durcissement de l'exécution du core mis en cache** — suivi en PRIVÉ
       (avis de sécurité GitHub, brouillon), pas ici : ce dépôt est public, et
       décrire par le menu un défaut non corrigé revient à en publier le mode
-      d'emploi. Ce qui peut se dire sans rien donner : la piste retenue est une
-      **empreinte servie par l'agent** sur le canal SSH déjà authentifié,
-      vérifiée avant exécution ; la signature de binaires reste souhaitable
-      ensuite, pour une menace différente (une source usurpée plutôt qu'une
-      altération locale). Le détail, l'impact et la reproduction vivent dans
-      l'avis. À publier dans les notes de version **une fois le correctif
-      livré** — c'est là qu'un défaut se raconte, pas avant.
+      d'emploi. Ce qui peut se dire sans rien donner : l'**empreinte servie par
+      l'agent** sur le canal SSH déjà authentifié, vérifiée avant exécution, est
+      **livrée en 2.7.2** ; ce qui reste est le durcissement résiduel, dont la
+      forme demande un arbitrage (le coût n'est pas le même selon l'OS). La
+      signature de binaires reste souhaitable ensuite, pour une menace
+      différente (une source usurpée plutôt qu'une altération locale). Le
+      détail, l'impact et la reproduction vivent dans l'avis. À publier dans les
+      notes de version **une fois le correctif livré** — c'est là qu'un défaut
+      se raconte, pas avant.
 
-- [ ] **Les requêtes DNS non-A répondent NODATA** (`cli/internal/tun/dns.go`, le
-      `case qtype != 1`). Sur macOS le stub est le résolveur de TOUTE la machine,
-      donc SRV/MX/PTR cassent à l'échelle du poste pendant une session — clients
-      AD, seedlists MongoDB, Consul. À relayer vers l'upstream.
-- [ ] **La map `tunnels` du daemon n'est pas protégée** (`cli/daemon_shared.go`) :
-      `close(stop)` ne synchronise rien, donc `closeAll` itère pendant que
-      `reconcileLoop` écrit. Tue le daemon root en plein `plug down`, avant la
-      restauration du resolver. Le `-race` activé le 31/07 pourra le prouver.
-- [ ] **Le /24 de noms mintés n'est jamais purgé** et le contrôle d'existence
-      échoue ouvert : un daemon qui vit longtemps peut l'épuiser (sondes Chrome).
-- [ ] **DNS : upstream figé au démarrage** (pas de failover si le VPN tombe) et
-      **8.8.8.8 en dur sous Windows** (`route_windows.go` retourne `nil`) — noms
-      internes cassés et requêtes d'entreprise exfiltrées.
-- [ ] **Le sweep de `serve` ignore le label owner** : deux agents co-localisés se
-      détruisent mutuellement leurs signposts vivants (le gc, lui, le respecte).
-- [ ] **`restartParkedContainers` avale ses erreurs** puis le signpost — qui
-      porte le reçu — est supprimé : un conteneur parké qui ne redémarre pas est
-      perdu même pour le gc de boot.
-- [ ] **La feature `forward` des profils** est parsée et transportée
-      (`PLUG_CORE_FORWARDS`) mais jamais armée : zéro appelant en production.
-      Câbler ou retirer.
+- [ ] **Capturer les vrais serveurs DNS sous Windows** (`route_windows.go`
+      retourne `nil`, donc `8.8.8.8` en dur) : les noms internes d'entreprise ne
+      résolvent pas et les requêtes quittent le réseau. 2.7.3 ne fait
+      qu'**annoncer** le repli — le correctif reste entier. Même famille :
+      **l'upstream est figé au démarrage**, donc aucune bascule si le VPN tombe.
 
 ## 🟢 Ouvert — produit
 

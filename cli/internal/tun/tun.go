@@ -164,7 +164,7 @@ func startDatapathDF(df dialFunc, dialers func() []Dialer, logf func(string, ...
 		log("tun: no system resolver was captured — dotted names will be forwarded to a PUBLIC resolver.\n" +
 			"      Internal names may stop resolving, and those lookups leave your network.")
 	}
-	st, ep := buildStack(tab, df, upstreamResolver(upstreams), check, log)
+	st, ep := buildStack(tab, df, newUpstream(upstreams), check, log)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	br := &bridge{dev: dev, ep: ep}

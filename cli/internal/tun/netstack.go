@@ -82,7 +82,7 @@ func (l *logLimiter) allow(key string) bool {
 	return true
 }
 
-func buildStack(tab *faketab, df dialFunc, upstream *net.Resolver, check nameChecker, log logfn) (*stack.Stack, *channel.Endpoint) {
+func buildStack(tab *faketab, df dialFunc, upstream *upstreamDNS, check nameChecker, log logfn) (*stack.Stack, *channel.Endpoint) {
 	s := stack.New(stack.Options{
 		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, ipv6.NewProtocol},
 		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol},
@@ -176,7 +176,7 @@ func handleTCP(r *tcp.ForwarderRequest, tab *faketab, df dialFunc, log logfn) {
 // NOT our resolver is drained and dropped (CreateEndpoint+Close, so the cloned
 // packet is released) — LOUDLY when it targeted a minted name: plug serves only
 // DNS in-stack, and the app deserves to know why nothing answers.
-func handleDNS(r *udp.ForwarderRequest, tab *faketab, upstream *net.Resolver, check nameChecker, log logfn) {
+func handleDNS(r *udp.ForwarderRequest, tab *faketab, upstream *upstreamDNS, check nameChecker, log logfn) {
 	var wq waiter.Queue
 	ep, terr := r.CreateEndpoint(&wq)
 	if terr != nil {
@@ -193,7 +193,10 @@ func handleDNS(r *udp.ForwarderRequest, tab *faketab, upstream *net.Resolver, ch
 	conn := gonet.NewUDPConn(&wq, ep)
 	go func() {
 		defer conn.Close()
-		buf := make([]byte, 512)
+		// 1232, not 512: a query carrying an EDNS0 OPT record announcing that size
+		// is itself allowed to be that long, and a short read would truncate the
+		// question before it was ever parsed.
+		buf := make([]byte, maxRelayReply)
 		// A resolver (glibc getaddrinfo) sends A and AAAA from the SAME socket, so
 		// both land on THIS endpoint. Read in a loop and answer each — reading only
 		// once loses the second query, and the client then stalls until its retry
