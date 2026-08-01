@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.8.0
+
 ### Added: plug tells you when your cluster is behind
 
 A version could sit published for days without anyone on the team knowing. plug
