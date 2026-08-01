@@ -127,6 +127,10 @@ type config struct {
 	host    string
 	port    string
 	exposes []tunnel.ExposeSpec
+	// updateMode is the cluster's update policy (none|notify|auto). It belongs
+	// to the profile because `auto` updates the AGENT, which is shared: you may
+	// govern your own cluster and have no say over the shared one.
+	updateMode string
 }
 
 // parseExpose parses one -s value, <name>:<cluster-port>:<local-port> — the
@@ -440,7 +444,7 @@ func launcherRun(args []string) {
 			}
 		}
 	}
-	announceUpdate() // what a previous session found, said before the core takes over
+	announceUpdate(cfg) // what a previous session found, said before the core takes over
 	bin, err := ensureVersion(remote, cfg)
 	if err != nil {
 		info("cannot fetch v%s (%v) — falling back to this launcher (v%s)", remote, err, version)
@@ -647,6 +651,10 @@ func coreEnv(cfg config) []string {
 	// the human's — and never find a node/npm that lives in nvm or Homebrew.
 	env := append(withUserPath(os.Environ()), "PLUG_CORE=1",
 		"PLUG_CORE_HOST="+cfg.host, "PLUG_CORE_PORT="+cfg.port,
+		// The core runs the background check but never knows which profile it
+		// came from — it is given a host and a port, not a name. So the policy
+		// travels with them.
+		"PLUG_CORE_UPDATE="+cfg.updateMode,
 		"PLUG_HOST="+cfg.host, "PLUG_PORT="+cfg.port) // legacy channel for older cores
 	return env
 }
@@ -1281,6 +1289,8 @@ func loadProfile(name string) config {
 			cfg.host = val
 		case "port":
 			cfg.port = val
+		case "update":
+			cfg.updateMode = val
 		case "forward":
 			// Removed: it declared a local port-forward for drivers that ignored
 			// the SOCKS proxy, and the userspace TUN made that unnecessary — it
@@ -1387,8 +1397,9 @@ func openTTY(hint string) *os.File {
 
 func coreMain() {
 	cfg := config{
-		host: coreGetenv("PLUG_CORE_HOST", "PLUG_HOST"),
-		port: coreGetenv("PLUG_CORE_PORT", "PLUG_PORT"),
+		host:       coreGetenv("PLUG_CORE_HOST", "PLUG_HOST"),
+		port:       coreGetenv("PLUG_CORE_PORT", "PLUG_PORT"),
+		updateMode: os.Getenv("PLUG_CORE_UPDATE"),
 	}
 	if cfg.port == "" {
 		cfg.port = defaultPort

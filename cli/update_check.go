@@ -22,7 +22,12 @@ import (
 // the cluster VM costs ~31s against ~1s here (see clientSideUpdate).
 const updateCheckEvery = 24 * time.Hour
 
-func updateStatePath() string { return filepath.Join(plugDir(), "update-state") }
+// One state file PER CLUSTER: the policy is per profile, so two clusters must
+// not overwrite each other's answer. Keyed by host:port, which is all the core
+// knows about the cluster it serves.
+func updateStatePath(cfg config) string {
+	return filepath.Join(plugDir(), "update-"+tun.ClusterHash(cfg.host+":"+cfg.port))
+}
 
 // shouldCheck is the whole policy, kept apart from the network so it can be
 // stated plainly: none never asks, and nobody asks more than once a day —
@@ -42,9 +47,9 @@ type updateState struct {
 	image     string // what that was decided against
 }
 
-func loadUpdateState() updateState {
+func loadUpdateState(cfg config) updateState {
 	var st updateState
-	data, err := os.ReadFile(updateStatePath())
+	data, err := os.ReadFile(updateStatePath(cfg))
 	if err != nil {
 		return st
 	}
@@ -67,8 +72,8 @@ func loadUpdateState() updateState {
 	return st
 }
 
-func saveUpdateState(st updateState) {
-	path := updateStatePath()
+func saveUpdateState(cfg config, st updateState) {
+	path := updateStatePath(cfg)
 	guardUserPath(path) // the core may hold root here — never write outside the caller's tree
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return
@@ -89,21 +94,21 @@ func saveUpdateState(st updateState) {
 func backgroundUpdateCheck(cfg config) {
 	defer func() { _ = recover() }() // a background nicety must never take the session down
 
-	if !shouldCheck(updateMode(), loadUpdateState(), time.Now()) {
+	if !shouldCheck(normalizeUpdateMode(cfg.updateMode), loadUpdateState(cfg), time.Now()) {
 		return
 	}
 	found, img, ok := probeUpdate(cfg)
 	if !ok {
 		return
 	}
-	saveUpdateState(updateState{checked: time.Now(), available: found, image: img})
+	saveUpdateState(cfg, updateState{checked: time.Now(), available: found, image: img})
 
 	// auto applies it from HERE rather than from the launcher, because the
 	// launcher execs the core and is gone — nothing it starts in the background
 	// outlives it. Applying from the core also gives the behaviour asked for:
 	// the agent rolls, every session drops, reconnects on its own, and each one
 	// says on the way back that it is now the older side.
-	if found != "" && updateMode() == updateAuto {
+	if found != "" && normalizeUpdateMode(cfg.updateMode) == updateAuto {
 		applyUpdate(cfg, found)
 	}
 }
@@ -112,7 +117,7 @@ func backgroundUpdateCheck(cfg config) {
 // is what stops a rollout that fails, or one that is merely slow, from being
 // retriggered by every later session.
 func applyUpdate(cfg config, tag string) {
-	saveUpdateState(updateState{checked: time.Now()})
+	saveUpdateState(cfg, updateState{checked: time.Now()})
 
 	tr, err := tunnel.Dial(cfg.host, cfg.port, sshUser, embeddedKey, tun.SharedKnownHosts(), nil)
 	if err != nil {
@@ -172,11 +177,11 @@ func probeUpdate(cfg config) (found, img string, ok bool) {
 // announceUpdate is the launcher's half: say what a previous session found, on
 // the way past. Only in notify — auto is applied by the core, which is the only
 // side that outlives the exec.
-func announceUpdate() {
-	if updateMode() != updateNotify {
+func announceUpdate(cfg config) {
+	if normalizeUpdateMode(cfg.updateMode) != updateNotify {
 		return
 	}
-	if st := loadUpdateState(); st.available != "" {
+	if st := loadUpdateState(cfg); st.available != "" {
 		info("agent update available: v%s — run `plug update` to take it "+
 			"(plug config update=auto to apply it for you, =none to stop saying it)", st.available)
 	}

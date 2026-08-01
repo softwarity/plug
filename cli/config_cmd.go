@@ -3,23 +3,14 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 )
 
-// Settings live in ~/.plug/config, next to the profiles but deliberately not one
-// of them: a profile describes a CLUSTER, and there is one per cluster, whereas
-// these describe THIS MACHINE. Update policy belongs to the machine — the same
-// launcher serves every cluster, and it is the launcher that gets replaced.
-//
-// listProfiles only picks up "*.conf", so this file is never mistaken for one.
-func settingsPath() string { return filepath.Join(plugDir(), "config") }
-
-// updateMode values. notify is the default: plug says a newer version is there
-// and leaves the decision alone. Nothing is ever replaced without the user
-// having asked for it once.
+// The update policy is a property of the CLUSTER, not of this machine: `auto`
+// updates the AGENT, and an agent is shared. You may well govern your own local
+// cluster and have no say at all over the shared one — so the setting lives in
+// the profile, beside host and port, and is set per profile.
 const (
 	updateNone   = "none"
 	updateNotify = "notify"
@@ -28,127 +19,104 @@ const (
 
 var updateModes = []string{updateNone, updateNotify, updateAuto}
 
-// settingKeys is the whole surface. Adding to it is a product decision, not a
-// convenience — every key here is one more thing to explain and to keep working.
-var settingKeys = map[string][]string{
-	"update": updateModes,
-}
-
-func loadSettings() map[string]string {
-	s := map[string]string{}
-	data, err := os.ReadFile(settingsPath())
-	if err != nil {
-		return s
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		if k, v, ok := strings.Cut(line, "="); ok {
-			s[strings.TrimSpace(k)] = strings.TrimSpace(v)
-		}
-	}
-	return s
-}
-
-func saveSettings(s map[string]string) error {
-	var b strings.Builder
-	b.WriteString("# plug machine settings — see `plug config`\n")
-	keys := make([]string, 0, len(s))
-	for k := range s {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		fmt.Fprintf(&b, "%s=%s\n", k, s[k])
-	}
-	path := settingsPath()
-	guardUserPath(path) // plug may hold root here — never write outside the caller's tree
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
-		return err
-	}
-	// Written as euid 0 on the setuid path, which would leave it root-owned and
-	// un-editable without sudo — the same trap already fixed for the core cache.
-	chownToUser(path)
-	return nil
-}
-
-// updateMode is the effective policy, defaulting to notify.
-func updateMode() string {
-	switch v := loadSettings()["update"]; v {
-	case updateNone, updateNotify, updateAuto:
+// normalizeUpdateMode maps anything unrecognised onto the default. A value that
+// is not one of the three is a profile someone hand-edited; guessing what they
+// meant would be worse than the documented default.
+func normalizeUpdateMode(v string) string {
+	if slices.Contains(updateModes, v) {
 		return v
-	default:
-		return updateNotify
 	}
+	return updateNotify
 }
 
-// cmdConfig implements `plug config` (show), `plug config <key>` (read) and
-// `plug config <key>=<value>` (write).
+// cmdConfig implements `plug config` (show) and `plug config update=<mode>`
+// (set), on the profile named the same way every other subcommand names one.
 func cmdConfig(args []string) {
-	if len(args) == 0 {
-		s := loadSettings()
-		keys := make([]string, 0, len(settingKeys))
-		for k := range settingKeys {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			val, set := s[k]
-			if !set {
-				val = defaultFor(k) + "  (default)"
+	var profile, setting string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-p", "--profile":
+			profile = flagValue(args, &i)
+		default:
+			if strings.HasPrefix(args[i], "-") || setting != "" {
+				fatal("usage: plug config [-p profile] [update=%s]", strings.Join(updateModes, "|"))
 			}
-			fmt.Printf("- %-10s %s\n", k, val)
-			fmt.Printf("  %s\n", strings.Join(settingKeys[k], " | "))
+			setting = args[i]
 		}
-		fmt.Printf("\nstored in %s\n", settingsPath())
+	}
+	name := configTarget(profile)
+	cfg := loadProfile(name)
+
+	if setting == "" {
+		fmt.Printf("- update    %s\n", cfg.updateMode)
+		fmt.Printf("  %s\n", strings.Join(updateModes, " | "))
+		fmt.Printf("\nprofile %q, stored in %s\n", name, profilePath(name))
 		return
 	}
 
-	key, val, assigning := strings.Cut(args[0], "=")
-	key = strings.TrimSpace(key)
-	allowed, known := settingKeys[key]
-	if !known {
-		fatal("unknown setting %q — plug config knows: %s", key, strings.Join(keysOf(settingKeys), ", "))
+	key, val, assigning := strings.Cut(setting, "=")
+	key, val = strings.TrimSpace(key), strings.TrimSpace(val)
+	if key != "update" {
+		fatal("unknown setting %q — plug config knows: update", key)
 	}
 	if !assigning {
-		s := loadSettings()
-		if v, ok := s[key]; ok {
-			fmt.Println(v)
-		} else {
-			fmt.Println(defaultFor(key))
-		}
+		fmt.Println(cfg.updateMode)
 		return
 	}
-
-	val = strings.TrimSpace(val)
-	if !slices.Contains(allowed, val) {
-		fatal("%s=%q is not one of: %s", key, val, strings.Join(allowed, ", "))
+	if !slices.Contains(updateModes, val) {
+		fatal("update=%q is not one of: %s", val, strings.Join(updateModes, ", "))
 	}
-	s := loadSettings()
-	s[key] = val
-	if err := saveSettings(s); err != nil {
-		fatal("cannot write %s: %v", settingsPath(), err)
-	}
-	info("%s=%s", key, val)
+	setProfileKey(name, "update", val)
+	info("profile %q: update=%s", name, val)
 }
 
-func defaultFor(key string) string {
-	if key == "update" {
-		return updateNotify
+// configTarget names the profile to read or write. Unlike `plug update` there is
+// no -H form: a host with no profile has nowhere to keep a setting.
+func configTarget(profile string) string {
+	if profile != "" {
+		return profile
+	}
+	names := listProfiles()
+	switch len(names) {
+	case 0:
+		fatal("no profile configured — create one with 'plug init'")
+	case 1:
+		return names[0]
+	default:
+		fatal("several profiles (%s) — name the cluster: plug config -p <name> …", strings.Join(names, ", "))
 	}
 	return ""
 }
 
-func keysOf(m map[string][]string) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
+// setProfileKey rewrites one key in a profile, in place. It reads the file back
+// line by line rather than reserialising it, so comments, spacing and any key
+// this version does not know about survive being edited by it.
+func setProfileKey(name, key, val string) {
+	path := profilePath(name)
+	guardUserPath(path) // plug may hold root here — never write outside the caller's tree
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fatal("no profile %q in %s — create one with 'plug init'", name, plugDir())
 	}
-	sort.Strings(out)
-	return out
+	lines := strings.Split(string(data), "\n")
+	replaced := false
+	for i, line := range lines {
+		k, _, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if ok && strings.TrimSpace(k) == key {
+			lines[i] = fmt.Sprintf("%s = %s", key, val)
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		// Append, keeping exactly one trailing newline whatever the file had.
+		for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+			lines = lines[:len(lines)-1]
+		}
+		lines = append(lines, fmt.Sprintf("%s = %s", key, val), "")
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o600); err != nil {
+		fatal("cannot write %s: %v", path, err)
+	}
+	chownToUser(path) // written as euid 0 on the setuid path
 }

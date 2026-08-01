@@ -10,23 +10,28 @@ whether the registry carries a release the agent does not — and says so the ne
 time you launch.
 
 ```bash
-plug config update=notify     # default: says it, changes nothing
-plug config update=auto       # applies it
-plug config update=none       # never looks
+plug config -p local update=auto     # a cluster you govern
+plug config -p shared update=none    # one you do not
+plug config -p neo                   # show what a cluster is set to
 ```
+
+The rule lives in the profile, not on the machine: `auto` updates the agent, and
+an agent is shared. Governing your own cluster while having no say over the
+shared one is the normal case, so each cluster carries its own answer — and its
+own record of what the registry last held. The default everywhere is `notify`.
 
 The check runs from your machine rather than from the cluster, which is not a
 detail: the same registry lookup costs about a second here and about thirty from
 inside a cluster VM. It never blocks anything — the session that performs it is
 already up, and what it learns is for the next launch.
 
-`auto` updates the agent, which is shared. It rolls, every session on that
-cluster drops and reconnects on its own, and each one now says on the way back
-that the agent moved and that it is still running the older core. Nothing local
-is swapped under a running command: the core is holding your process, so a
-session keeps the version it started with and the next launch picks up the new
-one. That is also why a reconnect cannot upgrade anything — the version is chosen
-once, before the core starts.
+`auto` rolls that cluster's agent. Every session on it drops and reconnects on
+its own, and each one now says on the way back that the agent moved and that it
+is still running the older core. Nothing local is swapped under a running
+command: the core is holding your process, so a session keeps the version it
+started with and the next launch picks up the new one. That is also why a
+reconnect cannot upgrade anything — the version is chosen once, before the core
+starts.
 
 A deployment following a moving tag (`latest`, a branch) is left alone: whether
 such a tag has moved is a digest question only the cluster can settle. `plug

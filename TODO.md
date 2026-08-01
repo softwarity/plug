@@ -38,8 +38,9 @@ désormais dans `RELEASE_NOTES.md` et la roadmap publique dans
 
 ## 🟢 Ouvert — produit
 
-- [ ] **Auto-update, ce qui reste** (le socle est livré : `plug config
-      update=none|notify|auto`, check quotidien en tâche de fond depuis le
+- [ ] **Auto-update, ce qui reste** (le socle est livré : `plug config -p <c>
+      update=none|notify|auto` **par profil** — la gouvernance est une propriété
+      du cluster, pas du poste —, check quotidien en tâche de fond depuis le
       core, avertissement au reconnect quand l'agent a bougé sous la session).
       Restent deux trous : les déploiements sur **tag mouvant** (`latest`, une
       branche) ne sont pas vérifiés — leur fraîcheur est une question de digest
