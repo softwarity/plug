@@ -128,9 +128,8 @@ func (t *faketab) lookup(ip uint32) (string, bool) {
 //
 // With none captured it falls back to a public resolver, which keeps dotted
 // names working but sends them somewhere the user did not choose — the caller
-// warns when that happens. The real fix is to capture the system servers on
-// every platform; Windows does not yet (configure() returns none there), which
-// is why this path is reached at all in practice.
+// warns when that happens. All three platforms capture the system servers now,
+// so this is the last resort it was meant to be rather than the Windows norm.
 type upstreamDNS struct {
 	addrs    []string // "host:port", port defaulted once at construction
 	resolver *net.Resolver

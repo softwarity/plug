@@ -30,11 +30,15 @@ désormais dans `RELEASE_NOTES.md` et la roadmap publique dans
       notes de version **une fois le correctif livré** — c'est là qu'un défaut
       se raconte, pas avant.
 
-- [ ] **Capturer les vrais serveurs DNS sous Windows** (`route_windows.go`
-      retourne `nil`, donc `8.8.8.8` en dur) : les noms internes d'entreprise ne
-      résolvent pas et les requêtes quittent le réseau. 2.7.3 ne fait
-      qu'**annoncer** le repli — le correctif reste entier. Même famille :
-      **l'upstream est figé au démarrage**, donc aucune bascule si le VPN tombe.
+- [ ] **L'upstream DNS est figé au démarrage** : aucune bascule si le VPN monte
+      ou tombe en pleine session — les serveurs sont lus une fois, dans
+      `configure()`, sur les trois OS. La capture Windows est **livrée** (table
+      des adaptateurs, tri par métrique, exclusion de notre propre adresse) ;
+      c'est le rafraîchissement qui reste. Chantier à part : il faut rendre
+      `upstreamDNS` mutable et thread-safe, puis une relecture par OS (table des
+      adaptateurs sous Windows, dict SystemConfiguration sous macOS, le
+      resolv.conf d'origine hors namespace sous Linux) — et un déclencheur, le
+      watchdog macOS existant étant le seul point d'accroche déjà en place.
 
 ## 🟢 Ouvert — produit
 
@@ -48,6 +52,16 @@ désormais dans `RELEASE_NOTES.md` et la roadmap publique dans
       muet pour eux ; et le mode `notify` ne **propose** rien, il informe. Le
       « notify avec choix » demande un prompt, donc `term.IsTerminal` + une
       échéance — le piège `askToStop` qui a bloqué une jambe Windows 16 min.
+
+- [ ] **Cellule e2e pour `auto`** — `notify` est **couvert** depuis le 01/08
+      (`update_check_notices`, greffée dans `do_update_jump` juste avant que
+      celle-ci ne fasse rouler l'agent : à cet instant précis l'agent est une
+      release en retard sur une **vraie image du registre**, ce que la cellule
+      vient de vérifier elle-même). `auto` n'est pas couvert et ne peut pas
+      l'être au même endroit — il ferait rouler le `prev-agent-*` dont la suite
+      de `do_update_jump` dépend. Il faudrait un agent N-1 dédié, donc trois
+      services de plus par famille ; à peser contre le fait que la décision est
+      déjà testée unitairement et l'application par `plug update`.
 
 - [ ] **`plug status` + verbes d'action hors bande** (roadmap publiée le 31/07) :
       lister les sessions vivantes, l'état de leur chemin, les arrêter ou

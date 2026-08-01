@@ -72,7 +72,54 @@ func configure(dev any, _ int, _, cidr, dnsIP string, log logfn) ([]string, stri
 		_ = luid.FlushRoutes(v4)
 		_ = luid.FlushIPAddresses(v4)
 	}
-	return nil, "", cleanup, nil
+	// The machine's REAL nameservers, so relayed lookups go where this machine's
+	// DNS was already going. Without them plug fell back to a public resolver,
+	// which on a corporate network is the worst of both: the internal names it is
+	// asked about do not exist there, and asking sends them off the network.
+	//
+	// It is not only the .plug suffix that reaches us: plug0 carries a resolver
+	// address of its own, and Windows queries every interface's resolver at once
+	// (smart multi-homed name resolution). Dotted names land here too, and
+	// whichever answer comes back first wins — so answering them badly, or
+	// quickly with NXDOMAIN, is worse than not answering at all.
+	ups := systemDNS(luid)
+	if len(ups) == 0 {
+		log.f("tun[win]: no system nameserver found — dotted names will go to a public resolver")
+	} else {
+		log.f("tun[win]: forwarding dotted names to %v", ups)
+	}
+	return ups, "", cleanup, nil
+}
+
+// systemDNS lists the machine's nameservers, best interface first, EXCLUDING
+// our own adapter — self is the one entry that must never come back, since
+// forwarding to ourselves is an unbounded loop rather than an error.
+//
+// Read here, at configure time, from the adapter table rather than from any
+// saved state: it is the same source Windows itself resolves against, and it is
+// already correct when a VPN brought its own resolver up before plug started.
+func systemDNS(self winipcfg.LUID) []string {
+	adapters, err := winipcfg.GetAdaptersAddresses(windows.AF_UNSPEC, winipcfg.GAAFlagDefault)
+	if err != nil {
+		return nil
+	}
+	var cands []dnsCandidate
+	for _, a := range adapters {
+		for dns := a.FirstDNSServerAddress; dns != nil; dns = dns.Next {
+			ip := dns.Address.IP()
+			if ip == nil {
+				continue
+			}
+			cands = append(cands, dnsCandidate{
+				addr:     ip.String(),
+				metric:   a.Ipv4Metric,
+				own:      a.LUID == self,
+				up:       a.OperStatus == winipcfg.IfOperStatusUp,
+				loopback: a.IfType == winipcfg.IfTypeSoftwareLoopback,
+			})
+		}
+	}
+	return pickUpstreams(cands)
 }
 
 // NRPT rules live under this policy key, one subkey (a GUID) per rule. plug writes

@@ -2,6 +2,25 @@
 
 ## NEXT RELEASE
 
+### Fixed: Windows now forwards to your own DNS servers, not a public one
+
+On Windows plug had no idea what this machine's nameservers were, so every dotted
+name it was asked about went to a public resolver. On a corporate network that is
+the worst of both outcomes: the internal names being asked about do not exist
+there, and asking sends them off your network. 2.7.3 only announced it; plug now
+reads the adapter table and forwards where this machine's DNS already went.
+
+It matters more than the `.plug` suffix suggests. Windows queries the resolver of
+EVERY interface at once, and plug's adapter carries one — so ordinary dotted
+names reach plug too, and whichever answer arrives first is the one your
+application gets.
+
+The servers are ranked the way Windows ranks its interfaces, by metric, so a
+corporate VPN's resolver — the only one that knows your internal names — is used
+first. plug never forwards to its own address, on any interface: that is not an
+error that surfaces, it is a query that comes back in and is sent out again for
+ever.
+
 ---
 
 ## 2.8.0

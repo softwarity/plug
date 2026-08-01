@@ -894,6 +894,55 @@ fi
 # Compose cannot recreate a container from inside it, so the verdict is "pulled"
 # plus the command that finishes the job; the rollout itself is Swarm/k8s work,
 # covered by the resilience cell. What this asserts is the DECISION.
+
+# update_check_notices proves the background check end to end: a session against
+# an agent one release behind must, on its own, leave enough behind that the NEXT
+# launch says a newer release exists.
+#
+# Two invocations because that is the design: the check runs in the core, which
+# is the only side that outlives the launcher's exec, and what it learns is for
+# the next launch. Nothing is asserted about the FIRST one's output — it has
+# nothing to say yet.
+#
+# The first session must last: the check is a goroutine racing the command, and
+# it has a dial, two agent round-trips and a registry lookup to get through. A
+# command that returns in 200ms (every other cell here) would kill the process
+# mid-flight. That is harmless in real use — nothing is written, the next session
+# tries again — but it would make this cell flap.
+update_check_notices() {
+  local ip="$1" port="$2" prev="$3"
+  echo "=== update check: a session must leave the next one something to say ==="
+
+  # Start from nothing, so what the second launch reports can only have come
+  # from the first one's check. Best effort: if HOME differs from what the Go
+  # side calls the home directory, there is nothing to clear anyway, and on a
+  # fresh runner there never is.
+  rm -f "$HOME"/.plug/update-* 2>/dev/null || true
+
+  # No profile, so no policy on file — which is the point: the default has to be
+  # notify, and an unset cluster has to check.
+  perl -e 'alarm 60; exec @ARGV or exit 127' \
+    "$PLUG" --host "$ip" --port "$port" -c sleep 15 </dev/null >/dev/null 2>&1 || true
+
+  local out
+  out="$(perl -e 'alarm 60; exec @ARGV or exit 127' \
+        "$PLUG" --host "$ip" --port "$port" -c true </dev/null 2>&1 | tr -d '\r')"
+  printf '%s\n' "$out" | sed 's/^/    /'
+
+  local found
+  found="$(printf '%s' "$out" | sed -n 's/.*agent update available: v\([0-9][0-9.]*\).*/\1/p' | head -1)"
+  if [ -z "$found" ]; then
+    echo "--- update check FAIL — the second launch said nothing, though $prev is behind the registry"
+    sum "**update check (notify)** ❌ — nothing announced"; return 1
+  fi
+  if [ "$found" = "$prev" ]; then
+    echo "--- update check FAIL — announced $found, the version it is already on"
+    sum "**update check (notify)** ❌ — announced its own version"; return 1
+  fi
+  echo "update check OK — announced v$found, newer than the deployed $prev"
+  sum "**update check (notify)** ✅ — v$prev → v$found announced"
+}
+
 do_update_jump() {
   local oldport
   case "$(uname -s)" in
@@ -915,6 +964,16 @@ do_update_jump() {
     sum "**update jump** ❌ — no usable starting version"; return 1
   fi
   echo "    starting from the published $prev"
+
+  # An agent one release behind, on a real registry image, is exactly what the
+  # background update check exists to notice — and this cell has just proven
+  # that is the situation. Assert it HERE, before the update below rolls the
+  # agent forward and the precondition is gone.
+  #
+  # notify only. `auto` would roll this same agent, which the rest of this cell
+  # depends on being where it is; the decision to apply is covered by the unit
+  # tests and the applying itself by `plug update` right below.
+  update_check_notices "$ip_b" "$oldport" "$prev" || return 1
 
   local out rc=0
   out="$("$PLUG" --host "$ip_b" --port "$oldport" update </dev/null 2>&1)" || rc=$?

@@ -67,6 +67,26 @@ func SelfTest(logf func(string, ...any)) error {
 	if err != nil {
 		return fmt.Errorf("configure %s: %w", ifname, err)
 	}
+	// Capturing the machine's own nameservers is what keeps a dotted name going
+	// where this machine's DNS already went. With none, plug forwards to a public
+	// resolver instead: internal names stop resolving and those lookups leave the
+	// network. Only the live adapter table can show it works, so assert it here —
+	// this is the one test that runs elevated, against the real OS, on all three.
+	//
+	// Not fatal: a CI runner or a container can genuinely have no nameserver on a
+	// non-loopback interface, and failing the selftest for the machine's own
+	// network shape would be a flake. Loud is enough to notice a regression.
+	if len(upstreams) == 0 {
+		log.f("selftest: WARNING no system nameserver captured — dotted names would go to a public resolver")
+	} else {
+		log.f("selftest: captured %d system nameserver(s), first %s", len(upstreams), upstreams[0])
+		for _, u := range upstreams {
+			if inFakeRange(u) {
+				return fmt.Errorf("selftest: captured %s as an upstream — that is plug's own range, "+
+					"forwarding there is an unbounded loop", u)
+			}
+		}
+	}
 	// The DNS repoint is the one piece of state that outlives this process, so a
 	// Ctrl-C mid-test MUST still undo it. Run cleanup once, from either the normal
 	// return path or a signal.
