@@ -276,6 +276,9 @@ func main() {
 	case "update":
 		cmdUpdate(args[1:])
 		return
+	case "config":
+		cmdConfig(args[1:])
+		return
 	case "uninstall":
 		uninstall(args[1:])
 		return
@@ -437,6 +440,7 @@ func launcherRun(args []string) {
 			}
 		}
 	}
+	announceUpdate() // what a previous session found, said before the core takes over
 	bin, err := ensureVersion(remote, cfg)
 	if err != nil {
 		info("cannot fetch v%s (%v) — falling back to this launcher (v%s)", remote, err, version)
@@ -668,6 +672,10 @@ func runCore(cfg config, cmdArgs []string) {
 		fatal("%v", err)
 	}
 	cfg.exposes = specs
+	// The core is the only side that lives long enough to ask: the launcher has
+	// exec'd into this process and is gone. Detached on purpose — the session
+	// never waits on it, and what it learns is for the NEXT launch.
+	go backgroundUpdateCheck(cfg)
 	os.Exit(coreRun(cfg, args))
 }
 

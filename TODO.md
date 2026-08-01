@@ -38,6 +38,16 @@ désormais dans `RELEASE_NOTES.md` et la roadmap publique dans
 
 ## 🟢 Ouvert — produit
 
+- [ ] **Auto-update, ce qui reste** (le socle est livré : `plug config
+      update=none|notify|auto`, check quotidien en tâche de fond depuis le
+      core, avertissement au reconnect quand l'agent a bougé sous la session).
+      Restent deux trous : les déploiements sur **tag mouvant** (`latest`, une
+      branche) ne sont pas vérifiés — leur fraîcheur est une question de digest
+      que seul le cluster tranche, à ~31 s l'aller-retour, donc le check reste
+      muet pour eux ; et le mode `notify` ne **propose** rien, il informe. Le
+      « notify avec choix » demande un prompt, donc `term.IsTerminal` + une
+      échéance — le piège `askToStop` qui a bloqué une jambe Windows 16 min.
+
 - [ ] **`plug status` + verbes d'action hors bande** (roadmap publiée le 31/07) :
       lister les sessions vivantes, l'état de leur chemin, les arrêter ou
       re-provisionner leur nom depuis n'importe quel terminal. Les

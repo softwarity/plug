@@ -2,6 +2,36 @@
 
 ## NEXT RELEASE
 
+### Added: plug tells you when your cluster is behind
+
+A version could sit published for days without anyone on the team knowing. plug
+now checks once a day, in the background of a session that is already running,
+whether the registry carries a release the agent does not — and says so the next
+time you launch.
+
+```bash
+plug config update=notify     # default: says it, changes nothing
+plug config update=auto       # applies it
+plug config update=none       # never looks
+```
+
+The check runs from your machine rather than from the cluster, which is not a
+detail: the same registry lookup costs about a second here and about thirty from
+inside a cluster VM. It never blocks anything — the session that performs it is
+already up, and what it learns is for the next launch.
+
+`auto` updates the agent, which is shared. It rolls, every session on that
+cluster drops and reconnects on its own, and each one now says on the way back
+that the agent moved and that it is still running the older core. Nothing local
+is swapped under a running command: the core is holding your process, so a
+session keeps the version it started with and the next launch picks up the new
+one. That is also why a reconnect cannot upgrade anything — the version is chosen
+once, before the core starts.
+
+A deployment following a moving tag (`latest`, a branch) is left alone: whether
+such a tag has moved is a digest question only the cluster can settle. `plug
+update` remains the explicit path there.
+
 ### Fixed: SRV, MX, PTR and TXT lookups work again during a session
 
 plug answered every query that was not an address with "no such record". On macOS

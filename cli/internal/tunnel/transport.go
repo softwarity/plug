@@ -86,6 +86,12 @@ type Transport struct {
 	// (it answered "unknown command") — asked once, then every later name
 	// check skips the round-trip and falls back to minting.
 	resolveUnsupported atomic.Bool
+
+	// agentVer is the version the agent reported when this transport last
+	// looked. An update to the agent restarts it, every session reconnects by
+	// itself, and the version it answers afterwards is the new one — comparing
+	// the two is how a running session finds out it is now the older side.
+	agentVer atomic.Value // string
 }
 
 // Dial opens the SSH transport to the agent as the tunnel user, authenticating
@@ -159,7 +165,30 @@ func (t *Transport) reconnectFrom(stale *ssh.Client) (*ssh.Client, error) {
 		t.note("agent connection re-established")
 	}
 	t.client = nc
+	go t.checkAgentVersion()
 	return nc, nil
+}
+
+// checkAgentVersion asks the agent what version it is now and says so when that
+// differs from what it answered before. The running core cannot become the new
+// version — the launcher picks it once, before exec, and this process is holding
+// the user's command at the end of its pipes — so the only useful thing to do
+// with the news is to say it.
+//
+// Runs in its own goroutine, out of the reconnect path: the caller holds t.mu,
+// which Exec needs, and a reconnect must not wait on a round-trip to report a
+// version nobody is blocked on.
+func (t *Transport) checkAgentVersion() {
+	now, err := t.Exec("version")
+	if err != nil || now == "" || strings.HasPrefix(now, "error:") {
+		return // an agent too old to answer, or a connection already gone again
+	}
+	was, _ := t.agentVer.Load().(string)
+	t.agentVer.Store(now)
+	if was != "" && was != now {
+		t.note("the agent moved from v%s to v%s — this session keeps running the older core, "+
+			"restart it to pick the new one", was, now)
+	}
 }
 
 // dropDead closes a client the keepalive confirmed dead and clears it if it is

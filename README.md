@@ -234,6 +234,28 @@ deployment at a tag nobody published leaves an agent that cannot pull. Release
 and stream are told apart by the tag itself — `x`, `x.y` or `x.y.z` is a
 release, anything else moves under you.
 
+### Being told a version is there
+
+A session checks once a day, in the background, whether the registry carries a
+release your agent does not, and says so the next time you run plug:
+
+```bash
+plug config                   # show the settings and where they live
+plug config update=notify     # default: say it, change nothing
+plug config update=auto       # apply it for you
+plug config update=none       # never look
+```
+
+`auto` updates the **agent**, which is shared: it rolls, every session on that
+cluster drops and reconnects by itself, and each one says on the way back that
+it is now running the older core. Nothing local is replaced under a running
+command — a session keeps the version it started with, by design, because the
+core is holding your process. The new one is picked up the next time you launch.
+
+A deployment following a moving tag (`latest`, a branch) is not checked: whether
+such a tag has moved is a digest question only the cluster can answer, and asking
+costs about half a minute. Use `plug update` there.
+
 ## Limits
 
 It carries TCP reached by name. UDP, QUIC and ping are not tunnelled (most
