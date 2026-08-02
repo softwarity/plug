@@ -73,10 +73,6 @@ désormais dans `RELEASE_NOTES.md` et la roadmap publique dans
       la sortie du client. Vérifié au banc le 31/07 : ni supprimer le signpost ni
       tuer la session SSH ne termine le client — il se reconnecte. La pièce
       manquante est **sortir sur re-provision refusée**.
-- [ ] **Info du détenteur distant** : l'agent peut enregistrer `SSH_CLIENT` dans
-      le bail (aucun changement de protocole — il lit déjà `SSH_ORIGINAL_COMMAND`
-      du même environnement). Limite : derrière un NAT tous les devs partagent
-      une IP ; un nom de machine lisible demanderait un champ côté client.
 
 **Contexte.** La **2.0.0** est publiée. Elle apporte le **sens retour** : `plug -s
 name:cluster-port:local-port` publie ton process dans le cluster sous un nom

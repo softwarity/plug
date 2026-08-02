@@ -2,6 +2,25 @@
 
 ## NEXT RELEASE
 
+### Changed: a name already taken now says where the session holding it is
+
+Refusing a `-s` name used to name the agent port holding it, which answers "is it
+taken" but not the question you actually have — by whom. The agent now records
+where the session reached it from, and says so:
+
+```
+"fpl-ui" is already exposed by another live session (agent port 41943, from 10.1.2.3)
+```
+
+Enough to tell your own forgotten session apart from a colleague's, which is the
+distinction that decides what you do next. It is the address the AGENT sees, so
+behind NAT every developer shares one and it only says "somebody out there"; a
+readable machine name would need the client to send one, and that protocol change
+is not made here.
+
+Nothing else changes. An agent that predates this simply records no origin, and
+the refusal reads as it did before rather than inventing a source.
+
 ### Fixed: a cluster whose DNS hiccups no longer makes a live name look absent
 
 Before minting an address for a cluster name, plug asks the agent whether that

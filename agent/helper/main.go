@@ -366,27 +366,77 @@ type portPair struct{ cluster, agent string }
 // The lease records name → agent port when the name is served, independently of
 // any signpost. It needs no cleanup to stay correct: it refuses only while the
 // port it recorded still ANSWERS, and every agent port dies with its session.
-const nameLeaseDir = "/tmp/plug-names"
+// A var, not a const, only so tests can point it at a scratch directory —
+// nothing in the agent ever reassigns it.
+var nameLeaseDir = "/tmp/plug-names"
 
 // leaseHolder returns the agent port recorded for name, "" when none is. name
 // is a validated DNS label by the time it gets here (nameRe, at dispatch), so
 // it cannot walk out of the directory.
 func leaseHolder(name string) string {
-	b, err := os.ReadFile(filepath.Join(nameLeaseDir, name))
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(b))
+	held, _ := readLease(name)
+	return held
 }
 
-// takeNameLease records this session as the owner of name. Best-effort: if the
-// lease cannot be written, the backend checks still apply — we lose the extra
-// guard, not the serve.
+// leaseOrigin is where the session holding name connected FROM, "" when unknown
+// (a lease written by an older agent, or a connection sshd told us nothing
+// about). Only ever used to make a refusal say who to go and ask.
+func leaseOrigin(name string) string {
+	_, from := readLease(name)
+	return from
+}
+
+// readLease parses the two-line lease: the agent port, then optionally where the
+// session came from. One line is the format older agents wrote, and it reads
+// back correctly as "port, origin unknown" — no migration, no version check.
+func readLease(name string) (port, from string) {
+	b, err := os.ReadFile(filepath.Join(nameLeaseDir, name))
+	if err != nil {
+		return "", ""
+	}
+	first, rest, _ := strings.Cut(strings.TrimSpace(string(b)), "\n")
+	return strings.TrimSpace(first), strings.TrimSpace(rest)
+}
+
+// takeNameLease records this session as the owner of name, and where it reached
+// us from. Best-effort: if the lease cannot be written, the backend checks still
+// apply — we lose the extra guard, not the serve.
 func takeNameLease(name, port string) {
 	if err := os.MkdirAll(nameLeaseDir, 0o700); err != nil {
 		return
 	}
-	_ = os.WriteFile(filepath.Join(nameLeaseDir, name), []byte(port), 0o600)
+	body := port
+	if from := sessionOrigin(); from != "" {
+		body += "\n" + from
+	}
+	_ = os.WriteFile(filepath.Join(nameLeaseDir, name), []byte(body), 0o600)
+}
+
+// heldBy describes the session holding a name, for a refusal message. The agent
+// port alone answers "is it taken"; the origin answers "by whom", which is the
+// question the person reading it actually has. Silent when the lease predates
+// this (an older agent wrote it) rather than inventing a source.
+func heldBy(name, port string) string {
+	if from := leaseOrigin(name); from != "" {
+		return fmt.Sprintf("agent port %s, from %s", port, from)
+	}
+	return fmt.Sprintf("agent port %s", port)
+}
+
+// sessionOrigin is the far end of the SSH connection carrying this request, as
+// sshd reports it: SSH_CLIENT is "<ip> <src-port> <dst-port>". The address is
+// enough to tell a colleague's machine from your own, which is the whole
+// question a "name already taken" raises.
+//
+// It is the address the AGENT sees, so behind NAT every developer shares one and
+// it says only "somebody out there". A readable machine name would need the
+// client to send one, which is a protocol change this does not make.
+func sessionOrigin() string {
+	f := strings.Fields(os.Getenv("SSH_CLIENT"))
+	if len(f) == 0 {
+		return ""
+	}
+	return f[0]
 }
 
 func dropNameLease(name string) { _ = os.Remove(filepath.Join(nameLeaseDir, name)) }
@@ -416,7 +466,7 @@ func serveName(name string, pairs []portPair) {
 	// someone else's: it records the port it holds a name on, and only a match
 	// proves its record is the holder rather than a leftover on a recycled PID.
 	if held := leaseHolder(name); nameTaken(held, pairs, agentPortLive) {
-		answer("error: %q is already exposed by another live session (agent port %s) — one -s per name at a time", name, held)
+		answer("error: %q is already exposed by another live session (%s) — one -s per name at a time", name, heldBy(name, held))
 	}
 	if len(pairs) > 0 {
 		takeNameLease(name, pairs[0].agent)
@@ -1308,7 +1358,7 @@ func containerServe(name string, pairs []portPair, self selfInfo) {
 				"two agents on one host cannot both own a name. Use a different name, or stop that agent.", name, o)
 		}
 		if ap := signpostAgentPort(insp.Config.Entrypoint); ap != "" && agentPortLive(ap) {
-			answer("error: %q is already exposed by another live session (agent port %s) — one -s per name at a time", name, ap)
+			answer("error: %q is already exposed by another live session (%s) — one -s per name at a time", name, heldBy(name, ap))
 		}
 	}
 	// A leftover signpost (a crashed session's, or a re-run) may carry a parking
@@ -1581,7 +1631,7 @@ func swarmServe(name string, pairs []portPair, self selfInfo) {
 				"two agents on one cluster cannot both own a name. Use a different name, or stop that agent.", name, o)
 		}
 		if ap := signpostAgentPort(sp.Spec.TaskTemplate.ContainerSpec.Command); ap != "" && agentPortLive(ap) {
-			answer("error: %q is already exposed by another live session (agent port %s) — one -s per name at a time", name, ap)
+			answer("error: %q is already exposed by another live session (%s) — one -s per name at a time", name, heldBy(name, ap))
 		}
 		// Past those two checks the signpost is ours to take: nobody live is
 		// behind it. Reuse it UNLESS it carries a parking receipt — that receipt
@@ -2055,7 +2105,7 @@ func k8sServe(name string, pairs []portPair) {
 		// targetPort still answers on this agent, its session is alive and the
 		// name is taken. A dead port is a crashed session's leftover — replaced.
 		if tp := k8sTargetPort(existing.Spec.Ports); tp != "" && agentPortLive(tp) {
-			answer("error: %q is already exposed by another live session (agent port %s) — one -s per name at a time", name, tp)
+			answer("error: %q is already exposed by another live session (%s) — one -s per name at a time", name, heldBy(name, tp))
 		}
 		// Replace it. If the re-create fails, say SO — do not fall through to
 		// the "not plug's" lie (the name is now deleted; report the real cause
