@@ -32,6 +32,18 @@ désormais dans `RELEASE_NOTES.md` et la roadmap publique dans
 
 ## 🟢 Ouvert — produit
 
+- [ ] **Prouver la réutilisation du signpost** (VIP Swarm gardée). Livrée le
+      02/08, mais **non couverte en CI** : la seule cellule qui provoque une
+      reconnexion (`resilience`) redémarre l'agent, et le boot gc balaie ses
+      propres signposts — donc il n'y a plus rien à réutiliser et l'adresse
+      change, correctement. Le correctif vise l'AUTRE reconnexion, celle où
+      l'agent ne meurt pas : réveil de veille, bascule VPN, hoquet Docker
+      Desktop. Il faudrait provoquer une coupure du transport SANS toucher à
+      l'agent — piste : un verbe `chaos` qui tue la connexion SSH de la session
+      (l'agent reste debout, le keepalive détecte, le client reconnecte).
+      Aujourd'hui la cellule ne fait que **rapporter** l'adresse sur Docker et
+      Swarm, et l'asserte sur k8s (dont le Service survit au redémarrage).
+
 - [ ] **Auto-update, ce qui reste** (le socle est livré : `plug config -p <c>
       update=none|notify|auto` **par profil** — la gouvernance est une propriété
       du cluster, pas du poste —, check quotidien en tâche de fond depuis le

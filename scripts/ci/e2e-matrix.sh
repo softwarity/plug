@@ -822,31 +822,31 @@ do_resilience() {
     sleep 5
   done
   addr_after="$(cresolve)"
-  # A reconnect re-provisions the name, and whether that KEEPS the address is a
-  # property of the backend — it is what decides whether every caller that
-  # cached the old one keeps working or spends its DNS TTL talking to an address
-  # that no longer exists (a real incident: a JVM caller held the old VIP and
-  # the name looked dead until its cache expired).
+  # Whether the name KEEPS its address across this depends on what the backend
+  # does at agent boot. This cell RESTARTS the agent, and the boot gc sweeps that
+  # agent's own signposts — so on Docker and Swarm there is nothing left to reuse
+  # and the replacement gets a new address. Kubernetes keeps its Service, hence
+  # its ClusterIP, which is why it alone can be asserted here.
   #
-  # Swarm keeps its service VIP now (updated in place), Kubernetes has always
-  # kept its ClusterIP. A plain Docker container cannot: its relay port lives in
-  # the entrypoint, so changing it means a new container and a new address.
-  # Assert the guarantee where the backend can give it, and report the known
-  # limit where it cannot — never skip, or a regression would look like silence.
+  # The signpost reuse (which keeps a Swarm VIP) covers the OTHER reconnect: the
+  # one where the agent never died — a laptop waking, a VPN switching, a Docker
+  # Desktop hiccup. That path has no agent restart to sweep anything, and this
+  # cell cannot produce it. Reported everywhere so a change in any backend shows
+  # up rather than passing unnoticed.
   case "$family" in
-    swarm|k8s)
+    k8s)
       if [ -n "$addr_before" ] && [ "$addr_before" = "$addr_after" ]; then
         echo "address kept across the reconnect — $vipname stayed at $addr_before"
-        sum "**name keeps its address across a reconnect** ✅ \`$addr_before\`"
+        sum "**name keeps its address across an agent restart** ✅ \`$addr_before\`"
       else
-        echo "--- resilience FAIL — $vipname moved from '${addr_before:-nothing}' to '${addr_after:-nothing}' across the reconnect;"
-        echo "    every caller holding the old address is broken until its DNS cache expires"
-        sum "**name keeps its address across a reconnect** ❌ — \`${addr_before:-nothing}\` → \`${addr_after:-nothing}\`"
+        echo "--- resilience FAIL — $vipname moved from '${addr_before:-nothing}' to '${addr_after:-nothing}';"
+        echo "    the k8s Service should survive the agent restart with its ClusterIP"
+        sum "**name keeps its address across an agent restart** ❌ — \`${addr_before:-nothing}\` → \`${addr_after:-nothing}\`"
         return 1
       fi ;;
     *)
-      echo "address across the reconnect: ${addr_before:-nothing} → ${addr_after:-nothing} (docker recreates the signpost — known)"
-      sum "**name keeps its address across a reconnect** · docker recreates it (\`${addr_before:-?}\` → \`${addr_after:-?}\`)" ;;
+      echo "address across the agent restart: ${addr_before:-nothing} → ${addr_after:-nothing} (boot gc sweeps the signpost — expected)"
+      sum "**name address across an agent restart** · swept and rebuilt (\`${addr_before:-?}\` → \`${addr_after:-?}\`)" ;;
   esac
 
   wait $res_pid 2>/dev/null # the -ttl fires; teardown restores the deployed service
