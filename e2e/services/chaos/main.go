@@ -172,6 +172,27 @@ func agentID(svc string) (string, error) {
 
 func main() {
 	mux := http.NewServeMux()
+	// /resolve?name=X — what a WORKLOAD in this cluster gets when it looks the
+	// name up. Asked from in here rather than from the harness because that is
+	// the only place the answer means anything: the address callers cache and
+	// keep using is the cluster's, not the runner's.
+	//
+	// Go's resolver holds no cache of its own, so each call is a fresh question
+	// to the cluster's DNS — which is what makes "same address before and after"
+	// a statement about the cluster rather than about this process.
+	mux.HandleFunc("/resolve", func(w http.ResponseWriter, r *http.Request) {
+		name := r.URL.Query().Get("name")
+		if name == "" {
+			http.Error(w, "name= required", http.StatusBadRequest)
+			return
+		}
+		addrs, err := net.DefaultResolver.LookupHost(r.Context(), name)
+		if err != nil {
+			fmt.Fprintf(w, "unresolved: %v\n", err)
+			return
+		}
+		fmt.Fprintln(w, strings.Join(addrs, ","))
+	})
 	mux.HandleFunc("/restart-agent", func(w http.ResponseWriter, r *http.Request) {
 		svc := r.URL.Query().Get("svc")
 		if svc == "" {

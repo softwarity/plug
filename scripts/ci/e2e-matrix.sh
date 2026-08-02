@@ -27,6 +27,16 @@ LANGS="go node python java"
 # proto:host:port — the by-name target for each service.
 PROTOS="http:httpbin:8080 postgres:postgres:5432 redis:redis:6379 mongo:mongo:27017 amqp:rabbitmq:5672 mqtt:mosquitto:1883 grpc:grpc:50051 websocket:wsserver:8090"
 
+# Which cluster family this run is against, read off the cluster name the
+# workflow passes (plug-cluster-… / plug-swarm-… / plug-k8s-…). Every cell runs
+# on all three; a couple of them assert something only one backend can give, and
+# say so rather than skipping.
+case "$peer_b" in
+  *-swarm-*|plug-swarm-*) family=swarm ;;
+  *-k8s-*|plug-k8s-*)     family=k8s ;;
+  *)                      family=compose ;;
+esac
+
 # --- OS specifics ---
 ext=""; py="python3"
 case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) ext=".exe"; py="python" ;; esac
@@ -790,6 +800,12 @@ do_resilience() {
   sleep 8
   for _ in 1 2 3; do during="$(bprobe)"; [ "$during" = "local-res-$leg" ] && break; sleep 3; done
 
+  # The address a workload in the cluster resolves the name to, RIGHT NOW —
+  # asked from inside, because that is the address callers cache and keep using.
+  cresolve() { plug_to "$ip_b" curl -s --max-time 10 "http://chaos:8095/resolve?name=$rname" 2>/dev/null | tr -d '\r' | tail -1; }
+  local addr_before addr_after
+  addr_before="$(cresolve)"
+
   # Crash THIS LEG'S agent mid-session (the chaos service answers, then fires).
   plug_to "$ip_b" curl -s --max-time 10 "http://chaos:8095/restart-agent?svc=$ragent" >/dev/null 2>&1 || true
   # keepalive detects (~10-15s at 5s cadence), reconnect re-arms and re-parks;
@@ -799,6 +815,34 @@ do_resilience() {
     [ "$after_crash" = "local-res-$leg" ] && break
     sleep 5
   done
+  addr_after="$(cresolve)"
+  # A reconnect re-provisions the name, and whether that KEEPS the address is a
+  # property of the backend — it is what decides whether every caller that
+  # cached the old one keeps working or spends its DNS TTL talking to an address
+  # that no longer exists (a real incident: a JVM caller held the old VIP and
+  # the name looked dead until its cache expired).
+  #
+  # Swarm keeps its service VIP now (updated in place), Kubernetes has always
+  # kept its ClusterIP. A plain Docker container cannot: its relay port lives in
+  # the entrypoint, so changing it means a new container and a new address.
+  # Assert the guarantee where the backend can give it, and report the known
+  # limit where it cannot — never skip, or a regression would look like silence.
+  case "$family" in
+    swarm|k8s)
+      if [ -n "$addr_before" ] && [ "$addr_before" = "$addr_after" ]; then
+        echo "address kept across the reconnect — $rname stayed at $addr_before"
+        sum "**name keeps its address across a reconnect** ✅ \`$addr_before\`"
+      else
+        echo "--- resilience FAIL — $rname moved from '${addr_before:-nothing}' to '${addr_after:-nothing}' across the reconnect;"
+        echo "    every caller holding the old address is broken until its DNS cache expires"
+        sum "**name keeps its address across a reconnect** ❌ — \`${addr_before:-nothing}\` → \`${addr_after:-nothing}\`"
+        return 1
+      fi ;;
+    *)
+      echo "address across the reconnect: ${addr_before:-nothing} → ${addr_after:-nothing} (docker recreates the signpost — known)"
+      sum "**name keeps its address across a reconnect** · docker recreates it (\`${addr_before:-?}\` → \`${addr_after:-?}\`)" ;;
+  esac
+
   wait $res_pid 2>/dev/null # the -ttl fires; teardown restores the deployed service
 
   # The deployed workload is coming back from a stop, on a runner that has just

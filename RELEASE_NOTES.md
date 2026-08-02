@@ -2,6 +2,31 @@
 
 ## NEXT RELEASE
 
+### Fixed: a Swarm name keeps its address across a reconnect
+
+plug publishes your `-s` name as a Swarm service, and Swarm gives a service its
+VIP once, at creation. Every re-provisioning recreated that service — so the name
+got a NEW address, and every caller that had resolved it kept using the old one
+until its DNS cache expired. The name looked dead, then came back on its own,
+with nothing having changed. A JVM caller is the clearest case: its default
+positive DNS cache is long enough to be very noticeable.
+
+It was not only about starting and stopping a session. Re-provisioning also runs
+after every reconnect, so a laptop waking from sleep, a VPN switching or a
+Docker Desktop hiccup was enough to move the address under callers that were
+working fine.
+
+The signpost is now updated in place instead of being replaced, so the VIP
+survives. Kubernetes already kept its ClusterIP; this brings Swarm in line. The
+one case that still replaces it is a signpost carrying a parking receipt —
+deleting it is what scales a parked workload back up, and keeping an address is
+not worth risking a real service left at zero replicas.
+
+Plain Docker cannot do this: a container's relay port lives in its entrypoint,
+so changing it means a new container and a new address. The e2e cell asserts the
+guarantee on Swarm and Kubernetes and reports the limit on Docker, rather than
+staying silent about it.
+
 ### Fixed: Windows now forwards to your own DNS servers, not a public one
 
 On Windows plug had no idea what this machine's nameservers were, so every dotted

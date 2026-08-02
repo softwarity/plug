@@ -1485,6 +1485,10 @@ func swarmServe(name string, pairs []portPair, self selfInfo) {
 	// session — its relay port still answers on this agent — and then the name
 	// is taken; a dead port is a crashed session's leftover, swept below.
 	var sp struct {
+		ID      string `json:"ID"`
+		Version struct {
+			Index uint64 `json:"Index"`
+		} `json:"Version"`
 		Spec struct {
 			Labels       map[string]string `json:"Labels"`
 			TaskTemplate struct {
@@ -1494,6 +1498,18 @@ func swarmServe(name string, pairs []portPair, self selfInfo) {
 			} `json:"TaskTemplate"`
 		} `json:"Spec"`
 	}
+	// Whether we can UPDATE the signpost that is already there instead of
+	// replacing it. Swarm gives a service its VIP once, at creation, and that VIP
+	// is what every caller resolved and cached — recreating hands out a new one
+	// and every cached answer points at an address that no longer exists. The
+	// callers recover when their cache expires, which is why this looks like a
+	// name that "comes back on its own".
+	//
+	// It matters far more than one session: re-provisioning after a reconnect
+	// goes through here too, so today a laptop waking up is enough to move the
+	// VIP. Kubernetes already keeps its ClusterIP across park and restore; this
+	// brings Swarm in line.
+	reuse := false
 	if code, err := dockerAPI("GET", "/services/"+signpostName(name), nil, &sp); err == nil && code == 200 {
 		// Same rule as the container shape: a service name is cluster-wide, so
 		// another agent's LIVE signpost must not read as our leftover just
@@ -1505,12 +1521,22 @@ func swarmServe(name string, pairs []portPair, self selfInfo) {
 		if ap := signpostAgentPort(sp.Spec.TaskTemplate.ContainerSpec.Command); ap != "" && agentPortLive(ap) {
 			answer("error: %q is already exposed by another live session (agent port %s) — one -s per name at a time", name, ap)
 		}
+		// Past those two checks the signpost is ours to take: nobody live is
+		// behind it. Reuse it UNLESS it carries a parking receipt — that receipt
+		// is what scales a real workload back up, and deleting the signpost is
+		// how the restore is driven (see restoreServiceParked). Keeping the VIP
+		// is not worth risking a deployed service left at zero replicas.
+		reuse = sp.ID != "" && sp.Spec.Labels[parkedServiceLabel] == ""
 	}
 	// A leftover signpost service (a crashed session's, or a re-run) may carry a
 	// parking receipt: restore it FIRST, then re-detect — one restore path, and
-	// the takeover below re-parks with a fresh receipt.
-	if err := restoreServiceParked(name); err != nil {
-		answer("error: restoring what the previous %s session parked: %v", name, err)
+	// the takeover below re-parks with a fresh receipt. Skipped when we are
+	// reusing: there is no receipt to act on (that is what made it reusable),
+	// and this is the call that would delete the service and take the VIP with it.
+	if !reuse {
+		if err := restoreServiceParked(name); err != nil {
+			answer("error: restoring what the previous %s session parked: %v", name, err)
+		}
 	}
 	// A real service with this name (anywhere in the cluster) must keep it: the
 	// container-scan nameOwners can't see Swarm services, so check them explicitly.
@@ -1552,8 +1578,21 @@ func swarmServe(name string, pairs []portPair, self selfInfo) {
 			"RestartPolicy": map[string]any{"Condition": "any"},
 		},
 		"Mode": map[string]any{"Replicated": map[string]any{"Replicas": 1}},
+		// stop-first, explicitly. A signpost relays to ONE agent port, so two
+		// tasks behind the VIP is not a smoother rollout — it is half the
+		// connections landing on the previous task, which relays to a port that
+		// no longer answers. A brief gap is the honest shape here.
+		"UpdateConfig": map[string]any{"Order": "stop-first"},
 	}
-	if _, err := dockerAPI("POST", "/services/create", spec, nil); err != nil {
+	if reuse {
+		// The VIP is kept by updating in place. Swarm requires the version we
+		// read the service at, which is also the concurrency guard: if anything
+		// touched it since, this fails rather than clobbering.
+		path := fmt.Sprintf("/services/%s/update?version=%d", sp.ID, sp.Version.Index)
+		if _, err := dockerAPI("POST", path, spec, nil); err != nil {
+			answer("error: updating the %s signpost service: %v", name, err)
+		}
+	} else if _, err := dockerAPI("POST", "/services/create", spec, nil); err != nil {
 		answer("error: creating the %s signpost service: %v", name, err)
 	}
 	if own != nil {
