@@ -833,21 +833,33 @@ do_resilience() {
   # Desktop hiccup. That path has no agent restart to sweep anything, and this
   # cell cannot produce it. Reported everywhere so a change in any backend shows
   # up rather than passing unnoticed.
-  case "$family" in
-    k8s)
-      if [ -n "$addr_before" ] && [ "$addr_before" = "$addr_after" ]; then
-        echo "address kept across the reconnect — $vipname stayed at $addr_before"
-        sum "**name keeps its address across an agent restart** ✅ \`$addr_before\`"
-      else
-        echo "--- resilience FAIL — $vipname moved from '${addr_before:-nothing}' to '${addr_after:-nothing}';"
-        echo "    the k8s Service should survive the agent restart with its ClusterIP"
-        sum "**name keeps its address across an agent restart** ❌ — \`${addr_before:-nothing}\` → \`${addr_after:-nothing}\`"
-        return 1
-      fi ;;
-    *)
-      echo "address across the agent restart: ${addr_before:-nothing} → ${addr_after:-nothing} (boot gc sweeps the signpost — expected)"
-      sum "**name address across an agent restart** · swept and rebuilt (\`${addr_before:-?}\` → \`${addr_after:-?}\`)" ;;
-  esac
+  # An answer that is not an ADDRESS proves nothing, and comparing two identical
+  # error strings would read as "kept" — a test that passes without testing,
+  # which is worse than one that fails. It happened: on k8s the chaos service
+  # lives in default while the per-leg Services live in plug-res-<leg>, a bare
+  # name does not cross namespaces, and the lookup failed identically before and
+  # after. No verdict is the honest outcome there, and it is said out loud.
+  is_addr() { case "${1:-}" in ""|*[!0-9.]*) return 1 ;; *) return 0 ;; esac; }
+  addr_bad=0
+  if ! is_addr "$addr_before" || ! is_addr "$addr_after"; then
+    echo "address across the agent restart: NOT MEASURABLE — '${addr_before:-nothing}' → '${addr_after:-nothing}'"
+    sum "**name address across an agent restart** · not measurable on this family"
+  else
+    case "$family" in
+      k8s)
+        if [ "$addr_before" = "$addr_after" ]; then
+          echo "address kept across the agent restart — $vipname stayed at $addr_before"
+          sum "**name keeps its address across an agent restart** ✅ \`$addr_before\`"
+        else
+          echo "--- $vipname moved from '$addr_before' to '$addr_after' — the k8s Service should have kept its ClusterIP"
+          sum "**name keeps its address across an agent restart** ❌ — \`$addr_before\` → \`$addr_after\`"
+          addr_bad=1
+        fi ;;
+      *)
+        echo "address across the agent restart: $addr_before → $addr_after (boot gc sweeps the signpost — expected)"
+        sum "**name address across an agent restart** · swept and rebuilt (\`$addr_before\` → \`$addr_after\`)" ;;
+    esac
+  fi
 
   wait $res_pid 2>/dev/null # the -ttl fires; teardown restores the deployed service
 
@@ -858,7 +870,7 @@ do_resilience() {
   # assertion, room to land.
   for _ in $(seq 1 15); do after="$(bprobe)"; [ "$after" = "deployed-res-$leg" ] && break; sleep 3; done
 
-  if [ "$during" = "local-res-$leg" ] && [ "$after_crash" = "local-res-$leg" ] && [ "$after" = "deployed-res-$leg" ]; then
+  if [ "$during" = "local-res-$leg" ] && [ "$after_crash" = "local-res-$leg" ] && [ "$after" = "deployed-res-$leg" ] && [ "$addr_bad" = 0 ]; then
     echo "resilience OK — parked, agent restarted, RE-parked (self-heal + boot-gc + re-arm), restored"
     sum "**resilience (agent crash mid-session)** ✅"; return 0
   fi

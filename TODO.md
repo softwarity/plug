@@ -42,7 +42,13 @@ désormais dans `RELEASE_NOTES.md` et la roadmap publique dans
       l'agent — piste : un verbe `chaos` qui tue la connexion SSH de la session
       (l'agent reste debout, le keepalive détecte, le client reconnecte).
       Aujourd'hui la cellule ne fait que **rapporter** l'adresse sur Docker et
-      Swarm, et l'asserte sur k8s (dont le Service survit au redémarrage).
+      Swarm. Sur k8s elle ne mesure **rien** : le `chaos` vit dans `default`, les
+      Services par jambe dans `plug-res-<leg>`, et un nom nu ne traverse pas les
+      namespaces — le lookup échoue identiquement avant et après, ce qui avait
+      produit un faux positif (« adresse conservée » en comparant deux messages
+      d'erreur). La cellule refuse désormais toute mesure qui n'est pas une
+      adresse. Pour mesurer sur k8s il faudrait le FQDN
+      `<nom>.plug-res-<leg>.svc.cluster.local`.
 
 - [ ] **Auto-update, ce qui reste** (le socle est livré : `plug config -p <c>
       update=none|notify|auto` **par profil** — la gouvernance est une propriété
