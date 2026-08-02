@@ -217,13 +217,8 @@ func dispatch(cmd []string) {
 			answer("error: usage: resolve <name>")
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		addrs, _ := net.DefaultResolver.LookupHost(ctx, cmd[1])
+		addrs, lerr := net.DefaultResolver.LookupHost(ctx, cmd[1])
 		cancel()
-		// NOTE: a lookup that FAILED is answered "nxdomain" here, which is not
-		// the same thing and has bitten a real session — see TODO.md. Telling
-		// them apart needs more than the error type: in an isolated cluster
-		// network an ABSENT name TIMES OUT exactly like an unreachable resolver,
-		// so a health probe against a name known to exist is what it will take.
 		for _, a := range addrs {
 			// 198.18.0.0/15 is the range plug itself mints fakes from — an
 			// answer there can only be an ECHO of a plug resolver upstream
@@ -234,6 +229,27 @@ func dispatch(cmd []string) {
 				continue
 			}
 			answer("found")
+		}
+		// Nothing came back — which is two different things. "This name does not
+		// exist" is an answer; "I could not ask" is not, and answering nxdomain
+		// to the second tells the CLI to serve a confident NXDOMAIN for a name
+		// that may be perfectly alive, cached for 30s, machine-wide on macOS.
+		//
+		// The error type alone cannot separate them: in an isolated cluster
+		// network an ABSENT name times out exactly like a dead resolver, because
+		// the embedded DNS forwards it upstream and the upstream is unreachable.
+		// A NXDOMAIN that arrives, though, is the resolver speaking — trust it.
+		var dnsErr *net.DNSError
+		if errors.As(lerr, &dnsErr) && dnsErr.IsNotFound {
+			answer("nxdomain")
+		}
+		// Left with a timeout. Ask about something that MUST resolve here: if it
+		// answers, the resolver is fine and the name really is absent; if it does
+		// not, the resolver is the problem and we must not pass judgement on the
+		// name. Anything the CLI does not recognise makes it fail open (mint as
+		// before), so this needs no client change and old clients behave right.
+		if lerr != nil && !clusterResolverHealthy() {
+			answer("unreachable")
 		}
 		answer("nxdomain")
 	case "self-update":
@@ -274,6 +290,52 @@ func dispatch(cmd []string) {
 	default:
 		answer("error: unknown command %q", cmd[0])
 	}
+}
+
+// clusterResolverHealthy reports whether the cluster's DNS is answering at all,
+// by asking it about something that MUST exist here. It is the only way to read
+// a timeout: on its own, a timeout means either "absent, and the forward
+// upstream is unreachable" or "the resolver is down", and those call for
+// opposite answers.
+//
+// No witness available means no verdict, and no verdict means keep the previous
+// behaviour (say nxdomain) rather than guess. That is deliberate: a wrong
+// "healthy" would be harmless, but a wrong "unreachable" would mint fake
+// addresses for names that really are absent — the DNS leak this whole check
+// exists to close.
+func clusterResolverHealthy() bool {
+	w := resolverWitness()
+	if w == "" {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	addrs, _ := net.DefaultResolver.LookupHost(ctx, w)
+	return len(addrs) > 0
+}
+
+// resolverWitness names something guaranteed to resolve in this cluster while
+// its DNS works. Guaranteed by construction rather than by convention: every
+// Kubernetes cluster has the kubernetes service in every namespace, and every
+// Docker/Swarm agent is itself a named object on the network it serves. Nothing
+// to configure, and no name that a user could remove.
+//
+// It must be a name the CLUSTER's own resolver answers directly. A hostname out
+// of /etc/hosts would prove nothing — it never reaches the resolver being tested.
+func resolverWitness() string {
+	if k8sAvailable() {
+		return "kubernetes.default"
+	}
+	if dockerAvailable() {
+		if self, err := dockerSelf(); err == nil {
+			for _, n := range []string{self.service, self.compose, self.name} {
+				if n != "" {
+					return n
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // localVersion is this agent's own version, baked into the image.

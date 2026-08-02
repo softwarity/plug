@@ -7,16 +7,6 @@ désormais dans `RELEASE_NOTES.md` et la roadmap publique dans
 
 ## 🔴 Ouvert — issu de l'audit du 30/07
 
-- [ ] **`resolve` répond `nxdomain` sur un lookup qui a ÉCHOUÉ** (agent/helper/main.go).
-      Corrigé puis **annulé le 31/07** : distinguer par le type d'erreur ne marche
-      pas. Dans un réseau de cluster isolé, un nom **absent** expire exactement
-      comme un résolveur injoignable, donc le correctif a fait minter une IP au
-      lieu du NXDOMAIN honnête — la cellule `dns honesty` l'a attrapé sur 6 legs.
-      La bonne réponse est une **sonde de santé** : sur erreur, re-résoudre un nom
-      dont on sait qu'il existe ; s'il répond, le résolveur va bien et le premier
-      nom est vraiment absent ; s'il ne répond pas, échouer ouvert. Reste à
-      trouver le nom témoin portable (Docker embarqué vs CoreDNS).
-
 - [ ] **Durcissement de l'exécution du core mis en cache** — suivi en PRIVÉ
       (avis de sécurité GitHub, brouillon), pas ici : ce dépôt est public, et
       décrire par le menu un défaut non corrigé revient à en publier le mode

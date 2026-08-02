@@ -2,6 +2,29 @@
 
 ## NEXT RELEASE
 
+### Fixed: a cluster whose DNS hiccups no longer makes a live name look absent
+
+Before minting an address for a cluster name, plug asks the agent whether that
+name exists — the check that turns an absent name into an honest "unknown host"
+instead of an address that can only refuse the connect. The agent answered
+"absent" whenever the lookup came back empty, including when it came back empty
+because the cluster's resolver had not answered at all. A perfectly live service
+could then be reported absent for 30 seconds, machine-wide on macOS.
+
+The two cannot be told apart by the error alone: in an isolated cluster network
+an absent name times out exactly like a dead resolver, because the embedded DNS
+forwards it upstream and cannot reach it. So the agent now asks a second
+question, about something that must exist while its DNS works — the Kubernetes
+service in Kubernetes, its own deployment object on Docker and Swarm. If that
+answers, the resolver is fine and the name really is absent. If it does not, the
+agent says so instead of passing judgement, and plug mints as it did before.
+
+An NXDOMAIN that actually arrives is still trusted immediately: that is the
+resolver speaking. And an agent with nothing to use as a witness keeps the old
+answer rather than guessing — a wrong "unreachable" would hand out fake
+addresses for names that really are absent, which is the leak this check exists
+to close.
+
 ### Fixed: a Swarm name keeps its address across a reconnect
 
 plug publishes your `-s` name as a Swarm service, and Swarm gives a service its

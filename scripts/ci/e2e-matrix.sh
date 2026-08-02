@@ -794,7 +794,13 @@ do_resilience() {
   # Hold the takeover THROUGH THIS LEG'S OWN AGENT, with a tight keepalive so
   # the dead transport is detected in seconds; -ttl ends the session naturally
   # (Windows: kill would skip the teardown — see do_takeover).
-  PLUG_KEEPALIVE_SECS=5 "$PLUG" --host "$ip_b" --port "$rsshport" -s "$rname:$rport:18123" \
+  # A SECOND name on the same session, this one owned by nobody: no deployed
+  # workload, so no parking receipt — which is the condition under which the
+  # signpost is reused instead of replaced. $rname cannot answer that question,
+  # since taking it over is exactly the case that must still replace it (the
+  # receipt is what scales the parked workload back up).
+  local vipname="vip-$leg"
+  PLUG_KEEPALIVE_SECS=5 "$PLUG" --host "$ip_b" --port "$rsshport" -s "$rname:$rport:18123" -s "$vipname:9099:18123" \
     "$root/echo-local$ext" -addr 127.0.0.1:18123 -text "local-res-$leg" -ttl 110s >/tmp/resilience.out 2>&1 &
   local res_pid=$! during="" after_crash="" after=""
   sleep 8
@@ -802,7 +808,7 @@ do_resilience() {
 
   # The address a workload in the cluster resolves the name to, RIGHT NOW —
   # asked from inside, because that is the address callers cache and keep using.
-  cresolve() { plug_to "$ip_b" curl -s --max-time 10 "http://chaos:8095/resolve?name=$rname" 2>/dev/null | tr -d '\r' | tail -1; }
+  cresolve() { plug_to "$ip_b" curl -s --max-time 10 "http://chaos:8095/resolve?name=$vipname" 2>/dev/null | tr -d '\r' | tail -1; }
   local addr_before addr_after
   addr_before="$(cresolve)"
 
@@ -830,10 +836,10 @@ do_resilience() {
   case "$family" in
     swarm|k8s)
       if [ -n "$addr_before" ] && [ "$addr_before" = "$addr_after" ]; then
-        echo "address kept across the reconnect — $rname stayed at $addr_before"
+        echo "address kept across the reconnect — $vipname stayed at $addr_before"
         sum "**name keeps its address across a reconnect** ✅ \`$addr_before\`"
       else
-        echo "--- resilience FAIL — $rname moved from '${addr_before:-nothing}' to '${addr_after:-nothing}' across the reconnect;"
+        echo "--- resilience FAIL — $vipname moved from '${addr_before:-nothing}' to '${addr_after:-nothing}' across the reconnect;"
         echo "    every caller holding the old address is broken until its DNS cache expires"
         sum "**name keeps its address across a reconnect** ❌ — \`${addr_before:-nothing}\` → \`${addr_after:-nothing}\`"
         return 1
