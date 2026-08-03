@@ -23,11 +23,26 @@ type nameChecker func(name string) bool
 // can ask in bursts.
 var nxLimiter = newLogLimiter(30 * time.Second)
 
+// checkTTL bounds how long a verdict — found or absent — may be repeated
+// without asking the agent again. It used to be five MINUTES for a positive,
+// and that number was the enabler of a real poisoning: kill a session
+// (Ctrl-C), and for the rest of those five minutes the stub kept telling
+// whoever asked that the name existed, minting a fake for it. On a plugged
+// workstation running Docker Desktop, "whoever asked" includes the VM — the
+// embedded DNS forwards names absent from the cluster upstream, which lands
+// here — so a GATEWAY INSIDE THE CLUSTER cached a 198.18.x address that only
+// means something on this machine, and stayed broken until restarted.
+//
+// Five seconds, same as the negative-SOA MINIMUM: plug's answers are honest
+// within five seconds, in both directions. The load stays bounded by the OS
+// resolver's own cache in front of us — one query per name per TTL — and each
+// re-check is one exec on an SSH connection that is already open.
+const checkTTL = 5 * time.Second
+
 // newNameChecker builds the pre-mint existence check: ask every current
-// transport — present in ANY cluster → mint. Verdicts are cached (found 5 min;
-// absent 30 s, so a service being deployed right now appears quickly). When
-// nobody can answer (no transport yet, old agents), mint as plug always did —
-// a fake IP whose connect is refused with a log, never a hang.
+// transport — present in ANY cluster → mint. When nobody can answer (no
+// transport yet, old agents), mint as plug always did — a fake IP whose
+// connect is refused with a log, never a hang.
 func newNameChecker(dialers func() []Dialer, log logfn) nameChecker {
 	type verdict struct {
 		found bool
@@ -62,15 +77,11 @@ func newNameChecker(dialers func() []Dialer, log logfn) nameChecker {
 		if !answered {
 			return true
 		}
-		ttl := 5 * time.Minute
-		if !found {
-			ttl = 30 * time.Second
-			if nxLimiter.allow(name) {
-				log.f("tun: %s is in no connected cluster — NXDOMAIN (repeats hidden 30s)", name)
-			}
+		if !found && nxLimiter.allow(name) {
+			log.f("tun: %s is in no connected cluster — NXDOMAIN (repeats hidden 30s)", name)
 		}
 		mu.Lock()
-		cache[name] = verdict{found: found, until: time.Now().Add(ttl)}
+		cache[name] = verdict{found: found, until: time.Now().Add(checkTTL)}
 		mu.Unlock()
 		return found
 	}

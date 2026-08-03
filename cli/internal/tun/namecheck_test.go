@@ -3,6 +3,7 @@ package tun
 import (
 	"net"
 	"testing"
+	"time"
 )
 
 // fakeResolver is a Dialer whose agent answers the resolve verb from a map.
@@ -80,5 +81,46 @@ func TestAnswerDNSHonestNXDOMAIN(t *testing.T) {
 	}
 	if _, ok := tab.lookup(fakeBase | 1); ok {
 		t.Fatal("a denied name must not be minted")
+	}
+}
+
+// The poisoning this guards against, reproduced live on a real cluster: a
+// session is killed, its name is gone from the cluster, and the stub kept
+// answering "found" from a FIVE-MINUTE cache — minting a fake address that, on
+// a plugged workstation running Docker Desktop, was echoed back INTO the
+// cluster (the embedded DNS forwards absent names upstream, which is us). A
+// gateway inside the cluster then cached an address that only exists on this
+// machine, and stayed broken until restarted.
+//
+// The product property is: plug's answers are honest within checkTTL, in BOTH
+// directions. This test pays real seconds for it on purpose — it is the direct
+// regression test for the incident, against the shipped constant.
+func TestAVerdictNeverOutlivesCheckTTL(t *testing.T) {
+	if testing.Short() {
+		t.Skip("sleeps past checkTTL")
+	}
+	fr := &fakeResolver{names: map[string]bool{"fpl-svc": true}, ok: true}
+	check := newNameChecker(func() []Dialer { return []Dialer{fr} }, logfn(func(string, ...any) {}))
+
+	if !check("fpl-svc") {
+		t.Fatal("served name must mint")
+	}
+	// The Ctrl-C: the name vanishes from the cluster.
+	fr.names["fpl-svc"] = false
+
+	time.Sleep(checkTTL + 500*time.Millisecond)
+	if check("fpl-svc") {
+		t.Fatal("the stub still said a killed session's name existed after checkTTL — this is the gateway-poisoning bug")
+	}
+
+	// And the other direction: an absent name that gets SERVED must appear
+	// within the same bound, not linger as NXDOMAIN.
+	if check("brand-new") {
+		t.Fatal("absent name must NXDOMAIN")
+	}
+	fr.names["brand-new"] = true
+	time.Sleep(checkTTL + 500*time.Millisecond)
+	if !check("brand-new") {
+		t.Fatal("a freshly served name stayed NXDOMAIN past checkTTL")
 	}
 }

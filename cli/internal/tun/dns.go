@@ -40,9 +40,9 @@ type faketab struct {
 }
 
 // reuseFloor is how long a fake must have gone untouched before it can be handed
-// to a different name. The A answers carry a 30s TTL, so anything past that is
-// not in a client's cache any more; a minute is several times that, and still
-// short enough that a long-lived daemon recovers its whole subnet.
+// to a different name. The A answers carry a 5s TTL, so anything past that is
+// not in a client's cache any more; a minute is an order of magnitude beyond,
+// and still short enough that a long-lived daemon recovers its whole subnet.
 const reuseFloor = time.Minute
 
 func newFaketab(base uint32) *faketab {
@@ -295,9 +295,16 @@ func answerDNS(q []byte, tab *faketab, upstream *upstreamDNS, check nameChecker)
 	r = append(r, q[12:qend]...) // question
 	switch {
 	case answerIP != nil:
-		r = append(r, 0xC0, 0x0C)  // name ptr
-		r = append(r, 0, 1, 0, 1)  // A, IN
-		r = append(r, 0, 0, 0, 30) // TTL
+		r = append(r, 0xC0, 0x0C) // name ptr
+		r = append(r, 0, 1, 0, 1) // A, IN
+		// TTL 5s, down from 30: this is how long the OS resolver (and, on a
+		// plugged workstation, Docker Desktop's VM behind it) may repeat this
+		// answer without asking again. Thirty seconds was the floor of a real
+		// incident — a session killed and relaunched left a cluster gateway
+		// dialling the previous address for the full OS-cache window, whatever
+		// plug's own caches did. Five matches the negative SOA MINIMUM below:
+		// plug's answers, positive or negative, are honest within five seconds.
+		r = append(r, 0, 0, 0, 5)
 		r = append(r, 0, 4)
 		r = append(r, answerIP.To4()...)
 	case rcode == 2: // SERVFAIL — header and question only

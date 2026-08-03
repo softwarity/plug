@@ -2,6 +2,34 @@
 
 ## NEXT RELEASE
 
+### Fixed: killing a session no longer poisons the cluster's own DNS
+
+Kill a plug session (Ctrl-C) on a workstation whose cluster runs in Docker
+Desktop, and anything in the cluster that asked for that name during the gap —
+a gateway routing to it, typically — could receive a 198.18.x address that only
+exists on your machine, cache it, and stay broken until restarted. Connections
+to it do not even fail fast: they hang.
+
+The chain, reproduced live: the name disappears from the cluster, so the
+embedded DNS forwards the lookup upstream — through the VM, to your machine's
+resolver, which is plug while sessions run. plug's stub still held "this name
+exists" in a five-minute cache, so it answered with a fake address — to a
+caller inside the cluster, where that address means nothing. The 2.7.1 resolver
+fix made this deterministic, ironically: before it, the stub regularly fell off
+the machine's DNS and the echo missed.
+
+Every verdict plug caches or hands out now lives five seconds, aligned in both
+directions: a killed name turns into an honest "unknown host" within five
+seconds (the gateway then heals by itself — no restart), and a freshly served
+one appears within the same bound. The A answers' TTL drops from 30 to 5
+seconds too, or the OS resolver would keep repeating the stale answer on plug's
+behalf. The load stays bounded by that same OS cache in front of the stub, and
+each re-check is one exec on an SSH connection that is already open.
+
+Pinning Docker Desktop's VM DNS (`daemon.json "dns"`) remains documented
+defence in depth: it kills the echo entirely, but a per-machine setting is not
+a fix — this is.
+
 ### Added: `plug prune` — the version cache finally shrinks
 
 plug caches one core per version it has ever met under `~/.plug/versions`, and

@@ -400,13 +400,65 @@ do_expose() {
     sleep 3
   done
   kill $expose_pid 2>/dev/null; wait $expose_pid 2>/dev/null
-  if [ "$eo" = "expose-ok-$exname" ]; then
-    echo "expose OK — a cluster workload reached this runner's local service by name"; sum "**expose (cluster→local)** ✅"; return 0
+  if [ "$eo" != "expose-ok-$exname" ]; then
+    echo "--- expose FAIL — prober said '${eo:-nothing}' (want expose-ok-$exname)"
+    echo "    --- expose session output ---"; tail -12 /tmp/expose.out 2>/dev/null | sed 's/^/    /'
+    tail -6 /tmp/expose-probe.err 2>/dev/null | sed 's/^/    /'
+    sum "**expose (cluster→local)** ❌ — prober said \`${eo:-nothing}\`"; return 1
   fi
-  echo "--- expose FAIL — prober said '${eo:-nothing}' (want expose-ok-$exname)"
-  echo "    --- expose session output ---"; tail -12 /tmp/expose.out 2>/dev/null | sed 's/^/    /'
-  tail -6 /tmp/expose-probe.err 2>/dev/null | sed 's/^/    /'
-  sum "**expose (cluster→local)** ❌ — prober said \`${eo:-nothing}\`"; return 1
+  echo "expose OK — a cluster workload reached this runner's local service by name"; sum "**expose (cluster→local)** ✅"
+
+  # dns honesty for a KILLED name — the gateway-poisoning regression, reproduced
+  # the way it bit: a name is served, a WITNESS session resolves it (seeding the
+  # resolver's "this exists" verdict), the serving session dies, and the witness
+  # asks again. plug used to keep answering "found" from a five-minute cache and
+  # mint a fake address for a name that was gone — which, echoed into a Docker
+  # Desktop cluster, left a real gateway dialling an address that only existed
+  # on the workstation, until someone restarted it.
+  #
+  # The witness must be ONE LONG-LIVED session asking twice, not two sessions:
+  # on Linux every session carries its own resolver cache, so a fresh session
+  # would start clean and prove nothing — while on macOS and Windows the shared
+  # daemon/service answers, which is exactly the incident's shape. One script,
+  # both shapes, each OS through its real resolver.
+  #
+  # The serving session ends by TTL, never by kill: a kill skips the teardown on
+  # Windows, and it is the TEARDOWN (unserve, signpost gone) that opens the gap
+  # under test. Verdict by curl exit code — locale-proof where message text is
+  # not: 6 = could not resolve (the honest answer), 7/28 = connected or hung on
+  # a minted fake (the poison), 0 = still served (the teardown never ran).
+  local pname="poison-$leg"
+  echo "=== dns honesty for a killed name: $pname must be NXDOMAIN within seconds of its session dying ==="
+  "$PLUG" --host "$ip" --port "$port" -s "$pname:9096:18087" \
+    "$root/echo-local$ext" -addr 127.0.0.1:18087 -text "alive-$pname" -ttl 18s >/tmp/poison-serve.out 2>&1 &
+  local poison_pid=$!
+  # 18s of life: the witness session takes 1-4s to arm (a cold Windows service
+  # is the slow end), so its first probe lands around t=9-12 with several
+  # seconds to spare, and its second around t=31 — the name then dead for
+  # ~13s, past the 5s check TTL plus the 5s the OS may repeat our old answer.
+  sleep 8
+  local wout
+  wout="$(perl -e 'alarm 60; exec @ARGV or exit 127' "$PLUG" --host "$ip" --port "$port" -c bash -c \
+    "p1=\$(curl -s --max-time 8 http://$pname:9096/ || true); echo \"P1=\$p1\"; sleep 22; curl -s --max-time 8 -o /dev/null http://$pname:9096/; echo \"P2-RC=\$?\"" 2>/dev/null | tr -d '\r')"
+  wait $poison_pid 2>/dev/null
+  local p1 p2rc
+  p1="$(printf '%s' "$wout" | sed -n 's/^P1=//p' | head -1)"
+  p2rc="$(printf '%s' "$wout" | sed -n 's/^P2-RC=//p' | head -1)"
+  if [ "$p1" != "alive-$pname" ]; then
+    echo "--- poison test FAIL — the witness never reached $pname while it was served (P1='${p1:-nothing}') — cannot conclude"
+    sum "**dns honesty (killed name)** ❌ — witness never saw it alive"; return 1
+  fi
+  case "$p2rc" in
+    6)
+      echo "poison test OK — $pname answered, its session died, and the SAME witness got an honest resolution failure"
+      sum "**dns honesty (killed name → NXDOMAIN)** ✅" ;;
+    0)
+      echo "--- poison test FAIL — $pname still answers after its session's ttl: the teardown never freed the name"
+      sum "**dns honesty (killed name)** ❌ — name still served"; return 1 ;;
+    *)
+      echo "--- poison test FAIL — curl exit $p2rc: the name still RESOLVED after death (a minted fake — the gateway-poisoning bug)"
+      sum "**dns honesty (killed name)** ❌ — resolved a dead name (curl rc \`${p2rc:-none}\`)"; return 1 ;;
+  esac
 }
 
 # exposevar: the SAME reverse path, with the local port NAMED instead of pinned
