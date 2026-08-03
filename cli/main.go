@@ -474,6 +474,31 @@ func launcherRun(args []string) {
 	child := exec.Command(bin, cmdArgs...)
 	child.Stdin, child.Stdout, child.Stderr = os.Stdin, os.Stdout, os.Stderr
 	child.Env = env
+	// The launcher is the process the SHELL waits on. A terminal Ctrl-C is
+	// delivered to the whole foreground group — launcher, core, the user's dev
+	// server — and with no handler here the launcher died on the spot, handing
+	// the prompt back while the rest of the group was still shutting down. The
+	// dev server then restored the raw-mode terminal it owns AFTER readline had
+	// already configured it, and arrow keys echoed ^[[A until the next Enter.
+	// The race is timing-dependent, which is why it comes and goes with
+	// unrelated teardown changes (f1e988f removed one trigger, not the race).
+	//
+	// So: survive SIGINT and keep waiting — the prompt returns only once the
+	// core, its teardown and the child's own exit are all done. Same contract as
+	// runChildEnv one level down: the child got the kernel's copy, never relay
+	// INT (a second one is "force quit NOW" to dev servers — the f1e988f bug);
+	// a targeted SIGTERM at the launcher alone is not group-delivered, so that
+	// one is passed on.
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigs)
+	go func() {
+		for s := range sigs {
+			if s == syscall.SIGTERM {
+				child.Process.Signal(s)
+			}
+		}
+	}()
 	if err := child.Run(); err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
 			os.Exit(ee.ExitCode())
