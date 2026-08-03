@@ -71,6 +71,8 @@ Usage:
                                        profile, that cluster agent's version
   plug versions                        launcher, cached cores, and the agent
                                        version of every profile
+  plug prune                           delete the cached cores no cluster runs
+                                       any more (asks each profile's agent)
   plug uninstall                       remove plug from this machine
   plug about                           what plug is, in a few lines
 
@@ -258,6 +260,9 @@ func main() {
 		return
 	case "versions":
 		listVersions()
+		return
+	case "prune":
+		cmdPrune()
 		return
 	case "init":
 		initProfile()

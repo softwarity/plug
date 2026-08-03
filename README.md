@@ -104,8 +104,8 @@ plug -p staging -s my-app:8080:3000 npm run start:dev   # asks once, then rememb
 ```
 
 Everyday commands: `plug ls` (list clusters), `plug test` (check one is
-reachable), `plug rn` / `plug rm` (rename / remove), `plug uninstall`,
-`plug about`.
+reachable), `plug rn` / `plug rm` (rename / remove), `plug prune` (delete the
+cached cores no cluster runs any more), `plug uninstall`, `plug about`.
 
 ## Several clusters at once
 
