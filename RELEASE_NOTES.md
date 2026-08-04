@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.9.0
+
 ### Changed: the launcher follows the cluster — every direction, dev builds included
 
 `plug update` used to refuse to touch the launcher when either side was a dev
