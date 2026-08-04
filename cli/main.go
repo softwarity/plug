@@ -458,7 +458,24 @@ func launcherRun(args []string) {
 		return
 	}
 	info("using cluster version v%s", shortVersion(remote))
-	raiseAmbientCaps() // linux: file caps don't survive exec'ing the downloaded core
+	// Linux: file capabilities do not survive exec'ing the downloaded core, so
+	// they are re-raised as AMBIENT ones, which do. Both halves of that —
+	// capset() and PR_CAP_AMBIENT_RAISE — apply to the calling THREAD, not the
+	// process, while Go moves goroutines between OS threads at any scheduling
+	// point. Unpinned, the fork below can leave from a thread that never got
+	// them, and the core starts unprivileged: "plug needs the privileged setup",
+	// on a machine where the install did grant it.
+	//
+	// So pin the goroutine to the thread being granted, and keep it pinned
+	// through the fork — os/exec clones from the calling thread. Never unlocked:
+	// this goroutine's remaining job is to wait for the child.
+	//
+	// It has always been a race; it became a likely one when the SIGINT handling
+	// below added a Notify and a goroutine start between the raise and the fork.
+	// It cost a red CI leg on Linux only, intermittently — the shape of a
+	// per-thread state leak.
+	runtime.LockOSThread()
+	raiseAmbientCaps()
 	// -s mappings cross the exec RAW, as leading argv: the downloaded core owns
 	// the grammar (validation included) — this launcher must not veto values a
 	// newer core understands. coreMain strips them back. An old launcher doesn't
