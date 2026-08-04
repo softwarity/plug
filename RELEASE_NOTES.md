@@ -2,6 +2,40 @@
 
 ## NEXT RELEASE
 
+### Fixed: a name keeps its address across kill and relaunch — the gateway stays sane
+
+The last piece of the "restart the gateway" story, and the measured reason it
+existed: Docker's embedded DNS hands every caller a hard-coded **600-second
+TTL** on cluster names, and a resolver that honours TTLs (Netty, so most Java
+gateways) is entitled to keep dialling an address for ten minutes. Every
+Ctrl-C→relaunch used to delete and recreate the signpost, which handed the name
+a fresh address — so the gateway spent up to ten minutes dialling the old one,
+and nobody waits ten minutes. No TTL on plug's side could shorten a TTL served
+by Docker; the only fix that reaches every caller is an address that does not
+change.
+
+So a cleanly-unserved name now **lingers**: its signpost stays, still resolving
+to the same address, refusing connections instantly — a stopped service's exact
+semantics, benched at zero seconds where the old failure hung. Relaunch within
+fifteen minutes and the signpost is taken over in place: same VIP on Swarm, same
+ClusterIP on Kubernetes, and every cached answer out there stays *valid* instead
+of stale. The grace is derived, not felt: it must outlive Docker's 600s TTL, or
+the linger protects nothing. Past it, the garbage collector reaps the signpost —
+at agent boot, and opportunistically on every serve — and an absent name goes
+back to an honest "unknown host".
+
+Three deliberate boundaries. A signpost carrying a parking receipt never
+lingers: deleting it is what scales the parked workload back up, and an address
+is not worth a deployed service left at zero replicas. A plain-Docker signpost
+cannot linger: its relay target is baked into the container's entrypoint, so a
+relaunch means a new container (Docker's own IPAM often re-hands the same IP —
+often, not promised). And a linger is not a session: the name fails fast while
+its owner is away, it does not pretend to serve.
+
+Kubernetes gains a twin fix on the way: reclaiming a leftover Service now
+patches it in place instead of delete-and-recreate, so the ClusterIP survives
+that path too.
+
 ---
 
 ## 2.9.0

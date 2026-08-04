@@ -1593,6 +1593,10 @@ func swarmServe(name string, pairs []portPair, self selfInfo) {
 		answer("error: the agent is on no overlay network — attach it to the overlay your " +
 			"services use, otherwise the name cannot resolve for them")
 	}
+	// Serving is the moment the agent runs code anyway: reap the lingers whose
+	// grace has passed, THIS name's included — if ours expired, the GET below
+	// sees nothing and a fresh create (fresh VIP) is the honest outcome.
+	sweepExpiredServiceLingers()
 	// A signpost service already carrying this name may belong to a LIVE
 	// session — its relay port still answers on this agent — and then the name
 	// is taken; a dead port is a crashed session's leftover, swept below.
@@ -1723,6 +1727,104 @@ func swarmServe(name string, pairs []portPair, self selfInfo) {
 // restoreServiceParked scales back whatever a previous session's signpost
 // service parked (its receipt labels), then removes that signpost. Scale-back
 // first, delete second — the name keeps resolving throughout.
+// ---- linger: an unserved name keeps its address warm for a relaunch ----
+//
+// Callers cache a name's address for as long as the DNS said they may — and
+// Docker's embedded DNS says 600 seconds, hard-coded. A gateway on a resolver
+// that honours TTLs (Netty does) keeps dialling the old address for up to ten
+// minutes after every Ctrl-C→relaunch, because deleting and recreating the
+// signpost hands the name a fresh VIP. No TTL on plug's side can shorten a TTL
+// served by Docker; the only fix that reaches every caller is an address that
+// does not change. So a cleanly-unserved signpost is no longer deleted: it
+// LINGERS — still resolving, refusing connections like any stopped service —
+// and the next serve of that name takes it over in place, address intact.
+//
+// Only Swarm services and Kubernetes Services can linger: both can be retargeted
+// in place. A plain container's relay target is baked into its entrypoint, so a
+// new session means a new container and there is nothing to keep — that shape
+// keeps today's delete (and Docker's own IPAM often re-hands the same IP).
+//
+// A signpost carrying a parking receipt never lingers: deleting it is what
+// scales the parked workload back up, and an address is not worth a deployed
+// service left at zero replicas.
+
+// lingerGrace is how long an unserved name stays warm before the GC reaps it.
+// Derived, not felt: it must outlive the 600s TTL Docker's DNS handed to every
+// caller — otherwise the linger protects nothing — and fifteen minutes gives
+// margin without keeping dead names resolving for hours.
+const lingerGrace = 15 * time.Minute
+
+// lingerLabel stamps WHEN the name was unserved (unix seconds) — as a Swarm
+// service label, and verbatim as a k8s annotation key.
+const lingerLabel = "plug.linger.since"
+
+func lingerStamp() string { return strconv.FormatInt(time.Now().Unix(), 10) }
+
+// lingerExpired reports whether a stamp is past the grace. Empty means "not
+// lingering" (a live session's signpost, or a crash leftover — the GC's other
+// rules own those). An unreadable stamp reads as expired: reaping is the honest
+// direction for a label something has mangled.
+func lingerExpired(stamp string, now time.Time) bool {
+	if stamp == "" {
+		return false
+	}
+	n, err := strconv.ParseInt(stamp, 10, 64)
+	if err != nil {
+		return true
+	}
+	return now.Sub(time.Unix(n, 0)) > lingerGrace
+}
+
+// sweepExpiredServiceLingers reaps every lingering signpost past its grace —
+// called from serve, because boot is the only other moment the agent runs any
+// code, and an agent that never restarts must not keep dead names resolving
+// for ever. One label-filtered list; best-effort like the gc.
+func sweepExpiredServiceLingers() {
+	var slist []struct {
+		ID   string `json:"ID"`
+		Spec struct {
+			Labels map[string]string `json:"Labels"`
+		} `json:"Spec"`
+	}
+	f := `{"label":["plug.signpost=1"]}`
+	if _, err := dockerAPI("GET", "/services?filters="+urlEscape(f), nil, &slist); err != nil {
+		return
+	}
+	now := time.Now()
+	for _, s := range slist {
+		if lingerExpired(s.Spec.Labels[lingerLabel], now) {
+			_, _ = dockerAPI("DELETE", "/services/"+s.ID, nil, nil)
+		}
+	}
+}
+
+// markServiceLinger stamps the signpost service instead of deleting it. The
+// update round-trips the FULL spec (Docker's update replaces, not merges) with
+// only the label added.
+func markServiceLinger(name string) error {
+	var s struct {
+		ID      string `json:"ID"`
+		Version struct {
+			Index uint64 `json:"Index"`
+		} `json:"Version"`
+		Spec map[string]any `json:"Spec"`
+	}
+	if code, err := dockerAPI("GET", "/services/"+signpostName(name), nil, &s); err != nil {
+		if code == 404 || code == 503 {
+			return nil
+		}
+		return err
+	}
+	labels, _ := s.Spec["Labels"].(map[string]any)
+	if labels == nil {
+		labels = map[string]any{}
+	}
+	labels[lingerLabel] = lingerStamp()
+	s.Spec["Labels"] = labels
+	_, err := dockerAPI("POST", fmt.Sprintf("/services/%s/update?version=%d", s.ID, s.Version.Index), s.Spec, nil)
+	return err
+}
+
 func restoreServiceParked(name string) error {
 	var s struct {
 		Spec struct {
@@ -1734,6 +1836,12 @@ func restoreServiceParked(name string) error {
 			return nil
 		}
 		return err
+	}
+	// No receipt → nothing to put back → the signpost LINGERS instead of dying:
+	// the name keeps its VIP for a quick relaunch (see the linger block above).
+	// With a receipt the address yields to the workload, exactly as before.
+	if s.Spec.Labels[parkedServiceLabel] == "" {
+		return markServiceLinger(name)
 	}
 	// Same rule as the container shape: the receipt is in the SIGNPOST's labels
 	// and the signpost goes next, so a scale-back that failed must stop us —
@@ -1838,7 +1946,21 @@ func dockerGC() {
 		} `json:"Spec"`
 	}
 	if _, err := dockerAPI("GET", "/services?filters="+urlEscape(f), nil, &slist); err == nil {
+		now := time.Now()
 		for _, s := range slist {
+			// The linger rule comes FIRST, before ownership: a lingering
+			// signpost is holding an ADDRESS warm, and an agent restart renames
+			// the owner — judged by the owner rule alone it would read as an
+			// orphan and be swept, killing the very address the linger exists to
+			// keep. Within the grace it stays, whoever stamped it; past the
+			// grace it goes, whoever stamped it.
+			if stamp := s.Spec.Labels[lingerLabel]; stamp != "" {
+				if !lingerExpired(stamp, now) {
+					continue
+				}
+				_, _ = dockerAPI("DELETE", "/services/"+s.ID, nil, nil)
+				continue
+			}
 			o := s.Spec.Labels["plug.signpost.owner"]
 			if o == mine || !ownerAlive(o, swarm) {
 				if err := scaleBackParkedService(s.Spec.Labels); err != nil { // undo the orphan's takeover
@@ -2039,8 +2161,32 @@ func selectorPatch(target, current map[string]string) map[string]any {
 	return p
 }
 
+// sweepExpiredK8sLingers is the serve-time reap, Swarm's twin: an agent that
+// never restarts must not keep dead names resolving for ever.
+func sweepExpiredK8sLingers(ns string) {
+	var list struct {
+		Items []struct {
+			Metadata struct {
+				Name        string            `json:"name"`
+				Labels      map[string]string `json:"labels"`
+				Annotations map[string]string `json:"annotations"`
+			} `json:"metadata"`
+		} `json:"items"`
+	}
+	if _, err := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/services?labelSelector="+urlEscape(k8sManaged+"=plug"), nil, &list); err != nil {
+		return
+	}
+	now := time.Now()
+	for _, s := range list.Items {
+		if stamp := s.Metadata.Annotations[lingerLabel]; stamp != "" && lingerExpired(stamp, now) {
+			_, _ = k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/services/"+s.Metadata.Name, nil, nil)
+		}
+	}
+}
+
 func k8sServe(name string, pairs []portPair) {
 	ns := k8sNamespace()
+	sweepExpiredK8sLingers(ns)
 	svc := map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Service",
@@ -2107,12 +2253,24 @@ func k8sServe(name string, pairs []portPair) {
 		if tp := k8sTargetPort(existing.Spec.Ports); tp != "" && agentPortLive(tp) {
 			answer("error: %q is already exposed by another live session (%s) — one -s per name at a time", name, heldBy(name, tp))
 		}
-		// Replace it. If the re-create fails, say SO — do not fall through to
-		// the "not plug's" lie (the name is now deleted; report the real cause
-		// so the session aborts with an accurate remedy).
-		_, _ = k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/services/"+name, nil, nil)
-		if _, rerr := k8sAPI("POST", "/api/v1/namespaces/"+ns+"/services", svc, nil); rerr != nil {
-			answer("error: re-provisioning the Service %q failed (a stale plug Service was removed): %v", name, rerr)
+		// Take it over IN PLACE — never delete-and-recreate. The ClusterIP is
+		// handed out at creation and it is what every caller cached: patching
+		// ports and selector (and clearing any linger stamp) keeps it, whether
+		// this Service was left lingering by a clean unserve or orphaned by a
+		// crash. Only if the patch itself fails do we fall back to the old
+		// replace, reporting the real cause.
+		patch := map[string]any{
+			"metadata": map[string]any{"annotations": map[string]any{lingerLabel: nil}},
+			"spec": map[string]any{
+				"selector": map[string]string{"app": "plug"},
+				"ports":    k8sPorts(pairs),
+			},
+		}
+		if _, perr := k8sMergePatch("/api/v1/namespaces/"+ns+"/services/"+name, patch); perr != nil {
+			_, _ = k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/services/"+name, nil, nil)
+			if _, rerr := k8sAPI("POST", "/api/v1/namespaces/"+ns+"/services", svc, nil); rerr != nil {
+				answer("error: re-provisioning the Service %q failed (a stale plug Service was removed): %v", name, rerr)
+			}
 		}
 		answer("dynamic")
 	default:
@@ -2168,8 +2326,12 @@ func k8sUnserve(name string) {
 		answer("error: reading the Service %q to release it: %v — anything this session parked is still parked", name, err)
 	}
 	if existing.Metadata.Labels[k8sManaged] == "plug" {
-		// Ours: the plug-created Service goes with the session.
-		if _, err := k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/services/"+name, nil, nil); err != nil {
+		// Ours: the plug-created Service LINGERS instead of dying — its
+		// ClusterIP is what every caller cached (600s TTL, Docker and CoreDNS
+		// alike), and a relaunch takes it over in place. See the linger block
+		// by restoreServiceParked. Reaped by gc/serve once the grace passes.
+		patch := map[string]any{"metadata": map[string]any{"annotations": map[string]any{lingerLabel: lingerStamp()}}}
+		if _, err := k8sMergePatch("/api/v1/namespaces/"+ns+"/services/"+name, patch); err != nil {
 			answer("error: %v", err)
 		}
 		answer("ok")
@@ -2201,8 +2363,15 @@ func k8sGC() {
 		gcNote("cannot list Services in %s (%v) — leftovers from crashed sessions were NOT swept", ns, err)
 		return
 	}
+	now := time.Now()
 	for _, s := range list.Items {
 		if s.Metadata.Labels[k8sManaged] == "plug" {
+			// Same first rule as the Swarm gc: a lingering Service within its
+			// grace keeps its ClusterIP warm across even an agent restart —
+			// sweeping it would kill the address the linger exists to keep.
+			if stamp := s.Metadata.Annotations[lingerLabel]; stamp != "" && !lingerExpired(stamp, now) {
+				continue
+			}
 			_, _ = k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/services/"+s.Metadata.Name, nil, nil)
 			continue
 		}

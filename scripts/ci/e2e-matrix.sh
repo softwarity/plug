@@ -96,6 +96,10 @@ cmd_node()   { echo "node $clients/node/client.js"; }
 cmd_python() { echo "$py $clients/python/client.py"; }
 cmd_java()   { echo "java -jar $clients/java/target/client.jar"; }
 
+# is_addr: the reading is an IPv4 address, not an error string. Every address
+# assertion goes through it — comparing two identical error messages once read
+# as "address kept", a test that passed without testing.
+is_addr() { case "${1:-}" in ""|*[!0-9.]*) return 1 ;; *) return 0 ;; esac; }
 glyph() { case "$1" in PASS) printf "✅" ;; FAIL) printf "❌" ;; SKIP) printf "·" ;; *) printf "?" ;; esac; }
 sum()   { echo "$*" >> "${GITHUB_STEP_SUMMARY:-/dev/stderr}"; }
 
@@ -432,11 +436,17 @@ do_expose() {
   "$PLUG" --host "$ip" --port "$port" -s "$pname:9096:18087" \
     "$root/echo-local$ext" -addr 127.0.0.1:18087 -text "alive-$pname" -ttl 18s >/tmp/poison-serve.out 2>&1 &
   local poison_pid=$!
+  # The address the CLUSTER resolves while the name is served — the one every
+  # caller caches for the 600s TTL Docker's DNS hands out. Compared after a
+  # relaunch below: the linger's whole contract is that it does not change.
+  presolve() { plug curl -s --max-time 10 "http://chaos:8095/resolve?name=$pname" 2>/dev/null | tr -d '\r' | tail -1; }
+  local paddr_before=""
   # 18s of life: the witness session takes 1-4s to arm (a cold Windows service
   # is the slow end), so its first probe lands around t=9-12 with several
   # seconds to spare, and its second around t=31 — the name then dead for
   # ~13s, past the 5s check TTL plus the 5s the OS may repeat our old answer.
   sleep 8
+  paddr_before="$(presolve)"
   local wout
   wout="$(perl -e 'alarm 60; exec @ARGV or exit 127' "$PLUG" --host "$ip" --port "$port" -c bash -c \
     "p1=\$(curl -s --max-time 8 http://$pname:9096/ || true); echo \"P1=\$p1\"; sleep 22; curl -s --max-time 8 -o /dev/null http://$pname:9096/; echo \"P2-RC=\$?\"" 2>/dev/null | tr -d '\r')"
@@ -452,12 +462,51 @@ do_expose() {
     6)
       echo "poison test OK — $pname answered, its session died, and the SAME witness got an honest resolution failure"
       sum "**dns honesty (killed name → NXDOMAIN)** ✅" ;;
+    7|52)
+      # The LINGER outcome (Swarm/k8s): the signpost outlives the session so the
+      # name keeps its address, and a connect is accepted-then-closed (52) or
+      # refused (7) INSTANTLY — a stopped service's semantics, benched at 0s.
+      # What the fix removed is the hang on a minted fake, and that shows as 28.
+      echo "poison test OK — $pname still resolves (lingering for relaunch) and fails fast (curl rc $p2rc)"
+      sum "**dns honesty (killed name → fast refusal, address kept)** ✅" ;;
     0)
       echo "--- poison test FAIL — $pname still answers after its session's ttl: the teardown never freed the name"
       sum "**dns honesty (killed name)** ❌ — name still served"; return 1 ;;
     *)
-      echo "--- poison test FAIL — curl exit $p2rc: the name still RESOLVED after death (a minted fake — the gateway-poisoning bug)"
-      sum "**dns honesty (killed name)** ❌ — resolved a dead name (curl rc \`${p2rc:-none}\`)"; return 1 ;;
+      echo "--- poison test FAIL — curl exit $p2rc: hang or fake on a dead name (the gateway-poisoning bug)"
+      sum "**dns honesty (killed name)** ❌ — rc \`${p2rc:-none}\` on a dead name"; return 1 ;;
+  esac
+
+  # The linger's contract, proven the way the incident bit: relaunch the SAME
+  # name and ask the cluster again. Swarm keeps its service VIP by in-place
+  # update and k8s its ClusterIP — asserted. A plain-Docker signpost is a new
+  # container (its relay target is baked into the entrypoint), so compose is
+  # reported, never asserted.
+  "$PLUG" --host "$ip" --port "$port" -s "$pname:9096:18087" \
+    "$root/echo-local$ext" -addr 127.0.0.1:18087 -text "alive-$pname" -ttl 10s >/tmp/poison-serve2.out 2>&1 &
+  local poison2_pid=$!
+  sleep 7
+  local paddr_after
+  paddr_after="$(presolve)"
+  wait $poison2_pid 2>/dev/null
+  if ! is_addr "${paddr_before:-}" || ! is_addr "${paddr_after:-}"; then
+    echo "address across the relaunch: NOT MEASURABLE — '${paddr_before:-nothing}' → '${paddr_after:-nothing}'"
+    sum "**name keeps its address across a relaunch** · not measurable on this family"
+    return 0
+  fi
+  case "$family" in
+    swarm|k8s)
+      if [ "$paddr_before" = "$paddr_after" ]; then
+        echo "linger OK — $pname kept $paddr_before across kill and relaunch; a caller's 600s cache stays valid"
+        sum "**name keeps its address across a relaunch** ✅ \`$paddr_before\`"
+      else
+        echo "--- linger FAIL — $pname moved from $paddr_before to $paddr_after across the relaunch"
+        sum "**name keeps its address across a relaunch** ❌ — \`$paddr_before\` → \`$paddr_after\`"
+        return 1
+      fi ;;
+    *)
+      echo "address across the relaunch: $paddr_before → $paddr_after (plain docker recreates — reported)"
+      sum "**name address across a relaunch** · docker recreates (\`$paddr_before\` → \`$paddr_after\`)" ;;
   esac
 }
 
@@ -891,7 +940,6 @@ do_resilience() {
   # lives in default while the per-leg Services live in plug-res-<leg>, a bare
   # name does not cross namespaces, and the lookup failed identically before and
   # after. No verdict is the honest outcome there, and it is said out loud.
-  is_addr() { case "${1:-}" in ""|*[!0-9.]*) return 1 ;; *) return 0 ;; esac; }
   addr_bad=0
   if ! is_addr "$addr_before" || ! is_addr "$addr_after"; then
     echo "address across the agent restart: NOT MEASURABLE — '${addr_before:-nothing}' → '${addr_after:-nothing}'"
