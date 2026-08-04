@@ -2,6 +2,25 @@
 
 ## NEXT RELEASE
 
+### Changed: the launcher follows the cluster — every direction, dev builds included
+
+`plug update` used to refuse to touch the launcher when either side was a dev
+build, and refused to move it downward. For a machine whose cluster follows the
+main channel that froze the launcher for good: the agent moved, every session's
+core moved with it, and the launcher stayed where its last release left it —
+missing every new subcommand while politely declining to update.
+
+One rule now, the one the cores have always lived by: the launcher matches the
+agent that `plug update` was just aimed at — exactly, dev builds and downgrades
+included. Wanting an earlier version is a legitimate thing to test, not a
+mistake to be protected from. A downgrade is followed, not refused; it announces
+the direction and the way back, because a silent downgrade is how a stale
+cluster would surprise you.
+
+One catch, once: a launcher from before this change still carries the old
+refusal, so the first alignment is a reinstall from the cluster (or from
+source). Every later `plug update` follows by itself.
+
 ### Fixed: killing a session no longer poisons the cluster's own DNS
 
 Kill a plug session (Ctrl-C) on a workstation whose cluster runs in Docker

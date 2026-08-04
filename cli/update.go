@@ -264,34 +264,29 @@ func waitNewVersion(cfg config, before string) string {
 	return before
 }
 
-// updateLauncher refreshes THIS binary from the agent when the agent is a newer
-// release — never on a dev build (built from source, not distributed) and never
-// DOWNward (a launcher from a newer cluster keeps serving an older one through
-// the per-version core cache; replacing it would regress every other profile).
-// Same x.y.z but a different +rev (a tag rebuilt in place) DOES replace: the
-// launcher follows the agent's exact build, like the per-cluster cores do.
+// updateLauncher refreshes THIS binary to the agent's exact build — in EVERY
+// direction. The cluster has always been the truth for the cores (each session
+// runs the agent's version, older included — `plug update 2.3.0` documents the
+// downgrade), and the launcher now honours the same contract instead of the
+// opposite one. The old policy refused dev builds and refused downward moves;
+// for anyone whose cluster follows the main channel that froze the launcher for
+// good — every other component moved while `plug update` politely declined —
+// and wanting an earlier version is a legitimate thing to test, not a mistake
+// to be protected from. This is an explicit command: it says which way it went,
+// and running it against a newer cluster is the equally explicit way back.
 func updateLauncher(cfg config, remote string) {
-	switch {
-	case remote == version:
-		info("launcher already matches the agent (v%s)", version)
-		return
-	case !semverOK(version):
-		info("launcher is a dev build (%s) — not self-replacing; the agent is v%s", version, remote)
-		return
-	case !semverOK(remote):
-		info("the agent runs a dev build (%s) — leaving the released launcher v%s in place", remote, version)
-		return
-	case semverLess(remote, version):
-		info("launcher v%s is newer than this cluster's agent (v%s) — nothing to update locally (sessions to this cluster already run its exact core)", version, remote)
+	replace, why := launcherFollow(version, remote)
+	info("%s", why)
+	if !replace {
 		return
 	}
 	self, err := os.Executable()
 	if err != nil {
 		fatal("%v", err)
 	}
-	data, err := getDownload(cfg, runtime.GOOS+"-"+runtime.GOARCH, "v"+remote)
+	data, err := getDownload(cfg, runtime.GOOS+"-"+runtime.GOARCH, shortVersion(remote))
 	if err != nil {
-		fatal("downloading v%s: %v", remote, err)
+		fatal("downloading %s: %v", shortVersion(remote), err)
 	}
 	if len(data) < 1<<20 || !looksLikeBinary(data) {
 		fatal("downloaded launcher looks invalid (%d bytes)", len(data))
@@ -312,7 +307,23 @@ func updateLauncher(cfg config, remote string) {
 			return
 		}
 	}
-	info("launcher updated: v%s → v%s (%s)", version, remote, self)
+	info("launcher updated: %s → %s (%s)", shortVersion(version), shortVersion(remote), self)
+}
+
+// launcherFollow is the whole policy, pure so it is testable: does `plug
+// update` replace this binary with the agent's, and what does it say either
+// way. One rule — the launcher matches the agent it was just asked to update,
+// exactly, dev builds and downgrades included. The only refusal left is
+// "nothing to do".
+func launcherFollow(local, remote string) (replace bool, why string) {
+	if local == remote {
+		return false, fmt.Sprintf("launcher already matches the agent (%s)", shortVersion(local))
+	}
+	if semverOK(local) && semverOK(remote) && semverLess(remote, local) {
+		return true, fmt.Sprintf("following this cluster DOWN: launcher v%s → v%s — its agent is the reference; "+
+			"update against a newer cluster to move back up", local, remote)
+	}
+	return true, fmt.Sprintf("following this cluster: launcher %s → %s", shortVersion(local), shortVersion(remote))
 }
 
 // replaceBinary swaps target for data without ever leaving the path empty.
