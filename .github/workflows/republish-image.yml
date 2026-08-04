@@ -1,0 +1,30 @@
+name: Republish image
+
+# The escape hatch for a WEDGED gate — nothing more.
+#
+# The compat cell tests the PUBLISHED :latest launcher against the branch under
+# test, and :latest only republishes when the whole CI is green. Ship a launcher
+# bug in :latest and the loop closes on itself: red CI → no new :latest → the
+# broken launcher fails the compat cell again → red CI. The fix exists on main
+# and can never publish itself.
+#
+# This dispatch calls the exact same build path as CI (_docker.yml: native
+# multi-arch runners, dev+<sha> version, :main + :latest on the default branch)
+# with the e2e gate deliberately absent. That absence is the whole point AND the
+# whole risk: it publishes an image the mesh has not blessed. Use it to break
+# the loop described above, then re-run the red CI so the gate takes back over —
+# not as a faster way to ship.
+#
+# First used 2026-08-04: the ambient-caps thread race (fixed by c317606) shipped
+# in :latest as dev+5b48380 and wedged the compat cell on Linux.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/_docker.yml
+    secrets: inherit
