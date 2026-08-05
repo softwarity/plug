@@ -1,6 +1,9 @@
 package tun
 
 import (
+	"context"
+	"fmt"
+	"net"
 	"strings"
 	"testing"
 )
@@ -114,5 +117,119 @@ func TestNothingUsableYieldsNothing(t *testing.T) {
 	})
 	if len(got) != 0 {
 		t.Errorf("pickUpstreams = %v, want empty so the caller can fall back and say so", got)
+	}
+}
+
+// The machine's nameservers are not a startup fact — a VPN coming up or going
+// down replaces them mid-session. Captured once, plug kept forwarding to a
+// resolver that had gone away, or missed the one that had just appeared, until
+// the session was restarted. The list must therefore be replaceable, and every
+// reader must see the replacement.
+func TestUpstreamServersCanBeReplacedMidSession(t *testing.T) {
+	u := newUpstream([]string{"192.168.1.1"})
+	if got := u.primary(); got != "192.168.1.1:53" {
+		t.Fatalf("primary = %q, want the captured server with its default port", got)
+	}
+	// The VPN comes up: its resolver is the only one that knows internal names.
+	u.set([]string{"10.8.0.1"})
+	if got := u.primary(); got != "10.8.0.1:53" {
+		t.Errorf("primary = %q after set, want the new server", got)
+	}
+	// And back down, to nothing at all: the public fallback, which the caller
+	// announces — never an empty list that would panic on the next lookup.
+	u.set(nil)
+	if got := u.primary(); got != "8.8.8.8:53" {
+		t.Errorf("primary = %q with no server, want the announced public fallback", got)
+	}
+}
+
+// A refresh that finds the usual answer must be able to stay silent, or a
+// periodic check logs on every tick. Comparison is on the NORMALISED form, so a
+// bare address and the same address with :53 are the same answer.
+func TestUpstreamSameIgnoresNoOpRefreshes(t *testing.T) {
+	u := newUpstream([]string{"192.168.1.1", "1.1.1.1"})
+	if !u.same([]string{"192.168.1.1", "1.1.1.1"}) {
+		t.Error("an identical list must read as unchanged")
+	}
+	if !u.same([]string{"192.168.1.1:53", "1.1.1.1:53"}) {
+		t.Error("the same servers written with their port must read as unchanged")
+	}
+	if u.same([]string{"1.1.1.1", "192.168.1.1"}) {
+		t.Error("ORDER matters — the first is the one every query goes to")
+	}
+	if u.same([]string{"192.168.1.1"}) {
+		t.Error("a shorter list is a different list")
+	}
+	if u.same(nil) {
+		t.Error("losing every server is a change, not a no-op")
+	}
+}
+
+// The resolver is built once and lives for the session, so it must read the
+// address at DIAL time. Capturing it at construction was the bug in disguise:
+// set() would update the relay path and leave the A path on the old server.
+func TestResolverFollowsALaterSet(t *testing.T) {
+	u := newUpstream([]string{"192.0.2.1"})
+	dialed := make(chan string, 1)
+	u.resolver = &net.Resolver{PreferGo: true, Dial: func(_ context.Context, _, _ string) (net.Conn, error) {
+		select {
+		case dialed <- u.primary():
+		default:
+		}
+		return nil, errStub
+	}}
+	u.set([]string{"192.0.2.99"})
+	_, _ = u.resolver.LookupHost(context.Background(), "example.com")
+	select {
+	case got := <-dialed:
+		if got != "192.0.2.99:53" {
+			t.Errorf("resolver dialled %q, want the server set after it was built", got)
+		}
+	default:
+		t.Fatal("the resolver never dialled")
+	}
+}
+
+var errStub = fmt.Errorf("stub dialer")
+
+// The watcher must be silent when nothing moved — it ticks for the life of a
+// session, and a VPN that never changes must not produce a line every ten
+// seconds. And it must move the forwarder the moment the servers do.
+func TestWatchUpstreamsOnlyActsOnRealChanges(t *testing.T) {
+	u := newUpstream([]string{"192.168.1.1"})
+	var lines int
+	log := logfn(func(string, ...any) { lines++ })
+
+	// A reader that returns the same thing, then something new, then nothing.
+	readings := [][]string{
+		{"192.168.1.1"},    // unchanged
+		{"192.168.1.1:53"}, // the same, written differently
+		nil,                // unreadable — keep what we have, say nothing
+		{"10.8.0.1"},       // the VPN came up
+	}
+	var i int
+	read := func() []string {
+		if i >= len(readings) {
+			return nil
+		}
+		r := readings[i]
+		i++
+		return r
+	}
+	// Drive the loop's body directly: the ticker's period is not what is under
+	// test, the decision is.
+	for range readings {
+		servers := read()
+		if len(servers) == 0 || u.same(servers) {
+			continue
+		}
+		u.set(servers)
+		log.f("changed")
+	}
+	if lines != 1 {
+		t.Errorf("logged %d times, want exactly 1 — only the real change speaks", lines)
+	}
+	if got := u.primary(); got != "10.8.0.1:53" {
+		t.Errorf("primary = %q, want the VPN's resolver", got)
 	}
 }

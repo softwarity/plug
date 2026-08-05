@@ -34,7 +34,7 @@ func checkPriv() error { return nil }
 // dial "unreachable"); wireguard-windows uses winipcfg for exactly this reason.
 // It assigns the adapter IP, routes the instance's /24 on-link, and sets the
 // adapter DNS to dnsIP (198.18.<N>.53).
-func configure(dev any, _ int, _, cidr, dnsIP string, log logfn) ([]string, string, func(), error) {
+func configure(dev any, _ int, _, cidr, dnsIP string, up *upstreamDNS, log logfn) ([]string, string, func(), error) {
 	nt, ok := dev.(*wgtun.NativeTun)
 	if !ok {
 		return nil, "", func() {}, fmt.Errorf("windows TUN: unexpected device type %T", dev)
@@ -67,7 +67,10 @@ func configure(dev any, _ int, _, cidr, dnsIP string, log logfn) ([]string, stri
 		log.f("tun[win]: system DNS repointed — *.%s → %s (NRPT)", searchSuffix, dnsIP)
 	}
 
+	stopWatch := make(chan struct{})
+	go watchUpstreams(up, func() []string { return systemDNS(luid) }, log, stopWatch)
 	cleanup := func() {
+		close(stopWatch)
 		clearSystemNRPT(dnsIP)
 		_ = luid.FlushRoutes(v4)
 		_ = luid.FlushIPAddresses(v4)

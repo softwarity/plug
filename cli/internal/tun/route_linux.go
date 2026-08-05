@@ -56,8 +56,13 @@ func hasEffCap(bit uint) bool {
 // pointing the resolver at us is scoped to this launch: the global
 // /etc/resolv.conf is never modified and two `plug` runs never collide. Returns
 // the child's former upstream nameservers (read before anything changes).
-func configure(_ any, n int, ifname, cidr, dnsIP string, log logfn) ([]string, string, func(), error) {
+func configure(_ any, n int, ifname, cidr, dnsIP string, up *upstreamDNS, log logfn) ([]string, string, func(), error) {
 	ups := resolvNameservers()
+	// /etc/resolv.conf is never touched here — the repoint is a bind-mount inside
+	// the child's own mount namespace — so re-reading it later is honest, and it
+	// is where a VPN client writes its servers.
+	stopWatch := make(chan struct{})
+	go watchUpstreams(up, resolvNameservers, log, stopWatch)
 
 	// Per-instance link-local address (10.99.99.1, 10.99.100.1, ...): simultaneous
 	// instances must not share it, or their connected routes become ambiguous.
@@ -88,6 +93,7 @@ func configure(_ any, n int, ifname, cidr, dnsIP string, log logfn) ([]string, s
 	}
 
 	cleanup := func() {
+		close(stopWatch)
 		_ = run("ip", "route", "del", cidr, "dev", ifname)
 		_ = run("ip", "addr", "del", local, "dev", ifname)
 		if privResolv != "" {

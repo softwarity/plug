@@ -63,7 +63,8 @@ func SelfTest(logf func(string, ...any)) error {
 	defer dev.Close()
 	ifname, _ := dev.Name()
 
-	upstreams, privResolv, cleanup, err := configure(dev, 0, ifname, cidr, dnsIP, log)
+	up := newUpstream(nil)
+	upstreams, privResolv, cleanup, err := configure(dev, 0, ifname, cidr, dnsIP, up, log)
 	if err != nil {
 		return fmt.Errorf("configure %s: %w", ifname, err)
 	}
@@ -105,7 +106,7 @@ func SelfTest(logf func(string, ...any)) error {
 
 	tab := newFaketab(base)
 
-	st, ep := buildStack(tab, constDial(loopbackDialer{addr: echo.Addr().String()}), newUpstream(upstreams), nil, log)
+	st, ep := buildStack(tab, constDial(loopbackDialer{addr: echo.Addr().String()}), up, nil, log)
 	defer st.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

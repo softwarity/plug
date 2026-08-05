@@ -130,13 +130,41 @@ func (t *faketab) lookup(ip uint32) (string, bool) {
 // names working but sends them somewhere the user did not choose — the caller
 // warns when that happens. All three platforms capture the system servers now,
 // so this is the last resort it was meant to be rather than the Windows norm.
+// The address list is MUTABLE and read under a lock, because the machine's
+// nameservers are not a startup fact: a VPN coming up or going down replaces
+// them mid-session. Captured once, plug kept forwarding to a resolver that had
+// gone away (internal names dead) or missed the one that just appeared
+// (internal names never resolving at all) until the session was restarted.
 type upstreamDNS struct {
-	addrs    []string // "host:port", port defaulted once at construction
+	mu       sync.RWMutex
+	addrs    []string // "host:port", port defaulted on the way in
 	resolver *net.Resolver
 	timeout  time.Duration // how long relay waits; tests shorten it
 }
 
 func newUpstream(servers []string) *upstreamDNS {
+	u := &upstreamDNS{
+		// Long enough for a slow corporate resolver, short enough to answer before
+		// the client's own patience runs out — the A path above uses the same 4s.
+		timeout: 4 * time.Second,
+	}
+	u.set(servers)
+	u.resolver = &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			var d net.Dialer
+			// Read at DIAL time, never captured: a resolver built once must still
+			// follow the servers as they change.
+			return d.DialContext(ctx, network, u.primary())
+		},
+	}
+	return u
+}
+
+// set replaces the servers plug forwards to. Empty falls back to a public
+// resolver — which keeps dotted names working but sends them somewhere the user
+// did not choose, so the caller announces it.
+func (u *upstreamDNS) set(servers []string) {
 	if len(servers) == 0 {
 		servers = []string{"8.8.8.8"}
 	}
@@ -149,19 +177,34 @@ func newUpstream(servers []string) *upstreamDNS {
 		}
 		addrs = append(addrs, s)
 	}
-	return &upstreamDNS{
-		addrs: addrs,
-		// Long enough for a slow corporate resolver, short enough to answer before
-		// the client's own patience runs out — the A path above uses the same 4s.
-		timeout: 4 * time.Second,
-		resolver: &net.Resolver{
-			PreferGo: true,
-			Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-				var d net.Dialer
-				return d.DialContext(ctx, network, addrs[0])
-			},
-		},
+	u.mu.Lock()
+	u.addrs = addrs
+	u.mu.Unlock()
+}
+
+// primary is the server every lookup goes to right now.
+func (u *upstreamDNS) primary() string {
+	u.mu.RLock()
+	defer u.mu.RUnlock()
+	return u.addrs[0]
+}
+
+// same reports whether servers would change nothing — so a refresh that found
+// the usual answer stays silent instead of logging every tick.
+func (u *upstreamDNS) same(servers []string) bool {
+	probe := &upstreamDNS{}
+	probe.set(servers)
+	u.mu.RLock()
+	defer u.mu.RUnlock()
+	if len(probe.addrs) != len(u.addrs) {
+		return false
 	}
+	for i := range probe.addrs {
+		if probe.addrs[i] != u.addrs[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // relay forwards a query verbatim to the upstream and returns its reply
@@ -172,7 +215,7 @@ func newUpstream(servers []string) *upstreamDNS {
 // Returns nil if the upstream said nothing in time — the caller turns that into
 // SERVFAIL rather than an invented empty answer.
 func (u *upstreamDNS) relay(q []byte) []byte {
-	c, err := net.DialTimeout("udp", u.addrs[0], u.timeout)
+	c, err := net.DialTimeout("udp", u.primary(), u.timeout)
 	if err != nil {
 		return nil
 	}

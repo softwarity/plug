@@ -43,7 +43,7 @@ func checkPriv() error {
 // PID-at-connect multicluster model uses anyway — one resolver hands out fake
 // IPs and the owning cluster is resolved at connect() (see route_darwin's
 // resolvConf note) — proven simultaneously in CI.
-func configure(_ any, _ int, ifname, cidr, dnsIP string, log logfn) ([]string, string, func(), error) {
+func configure(_ any, _ int, ifname, cidr, dnsIP string, up *upstreamDNS, log logfn) ([]string, string, func(), error) {
 	for _, cmd := range [][]string{
 		{"ifconfig", ifname, "inet", "10.99.99.1", "10.99.99.2", "up"},
 		{"route", "-n", "add", "-net", cidr, "-interface", ifname},
@@ -199,7 +199,18 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, log logfn) ([]string, s
 					dnsKey = "State:/Network/Service/" + svc + "/DNS"
 					setupKey = "Setup:/Network/Service/" + svc + "/DNS"
 					var newSearch, newSetupSearch, newSetupServers []string
-					restore, _, newSearch = readDNSDict(dnsKey)
+					var newServers []string
+					restore, newServers, newSearch = readDNSDict(dnsKey)
+					// The new primary's OWN servers, read before we overwrite
+					// them — this is the VPN's resolver when a VPN just came up,
+					// and the only moment it is visible: a second later this key
+					// holds our address. Forwarding kept going to the servers
+					// captured at startup, so internal names died the moment the
+					// VPN that serves them appeared or went away.
+					if len(newServers) > 0 && !up.same(newServers) {
+						up.set(newServers)
+						log.f("tun[mac]: forwarding dotted names to %v (the new primary's resolver)", newServers)
+					}
 					setupRestore, newSetupServers, newSetupSearch = readDNSDict(setupKey)
 					setupOverridden = len(newSetupServers) > 0
 					set = "d.init\nd.add ServerAddresses * " + dnsIP + "\nd.add SearchDomains * " +

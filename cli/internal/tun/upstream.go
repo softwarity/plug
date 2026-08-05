@@ -3,6 +3,7 @@ package tun
 import (
 	"net"
 	"sort"
+	"time"
 )
 
 // dnsCandidate is one nameserver as the OS reported it, with everything needed
@@ -69,4 +70,32 @@ func pickUpstreams(cands []dnsCandidate) []string {
 		}
 	}
 	return out
+}
+
+// watchUpstreams re-reads the system nameservers every tick and moves the
+// forwarder when they changed. Used where plug does NOT overwrite the source it
+// reads — the adapter table on Windows, the untouched /etc/resolv.conf on Linux
+// — so a re-read always tells the truth. macOS is different: plug overwrites the
+// primary service's DNS dict, so a re-read there returns plug's own address;
+// that platform hooks its existing watchdog instead, at the one moment the new
+// servers are still visible.
+//
+// 10s: a VPN coming up or down is a human-scale event, and the read is a local
+// syscall or a small file. Silent unless something actually moved.
+func watchUpstreams(u *upstreamDNS, read func() []string, log logfn, stop <-chan struct{}) {
+	t := time.NewTicker(10 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			servers := read()
+			if len(servers) == 0 || u.same(servers) {
+				continue // nothing readable, or nothing new — say nothing
+			}
+			u.set(servers)
+			log.f("tun: the system nameservers changed — forwarding dotted names to %v", servers)
+		}
+	}
 }

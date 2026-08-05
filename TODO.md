@@ -20,22 +20,15 @@ désormais dans `RELEASE_NOTES.md` et la roadmap publique dans
       notes de version **une fois le correctif livré** — c'est là qu'un défaut
       se raconte, pas avant.
 
-- [ ] **L'upstream DNS est figé au démarrage** : aucune bascule si le VPN monte
-      ou tombe en pleine session — les serveurs sont lus une fois, dans
-      `configure()`, sur les trois OS. La capture Windows est **livrée** (table
-      des adaptateurs, tri par métrique, exclusion de notre propre adresse) ;
-      c'est le rafraîchissement qui reste. Chantier à part : il faut rendre
-      `upstreamDNS` mutable et thread-safe, puis une relecture par OS (table des
-      adaptateurs sous Windows, dict SystemConfiguration sous macOS, le
-      resolv.conf d'origine hors namespace sous Linux) — et un déclencheur, le
-      watchdog macOS existant étant le seul point d'accroche déjà en place.
-
 ## 🟢 Ouvert — produit
 
 - [ ] **Auto-update, ce qui reste** (le socle est livré : `plug config -p <c>
       update=none|notify|auto` **par profil** — la gouvernance est une propriété
       du cluster, pas du poste —, check quotidien en tâche de fond depuis le
-      core, avertissement au reconnect quand l'agent a bougé sous la session).
+      core, avertissement au reconnect quand l'agent a bougé sous la session.
+      **Le check était mort-né en 2.9.0/2.9.1** — il demandait `version` sur le
+      canal tunnel, où ce verbe n'existe pas — corrigé le 05/08, donc réellement
+      fonctionnel à partir de la release qui suit.)
       Restent deux trous : les déploiements sur **tag mouvant** (`latest`, une
       branche) ne sont pas vérifiés — leur fraîcheur est une question de digest
       que seul le cluster tranche, à ~31 s l'aller-retour, donc le check reste
@@ -73,13 +66,6 @@ désormais dans `RELEASE_NOTES.md` et la roadmap publique dans
       existent déjà depuis le 31/07 — c'est la matière première. **Pas** de
       raccourci clavier : la commande lancée possède `stdin`, et aucune touche
       n'est libre sur tous les runtimes.
-- [ ] **`--force` réhabilité** — retiré le 31/07 : il laissait la session évincée
-      vivante et muette. Pour exister, il faut que le déchu **meure** : l'agent
-      retrouve dans son `/proc` le processus tenant le port du bail et tue sa
-      session SSH, ce qui force la reconnexion, donc le refus par le bail, donc
-      la sortie du client. Vérifié au banc le 31/07 : ni supprimer le signpost ni
-      tuer la session SSH ne termine le client — il se reconnecte. La pièce
-      manquante est **sortir sur re-provision refusée**.
 
 **Contexte.** La **2.0.0** est publiée. Elle apporte le **sens retour** : `plug -s
 name:cluster-port:local-port` publie ton process dans le cluster sous un nom

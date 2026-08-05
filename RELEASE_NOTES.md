@@ -2,6 +2,26 @@
 
 ## NEXT RELEASE
 
+### Fixed: plug follows your DNS servers when a VPN comes up or goes down
+
+The machine's nameservers were captured once, at session start, and kept for the
+life of the session. Connect a corporate VPN afterwards and plug went on
+forwarding to the resolver from before — the one that does not know your
+internal names. Drop the VPN and it kept forwarding to a resolver that had gone
+away. Either way the session had to be restarted, and nothing said why.
+
+plug now follows them. Where the system's own record can be re-read honestly it
+is, every ten seconds: the adapter table on Windows, `/etc/resolv.conf` on Linux
+(never modified there — the repoint is a bind-mount inside the child's own mount
+namespace). macOS cannot work that way, because plug overwrites the primary
+service's DNS entry and a re-read would return plug's own address; it hooks the
+watchdog that already notices the primary service changing, which is the exact
+moment a VPN's resolver is visible before being overwritten.
+
+Silent unless something actually moved, and unchanged servers written in a
+different form do not count as a move — a session that runs all day on one
+network logs nothing.
+
 ---
 
 ## 2.9.2

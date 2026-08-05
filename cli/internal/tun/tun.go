@@ -138,7 +138,8 @@ func startDatapathDF(df dialFunc, dialers func() []Dialer, logf func(string, ...
 	// the adapter DNS on Windows. Returns the child's former upstream nameservers
 	// (captured so our own dotted-name lookups don't loop) and, on Linux, the path
 	// to that private resolv.conf.
-	upstreams, privResolv, cleanup, err := configure(dev, n, ifname, cidr, dnsIP, log)
+	up := newUpstream(nil)
+	upstreams, privResolv, cleanup, err := configure(dev, n, ifname, cidr, dnsIP, up, log)
 	if err != nil {
 		dev.Close()
 		return nil, fmt.Errorf("configure %s: %w", ifname, err)
@@ -164,7 +165,11 @@ func startDatapathDF(df dialFunc, dialers func() []Dialer, logf func(string, ...
 		log("tun: no system resolver was captured — dotted names will be forwarded to a PUBLIC resolver.\n" +
 			"      Internal names may stop resolving, and those lookups leave your network.")
 	}
-	st, ep := buildStack(tab, df, newUpstream(upstreams), check, log)
+	// Seed it with what configure just captured. From here the per-OS watcher
+	// inside configure keeps it current: the servers are not a startup fact, and
+	// a VPN coming up mid-session replaces them.
+	up.set(upstreams)
+	st, ep := buildStack(tab, df, up, check, log)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	br := &bridge{dev: dev, ep: ep}
