@@ -1141,40 +1141,6 @@ do_update_jump() {
   fi
   echo "    starting from the published $prev"
 
-  # The background update check, end to end — possible at last. It was tried on
-  # 01/08 and retired the same day: the check runs in the CORE, and the core is
-  # whatever the AGENT serves, so against an agent that PREDATED the check the
-  # code under test was never reached ("using cluster version v2.7.3" on the
-  # very launch meant to announce). Now that the previous release carries it,
-  # the agent one release behind runs a core that checks — and a newer release
-  # exists on the registry for it to find.
-  #
-  # Two launches because that IS the design: the check is a goroutine in the
-  # core, and what it learns is for the NEXT launch. The first one sleeps on
-  # purpose — a dial, two agent round-trips and a registry lookup have to land
-  # before the session ends, and every other cell here returns in milliseconds.
-  # No profile, so no policy on file: the default has to be notify, and an unset
-  # cluster has to check.
-  echo "=== update check: a session must leave the next one something to say ==="
-  rm -f "$HOME"/.plug/update-* 2>/dev/null || true
-  perl -e 'alarm 60; exec @ARGV or exit 127' \
-    "$PLUG" --host "$ip_b" --port "$oldport" -c sleep 15 </dev/null >/dev/null 2>&1 || true
-  local chk found
-  chk="$(perl -e 'alarm 60; exec @ARGV or exit 127' \
-        "$PLUG" --host "$ip_b" --port "$oldport" -c true </dev/null 2>&1 | tr -d '\r')"
-  printf '%s\n' "$chk" | sed 's/^/    /' | tail -4
-  found="$(printf '%s' "$chk" | sed -n 's/.*agent update available: v\([0-9][0-9.]*\).*/\1/p' | head -1)"
-  if [ -z "$found" ]; then
-    echo "--- update check FAIL — the second launch announced nothing, though $prev is behind the registry"
-    sum "**update check (notify)** ❌ — nothing announced"; return 1
-  fi
-  if [ "$found" = "$prev" ]; then
-    echo "--- update check FAIL — announced $found, the version it is already on"
-    sum "**update check (notify)** ❌ — announced its own version"; return 1
-  fi
-  echo "update check OK — announced v$found, newer than the deployed $prev"
-  sum "**update check (notify)** ✅ — v$prev → v$found announced"
-
   local out rc=0
   out="$("$PLUG" --host "$ip_b" --port "$oldport" update </dev/null 2>&1)" || rc=$?
   printf '%s\n' "$out" | sed 's/^/    /'

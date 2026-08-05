@@ -43,14 +43,28 @@ désormais dans `RELEASE_NOTES.md` et la roadmap publique dans
       « notify avec choix » demande un prompt, donc `term.IsTerminal` + une
       échéance — le piège `askToStop` qui a bloqué une jambe Windows 16 min.
 
-- [ ] **Cellule e2e pour `auto`** — `notify` est **couvert depuis le 05/08**
-      (dans `do_update_jump`, avant que celle-ci ne fasse rouler l'agent : à cet
-      instant l'agent est une release en retard sur une vraie image du registre,
-      ce que la cellule vient de vérifier elle-même). `auto` reste découvert et
-      ne peut pas l'être au même endroit : il ferait rouler le `prev-agent-*`
-      dont la suite de la cellule dépend. Il lui faudrait un agent N-1 dédié
-      (3 services de plus par famille) — à peser contre le fait que la décision
-      est déjà testée unitairement et l'application par `plug update`.
+- [ ] **Cellules e2e pour l'auto-update — attendre que N-1 porte le CORRECTIF**.
+      Tentée deux fois, retirée deux fois, même mécanisme à chaque coup : le
+      check tourne dans le CORE, et le core est celui que sert l'AGENT. Face à
+      `prev-agent-*` c'est donc le core N-1 qui s'exécute, jamais le code de la
+      branche.
+      · 01/08 : N-1 (2.7.3) ne connaissait pas le check → rien à tester.
+      · 05/08 : N-1 (2.9.0) le connaît mais il est CASSÉ (il demandait `version`
+        sur le canal tunnel, où ce verbe n'existe pas — corrigé le 05/08 dans la
+        branche, donc absent de 2.9.0). La cellule ne pouvait pas passer.
+      **Condition, cette fois vérifiable avant d'écrire quoi que ce soit** :
+      `docker run --rm --entrypoint sh softwarity/plug:$(bash
+      scripts/ci/previous-release.sh) -c 'strings /opt/plug/bin/plug-linux-amd64
+      | grep -c "unknown command"'` ne suffit PAS — il faut vérifier que N-1
+      contient le correctif, c.-à-d. que N-1 > 2.9.0. Autrement dit : réessayer
+      quand la release qui suit le 05/08 sera devenue N-1.
+      Quand ce sera le cas : `notify` se greffe dans `do_update_jump` (la
+      précondition — agent une release en retard sur une vraie image du registre
+      — y est déjà établie et vérifiée par la cellule elle-même) ; la session
+      doit durer (le check attend que le datapath se pose, puis dial + info +
+      registre) et le verdict se lit au lancement SUIVANT. `auto` demanderait un
+      agent N-1 dédié, car il ferait rouler le `prev-agent-*` dont la suite de
+      la cellule dépend.
 
 - [ ] **`plug status` + verbes d'action hors bande** (roadmap publiée le 31/07) :
       lister les sessions vivantes, l'état de leur chemin, les arrêter ou
