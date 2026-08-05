@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.9.1
+
 ### Fixed: a name keeps its address across kill and relaunch — the gateway stays sane
 
 The last piece of the "restart the gateway" story, and the measured reason it
