@@ -945,6 +945,14 @@ do_resilience() {
   addr_bad=0
   raddr_before="$(cresolve)"
   plug_to "$ip_b" curl -s --max-time 10 "http://chaos:8095/kill-sessions?svc=$ragent" >/tmp/killsess.out 2>&1 || true
+  # Did the kill actually happen? On k8s it answers 501 (pod exec needs SPDY),
+  # so NOTHING reconnects — and an unchanged address would then read as proof
+  # when it is merely the absence of an event. Say that, rather than let a
+  # reader take silence for evidence.
+  if ! grep -q killing /tmp/killsess.out 2>/dev/null; then
+    echo "live-reconnect: NOT EXERCISED here — $(head -c 90 /tmp/killsess.out 2>/dev/null | tr -d '\r\n')"
+    sum "**name keeps its address across a live reconnect** · not exercised on this family"
+  else
   sleep 20 # keepalive (5s cadence here) notices, reconnect re-arms and re-provisions
   raddr_after="$(cresolve)"
   if ! is_addr "${raddr_before:-}" || ! is_addr "${raddr_after:-}"; then
@@ -965,6 +973,7 @@ do_resilience() {
         echo "live-reconnect address: $raddr_before → $raddr_after (reported on this family)"
         sum "**name address across a live reconnect** · \`$raddr_before\` → \`$raddr_after\`" ;;
     esac
+  fi
   fi
 
   # Crash THIS LEG'S agent mid-session (the chaos service answers, then fires).
