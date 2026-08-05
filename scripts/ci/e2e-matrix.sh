@@ -434,23 +434,31 @@ do_expose() {
   local pname="poison-$leg"
   echo "=== dns honesty for a killed name: $pname must be NXDOMAIN within seconds of its session dying ==="
   "$PLUG" --host "$ip" --port "$port" -s "$pname:9096:18087" \
-    "$root/echo-local$ext" -addr 127.0.0.1:18087 -text "alive-$pname" -ttl 18s >/tmp/poison-serve.out 2>&1 &
+    "$root/echo-local$ext" -addr 127.0.0.1:18087 -text "alive-$pname" -ttl 20s >/tmp/poison-serve.out 2>&1 &
   local poison_pid=$!
   # The address the CLUSTER resolves while the name is served — the one every
   # caller caches for the 600s TTL Docker's DNS hands out. Compared after a
   # relaunch below: the linger's whole contract is that it does not change.
   presolve() { plug curl -s --max-time 10 "http://chaos:8095/resolve?name=$pname" 2>/dev/null | tr -d '\r' | tail -1; }
   local paddr_before=""
-  # 18s of life: the witness session takes 1-4s to arm (a cold Windows service
+  # 20s of life: the witness session takes 1-4s to arm (a cold Windows service
   # is the slow end), so its first probe lands around t=9-12 with several
   # seconds to spare, and its second around t=31 — the name then dead for
   # ~13s, past the 5s check TTL plus the 5s the OS may repeat our old answer.
   sleep 8
-  paddr_before="$(presolve)"
+  # Captured in PARALLEL with the witness, not before it: presolve is a full
+  # plug session (~5-8s on a cold Windows runner), and running it inline pushed
+  # the witness past the serving session's ttl — P1 found nothing and the cell
+  # could not conclude. The name is alive for both as long as the capture
+  # overlaps the ttl window, which the background start guarantees.
+  presolve >/tmp/poison-addr-before 2>/dev/null &
+  local presolve_pid=$!
   local wout
   wout="$(perl -e 'alarm 60; exec @ARGV or exit 127' "$PLUG" --host "$ip" --port "$port" -c bash -c \
     "p1=\$(curl -s --max-time 8 http://$pname:9096/ || true); echo \"P1=\$p1\"; sleep 22; curl -s --max-time 8 -o /dev/null http://$pname:9096/; echo \"P2-RC=\$?\"" 2>/dev/null | tr -d '\r')"
   wait $poison_pid 2>/dev/null
+  wait $presolve_pid 2>/dev/null
+  paddr_before="$(tr -d '\r' </tmp/poison-addr-before 2>/dev/null | tail -1)"
   local p1 p2rc
   p1="$(printf '%s' "$wout" | sed -n 's/^P1=//p' | head -1)"
   p2rc="$(printf '%s' "$wout" | sed -n 's/^P2-RC=//p' | head -1)"
