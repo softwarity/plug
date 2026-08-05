@@ -43,15 +43,14 @@ désormais dans `RELEASE_NOTES.md` et la roadmap publique dans
       « notify avec choix » demande un prompt, donc `term.IsTerminal` + une
       échéance — le piège `askToStop` qui a bloqué une jambe Windows 16 min.
 
-- [ ] **Cellules e2e pour l'auto-update — DÉBLOQUÉES par la 2.9.0** : la N-1
-      résolue par `previous-release.sh` est désormais la 2.8.0, qui embarque le
-      check. `notify` se greffe dans `do_update_jump` (la précondition — un
-      agent une release en retard sur une vraie image — y est déjà établie et
-      vérifiée) ; `auto` demande un agent N-1 dédié, car il ferait rouler le
-      `prev-agent-*` dont la suite de la cellule dépend. Leçon du 01/08 à ne
-      pas reperdre : le check tourne dans le CORE, qui vient de l'AGENT — la
-      session de la cellule doit durer (le check est une goroutine : dial +
-      2 Exec + registre), et le verdict se lit au lancement SUIVANT.
+- [ ] **Cellule e2e pour `auto`** — `notify` est **couvert depuis le 05/08**
+      (dans `do_update_jump`, avant que celle-ci ne fasse rouler l'agent : à cet
+      instant l'agent est une release en retard sur une vraie image du registre,
+      ce que la cellule vient de vérifier elle-même). `auto` reste découvert et
+      ne peut pas l'être au même endroit : il ferait rouler le `prev-agent-*`
+      dont la suite de la cellule dépend. Il lui faudrait un agent N-1 dédié
+      (3 services de plus par famille) — à peser contre le fait que la décision
+      est déjà testée unitairement et l'application par `plug update`.
 
 - [ ] **`plug status` + verbes d'action hors bande** (roadmap publiée le 31/07) :
       lister les sessions vivantes, l'état de leur chemin, les arrêter ou
