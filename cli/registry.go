@@ -136,11 +136,22 @@ func imageHasTag(ref string) bool {
 // registryTags lists the repository's tags from the registry that holds it,
 // token auth and Link pagination included.
 func registryTags(host, repo string) ([]string, error) {
-	// 4s, aggressively short: this lookup is an OPTIMIZATION with a full
-	// fallback behind it (the agent does its own), and on the machines it helps
-	// least — a workstation whose per-process routing or VPN filters some paths
-	// — a generous budget just delays the fallback. Measured healthy: ~1s.
-	cl := &http.Client{Timeout: 4 * time.Second}
+	return registryTagsWithin(host, repo, 4*time.Second)
+}
+
+// registryTagsWithin is registryTags with an explicit budget.
+//
+// `plug update` uses 4s, aggressively short on purpose: there the lookup is an
+// OPTIMIZATION with a full fallback behind it (the agent does its own), and on
+// the machines it helps least — a workstation whose per-process routing or VPN
+// filters some paths — a generous budget just delays the fallback. Measured
+// healthy: ~1s.
+//
+// The background check has NO fallback: a timeout there is not a slower path,
+// it is no check at all, silently. And nobody is waiting on it. So it asks for
+// more room.
+func registryTagsWithin(host, repo string, budget time.Duration) ([]string, error) {
+	cl := &http.Client{Timeout: budget}
 	next := "https://" + host + "/v2/" + repo + "/tags/list?n=100"
 	var token string
 	var all []string

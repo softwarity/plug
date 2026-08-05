@@ -24,6 +24,11 @@ import (
 // the cluster VM costs ~31s against ~1s here (see clientSideUpdate).
 const updateCheckEvery = 24 * time.Hour
 
+// startupSettle is how long the background check waits before its first lookup,
+// so the TUN and the resolver it will use are up. Measured need is a second or
+// two; ten is comfortable and costs nothing — the result is for the NEXT launch.
+const startupSettle = 10 * time.Second
+
 // One state file PER CLUSTER: the policy is per profile, so two clusters must
 // not overwrite each other's answer. Keyed by host:port, which is all the core
 // knows about the cluster it serves — hashed rather than used raw, since a host
@@ -104,6 +109,13 @@ func backgroundUpdateCheck(cfg config) {
 	if !shouldCheck(normalizeUpdateMode(cfg.updateMode), loadUpdateState(cfg), time.Now()) {
 		return
 	}
+	// Let the datapath settle first. This goroutine starts while the core is
+	// still bringing up the TUN and repointing the resolver, and its own lookup
+	// of the registry goes THROUGH that resolver — fired too early it gets
+	// "no such host" for a name that resolves perfectly a moment later, and the
+	// check silently records nothing. Nobody is waiting on this, so waiting is
+	// free; being early is not.
+	time.Sleep(startupSettle)
 	found, img, ok := probeUpdate(cfg)
 	if !ok {
 		return
@@ -144,30 +156,36 @@ func applyUpdate(cfg config, tag string) {
 // those has moved is a digest question only the cluster can settle, and paying
 // ~31s in the background to find out is not worth it.
 func probeUpdate(cfg config) (found, img string, ok bool) {
+	var before string
 	tr, err := tunnel.Dial(cfg.host, cfg.port, sshUser, embeddedKey, tun.SharedKnownHosts(), nil)
 	if err != nil {
 		return "", "", false
 	}
 	defer tr.Close()
 
-	before, err := tr.Exec("version")
-	if err != nil || before == "" || strings.HasPrefix(before, "error:") {
-		return "", "", false
-	}
+	// ONE verb, on the tunnel channel: `info` carries both the running version
+	// and the image. Asking `version` here used to come first and killed the
+	// whole check — that verb lives on the DOWNLOAD channel (the `get` user's
+	// ForceCommand), not on the tunnel user's, so the agent answered
+	// `error: unknown command "version"`, probeUpdate gave up on the spot and
+	// nothing was ever recorded. The check never fired for anyone.
 	out, err := tr.Exec("info")
 	if err != nil || !strings.HasPrefix(out, "version=") {
 		return "", "", false // an agent from before `info` cannot name its image
 	}
 	for _, f := range strings.Fields(out) {
+		if v, cut := strings.CutPrefix(f, "version="); cut {
+			before = v
+		}
 		if v, cut := strings.CutPrefix(f, "image="); cut {
 			img = v
 		}
 	}
-	if img == "" {
+	if before == "" || img == "" {
 		return "", "", false
 	}
 	host, repo, _ := parseImageRef(img)
-	tags, err := registryTags(host, repo)
+	tags, err := registryTagsWithin(host, repo, 20*time.Second)
 	if err != nil {
 		return "", "", false
 	}

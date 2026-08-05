@@ -2,6 +2,34 @@
 
 ## NEXT RELEASE
 
+### Fixed: the update check never actually ran
+
+`plug config update=notify` is the default, and since 2.9.0 it has announced
+nothing to anybody — not because no version was available, but because the check
+asked the wrong channel. Its first step requested the `version` verb over the
+TUNNEL connection, where that verb does not exist: it belongs to the DOWNLOAD
+channel, the one the passwordless `get` user serves. The agent answered
+`error: unknown command "version"`, the check gave up on its first step, and
+nothing was ever recorded — so the launch that was supposed to say "a newer
+release is out" had nothing to say. Silent by design, and therefore invisible.
+
+`info` was already answering both facts in a single round-trip — the running
+version and the deployed image — so that is what it asks now.
+
+Two more things kept it from working even once that was fixed. The check fires
+while the core is still bringing up the TUN and repointing the resolver, and its
+own registry lookup goes THROUGH that resolver: too early, it got "no such host"
+for a name that resolves perfectly a second later. It now lets the datapath
+settle first — nobody is waiting on a result meant for the next launch. And its
+registry budget was the one `plug update` uses, four seconds, chosen to be
+aggressively short precisely because THAT path has a fallback. This one has
+none: a timeout is not a slower answer, it is no check at all. It gets room to
+breathe instead.
+
+Covered end to end in CI now, on all nine legs, which is what surfaced the bug:
+an agent one release behind, a newer release on the registry, and a second
+launch that must name it.
+
 ---
 
 ## 2.9.1

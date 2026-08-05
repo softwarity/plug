@@ -168,3 +168,41 @@ func TestSettingAPolicyPreservesTheRestOfTheProfile(t *testing.T) {
 		t.Error("the second set did not take")
 	}
 }
+
+// The check asks the tunnel channel, where `version` does not exist — it lives
+// on the DOWNLOAD channel (the `get` user's ForceCommand). Asking for it there
+// made the agent answer `error: unknown command "version"`, probeUpdate gave up
+// on its first step, and NOTHING was ever recorded: the feature shipped in
+// 2.9.0 and never fired once. `info` carries both facts in one round-trip, so
+// the parser must take the version from it.
+func TestInfoCarriesBothVersionAndImage(t *testing.T) {
+	const line = "version=2.9.0 backend=docker-swarm image=softwarity/plug:2.9.0@sha256:e330e479"
+	var before, img string
+	for _, f := range strings.Fields(line) {
+		if v, cut := strings.CutPrefix(f, "version="); cut {
+			before = v
+		}
+		if v, cut := strings.CutPrefix(f, "image="); cut {
+			img = v
+		}
+	}
+	if before != "2.9.0" {
+		t.Errorf("version = %q, want 2.9.0 — parsed from info, never from a `version` verb", before)
+	}
+	if img == "" || !strings.HasPrefix(img, "softwarity/plug:") {
+		t.Errorf("image = %q, want the pinned reference", img)
+	}
+	// And the pinned digest Swarm appends must not confuse the decision.
+	apply, _, errMsg, delegate := decideClient(img, before, "", []string{"2.8.0", "2.9.0", "2.9.1", "latest"})
+	if delegate || errMsg != "" || apply != "2.9.1" {
+		t.Errorf("decideClient(%q, %q) = apply %q, err %q, delegate %v; want 2.9.1", img, before, apply, errMsg, delegate)
+	}
+}
+
+// The background check has no fallback, so its budget must be bigger than the
+// one `plug update` uses (where a timeout merely picks the slower path).
+func TestTheCheckAsksForMoreRoomThanUpdate(t *testing.T) {
+	if startupSettle <= 0 {
+		t.Error("the check must let the datapath settle before its first lookup")
+	}
+}
