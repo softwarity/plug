@@ -32,24 +32,6 @@ désormais dans `RELEASE_NOTES.md` et la roadmap publique dans
 
 ## 🟢 Ouvert — produit
 
-- [ ] **Prouver la réutilisation du signpost** (VIP Swarm gardée). Livrée le
-      02/08, mais **non couverte en CI** : la seule cellule qui provoque une
-      reconnexion (`resilience`) redémarre l'agent, et le boot gc balaie ses
-      propres signposts — donc il n'y a plus rien à réutiliser et l'adresse
-      change, correctement. Le correctif vise l'AUTRE reconnexion, celle où
-      l'agent ne meurt pas : réveil de veille, bascule VPN, hoquet Docker
-      Desktop. Il faudrait provoquer une coupure du transport SANS toucher à
-      l'agent — piste : un verbe `chaos` qui tue la connexion SSH de la session
-      (l'agent reste debout, le keepalive détecte, le client reconnecte).
-      Aujourd'hui la cellule ne fait que **rapporter** l'adresse sur Docker et
-      Swarm. Sur k8s elle ne mesure **rien** : le `chaos` vit dans `default`, les
-      Services par jambe dans `plug-res-<leg>`, et un nom nu ne traverse pas les
-      namespaces — le lookup échoue identiquement avant et après, ce qui avait
-      produit un faux positif (« adresse conservée » en comparant deux messages
-      d'erreur). La cellule refuse désormais toute mesure qui n'est pas une
-      adresse. Pour mesurer sur k8s il faudrait le FQDN
-      `<nom>.plug-res-<leg>.svc.cluster.local`.
-
 - [ ] **Auto-update, ce qui reste** (le socle est livré : `plug config -p <c>
       update=none|notify|auto` **par profil** — la gouvernance est une propriété
       du cluster, pas du poste —, check quotidien en tâche de fond depuis le
@@ -61,21 +43,15 @@ désormais dans `RELEASE_NOTES.md` et la roadmap publique dans
       « notify avec choix » demande un prompt, donc `term.IsTerminal` + une
       échéance — le piège `askToStop` qui a bloqué une jambe Windows 16 min.
 
-- [ ] **Cellules e2e pour l'auto-update** — **impossible tant que la version qui
-      porte le check n'est pas elle-même publiée**. Tenté le 01/08 contre les
-      `prev-agent-*`, 9 jambes rouges, retiré : le check tourne dans le CORE, et
-      le core vient de l'AGENT (`ensureVersion`). Face à un agent N-1, c'est le
-      core N-1 qui s'exécute — le code testé n'est jamais atteint (`using
-      cluster version v2.7.3` dans le log). François l'avait dit dès le départ ;
-      la condition est bien que N-1 embarque la feature, pas l'inverse.
-      **Conséquence produit, pas seulement de test** : le check ne commence à
-      voir quoi que ce soit qu'à partir de la version qui l'introduit. Quelqu'un
-      en 2.8.x ne sera pas averti de 2.9.0 ; en 2.9.0 il verra 2.9.1. Normal
-      pour un auto-updater, mais à dire dans les notes.
-      Quand ce sera possible : `notify` se greffe dans `do_update_jump` (la
-      précondition y est déjà établie et vérifiée) ; `auto` demande un agent
-      dédié, puisqu'il ferait rouler le `prev-agent-*` dont la suite de cette
-      cellule dépend.
+- [ ] **Cellules e2e pour l'auto-update — DÉBLOQUÉES par la 2.9.0** : la N-1
+      résolue par `previous-release.sh` est désormais la 2.8.0, qui embarque le
+      check. `notify` se greffe dans `do_update_jump` (la précondition — un
+      agent une release en retard sur une vraie image — y est déjà établie et
+      vérifiée) ; `auto` demande un agent N-1 dédié, car il ferait rouler le
+      `prev-agent-*` dont la suite de la cellule dépend. Leçon du 01/08 à ne
+      pas reperdre : le check tourne dans le CORE, qui vient de l'AGENT — la
+      session de la cellule doit durer (le check est une goroutine : dial +
+      2 Exec + registre), et le verdict se lit au lancement SUIVANT.
 
 - [ ] **`plug status` + verbes d'action hors bande** (roadmap publiée le 31/07) :
       lister les sessions vivantes, l'état de leur chemin, les arrêter ou

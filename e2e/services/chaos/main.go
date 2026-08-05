@@ -10,6 +10,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -137,6 +138,56 @@ func docker(method, path string) (*http.Response, error) {
 	return c.Do(req)
 }
 
+// dockerBody is docker() with a JSON body — the exec API needs one, and the
+// plain helper above deliberately has none.
+func dockerBody(method, path string, body any) (*http.Response, error) {
+	b, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	c := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, "unix", sock)
+			},
+		},
+		Timeout: 20 * time.Second,
+	}
+	req, err := http.NewRequest(method, "http://docker"+path, bytes.NewReader(b))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return c.Do(req)
+}
+
+// dockerExec runs cmd inside a container and returns once it has been started.
+func dockerExec(id string, cmd []string) error {
+	resp, err := dockerBody("POST", "/containers/"+id+"/exec",
+		map[string]any{"Cmd": cmd, "AttachStdout": false, "AttachStderr": false})
+	if err != nil {
+		return err
+	}
+	var created struct {
+		ID string `json:"Id"`
+	}
+	derr := json.NewDecoder(resp.Body).Decode(&created)
+	resp.Body.Close()
+	if derr != nil {
+		return derr
+	}
+	if created.ID == "" {
+		return fmt.Errorf("exec create returned no id")
+	}
+	start, err := dockerBody("POST", "/exec/"+created.ID+"/start", map[string]any{"Detach": true})
+	if err != nil {
+		return err
+	}
+	start.Body.Close()
+	return nil
+}
+
 // agentID finds a running agent container by the labels its orchestrator gave
 // it. Both schemes are scoped to the e2e stack, so a same-named service from
 // anything else on the host can never be the target. svc selects WHICH agent
@@ -218,6 +269,44 @@ func main() {
 			if resp, err := docker("POST", "/containers/"+id+"/restart?t=0"); err == nil {
 				resp.Body.Close()
 			}
+		}()
+	})
+	// /kill-sessions?svc=<agent> drops every SSH SESSION on an agent while
+	// leaving the agent itself running — the transport dies under live clients,
+	// their keepalive notices, they reconnect and re-provision their names.
+	//
+	// That is the reconnect nobody could produce until now, and the one that
+	// matters most: a laptop waking, a VPN switching, a Docker Desktop hiccup.
+	// /restart-agent cannot stand in for it — a restarted agent runs its boot gc,
+	// which sweeps its own signposts, so the address is legitimately lost and
+	// the signpost REUSE (which keeps a Swarm VIP) never gets a chance to fire.
+	//
+	// sshd's listener is pid 1 and shows as "sshd: /usr/sbin/sshd … [listener]";
+	// each session is a separate "sshd-session:" process. Matching the latter
+	// leaves the former alone — the agent keeps accepting new connections
+	// throughout, which is exactly what makes this a transport blip and not an
+	// outage.
+	mux.HandleFunc("/kill-sessions", func(w http.ResponseWriter, r *http.Request) {
+		svc := r.URL.Query().Get("svc")
+		if svc == "" {
+			svc = "agent"
+		}
+		if onK8s() {
+			// Exec into a pod needs SPDY/websocket, not the plain REST this
+			// service speaks. Say so plainly — the cell reports "not
+			// measurable" rather than silently proving nothing.
+			http.Error(w, "kill-sessions is docker/swarm only (pod exec needs SPDY)", 501)
+			return
+		}
+		id, err := agentID(svc)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		fmt.Fprint(w, "killing") // answer FIRST — this request rides a session too
+		go func() {
+			time.Sleep(500 * time.Millisecond) // let the reply drain through the tunnel
+			_ = dockerExec(id, []string{"pkill", "-f", "sshd-session"})
 		}()
 	})
 	// /rm-signpost?name=<n> deletes the signpost a LIVE session created, without

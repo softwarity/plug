@@ -516,6 +516,7 @@ do_expose() {
       echo "address across the relaunch: $paddr_before → $paddr_after (plain docker recreates — reported)"
       sum "**name address across a relaunch** · docker recreates (\`$paddr_before\` → \`$paddr_after\`)" ;;
   esac
+
 }
 
 # exposevar: the SAME reverse path, with the local port NAMED instead of pinned
@@ -910,16 +911,61 @@ do_resilience() {
   # receipt is what scales the parked workload back up).
   local vipname="vip-$leg"
   PLUG_KEEPALIVE_SECS=5 "$PLUG" --host "$ip_b" --port "$rsshport" -s "$rname:$rport:18123" -s "$vipname:9099:18123" \
-    "$root/echo-local$ext" -addr 127.0.0.1:18123 -text "local-res-$leg" -ttl 110s >/tmp/resilience.out 2>&1 &
+    "$root/echo-local$ext" -addr 127.0.0.1:18123 -text "local-res-$leg" -ttl 150s >/tmp/resilience.out 2>&1 &
   local res_pid=$! during="" after_crash="" after=""
   sleep 8
   for _ in 1 2 3; do during="$(bprobe)"; [ "$during" = "local-res-$leg" ] && break; sleep 3; done
 
   # The address a workload in the cluster resolves the name to, RIGHT NOW —
   # asked from inside, because that is the address callers cache and keep using.
-  cresolve() { plug_to "$ip_b" curl -s --max-time 10 "http://chaos:8095/resolve?name=$vipname" 2>/dev/null | tr -d '\r' | tail -1; }
+  # On k8s the chaos service answers in `default` while the per-leg Services live
+  # in plug-res-<leg>, and a BARE name does not cross namespaces — the lookup
+  # failed identically before and after, which is what made this "NOT
+  # MEASURABLE". The FQDN crosses; the other families have one flat space and
+  # take the name as-is.
+  local vipq="$vipname"
+  [ "$family" = k8s ] && vipq="$vipname.plug-res-$leg.svc.cluster.local"
+  cresolve() { plug_to "$ip_b" curl -s --max-time 10 "http://chaos:8095/resolve?name=$vipq" 2>/dev/null | tr -d '\r' | tail -1; }
   local addr_before addr_after
   addr_before="$(cresolve)"
+
+  # Before killing the agent: the reconnect with NO death — the transport drops
+  # while the session AND the agent keep running (a laptop waking, a VPN
+  # switching, a Docker Desktop hiccup). The session re-provisions its name, and
+  # the signpost must be REUSED in place or the address moves under callers that
+  # were working fine.
+  #
+  # A restarted agent cannot show this: its boot gc sweeps its own signposts, so
+  # the address is legitimately gone and there is nothing left to reuse. Killing
+  # only the sshd SESSIONS — listener untouched — is what leaves something.
+  # Targeted at THIS LEG's agent, never the shared one: three legs run
+  # concurrently. Docker/Swarm only (pod exec needs SPDY the chaos service does
+  # not speak), so k8s reports rather than asserts.
+  local raddr_before raddr_after
+  addr_bad=0
+  raddr_before="$(cresolve)"
+  plug_to "$ip_b" curl -s --max-time 10 "http://chaos:8095/kill-sessions?svc=$ragent" >/tmp/killsess.out 2>&1 || true
+  sleep 20 # keepalive (5s cadence here) notices, reconnect re-arms and re-provisions
+  raddr_after="$(cresolve)"
+  if ! is_addr "${raddr_before:-}" || ! is_addr "${raddr_after:-}"; then
+    echo "live-reconnect address: NOT MEASURABLE — '${raddr_before:-nothing}' → '${raddr_after:-nothing}'"
+    sum "**name keeps its address across a live reconnect** · not measurable on this family"
+  else
+    case "$family" in
+      swarm)
+        if [ "$raddr_before" = "$raddr_after" ]; then
+          echo "live-reconnect OK — $vipname kept $raddr_before while its agent stayed up (signpost reused in place)"
+          sum "**name keeps its address across a live reconnect** ✅ \`$raddr_before\`"
+        else
+          echo "--- live-reconnect FAIL — $vipname moved from $raddr_before to $raddr_after on a mere transport blip"
+          sum "**name keeps its address across a live reconnect** ❌ — \`$raddr_before\` → \`$raddr_after\`"
+          addr_bad=1
+        fi ;;
+      *)
+        echo "live-reconnect address: $raddr_before → $raddr_after (reported on this family)"
+        sum "**name address across a live reconnect** · \`$raddr_before\` → \`$raddr_after\`" ;;
+    esac
+  fi
 
   # Crash THIS LEG'S agent mid-session (the chaos service answers, then fires).
   plug_to "$ip_b" curl -s --max-time 10 "http://chaos:8095/restart-agent?svc=$ragent" >/dev/null 2>&1 || true
@@ -937,18 +983,16 @@ do_resilience() {
   # and the replacement gets a new address. Kubernetes keeps its Service, hence
   # its ClusterIP, which is why it alone can be asserted here.
   #
-  # The signpost reuse (which keeps a Swarm VIP) covers the OTHER reconnect: the
-  # one where the agent never died — a laptop waking, a VPN switching, a Docker
-  # Desktop hiccup. That path has no agent restart to sweep anything, and this
-  # cell cannot produce it. Reported everywhere so a change in any backend shows
-  # up rather than passing unnoticed.
+  # The OTHER reconnect — agent alive, transport dropped — is asserted a few
+  # lines above via kill-sessions; this one is specifically the post-restart
+  # case, where losing the address is correct.
   # An answer that is not an ADDRESS proves nothing, and comparing two identical
   # error strings would read as "kept" — a test that passes without testing,
-  # which is worse than one that fails. It happened: on k8s the chaos service
-  # lives in default while the per-leg Services live in plug-res-<leg>, a bare
-  # name does not cross namespaces, and the lookup failed identically before and
-  # after. No verdict is the honest outcome there, and it is said out loud.
-  addr_bad=0
+  # which is worse than one that fails. It happened here: on k8s a BARE name did
+  # not cross from chaos (in default) to the per-leg Services (in
+  # plug-res-<leg>), so the lookup failed identically before and after — now
+  # asked by FQDN. Any reading that is still not an address yields no verdict,
+  # said out loud.
   if ! is_addr "$addr_before" || ! is_addr "$addr_after"; then
     echo "address across the agent restart: NOT MEASURABLE — '${addr_before:-nothing}' → '${addr_after:-nothing}'"
     sum "**name address across an agent restart** · not measurable on this family"
