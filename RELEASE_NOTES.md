@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.9.2
+
 ### Fixed: the update check never actually ran
 
 `plug config update=notify` is the default, and since 2.9.0 it has announced
