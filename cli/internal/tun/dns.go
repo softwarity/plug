@@ -180,6 +180,7 @@ func (u *upstreamDNS) set(servers []string) {
 	u.mu.Lock()
 	u.addrs = addrs
 	u.mu.Unlock()
+	publishUpstreams(addrs) // so `plug doctor` can say where lookups actually go
 }
 
 // primary is the server every lookup goes to right now.
@@ -187,6 +188,15 @@ func (u *upstreamDNS) primary() string {
 	u.mu.RLock()
 	defer u.mu.RUnlock()
 	return u.addrs[0]
+}
+
+// all is every server, in order. A VPN typically pushes two or three, and the
+// OS moves to the next when one stops answering — so must the relay, or a
+// single sick resolver takes every non-address lookup down with it.
+func (u *upstreamDNS) all() []string {
+	u.mu.RLock()
+	defer u.mu.RUnlock()
+	return append([]string(nil), u.addrs...)
 }
 
 // same reports whether servers would change nothing — so a refresh that found
@@ -215,7 +225,22 @@ func (u *upstreamDNS) same(servers []string) bool {
 // Returns nil if the upstream said nothing in time — the caller turns that into
 // SERVFAIL rather than an invented empty answer.
 func (u *upstreamDNS) relay(q []byte) []byte {
-	c, err := net.DialTimeout("udp", u.primary(), u.timeout)
+	// Every server in turn, not just the first. A VPN pushes several precisely
+	// so that one being unreachable is survivable; asking only the primary threw
+	// that away and made a single sick resolver look like "no such record".
+	// The budget is per server, since a dead one costs its whole timeout.
+	servers := u.all()
+	for _, addr := range servers {
+		if reply := u.ask(addr, q); reply != nil {
+			return reply
+		}
+	}
+	return nil
+}
+
+// ask sends q to one server and returns its reply, or nil.
+func (u *upstreamDNS) ask(addr string, q []byte) []byte {
+	c, err := net.DialTimeout("udp", addr, u.timeout)
 	if err != nil {
 		return nil
 	}

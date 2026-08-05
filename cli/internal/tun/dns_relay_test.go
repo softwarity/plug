@@ -178,3 +178,37 @@ func TestAMismatchedIdIsNotAccepted(t *testing.T) {
 		t.Errorf("rcode = %d, want 2 (SERVFAIL) — a reply with the wrong id must be ignored", rcode)
 	}
 }
+
+// A VPN pushes two or three resolvers so that one being unreachable is
+// survivable. Asking only the first threw that away: a single sick server made
+// every non-address lookup look like "no such record", on a machine whose OS
+// would have moved to the next one without blinking.
+func TestRelayMovesToTheNextServerWhenOneIsSilent(t *testing.T) {
+	dead := newFakeUpstream(t, nil) // takes the query, never answers
+	want := []byte{0x12, 0x34, 0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0, 'S', 'R', 'V'}
+	live := newFakeUpstream(t, func(q []byte) []byte { return want })
+
+	u := newUpstream([]string{dead.conn.LocalAddr().String(), live.conn.LocalAddr().String()})
+	u.timeout = 300 * time.Millisecond
+
+	got := answerDNS(query("_sip._tcp.example.com", 33), newFaketab(fakeBase), u, nil)
+	if string(got) != string(want) {
+		t.Fatalf("relay gave %v — it must fall through to the second server", got)
+	}
+	if !dead.wasAsked() {
+		t.Error("the first server was never tried — order must be honoured")
+	}
+}
+
+// All of them silent is still SERVFAIL, not an invented empty answer.
+func TestRelayWithEveryServerSilentIsStillServfail(t *testing.T) {
+	a := newFakeUpstream(t, nil)
+	b := newFakeUpstream(t, nil)
+	u := newUpstream([]string{a.conn.LocalAddr().String(), b.conn.LocalAddr().String()})
+	u.timeout = 200 * time.Millisecond
+
+	resp := answerDNS(query("_sip._tcp.example.com", 33), newFaketab(fakeBase), u, nil)
+	if rcode := resp[3] & 0x0F; rcode != 2 {
+		t.Errorf("rcode = %d, want 2 (SERVFAIL)", rcode)
+	}
+}

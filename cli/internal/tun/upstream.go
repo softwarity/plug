@@ -2,7 +2,10 @@ package tun
 
 import (
 	"net"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -99,3 +102,42 @@ func watchUpstreams(u *upstreamDNS, read func() []string, log logfn, stop <-chan
 		}
 	}
 }
+
+// upstreamsFile is where the running datapath publishes the servers it forwards
+// to, so `plug doctor` can report what is ACTUALLY in use rather than re-reading
+// the system and guessing. Those two answers differ exactly when it matters —
+// a stale capture is invisible from the outside otherwise.
+//
+// Written best-effort next to the other datapath state, world-readable: doctor
+// runs as the user while the daemon may hold root.
+func upstreamsFile() string { return filepath.Join(graftDir, "upstreams") }
+
+// publishUpstreams records the current servers. Failure is silent: this is
+// reporting, and losing it must never disturb resolution.
+func publishUpstreams(addrs []string) {
+	if err := os.MkdirAll(graftDir, 0o755); err != nil {
+		return
+	}
+	_ = os.WriteFile(upstreamsFile(), []byte(strings.Join(addrs, "\n")+"\n"), 0o644)
+}
+
+// CurrentUpstreams is what the running datapath last published — the servers
+// dotted names are being forwarded to right now. Empty when nothing is running,
+// or on a platform that keeps no shared state.
+func CurrentUpstreams() []string {
+	b, err := os.ReadFile(upstreamsFile())
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// ClearUpstreams drops the published record — the datapath is going away, and a
+// leftover list would read as live.
+func ClearUpstreams() { _ = os.Remove(upstreamsFile()) }

@@ -4,6 +4,22 @@
 
 ### Fixed: plug follows your DNS servers when a VPN comes up or goes down
 
+`plug doctor` now shows where lookups actually go — read from what the running
+datapath published, not re-derived from the system, because those two answers
+diverge exactly when it matters: a capture that went stale after a VPN moved
+looks perfectly healthy if you simply ask the system again.
+
+```
+✓ dns forwarding   forwarding dotted names to 10.8.0.1:53, 192.168.1.1:53
+! dns forwarding   forwarding dotted names to 8.8.8.8:53 — a PUBLIC resolver:
+                   internal names will not resolve, and these lookups leave your network
+```
+
+And a resolver that stops answering is no longer fatal to the rest: a VPN pushes
+two or three precisely so one can fail, and plug asked only the first. It now
+tries them in order — a single sick server used to make every SRV, MX or PTR
+lookup come back as "no such record".
+
 The machine's nameservers were captured once, at session start, and kept for the
 life of the session. Connect a corporate VPN afterwards and plug went on
 forwarding to the resolver from before — the one that does not know your

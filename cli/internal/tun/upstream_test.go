@@ -233,3 +233,30 @@ func TestWatchUpstreamsOnlyActsOnRealChanges(t *testing.T) {
 		t.Errorf("primary = %q, want the VPN's resolver", got)
 	}
 }
+
+// doctor must report what the datapath IS using, not what the system says now —
+// those two answers diverge exactly when it matters (a capture that went stale
+// after a VPN moved looks perfectly healthy if you re-ask the system).
+func TestPublishedUpstreamsRoundTrip(t *testing.T) {
+	old := graftDir
+	graftDir = t.TempDir()
+	defer func() { graftDir = old }()
+
+	if got := CurrentUpstreams(); len(got) != 0 {
+		t.Errorf("with nothing running, CurrentUpstreams = %v, want empty", got)
+	}
+	u := newUpstream([]string{"10.8.0.1", "192.168.1.1"})
+	got := CurrentUpstreams()
+	if len(got) != 2 || got[0] != "10.8.0.1:53" {
+		t.Fatalf("CurrentUpstreams = %v, want the servers set, in order", got)
+	}
+	// A change must be visible immediately: this is the whole point.
+	u.set([]string{"1.1.1.1"})
+	if got := CurrentUpstreams(); len(got) != 1 || got[0] != "1.1.1.1:53" {
+		t.Errorf("after a change, CurrentUpstreams = %v", got)
+	}
+	ClearUpstreams()
+	if got := CurrentUpstreams(); len(got) != 0 {
+		t.Errorf("after clearing, CurrentUpstreams = %v, want empty", got)
+	}
+}
