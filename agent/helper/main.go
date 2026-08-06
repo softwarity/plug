@@ -216,7 +216,7 @@ func dispatch(cmd []string) {
 		if len(cmd) != 2 || !nameRe.MatchString(cmd[1]) {
 			answer("error: usage: resolve <name>")
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), resolveLookupBudget)
 		addrs, lerr := net.DefaultResolver.LookupHost(ctx, cmd[1])
 		cancel()
 		for _, a := range addrs {
@@ -308,11 +308,41 @@ func clusterResolverHealthy() bool {
 	if w == "" {
 		return true
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), resolveWitnessBudget)
 	defer cancel()
 	addrs, _ := net.DefaultResolver.LookupHost(ctx, w)
 	return len(addrs) > 0
 }
+
+// The CLI gives this agent cliResolveBudget to say whether a name exists, and
+// MINTS a fake address if the answer is late — being slow is indistinguishable
+// from being absent, from where it sits. Our own budgets must therefore fit
+// INSIDE its, witness included.
+//
+// They did not: a 3s lookup followed by a 2s witness could only ever answer
+// after the CLI had given up, so a slow lookup ALWAYS ended in a mint whatever
+// this agent finally concluded. Two identical budgets in cascade.
+//
+// That is not a corner case. On Docker Desktop it is the normal path for an
+// absent name: the embedded DNS forwards what it does not know upstream,
+// upstream is the workstation, and the workstation is plugged — so the question
+// comes back to the stub that asked it and nothing answers until something
+// times out. Measured on a real machine: 3.03s, then a minted 198.18 address,
+// on a perfectly current datapath.
+//
+// 800ms is generous for the only lookup that can legitimately succeed here: a
+// cluster name is answered by the embedded resolver from memory, in single-digit
+// milliseconds. Anything slower is not a cluster name being resolved — it is a
+// question that has left the cluster.
+const (
+	resolveLookupBudget  = 800 * time.Millisecond
+	resolveWitnessBudget = 700 * time.Millisecond
+	// cliResolveBudget mirrors the client's timeout (cli/internal/tunnel:
+	// "a wedged session must not stall DNS"). Duplicated deliberately — the two
+	// modules do not share code — and asserted in the tests, because the day it
+	// drifts nothing fails: the CLI simply starts minting again, silently.
+	cliResolveBudget = 3 * time.Second
+)
 
 // resolverWitness names something guaranteed to resolve in this cluster while
 // its DNS works. Guaranteed by construction rather than by convention: every
