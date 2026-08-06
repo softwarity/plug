@@ -68,7 +68,7 @@ func configure(dev any, _ int, _, cidr, dnsIP string, up *upstreamDNS, log logfn
 	}
 
 	stopWatch := make(chan struct{})
-	go watchUpstreams(up, func() []string { return systemDNS(luid) }, log, stopWatch)
+	go watchUpstreams(up, func() []string { return systemDNS(luid) }, upstreamPoll, log, stopWatch)
 	cleanup := func() {
 		close(stopWatch)
 		clearSystemNRPT(dnsIP)

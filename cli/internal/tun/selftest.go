@@ -39,6 +39,17 @@ func SelfTest(logf func(string, ...any)) error {
 	const n = 0
 	cidr, dnsIP, base := instanceNet(n)
 
+	// The fake-VPN probe is opt-in: it fabricates a network address (and, on
+	// Windows, an adapter) rather than only reading the machine, so a bare
+	// `plug selftest` does not do it. scripts/selftest.sh turns it on, which is
+	// what CI runs — the probe is covered on all three OSes there.
+	vpnProbe := os.Getenv("PLUG_SELFTEST_VPN") == "1"
+	if vpnProbe {
+		// The production poll is human-scale, and the probe waits on it twice.
+		// Shortened BEFORE configure, which is what starts the watcher.
+		upstreamPoll = 500 * time.Millisecond
+	}
+
 	// The pretend cluster service: a loopback TCP echo server.
 	echo, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -77,6 +88,10 @@ func SelfTest(logf func(string, ...any)) error {
 	// Not fatal: a CI runner or a container can genuinely have no nameserver on a
 	// non-loopback interface, and failing the selftest for the machine's own
 	// network shape would be a flake. Loud is enough to notice a regression.
+	// What production does right after configure (tun.go): without it the stub
+	// would relay to the public fallback here, and the probe below would be
+	// asserting against a datapath no user ever runs.
+	up.set(upstreams)
 	if len(upstreams) == 0 {
 		log.f("selftest: WARNING no system nameserver captured — dotted names would go to a public resolver")
 	} else {
@@ -88,11 +103,30 @@ func SelfTest(logf func(string, ...any)) error {
 			}
 		}
 	}
-	// The DNS repoint is the one piece of state that outlives this process, so a
-	// Ctrl-C mid-test MUST still undo it. Run cleanup once, from either the normal
-	// return path or a signal.
+	// The DNS repoint is not the only piece of state that outlives this process —
+	// the VPN probe below adds an address, and an adapter on Windows — so a Ctrl-C
+	// mid-test MUST still undo all of it. Undo in reverse order (the probe's rig
+	// comes off before the repoint it was driving), exactly once, from either the
+	// normal return path or a signal.
+	var undoMu sync.Mutex
+	// ClearUpstreams too: the self-test publishes where `plug doctor` reads, and
+	// leaving that behind would have doctor report a datapath that is long gone.
+	undo := []func(){cleanup, ClearUpstreams}
+	addUndo := func(f func()) {
+		undoMu.Lock()
+		defer undoMu.Unlock()
+		undo = append(undo, f)
+	}
 	var once sync.Once
-	doCleanup := func() { once.Do(cleanup) }
+	doCleanup := func() {
+		once.Do(func() {
+			undoMu.Lock()
+			defer undoMu.Unlock()
+			for i := len(undo) - 1; i >= 0; i-- {
+				undo[i]()
+			}
+		})
+	}
 	defer doCleanup()
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
@@ -164,6 +198,15 @@ func SelfTest(logf func(string, ...any)) error {
 	// mount-ns works — under a setcap'd non-root plug too, not just as root.
 	if err := checkLaunchIsolation(privResolv, dnsIP, log); err != nil {
 		return err
+	}
+
+	// Last, because it moves the machine's resolvers under the running datapath:
+	// everything above asserts against the state configure() set up, and this is
+	// the one check that deliberately changes it.
+	if vpnProbe {
+		if err := probeVPNFollowing(up, dnsIP, upstreams, addUndo, log); err != nil {
+			return err
+		}
 	}
 	return nil
 }

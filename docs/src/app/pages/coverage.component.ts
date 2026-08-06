@@ -148,7 +148,7 @@ interface Hole {
   `,
 })
 export class CoverageComponent {
-  protected readonly snapshot = '2026-07-18';
+  protected readonly snapshot = '2026-08-06';
   protected readonly os = ['Linux', 'macOS', 'Windows'];
 
   protected glyph(s: St): string {
@@ -158,8 +158,8 @@ export class CoverageComponent {
   protected readonly holes: Hole[] = [
     {
       sev: 'warn',
-      t: 'Windows under a corporate VPN',
-      d: 'Everything else on Windows is proven in CI — including self-heal: the resilience cell restarts the agent mid-session and traffic re-parks in seconds. Behaviour under a real corporate VPN client is the one Windows unknown left.',
+      t: 'Windows under a real corporate VPN client',
+      d: 'What a VPN does to DNS is now proven in CI on all three OSes: the selftest fabricates an extra adapter carrying a resolver that knows a name nothing else knows, and asserts plug follows it — and follows it back down when the VPN goes away. What no CI runner can bring is a real corporate client: split-tunnel routing, Windows conditional-DNS (NRPT) rules pushed by policy, MTU, and clients that intercept DNS on a loopback address. Everything else on Windows is proven in CI, including self-heal.',
     },
     {
       sev: 'warn',
@@ -187,7 +187,8 @@ export class CoverageComponent {
         { feat: 'Userspace TUN (IP-layer capture)', os: ['ok', 'ok', 'ok'], note: '/dev/net/tun · utun · WinTUN' },
         { feat: 'Cluster-name DNS (real apps)', os: ['ok', 'ok', 'ok'], note: 'private resolv.conf · scutil store · WinTUN search-suffix + NRPT' },
         { feat: 'Single-label name via <code>getaddrinfo</code>', os: ['ok', 'ok', 'ok'], note: 'the real app path; Windows needs the <code>.plug</code> search suffix to issue a DNS query' },
-        { feat: 'Works under a corporate VPN', os: ['ok', 'ok', 'warn'], note: 'macOS proven w/ GlobalProtect; Windows unproven' },
+        { feat: 'Works under a corporate VPN', os: ['ok', 'ok', 'warn'], note: 'macOS proven w/ GlobalProtect; a real Windows corporate client is still unproven (split-tunnel, NRPT-by-policy)' },
+        { feat: 'Follows the resolver when a VPN comes up, drops, or the network changes', os: ['ok', 'ok', 'ok'], note: 'the servers are not a startup fact — <b>in CI on all three OSes</b>: the selftest fabricates a VPN (an extra adapter carrying a resolver that knows a name nothing else knows) and asserts that name resolves <i>through plug</i>, then stops when the VPN goes away. Includes what a VPN does not cause: on macOS one network service serves every SSID, so changing Wi-Fi moves the resolvers without moving the service. <code>plug doctor</code> reports where lookups actually go' },
         { feat: 'Every runtime (Node/JVM/Py/Go/gRPC)', os: ['ok', 'ok', 'ok'], note: 'IP-level capture, socket never touched' },
         { feat: 'Native selftest (datapath proof)', os: ['ok', 'ok', 'ok'], note: 'green on all three in CI' },
         { feat: 'e2e protocol matrix (8 protos × 4 langs)', os: ['ok', 'ok', 'ok'], note: 'native over a Tailscale mesh, against all THREE cluster families — compose, Swarm and Kubernetes (kind) — the same by-name path on Linux, macOS and Windows' },

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build plug and run its TUN self-test on THIS OS: loop real traffic through a
-# real device (utun / WinTUN / tun) BY NAME, with no agent and no Docker. Records
+# real device (utun / WinTUN / tun) BY NAME, and follow a fabricated VPN's
+# resolver up and back down, with no agent and no Docker. Records
 # a PASS/FAIL marker (read back by scripts/platform-grid.sh) and, in CI, appends a
 # line to the job summary.
 #
@@ -32,8 +33,13 @@ if [ "$os" = Windows ]; then
   cp wtun/wintun/bin/amd64/wintun.dll .
 fi
 
+# The fake-VPN probe (opt-in, see tun.SelfTest): fabricate what a VPN does to
+# this machine — an extra address carrying a resolver that knows a name nothing
+# else knows, announced through the very door plug reads from on this OS — and
+# assert plug follows it, and follows it back down. Set PLUG_SELFTEST_VPN=0 to
+# skip it. Passed through `env` because sudo resets the environment.
 echo "=== plug selftest ($label) ==="
-if $sudo "./plug$ext" selftest 2>&1 | tee out.txt && grep -q "SELFTEST-OK" out.txt; then
+if $sudo env PLUG_SELFTEST_VPN="${PLUG_SELFTEST_VPN:-1}" "./plug$ext" selftest 2>&1 | tee out.txt && grep -q "SELFTEST-OK" out.txt; then
   result=PASS; mark="✅ real device, traffic round-tripped by name"
 else
   result=FAIL; mark="❌ (see log)"

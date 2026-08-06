@@ -115,6 +115,7 @@ import { MatIconModule } from '@angular/material/icon';
         <tr><td>Install from cluster + launcher (per-cluster versions) + one-privilege install (setcap / setuid / service)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
         <tr><td>Profiles: wizard, <code>ls</code> / <code>rm</code> / <code>rn</code> / <code>test</code></td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
         <tr><td>macOS DNS at the IP layer (works under a corporate VPN) + persistent per-cluster daemon</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
+        <tr><td>Forwarding follows the machine's resolvers when a VPN comes up or drops, or the network changes (<code>plug doctor</code> reports where lookups go)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
         <tr><td>Kubernetes manifest (NodePort / <code>kubectl port-forward</code>)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
         <tr><td>Windows no-admin SYSTEM service + multicluster (PID-at-connect)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
         <tr><td>Multicluster on Linux (per-launch mount namespaces)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>

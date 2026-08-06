@@ -165,6 +165,21 @@ func newUpstream(servers []string) *upstreamDNS {
 // resolver — which keeps dotted names working but sends them somewhere the user
 // did not choose, so the caller announces it.
 func (u *upstreamDNS) set(servers []string) {
+	addrs := dialable(servers)
+	u.mu.Lock()
+	u.addrs = addrs
+	u.mu.Unlock()
+	publishUpstreams(addrs) // so `plug doctor` can say where lookups actually go
+}
+
+// dialable turns captured servers into addresses that can be dialled, applying
+// the public fallback when there are none.
+//
+// Separate from set because same() needs the exact same normalisation to compare
+// honestly, and set has a side effect: it publishes. Comparing THROUGH set meant
+// every silent tick of the watcher rewrote the file `plug doctor` reads, with
+// candidates that had not been adopted.
+func dialable(servers []string) []string {
 	if len(servers) == 0 {
 		servers = []string{"8.8.8.8"}
 	}
@@ -177,10 +192,7 @@ func (u *upstreamDNS) set(servers []string) {
 		}
 		addrs = append(addrs, s)
 	}
-	u.mu.Lock()
-	u.addrs = addrs
-	u.mu.Unlock()
-	publishUpstreams(addrs) // so `plug doctor` can say where lookups actually go
+	return addrs
 }
 
 // primary is the server every lookup goes to right now.
@@ -202,15 +214,14 @@ func (u *upstreamDNS) all() []string {
 // same reports whether servers would change nothing — so a refresh that found
 // the usual answer stays silent instead of logging every tick.
 func (u *upstreamDNS) same(servers []string) bool {
-	probe := &upstreamDNS{}
-	probe.set(servers)
+	probe := dialable(servers)
 	u.mu.RLock()
 	defer u.mu.RUnlock()
-	if len(probe.addrs) != len(u.addrs) {
+	if len(probe) != len(u.addrs) {
 		return false
 	}
-	for i := range probe.addrs {
-		if probe.addrs[i] != u.addrs[i] {
+	for i := range probe {
+		if probe[i] != u.addrs[i] {
 			return false
 		}
 	}

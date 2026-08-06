@@ -92,7 +92,7 @@ vertes.
 ---
 
 ## 🟡 Ce qui reste hors CI (le banc → CI est bouclé)
-- [ ] **Windows sous VPN d'entreprise** : non prouvé (macOS OK avec GlobalProtect). Il faut un poste Windows avec un vrai client VPN corpo — la box 192.168.2.17 ferait l'affaire si on y installe le client ; banc ~30 min ensuite.
+- [ ] **Windows sous VPN d'entreprise** : non prouvé sur un vrai client corpo (macOS OK avec GlobalProtect). Il faut un poste Windows avec un vrai client VPN — la box 192.168.2.17 ferait l'affaire si on y installe le client ; banc ~30 min ensuite. **Ce qui est désormais couvert en CI** (cellule « fake VPN » du selftest, ×3 OS) : une interface de plus portant un résolveur qui connaît un nom que rien d'autre ne connaît, annoncée par la porte que plug lit sur cet OS (2ᵉ adaptateur WinTUN + métrique sur Windows, `resolv.conf` sur Linux, dict DNS du service primaire sur macOS) → plug doit le suivre, résoudre le nom témoin à travers son stub, puis revenir quand le VPN disparaît. **Ce qui reste hors CI** : le split-tunnel (le trafic vers l'IP interne doit emprunter le tunnel), le NRPT / DNS conditionnel Windows, la MTU/fragmentation, et les clients qui interceptent le DNS en `127.0.0.1` (écartés par `pickUpstreams` sur Windows — à confronter à un vrai client corpo).
 - [ ] **Sessions longues & charge** : heures, gros transferts, sleep/wake. Piste actée : un workflow « soak » cron hebdo (session tenue 5-6 h, transferts gros volumes, asserts RSS/reconnexions) ; le sleep/wake réel reste un banc local assisté.
 
 ## 🟣 UDP par nom (relais de datagrammes) — REPORTÉ (décision 18/07)
@@ -119,7 +119,7 @@ toute façon).
 ## 🔵 Transport & intégration (roadmap)
 - [ ] **IPv6** : fake-pool v6 + tunneling des littéraux v6 (fakes IPv4 aujourd'hui ; service par nom déjà OK).
 - [ ] **Transport `kubectl exec`** : tunnel via `kubectl exec` sur un pod nu — zéro port exposé, accès gouverné par le kubeconfig RBAC (adoucit le compromis no-auth).
-- [ ] **Gateway hôte du tunnel** : la gateway (Java) déjà déployée héberge l'endpoint et l'active dynamiquement — son auth devant. Fin de l'agent dédié.
+- [ ] **Gateway hôte du tunnel** : la gateway déjà déployée héberge l'endpoint et l'active dynamiquement — son auth devant. Fin de l'agent dédié. C'est **le mécanisme du « plug autorisé ici ou pas »** (dev : oui, prod : non — l'interdiction est une *absence*) et le point 4 des « implications côté plug » de `meerkat_integration.md` — doc de conception Meerkat, **hors dépôt** tant que son sort n'est pas tranché (public / privé / futur dépôt Meerkat) — qui fige la conception d'ensemble et les quatre autres chantiers qu'elle induit : auth par clé par dev, attribution nominative des sessions, API d'état (« qui plugge quoi depuis quand »), et plus tard le signpost-proxy L7.
 
 ## 🟠 Fuite DNS Docker-Desktop-sur-poste-plugué — RÉSOLUE (18/07)
 Docker forwarde les noms inconnus du cluster vers le resolver de la VM → hérite

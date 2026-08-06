@@ -192,45 +192,70 @@ func TestResolverFollowsALaterSet(t *testing.T) {
 
 var errStub = fmt.Errorf("stub dialer")
 
-// The watcher must be silent when nothing moved — it ticks for the life of a
-// session, and a VPN that never changes must not produce a line every ten
-// seconds. And it must move the forwarder the moment the servers do.
-func TestWatchUpstreamsOnlyActsOnRealChanges(t *testing.T) {
+// The watcher itself is exercised in fakevpn_test.go, against the real goroutine
+// and ticker. What belongs here is the decision it rests on: two readings that
+// mean the same thing must not count as a change, whatever their spelling — a
+// watcher that thought they differed would log, and re-publish, every tick for
+// the life of a session.
+func TestASameSpelledDifferentlyIsNotAChange(t *testing.T) {
 	u := newUpstream([]string{"192.168.1.1"})
-	var lines int
-	log := logfn(func(string, ...any) { lines++ })
-
-	// A reader that returns the same thing, then something new, then nothing.
-	readings := [][]string{
-		{"192.168.1.1"},    // unchanged
-		{"192.168.1.1:53"}, // the same, written differently
-		nil,                // unreadable — keep what we have, say nothing
-		{"10.8.0.1"},       // the VPN came up
-	}
-	var i int
-	read := func() []string {
-		if i >= len(readings) {
-			return nil
+	for _, same := range [][]string{{"192.168.1.1"}, {"192.168.1.1:53"}} {
+		if !u.same(same) {
+			t.Errorf("%v read as a change from %v", same, u.all())
 		}
-		r := readings[i]
-		i++
-		return r
 	}
-	// Drive the loop's body directly: the ticker's period is not what is under
-	// test, the decision is.
-	for range readings {
-		servers := read()
-		if len(servers) == 0 || u.same(servers) {
+	for _, diff := range [][]string{{"10.8.0.1"}, {"192.168.1.1", "10.8.0.1"}, {"192.168.1.1:5353"}, nil} {
+		if u.same(diff) {
+			t.Errorf("%v read as no change from %v", diff, u.all())
+		}
+	}
+}
+
+// systemServers guards the one platform where plug reads the machine's resolvers
+// from a key it also WRITES: macOS. The read comes back holding our own address
+// on every tick after our own write, and adopting it would point the relay at the
+// stub that is doing the relaying — a loop that answers nothing and logs nothing.
+func TestSystemServersNeverAdoptsUsOrAnotherPlug(t *testing.T) {
+	const own = "198.18.0.53"
+	for _, tc := range []struct {
+		what string
+		in   []string
+		want []string
+	}{
+		{"our own address, the tick after our own write", []string{own}, nil},
+		{"ours mixed in with the real ones", []string{own, "192.168.1.1"}, []string{"192.168.1.1"}},
+		{"another plug instance's stub", []string{"198.18.3.53", "192.168.1.1"}, []string{"192.168.1.1"}},
+		{"the far end of plug's /15", []string{"198.19.255.53"}, nil},
+		{"a neighbour of the range, which is NOT ours", []string{"198.20.0.53"}, []string{"198.20.0.53"}},
+		{"junk from the system store", []string{"", "  ", "not-an-ip", "192.168.1.1"}, []string{"192.168.1.1"}},
+		{"the same server listed twice", []string{"10.8.0.1", "10.8.0.1"}, []string{"10.8.0.1"}},
+		{"order, which is the whole answer", []string{"10.8.0.1", "192.168.1.1"}, []string{"10.8.0.1", "192.168.1.1"}},
+		{"nothing at all", nil, nil},
+	} {
+		got := systemServers(tc.in, own)
+		if len(got) != len(tc.want) {
+			t.Errorf("%s: systemServers(%v) = %v, want %v", tc.what, tc.in, got, tc.want)
 			continue
 		}
-		u.set(servers)
-		log.f("changed")
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("%s: systemServers(%v) = %v, want %v", tc.what, tc.in, got, tc.want)
+				break
+			}
+		}
 	}
-	if lines != 1 {
-		t.Errorf("logged %d times, want exactly 1 — only the real change speaks", lines)
+}
+
+// The filter must never answer "nothing" in a way the caller could mistake for
+// "the machine has no resolvers": the caller's guard is len(real) > 0, so an
+// all-filtered read has to leave the forwarder exactly as it was.
+func TestAnAllFilteredReadChangesNothing(t *testing.T) {
+	u := newUpstream([]string{"192.168.1.1"})
+	if real := systemServers([]string{"198.18.0.53"}, "198.18.0.53"); len(real) > 0 {
+		u.set(real)
 	}
-	if got := u.primary(); got != "10.8.0.1:53" {
-		t.Errorf("primary = %q, want the VPN's resolver", got)
+	if got := u.primary(); got != "192.168.1.1:53" {
+		t.Errorf("primary = %s, want the servers it already had", got)
 	}
 }
 

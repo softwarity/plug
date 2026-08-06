@@ -207,9 +207,9 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 					// holds our address. Forwarding kept going to the servers
 					// captured at startup, so internal names died the moment the
 					// VPN that serves them appeared or went away.
-					if len(newServers) > 0 && !up.same(newServers) {
-						up.set(newServers)
-						log.f("tun[mac]: forwarding dotted names to %v (the new primary's resolver)", newServers)
+					if real := systemServers(newServers, dnsIP); len(real) > 0 && !up.same(real) {
+						up.set(real)
+						log.f("tun[mac]: forwarding dotted names to %v (the new primary's resolver)", real)
 					}
 					setupRestore, newSetupServers, newSetupSearch = readDNSDict(setupKey)
 					setupOverridden = len(newSetupServers) > 0
@@ -230,6 +230,23 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 				input := false     // Service key — configd's composition input only
 				effective := false // what resolution consumes: Global, Setup, the files
 				if _, cur, _ := readDNSDict(dnsKey); len(cur) != 1 || cur[0] != dnsIP {
+					// cur is what the system just published HERE — the only moment
+					// the machine's real resolvers are visible on a platform where
+					// we overwrite them, and we are about to overwrite them again.
+					//
+					// The block above catches a VPN, which brings its own service.
+					// This one catches what it cannot: the primary service is
+					// STABLE across a Wi-Fi change (one service per hardware port,
+					// whatever the SSID), so joining another network moves the
+					// resolvers without moving the service. Everything looked
+					// healthy — the key we watch holds our IP, nothing is logged —
+					// while dotted names kept being forwarded to the resolver of a
+					// network this machine had left. configd republishes the DHCP
+					// lease on this key ~2/min, so the new one lands within a tick.
+					if real := systemServers(cur, dnsIP); len(real) > 0 && !up.same(real) {
+						up.set(real)
+						log.f("tun[mac]: the system nameservers changed — forwarding dotted names to %v", real)
+					}
 					_ = scutilSet(dnsKey, set)
 					input = true
 				}
@@ -239,6 +256,15 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 				}
 				if setupOverridden {
 					if _, cur, _ := readDNSDict(setupKey); len(cur) != 1 || cur[0] != dnsIP {
+						// Manually configured DNS wins over the DHCP/VPN ones, so
+						// when the user retypes them mid-session those are the real
+						// upstreams. (Only while we are already overriding this key:
+						// a user who had none at startup and adds some later is not
+						// followed — the key is never read in that case.)
+						if real := systemServers(cur, dnsIP); len(real) > 0 && !up.same(real) {
+							up.set(real)
+							log.f("tun[mac]: the manually configured nameservers changed — forwarding dotted names to %v", real)
+						}
 						_ = scutilSet(setupKey, setupSet)
 						effective = true
 					}

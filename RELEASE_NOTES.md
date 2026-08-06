@@ -30,9 +30,15 @@ plug now follows them. Where the system's own record can be re-read honestly it
 is, every ten seconds: the adapter table on Windows, `/etc/resolv.conf` on Linux
 (never modified there — the repoint is a bind-mount inside the child's own mount
 namespace). macOS cannot work that way, because plug overwrites the primary
-service's DNS entry and a re-read would return plug's own address; it hooks the
-watchdog that already notices the primary service changing, which is the exact
-moment a VPN's resolver is visible before being overwritten.
+service's DNS entry and a re-read would return plug's own address; it reads them
+at the one moment they are visible instead — the instant the system republishes
+its own servers there, just before the watchdog overwrites them again.
+
+That last part also covers the case a VPN does not create: **changing Wi-Fi
+network**. macOS keeps one network service per hardware port whatever the SSID,
+so going from the office to home moves the resolvers without moving the service.
+Everything looked healthy — and dotted names kept being sent to the resolver of
+a network the machine had left.
 
 Silent unless something actually moved, and unchanged servers written in a
 different form do not count as a move — a session that runs all day on one

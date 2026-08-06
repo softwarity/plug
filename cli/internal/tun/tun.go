@@ -180,10 +180,11 @@ func startDatapathDF(df dialFunc, dialers func() []Dialer, logf func(string, ...
 
 	dp := &Datapath{Ifname: ifname, DNSIP: dnsIP, privResolv: privResolv, done: make(chan struct{})}
 	dp.stop = func() {
-		cancel()    // stop the bridge's fromStack loop
-		st.Close()  // tear down the netstack
-		cleanup()   // restore routes + system/child DNS
-		dev.Close() // remove the utun
+		cancel()         // stop the bridge's fromStack loop
+		st.Close()       // tear down the netstack
+		cleanup()        // restore routes + system/child DNS
+		dev.Close()      // remove the utun
+		ClearUpstreams() // nothing is forwarding any more — say nothing rather than the last thing that was true
 	}
 	return dp, nil
 }

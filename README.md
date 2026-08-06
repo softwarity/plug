@@ -263,10 +263,19 @@ costs about half a minute. Use `plug update` there.
 ## Which DNS servers plug forwards to
 
 Names that are not cluster services are forwarded to the nameservers this machine
-already used, read from the system at startup: `scutil` on macOS, the child's
-former `resolv.conf` on Linux, the adapter table on Windows. Where several are
+already used, read from the system: `scutil` on macOS, the child's former
+`resolv.conf` on Linux, the adapter table on Windows. Where several are
 configured, they are ranked the way the OS ranks its interfaces — so a corporate
 VPN's resolver, the only one that knows your internal names, comes first.
+
+They are not a startup fact. Connect a VPN mid-session, drop it, or move to
+another network, and plug follows — including the case macOS makes invisible,
+where changing Wi-Fi network moves the resolvers without moving the network
+service. `plug doctor` reports where lookups are going right now:
+
+```
+✓ dns forwarding   forwarding dotted names to 10.8.0.1:53, 192.168.1.1:53
+```
 
 With none found, plug falls back to a public resolver and says so. That keeps
 public names working, but internal ones will not resolve and those lookups leave

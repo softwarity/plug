@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // Available reports whether the TUN data path can run on this OS.
@@ -62,7 +63,7 @@ func configure(_ any, n int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 	// the child's own mount namespace — so re-reading it later is honest, and it
 	// is where a VPN client writes its servers.
 	stopWatch := make(chan struct{})
-	go watchUpstreams(up, resolvNameservers, log, stopWatch)
+	go watchUpstreams(up, resolvNameservers, upstreamPoll, log, stopWatch)
 
 	// Per-instance link-local address (10.99.99.1, 10.99.100.1, ...): simultaneous
 	// instances must not share it, or their connected routes become ambiguous.
@@ -103,9 +104,37 @@ func configure(_ any, n int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 	return ups, privResolv, cleanup, nil
 }
 
+// resolvFile is the file plug follows on Linux — the one a VPN client writes its
+// servers into. Behind an accessor rather than a constant so the VPN probe can
+// point it at a temporary file: rewriting the machine's real resolver config
+// would break every later step of a CI job if the probe died between two of its
+// own steps. The probe asserts this path is readable and parses before
+// redirecting it, so the production path is still exercised.
+//
+// Guarded because the watcher goroutine reads it while the probe swaps it.
+var (
+	resolvMu   sync.RWMutex
+	resolvPath = "/etc/resolv.conf"
+)
+
+func resolvFile() string {
+	resolvMu.RLock()
+	defer resolvMu.RUnlock()
+	return resolvPath
+}
+
+// setResolvFile points the follower at p and returns what it was following.
+func setResolvFile(p string) string {
+	resolvMu.Lock()
+	defer resolvMu.Unlock()
+	old := resolvPath
+	resolvPath = p
+	return old
+}
+
 // resolvNameservers returns the `nameserver` entries currently in resolv.conf.
 func resolvNameservers() []string {
-	b, err := os.ReadFile("/etc/resolv.conf")
+	b, err := os.ReadFile(resolvFile())
 	if err != nil {
 		return nil
 	}

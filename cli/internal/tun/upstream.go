@@ -75,6 +75,38 @@ func pickUpstreams(cands []dnsCandidate) []string {
 	return out
 }
 
+// systemServers filters what the OS just published on a key plug also writes to.
+// Reading such a key is the only way to see the machine's real resolvers on a
+// platform where plug overwrites them — but the read comes back holding OUR
+// address on every tick that follows our own write, and could hold another plug
+// instance's. Adopting either points the relay at a stub that forwards to the
+// stub that forwarded to it: not an error, a silent unbounded loop.
+//
+// own is this instance's resolver address. Anything unparseable is dropped too:
+// these values come from a system store, not from us.
+func systemServers(servers []string, own string) []string {
+	out := make([]string, 0, len(servers))
+	seen := map[string]bool{}
+	for _, s := range servers {
+		s = strings.TrimSpace(s)
+		switch {
+		case s == "", s == own, seen[s]:
+			continue
+		case net.ParseIP(s) == nil, inFakeRange(s):
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
+}
+
+// upstreamPoll is how often the platforms that can re-read their source check it.
+// A VPN coming up or down is a human-scale event, and the read is a local syscall
+// or a small file. A var only so the VPN probe can shorten it — it is set once,
+// before any watcher starts, and never while one is running.
+var upstreamPoll = 10 * time.Second
+
 // watchUpstreams re-reads the system nameservers every tick and moves the
 // forwarder when they changed. Used where plug does NOT overwrite the source it
 // reads — the adapter table on Windows, the untouched /etc/resolv.conf on Linux
@@ -83,10 +115,10 @@ func pickUpstreams(cands []dnsCandidate) []string {
 // that platform hooks its existing watchdog instead, at the one moment the new
 // servers are still visible.
 //
-// 10s: a VPN coming up or down is a human-scale event, and the read is a local
-// syscall or a small file. Silent unless something actually moved.
-func watchUpstreams(u *upstreamDNS, read func() []string, log logfn, stop <-chan struct{}) {
-	t := time.NewTicker(10 * time.Second)
+// Silent unless something actually moved. every is upstreamPoll in production;
+// the VPN probe drives it faster so the test does not wait on a human-scale tick.
+func watchUpstreams(u *upstreamDNS, read func() []string, every time.Duration, log logfn, stop <-chan struct{}) {
+	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
 		select {
