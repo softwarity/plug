@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.9.3
+
 ### Fixed: plug follows your DNS servers when a VPN comes up or goes down
 
 `plug doctor` now shows where lookups actually go — read from what the running
