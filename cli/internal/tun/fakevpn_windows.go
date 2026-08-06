@@ -5,6 +5,7 @@ package tun
 import (
 	"fmt"
 	"net/netip"
+	"sync"
 
 	"golang.org/x/sys/windows"
 	wgtun "golang.zx2c4.com/wireguard/tun"
@@ -86,14 +87,24 @@ func newVPNRig(_ []string, _ string, log logfn) (*vpnRig, error) {
 		log.f("vpn probe: WARNING could not read %s's IP interface row: %v", probeAdapter, e)
 	}
 
+	// Dropping the VPN means dropping its adapter, which is what a real one does
+	// and the only faithful way back here. Clearing the IPv4 server list is NOT
+	// enough: Windows puts its default IPv6 resolvers (fec0:0:0:ffff::1/2/3) on
+	// every adapter, so a lingering adapter keeps announcing THOSE — ranked by the
+	// low metric pinned above, ahead of the machine's real resolver. Measured in
+	// CI: the machine came back to [fec0::1 fec0::2 fec0::3 168.63.129.16].
+	var once sync.Once
+	var closeErr error
+	teardown := func() error {
+		once.Do(func() { closeErr = dev.Close() })
+		return closeErr
+	}
 	return &vpnRig{
 		resolverAddr: probeResolverAddr,
 		announce:     func() error { return luid.SetDNS(v4, []netip.Addr{addr}, nil) },
-		// The adapter stays, its resolver goes: the machine falls back to its own
-		// nameservers exactly as it does when a VPN drops but its adapter lingers.
-		restore: func() error { return luid.SetDNS(v4, nil, nil) },
+		restore:      teardown,
 		close: func() {
-			if err := dev.Close(); err != nil {
+			if err := teardown(); err != nil {
 				log.f("vpn probe: WARNING the %s adapter may be left behind: %v", probeAdapter, err)
 			}
 		},
