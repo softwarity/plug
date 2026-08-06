@@ -56,7 +56,11 @@ jobs:
         with:
           name: plat-test-${{ matrix.os }}
           path: plat/*.txt
-          retention-days: 1
+          # 30 days, not 1: the release gate re-reads these markers to decide
+          # whether a tagged commit is publishable, and a tag can be cut days
+          # after the commit. Expired markers would fail the gate closed for a
+          # reason that has nothing to do with the code. They are 170 bytes.
+          retention-days: 30
 
   # The visible cross-platform proof: build plug natively on each OS and loop real
   # traffic through a real TUN device BY NAME (no agent, no Docker). macOS/Linux
@@ -90,7 +94,7 @@ jobs:
         with:
           name: plat-selftest-${{ matrix.os }}
           path: cli/plat/*.txt
-          retention-days: 1
+          retention-days: 30 # the release gate re-reads them; see plat-test above
 
   # One-glance platform grid in the run Summary, from the REAL per-OS results
   # (not the job status — the Windows selftest is continue-on-error, so its true
@@ -100,6 +104,11 @@ jobs:
     needs: [test, selftest]
     if: always()
     runs-on: ubuntu-latest
+    # The verdict the image gate reads. It comes from the MARKERS, because the
+    # job statuses cannot answer this: the Windows selftest is continue-on-error,
+    # so a real FAIL leaves its job green — 33f8c40 published an image that way.
+    outputs:
+      verdict: ${{ steps.grid.outputs.verdict }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/download-artifact@v7
@@ -108,6 +117,7 @@ jobs:
           pattern: plat-*
           merge-multiple: true
       - name: Render platform grid
+        id: grid
         run: bash scripts/platform-grid.sh plat
 
   build:
@@ -157,8 +167,14 @@ jobs:
     # is_default_branch) — a throwaway image to test that branch on a real
     # cluster, never latest. Off PRs (secrets). Delete stale branch tags from
     # Docker Hub after merge.
-    needs: [build, selftest, e2e-compose, e2e-k8s, e2e-swarm]
-    if: success() && github.event_name != 'pull_request'
+    #
+    # `needs: selftest` is NOT enough on its own: that job is continue-on-error on
+    # Windows, so it reports success on a selftest that failed. The verdict from
+    # `platforms` reads the markers those jobs wrote, which is the only record
+    # that cannot lie — without it the image of 33f8c40 shipped with a red
+    # Windows selftest, past a comment promising the opposite.
+    needs: [build, selftest, platforms, e2e-compose, e2e-k8s, e2e-swarm]
+    if: success() && needs.platforms.outputs.verdict == 'pass' && github.event_name != 'pull_request'
     uses: ./.github/workflows/_docker.yml
     secrets: inherit
 
