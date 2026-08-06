@@ -44,6 +44,24 @@ Silent unless something actually moved, and unchanged servers written in a
 different form do not count as a move — a session that runs all day on one
 network logs nothing.
 
+### Fixed: `plug doctor` no longer reports a data path that has stopped
+
+`dns forwarding` kept naming the servers of the last session that ran, long
+after it was over — the published record was written but never cleared. It is
+dropped on teardown now, so the check appears only while something really is
+forwarding.
+
+### Proven on all three OSes: following a VPN
+
+There is no VPN on a CI runner, so the self-test builds one: an extra address
+carrying a resolver that knows a name nothing else on earth knows, announced to
+the system exactly as a VPN client would — a second WinTUN adapter on Windows,
+`resolv.conf` on Linux, the primary service's DNS entry on macOS. The assertion
+is a fact rather than a setting: that name must resolve **through plug** to an
+address only that resolver could return, and must stop resolving once the VPN
+goes away. Following a VPN up and never following it down is the same bug seen
+from the other side.
+
 ---
 
 ## 2.9.2
