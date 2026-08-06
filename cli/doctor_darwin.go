@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/softwarity/plug/cli/internal/tun"
 )
@@ -120,24 +121,78 @@ func doctorOS(add func(check)) {
 					detail: `daemon.json pins upstream "dns" (belt and braces)`})
 			} else {
 				add(check{area: "local", name: "docker desktop dns", status: stOK,
-					detail: `no "dns" pin — fine since 2.2 (honest NXDOMAIN); pin one for belt and braces`})
+					detail: `no "dns" pin — the agent's lookups for names it does not know are forwarded out of the VM, ` +
+						`i.e. back to this Mac; pinning one keeps them inside (see the NXDOMAIN check below)`})
 			}
 		}
 	}
 
 	// Honest-NXDOMAIN, live: with a datapath running, an absent bare name must
-	// FAIL to resolve. A minted 198.18 answer means the RUNNING datapath
-	// predates 2.2 — the exact service-vs-launcher version gap, caught red-handed.
+	// FAIL to resolve. A minted 198.18 answer says the name was minted without
+	// being checked — but NOT why, and the two whys need opposite remedies.
 	if plugged && sessions > 0 {
+		start := time.Now()
 		addrs, err := net.LookupHost("plug-doctor-absent-probe")
-		if err == nil && len(addrs) > 0 && strings.HasPrefix(addrs[0], "198.18.") {
-			add(check{area: "local", name: "honest NXDOMAIN", status: stWarn,
-				detail: "an absent name minted a fake IP — the RUNNING datapath predates 2.2",
-				remedy: "end the sessions (or plug down), relaunch — the new core takes over"})
-		} else if err != nil {
-			add(check{area: "local", name: "honest NXDOMAIN", status: stOK,
-				detail: "absent names answer NXDOMAIN through the live datapath"})
+		addr := ""
+		if len(addrs) > 0 {
+			addr = addrs[0]
 		}
+		add(nxdomainVerdict(addr, err, time.Since(start)))
+	}
+}
+
+// probeStall is the point past which a probe was not answered but ABANDONED.
+// The CLI gives the agent 3s to say whether a name exists and mints if the
+// answer does not come (transport.go, "a wedged session must not stall DNS").
+// Anything close to that is the timeout, not a verdict — and a verdict that
+// arrives in milliseconds is a different story entirely.
+const probeStall = 2 * time.Second
+
+// nxdomainVerdict turns ONE probe measurement into a check. Split out from the
+// probe itself so the reasoning is testable without a datapath, a cluster or a
+// network — and because it got this wrong once, in the way that costs most: it
+// named a single cause ("the datapath predates 2.2") with a remedy that could
+// not work, for a symptom every Docker Desktop user reproduces.
+//
+// What the duration tells us, and the earlier version ignored:
+//
+//   - fast + minted  → the check ran and said "exists", or did not run at all.
+//     On a current datapath that means the agent answered something other than
+//     nxdomain. On an old one, that there is no check. Version tells them apart,
+//     and doctor prints both versions two lines above.
+//   - slow + minted  → the check RAN and timed out. plug minted rather than
+//     lie. On Docker Desktop the cause is almost always the loop: the agent's
+//     own lookup is forwarded upstream, upstream is this Mac, and this Mac is
+//     plugged — the question comes back to the stub that asked it.
+func nxdomainVerdict(addr string, err error, took time.Duration) check {
+	const name = "honest NXDOMAIN"
+	minted := err == nil && strings.HasPrefix(addr, "198.18.")
+	switch {
+	case minted && took >= probeStall:
+		return check{area: "local", name: name, status: stWarn,
+			detail: fmt.Sprintf("an absent name was minted after %s — the existence check timed out, "+
+				"so plug minted rather than answer for a cluster it could not ask", took.Round(100*time.Millisecond)),
+			remedy: `Docker Desktop is sending the agent's lookups back to this Mac. Settings → Docker Engine, add "dns": ["1.1.1.1"], apply & restart`}
+	case minted:
+		return check{area: "local", name: name, status: stWarn,
+			detail: "an absent name minted a fake IP immediately — the running datapath did not check whether it exists",
+			remedy: "plug down, then relaunch — stopping the sessions is NOT enough on macOS, the daemon outlives them (compare `cached cores` with the agent version above)"}
+	case err != nil && took >= probeStall:
+		// No address, but far too slow to call it a clean NXDOMAIN: something on
+		// the path is timing out. Saying OK here would hide exactly the problem
+		// this check exists to surface.
+		return check{area: "local", name: name, status: stWarn,
+			detail: fmt.Sprintf("an absent name failed to resolve, but took %s to do so — something on the DNS path is timing out",
+				took.Round(100*time.Millisecond)),
+			remedy: `if this machine runs Docker Desktop: Settings → Docker Engine, add "dns": ["1.1.1.1"], apply & restart`}
+	case err != nil:
+		return check{area: "local", name: name, status: stOK,
+			detail: "absent names answer NXDOMAIN through the live datapath"}
+	default:
+		// Resolved to something that is not ours: a real name, or a resolver
+		// answering wildcards. Either way this probe proves nothing here.
+		return check{area: "local", name: name, status: stOK,
+			detail: "not conclusive here — the probe name resolved to " + addr + ", which is not plug's doing"}
 	}
 }
 
