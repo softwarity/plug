@@ -1,13 +1,21 @@
 name: Docker release
 
-# Triggered by version tags created by the Release workflow: build and publish
-# the released image (semver tags) via the shared multi-arch workflow. The CLI
-# binaries are served straight from the agent container (the `get` user), so
-# they are deliberately not attached to the GitHub Release.
+# Triggered by version tags created by the Release workflow. It does NOT build:
+# it PROMOTES. The CLI binaries are served straight from the agent container
+# (the `get` user), so they are deliberately not attached to the GitHub Release.
 #
-# A released image must be AS BLESSED as :latest — the gate below waits for
-# the CI run of this very commit (the 9-leg mesh e2e) and refuses to publish
-# on anything but green. Before it existed, 2.2.0 shipped while its CI run was
+# Why promotion. release-flow tags the release commit, so that commit's own CI
+# run already built the image stamped with the released version (see "Resolve
+# version" in _docker.yml) and published it as `sha-<short>` and `latest`.
+# Rebuilding here from the same sources produced a DIFFERENT artefact — `apk`
+# and the wintun download reach the network again — and that is how 2.7.3 died
+# on a CDN's bad minute. Putting the semver tags on the digest the CI already
+# published takes seconds, touches no network, and cannot fail on someone
+# else's infrastructure.
+#
+# A released image must be AS BLESSED as :latest — the gate below waits for the
+# CI run of this very commit (the 9-leg mesh e2e) and refuses on anything but
+# green, markers included. Before it existed, 2.2.0 shipped while its CI run was
 # still failing on a broken test cell — sound image, broken contract.
 on:
   push:
@@ -22,7 +30,9 @@ jobs:
     name: wait for this commit's CI to be green
     runs-on: ubuntu-latest
     steps:
-      - env:
+      - uses: actions/checkout@v6
+      - name: wait for the CI run
+        env:
           GH_TOKEN: ${{ github.token }}
         run: |
           sha="${{ github.sha }}"
@@ -30,12 +40,13 @@ jobs:
           # run fails the gate loudly — re-run the CI on the release commit,
           # then re-run this workflow.
           for _ in $(seq 1 50); do
-            read -r st cc < <(gh run list --repo "$GITHUB_REPOSITORY" --workflow=ci.yml \
-              --commit "$sha" --limit 1 --json status,conclusion \
-              --jq '.[0] | "\(.status) \(.conclusion // "")"' 2>/dev/null || echo "none ")
+            read -r st cc id < <(gh run list --repo "$GITHUB_REPOSITORY" --workflow=ci.yml \
+              --commit "$sha" --limit 1 --json status,conclusion,databaseId \
+              --jq '.[0] | "\(.status) \(.conclusion // "-") \(.databaseId)"' 2>/dev/null || echo "none - -")
             case "$st $cc" in
               "completed success")
-                echo "CI is green for $sha — publishing"
+                echo "CI is green for $sha (run $id)"
+                echo "run=$id" >> "$GITHUB_ENV"
                 exit 0 ;;
               "completed "*)
                 echo "::error::CI concluded '$cc' for $sha — refusing to publish the release image. Re-run the CI on this commit, then re-run this workflow."
@@ -47,8 +58,68 @@ jobs:
           echo "::error::timed out waiting for this commit's CI run"
           exit 1
 
-  image:
-    name: Build & publish image
+      # Green is not the same as blessed. The CI run concludes success even when
+      # a selftest FAILED, because the Windows one is continue-on-error — that is
+      # exactly how 33f8c40 published an image with a red selftest. The markers
+      # those jobs wrote are the honest record, so read them, with the same rule
+      # the CI's own image gate applies.
+      - name: the platform markers of that run must be green
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh run download "$run" --repo "$GITHUB_REPOSITORY" -p 'plat-*' -D markers; then
+            echo "::error::could not read the platform markers of CI run $run (expired, or the run never uploaded them) — re-run the CI on this commit, then re-run this workflow."
+            exit 1
+          fi
+          mkdir -p plat && find markers -name '*.txt' -exec cp {} plat/ \;
+          bash scripts/platform-grid.sh plat --strict
+
+  promote:
+    name: Promote the blessed image to the release tags
     needs: gate
-    uses: ./.github/workflows/_docker.yml
-    secrets: inherit
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: docker.io/softwarity/plug
+    steps:
+      - uses: docker/setup-buildx-action@v4
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_RW }}
+
+      # The image built and blessed by THIS commit's CI, by its immutable
+      # `sha-` handle. Not `latest`: another push to main moves latest between
+      # the CI run and this one, and we would ship whatever happened to be there.
+      - name: The release image must exist and carry the released version
+        run: |
+          ver="${GITHUB_REF#refs/tags/v}"
+          src="$IMAGE:sha-$(echo "${{ github.sha }}" | cut -c1-7)"
+          if ! docker buildx imagetools inspect "$src" >/dev/null 2>&1; then
+            echo "::error::$src does not exist — this commit's CI never published an image, so there is nothing blessed to release. Re-run the CI on this commit, then re-run this workflow."
+            exit 1
+          fi
+          # What the CLI itself reads. The version is stamped into the binaries
+          # at build time, so an image built before its tag existed would be
+          # stamped dev+<sha> — and promoting THAT would publish a "2.9.3" whose
+          # launcher announces dev. Read the file rather than trust the pipeline.
+          got=$(docker run --rm --entrypoint cat "$src" /opt/plug/VERSION)
+          if [ "$got" != "$ver" ]; then
+            echo "::error::$src is stamped '$got' but the tag says '$ver' — refusing to publish. The CI built it before the tag reached the runner; re-run the CI on this commit, then re-run this workflow."
+            exit 1
+          fi
+          echo "$src is stamped $got — promoting"
+          echo "src=$src" >> "$GITHUB_ENV"
+          echo "ver=$ver" >> "$GITHUB_ENV"
+
+      # A new manifest list over the SAME digests: no layer is rebuilt, nothing
+      # is fetched, and the released image is bit-for-bit the one the nine e2e
+      # legs ran against. Seconds instead of a quarter of an hour, and no network
+      # to have a bad minute.
+      - name: Put the release tags on that digest
+        run: |
+          maj=${ver%%.*}; min=${ver#*.}; min=${min%%.*}
+          docker buildx imagetools create \
+            -t "$IMAGE:$ver" -t "$IMAGE:$maj.$min" -t "$IMAGE:$maj" \
+            "$src"
+          docker buildx imagetools inspect "$IMAGE:$ver"

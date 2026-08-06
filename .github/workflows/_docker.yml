@@ -20,6 +20,12 @@ jobs:
         platform: [linux/amd64, linux/arm64]
     steps:
       - uses: actions/checkout@v6
+        with:
+          # The tags, because the version is resolved from the one pointing at
+          # THIS commit (see "Resolve version"). fetch-tags rather than
+          # fetch-depth: 0 — the tags are all we need and the history is not
+          # small.
+          fetch-tags: true
       - name: Prepare platform name
         run: echo "PLATFORM_PAIR=${platform//\//-}" >> "$GITHUB_ENV"
         env:
@@ -37,28 +43,41 @@ jobs:
           password: ${{ secrets.DOCKERHUB_RW }}
       - name: Resolve version
         id: ver
-        # A v-tag → its semver, bare. Any branch → "dev" plus the short commit as
-        # build metadata (Dockerfile), because "dev" alone names every build of
-        # every branch: without the commit, two rebuilds of `main` would look
-        # identical and the CLI would keep serving the cached core.
+        # The version comes from the TAG THAT POINTS AT THIS COMMIT — not from
+        # what triggered the run. That one change is what lets a release be a
+        # promotion instead of a rebuild.
         #
-        # A RELEASE needs none of that — v2.4.0 designates one commit, so the
-        # commit adds nothing and only makes the version harder to read
-        # everywhere it shows (plug version, plug versions, update messages).
-        # Consequence, and it is the right one: rebuilding a release tag in
-        # place no longer propagates — a release is immutable, cut a new one.
+        # release-flow creates the release commit ("2.9.3", the resolved notes)
+        # and tags it, pushing both. The push builds this image, and because the
+        # tag is on HEAD the image is stamped 2.9.3 — so docker-release only has
+        # to put the semver tags on that exact digest, which is also the digest
+        # `latest` points at. Before, the tag rebuilt from the same sources, and
+        # same sources is not the same artefact: `apk` and the wintun download
+        # reach the network again, which is precisely how 2.7.3 died on someone
+        # else's bad minute.
+        #
+        # (The e2e legs build their own :e2e image from this Dockerfile rather
+        # than consuming this one, so "released == e2e-tested" is still not true.
+        # What this buys is that released == what the CI of that commit shipped,
+        # one build instead of two, and no network at release time.)
+        #
+        # Any other commit → "dev" plus the short sha as build metadata, because
+        # "dev" alone names every build of every branch: without the commit, two
+        # rebuilds of `main` would look identical and the CLI would keep serving
+        # the cached core. A RELEASE needs none of that — v2.4.0 designates one
+        # commit, and the sha only makes the version harder to read everywhere it
+        # shows (plug version, plug versions, update messages).
         run: |
-          ref="${GITHUB_REF#refs/tags/v}"
-          case "$GITHUB_REF" in
-            refs/tags/v*)
-              echo "value=$ref" >> "$GITHUB_OUTPUT"
-              echo "rev="       >> "$GITHUB_OUTPUT"
-              ;;
-            *)
-              echo "value=dev"                 >> "$GITHUB_OUTPUT"
-              echo "rev=${GITHUB_SHA::7}"      >> "$GITHUB_OUTPUT"
-              ;;
-          esac
+          tag=$(git tag --points-at HEAD --list 'v*' | sort -V | tail -1)
+          if [ -n "$tag" ]; then
+            echo "value=${tag#v}" >> "$GITHUB_OUTPUT"
+            echo "rev="           >> "$GITHUB_OUTPUT"
+            echo "release version ${tag#v} (tag $tag points at $GITHUB_SHA)"
+          else
+            echo "value=dev"            >> "$GITHUB_OUTPUT"
+            echo "rev=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+            echo "dev version dev+${GITHUB_SHA::7} (no v-tag on this commit)"
+          fi
       - name: Build and push by digest
         id: build
         uses: docker/build-push-action@v7
@@ -106,6 +125,14 @@ jobs:
           tags: |
             type=ref,event=branch
             type=raw,value=latest,enable={{is_default_branch}}
+            # The immutable handle on this exact build: `sha-<short>`. It is what
+            # docker-release promotes to the semver tags, and it has to be a tag
+            # nothing else ever moves — `latest` cannot serve, since another push
+            # to main moves it between the CI and the release.
+            type=sha
+            # Only reachable if this reusable workflow is ever called on a tag
+            # ref. The release path does NOT: it promotes the digest the CI
+            # already built and blessed, rather than building again.
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
