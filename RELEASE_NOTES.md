@@ -2,6 +2,40 @@
 
 ## NEXT RELEASE
 
+### Fixed: an absent name took 3 seconds and came back as a fake address
+
+Asking for a name that does not exist in your cluster should fail immediately
+and honestly. On Docker Desktop it did the opposite: three seconds of waiting,
+then a `198.18.x` address for a service that is not there.
+
+The agent and the CLI had been given the same three-second budget, one waiting
+on the other. The agent could not answer in time whatever it concluded, so the
+CLI minted a fake address rather than stay silent — every time, not
+occasionally. And the case is the normal one on Docker Desktop: the embedded DNS
+forwards names it does not know upstream, upstream is your workstation, your
+workstation is plugged, so the question comes back to the resolver that asked
+it and nobody answers until something gives up.
+
+The agent now answers within 1.5 s at worst, well inside what the CLI waits for.
+Absent names fail immediately, and say so.
+
+Pinning `"dns"` in Docker Desktop is no longer needed to avoid this — it goes
+back to being the belt-and-braces measure it was always described as.
+
+### Fixed: `plug doctor` blamed the wrong thing, and gave a remedy that could not work
+
+The live NXDOMAIN check reported "the RUNNING datapath predates 2.2" and advised
+relaunching — on datapaths that were perfectly up to date, where relaunching
+changed nothing. The symptom it saw has two causes, and it only knew one.
+
+It now measures how long the probe took, which is the whole diagnosis: three
+seconds means the existence check timed out (and names the Docker Desktop loop),
+milliseconds mean the datapath never checked at all. A lookup that fails
+*slowly* is no longer reported as healthy either.
+
+The macOS remedy was wrong on its own terms: ending the sessions does not
+suffice, since the daemon outlives them. It now says `plug down`.
+
 ---
 
 ## 2.9.3
