@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.9.4
+
 ### Fixed: an absent name took 3 seconds and came back as a fake address
 
 Asking for a name that does not exist in your cluster should fail immediately
