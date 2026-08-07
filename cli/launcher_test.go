@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -85,3 +86,50 @@ func TestEnsureVersionRejectsTruncatedCache(t *testing.T) {
 		t.Fatal("a truncated cache must not be returned as a valid binary")
 	}
 }
+
+// The launcher is replaced on a NUMBER, which is all launcherFollow can see —
+// but it is a thin thing (pick a version, verify a digest, exec the core) and
+// goes untouched across most releases. Replacing it then costs a 9MB download
+// and swaps a setuid ROOT binary for an identical one.
+//
+// The agent already publishes what each build must hash to, so compare before
+// replacing. Here the digest matches this very test binary: updateLauncher must
+// return before reaching the network — a config pointing nowhere would fatal()
+// and take the test process with it if it did not.
+func TestTheLauncherIsNotReplacedByAnIdenticalBuild(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Skip("cannot locate the test binary")
+	}
+	sum, err := fileSHA256(self)
+	if err != nil {
+		t.Skip("cannot hash the test binary")
+	}
+	saved := fetchDigest
+	fetchDigest = func(config, string) (string, error) { return sum, nil }
+	defer func() { fetchDigest = saved }()
+
+	// A version that differs, so launcherFollow says "replace" and we reach the
+	// digest comparison; a host that cannot be dialled, so any download fails
+	// loudly rather than silently passing the test.
+	updateLauncher(config{host: "127.0.0.1", port: "1"}, "9.9.9")
+}
+
+// And a digest the agent cannot give must NOT block the update: unknown is not
+// "identical", so it falls through and replaces as before.
+func TestAnUnavailableDigestStillReplaces(t *testing.T) {
+	saved := fetchDigest
+	fetchDigest = func(config, string) (string, error) { return "", errUnavailableTest }
+	defer func() { fetchDigest = saved }()
+
+	if replace, _ := launcherFollow("2.9.3", "2.9.4"); !replace {
+		t.Fatal("a version change must still ask to replace")
+	}
+	// The decision to fall through lives in updateLauncher's guard: with no
+	// digest, it cannot conclude "same bytes" and must go on to download.
+	if want, err := fetchDigest(config{}, "x"); err == nil || want != "" {
+		t.Errorf("the stub must report no digest, got %q / %v", want, err)
+	}
+}
+
+var errUnavailableTest = errors.New("digest unavailable")

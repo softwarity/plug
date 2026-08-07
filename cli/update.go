@@ -346,13 +346,30 @@ func updateLauncher(cfg config, remote string) {
 	if err != nil {
 		fatal("%v", err)
 	}
+	// The VERSION moved; the BINARY may not have. launcherFollow compares numbers,
+	// which is all it can see — but the launcher is a thin thing (pick a version,
+	// verify a digest, exec the core) and it goes untouched across most releases.
+	// Replacing it anyway costs a 9MB download and, worse, swaps a setuid root
+	// file for an identical one.
+	//
+	// The agent already publishes what each build must hash to — ensureVersion
+	// asks on every single launch — so ask the same question and compare with
+	// what is on disk. A digest we cannot get is not a reason to skip the update:
+	// fall through and replace, as before.
+	osArch := runtime.GOOS + "-" + runtime.GOARCH
+	if want, derr := fetchDigest(cfg, osArch); derr == nil && want != "" {
+		if got, herr := fileSHA256(self); herr == nil && got == want {
+			info("launcher is already this exact build (same bytes) — nothing to replace")
+			return
+		}
+	}
 	// Retry, because we CAUSED the instability we are about to hit: the agent was
 	// just rolled, it already answers "which version?" from the new pod, and the
 	// very next connection can still land while the endpoint is switching over.
 	// One i/o timeout there failed the whole update at its last step, with the
 	// cluster already migrated — the worst possible place to give up.
 	data, err := fetchWithRetry(func() ([]byte, error) {
-		return getDownload(cfg, runtime.GOOS+"-"+runtime.GOARCH, shortVersion(remote))
+		return getDownload(cfg, osArch, shortVersion(remote))
 	}, 3, func(attempt int) time.Duration { return time.Duration(attempt) * 2 * time.Second })
 	if err != nil {
 		fatal("downloading %s: %v", shortVersion(remote), err)

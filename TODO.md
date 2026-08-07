@@ -59,14 +59,6 @@ désormais dans `RELEASE_NOTES.md` et la roadmap publique dans
       agent N-1 dédié, car il ferait rouler le `prev-agent-*` dont la suite de
       la cellule dépend.
 
-- [ ] **`plug status` + verbes d'action hors bande** (roadmap publiée le 31/07) :
-      lister les sessions vivantes, l'état de leur chemin, les arrêter ou
-      re-provisionner leur nom depuis n'importe quel terminal. Les
-      enregistrements `~/.plug/served` (PID, port agent, répertoire, commande)
-      existent déjà depuis le 31/07 — c'est la matière première. **Pas** de
-      raccourci clavier : la commande lancée possède `stdin`, et aucune touche
-      n'est libre sur tous les runtimes.
-
 **Contexte.** La **2.0.0** est publiée. Elle apporte le **sens retour** : `plug -s
 name:cluster-port:local-port` publie ton process dans le cluster sous un nom
 (remote-forward sshd, connexion SSH dédiée à la session), le nom est
@@ -92,7 +84,11 @@ vertes.
 ---
 
 ## 🟡 Ce qui reste hors CI (le banc → CI est bouclé)
-- [ ] **Windows sous VPN d'entreprise** : non prouvé sur un vrai client corpo (macOS OK avec GlobalProtect). Il faut un poste Windows avec un vrai client VPN — la box 192.168.2.17 ferait l'affaire si on y installe le client ; banc ~30 min ensuite. **Ce qui est désormais couvert en CI** (cellule « fake VPN » du selftest, ×3 OS) : une interface de plus portant un résolveur qui connaît un nom que rien d'autre ne connaît, annoncée par la porte que plug lit sur cet OS (2ᵉ adaptateur WinTUN + métrique sur Windows, `resolv.conf` sur Linux, dict DNS du service primaire sur macOS) → plug doit le suivre, résoudre le nom témoin à travers son stub, puis revenir quand le VPN disparaît. **Ce qui reste hors CI** : le split-tunnel (le trafic vers l'IP interne doit emprunter le tunnel), le NRPT / DNS conditionnel Windows, la MTU/fragmentation, et les clients qui interceptent le DNS en `127.0.0.1` (écartés par `pickUpstreams` sur Windows — à confronter à un vrai client corpo).
+- [ ] **arm64 publié, jamais exercé** (07/08) : `_docker.yml` construit et publie linux/arm64 à chaque release, et AUCUN e2e ne tourne dessus — les 9 jambes sont amd64. Le runner existe pourtant déjà (`ubuntu-24.04-arm`, utilisé pour ce build). Une jambe Compose arm64 suffirait à sortir de « on publie un artefact que rien n'a exécuté ».
+- [ ] **Les e2e testent une AUTRE image que celle publiée** (07/08) : `compose-for.yml` fait son propre `docker build -t softwarity/plug:e2e` (amd64, `VERSION=dev`) au lieu de consommer le digest de `_docker.yml`. Même Dockerfile, même commit, deux artefacts — et l'écart possible est exactement celui qui a tué 2.7.3 (`apk` et le fetch wintun refaits séparément). La promotion a supprimé un build sur trois ; celui-ci reste. Chantier : publier par digest AVANT les e2e, leur faire tirer ce digest, ne poser les tags qu'après.
+- [ ] **Rien ne confronte les remèdes du code à la doc** (07/08) : la page `cli` disait juste (« le daemon s'arrête seul ~30 s après la dernière session »), le remède de `doctor` disait le contraire — et c'est le remède qui a été suivi, quinze fois. Piste : un golden test des remèdes (toute modification casse le test et impose la relecture), plus une assertion que chaque commande citée dans un remède est un verbe existant.
+- [ ] **Le launcher se remplace sur un NUMÉRO, pas sur un contenu** (07/08) : `launcherFollow` compare `local != remote`, donc un binaire identique entre deux versions est quand même retéléchargé (~9 Mo) et un fichier **setuid root** remplacé pour rien. L'agent expose déjà le digest (`fetchDigest`, interrogé à chaque lancement par `ensureVersion`) : comparer le hash du binaire installé avant de le remplacer.
+- [ ] **`fec0:0:0:ffff::1/2/3` en fallback sur Windows** (07/08) : Windows attribue ces résolveurs IPv6 par défaut à tout adaptateur sans DNS configuré ; ils ne répondent jamais. `relay()` les essaie l'un après l'autre avec un budget PAR serveur → 3 × 4 s quand le résolveur primaire devient muet (SRV/MX/PTR seulement, le chemin A n'utilise que `primary()`). Piste retenue plutôt que de filtrer la plage — qui serait une décision de politique sur « ce qui est un résolveur légitime » — : borner le budget GLOBAL du fallback au lieu de le compter par serveur.
 - [ ] **Sessions longues & charge** : heures, gros transferts, sleep/wake. Piste actée : un workflow « soak » cron hebdo (session tenue 5-6 h, transferts gros volumes, asserts RSS/reconnexions) ; le sleep/wake réel reste un banc local assisté.
 
 ## 🟣 UDP par nom (relais de datagrammes) — REPORTÉ (décision 18/07)
@@ -117,6 +113,7 @@ UDP → porté mais QUIC-over-TCP est pathologique (les clients retombent en TCP
 toute façon).
 
 ## 🔵 Transport & intégration (roadmap)
+- [ ] **Windows sous VPN d'entreprise** : non prouvé sur un vrai client corpo (macOS OK avec GlobalProtect). Il faut un poste Windows avec un vrai client VPN — la box 192.168.2.17 ferait l'affaire si on y installe le client ; banc ~30 min ensuite. **Ce qui est désormais couvert en CI** (cellule « fake VPN » du selftest, ×3 OS) : une interface de plus portant un résolveur qui connaît un nom que rien d'autre ne connaît, annoncée par la porte que plug lit sur cet OS (2ᵉ adaptateur WinTUN + métrique sur Windows, `resolv.conf` sur Linux, dict DNS du service primaire sur macOS) → plug doit le suivre, résoudre le nom témoin à travers son stub, puis revenir quand le VPN disparaît. **Ce qui reste hors CI** : le split-tunnel (le trafic vers l'IP interne doit emprunter le tunnel), le NRPT / DNS conditionnel Windows, la MTU/fragmentation, et les clients qui interceptent le DNS en `127.0.0.1` (écartés par `pickUpstreams` sur Windows — à confronter à un vrai client corpo).
 - [ ] **IPv6** : fake-pool v6 + tunneling des littéraux v6 (fakes IPv4 aujourd'hui ; service par nom déjà OK).
 - [ ] **Transport `kubectl exec`** : tunnel via `kubectl exec` sur un pod nu — zéro port exposé, accès gouverné par le kubeconfig RBAC (adoucit le compromis no-auth).
 - [ ] **Gateway hôte du tunnel** : la gateway déjà déployée héberge l'endpoint et l'active dynamiquement — son auth devant. Fin de l'agent dédié. C'est **le mécanisme du « plug autorisé ici ou pas »** (dev : oui, prod : non — l'interdiction est une *absence*) et le point 4 des « implications côté plug » de `meerkat_integration.md` — doc de conception Meerkat, **hors dépôt** tant que son sort n'est pas tranché (public / privé / futur dépôt Meerkat) — qui fige la conception d'ensemble et les quatre autres chantiers qu'elle induit : auth par clé par dev, attribution nominative des sessions, API d'état (« qui plugge quoi depuis quand »), et plus tard le signpost-proxy L7.
