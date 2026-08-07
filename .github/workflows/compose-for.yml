@@ -31,42 +31,24 @@ permissions:
   actions: read # the serve idles by WATCHING the caller run — dead caller, dead cluster
 
 jobs:
-  # THE image under test: the agent is built from this branch FIRST, as its own
-  # pipeline stage — it then serves both the cluster services and the plug
-  # installer/binaries that every OS leg installs from. Two jobs mean two
-  # runners, so the image travels as an artifact (docker save → docker load).
+  # The agent image, built here ONLY when nobody handed us one — a manual
+  # dispatch. In CI the caller has already published it for this commit, so this
+  # job is skipped and `serve` pulls it straight from the registry.
+  #
+  # It used to run in every case and then ship the image to `serve` as an
+  # artifact: docker save → gzip → upload → download → load, about two minutes
+  # to move bytes both runners could already fetch from a registry. That sat on
+  # the critical path of EVERY leg, since no leg starts before its cluster
+  # answers — 268s of one Windows leg's 28 minutes was this wait.
   build-agent:
-    name: get the agent image (published, or built here)
+    name: build the agent image (manual dispatch only)
+    if: inputs.image == ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      # PULL what ci.yml published for this commit rather than building again.
-      # Same Dockerfile and same commit is NOT the same artefact — `apk` and the
-      # wintun download reach the network on every build, which is exactly how
-      # 2.7.3 died — so a leg that builds its own image cannot vouch for the one
-      # we ship. Falls back to building when dispatched by hand with no image.
-      - name: Get the agent image
-        run: |
-          if [ -n "${{ inputs.image }}" ]; then
-            # WAIT for it rather than require it: the caller dispatches us before
-            # the build finishes, on purpose — the reference is predictable, so
-            # booting this runner, checking out and joining the tailnet all
-            # happen while the image is still being built. Only the pull waits.
-            echo "waiting for ${{ inputs.image }} (built in parallel by the caller)"
-            for i in $(seq 1 60); do
-              docker pull -q "${{ inputs.image }}" && break
-              [ "$i" = 60 ] && { echo "::error::${{ inputs.image }} never appeared — did the image build fail?"; exit 1; }
-              sleep 15
-            done
-            docker tag "${{ inputs.image }}" softwarity/plug:e2e
-          else
-            echo "no image given (manual dispatch) — building from this checkout"
-            docker build -f agent/Dockerfile -t softwarity/plug:e2e .
-          fi
-          # --entrypoint: the image's entrypoint ignores its args and execs sshd in
-          # the foreground — without the override this docker run never returns.
-          echo "agent image ready — serves plug version: $(docker run --rm --entrypoint cat softwarity/plug:e2e /opt/plug/VERSION)" | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Save the image for the serve job
+      - name: Build it from this checkout
+        run: docker build -f agent/Dockerfile -t softwarity/plug:e2e .
+      - name: Save it for the serve job
         run: docker save softwarity/plug:e2e | gzip > /tmp/agent-image.tar.gz
       - uses: actions/upload-artifact@v7
         with:
@@ -77,15 +59,45 @@ jobs:
   serve:
     name: serve the cluster
     needs: build-agent
+    # `skipped` is the NORMAL outcome for build-agent: it only runs on a manual
+    # dispatch with no image. Without always() a skipped dependency would skip
+    # this job too, and no cluster would ever come up.
+    if: always() && (needs.build-agent.result == 'success' || needs.build-agent.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      # PULL what ci.yml published for this commit rather than building again.
+      # Same Dockerfile and same commit is NOT the same artefact — `apk` and the
+      # wintun download reach the network on every build, which is exactly how
+      # 2.7.3 died — so a cluster that builds its own image cannot vouch for the
+      # one we ship.
+      #
+      # WAIT for it rather than require it: the caller dispatches us before the
+      # build finishes, on purpose — the reference is predictable, so booting
+      # this runner and checking out happen while it is still being built.
+      - name: Pull the tested image
+        if: inputs.image != ''
+        run: |
+          echo "waiting for ${{ inputs.image }} (built in parallel by the caller)"
+          for i in $(seq 1 60); do
+            docker pull -q "${{ inputs.image }}" && break
+            [ "$i" = 60 ] && { echo "::error::${{ inputs.image }} never appeared — did the image build fail?"; exit 1; }
+            sleep 15
+          done
+          docker tag "${{ inputs.image }}" softwarity/plug:e2e
       - uses: actions/download-artifact@v7
+        if: inputs.image == ''
         with:
           name: agent-image
           path: /tmp
-      - name: Load the agent image
+      - name: Load the image built here
+        if: inputs.image == ''
         run: gunzip -c /tmp/agent-image.tar.gz | docker load
+      - name: Say what it serves
+        # --entrypoint: the image's entrypoint ignores its args and execs sshd in
+        # the foreground — without the override this docker run never returns.
+        run: |
+          echo "agent image ready — serves plug version: $(docker run --rm --entrypoint cat softwarity/plug:e2e /opt/plug/VERSION)" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Join the tailnet
         uses: tailscale/github-action@v3
         with:

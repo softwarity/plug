@@ -46,7 +46,8 @@ Compose). **Un seul build d'image** (`sha-<court>`, immuable), consommé tel que
 par les jambes ; il n'est **promu** sous des noms qu'une fois tout vert — branche
 → `:<branche>`, branche par défaut → `+ :latest`, tag `vx.y.z` posé sur HEAD →
 `+ :x.y.z, :x.y, :x`. Ce qui est publié est donc, au digest près, ce qui a été
-testé.
+testé. **Un seul build de clients e2e** aussi (`build-clients`), et les clusters
+**tirent l'image du registre** au lieu de se la faire livrer en artefact.
 
 ---
 
@@ -100,6 +101,14 @@ d'unknown host).
 ---
 
 ## ✅ Acquis
+
+### Post-2.10.0 (7 août 2026) — ce que la CI faisait dix fois
+Mesuré sur la jambe la plus lente (swarm/windows, 28 min), en décomposant au lieu
+de supposer. Trois postes, tous du travail **répété**, aucun une assertion :
+- [x] **Les clients e2e, construits une fois** (`scripts/ci/build-clients.sh`) : 493 s des 769 s de setup partaient dans leur build — go 278 s, node 99 s, java 74 s, python 42 s — et chacune des trois jambes Windows les repayait en entier. Le client Go n'a **aucun cgo** (tous ses drivers sont pur Go), donc un runner Linux cross-compile les quatre cibles ; un jar est du bytecode ; `node_modules` n'est que du JS. Seul python reste par jambe, ses wheels étant compilées. Les jambes ne compilent plus rien : `setup-go` a disparu de leurs étapes, et `echo-local`, que **neuf cellules** rebâtissaient chacune, arrive tout fait. Le bit exécutable ne survivant pas au zip d'un artefact, `take_prebuilt` le rétablit — sans quoi tout échouerait sur « permission denied » d'un fichier bien présent. Le repli (aucun artefact → on construit) reste le chemin d'un run local.
+- [x] **Le cache npm ne touchait JAMAIS sur Windows** : il pointait `~/.npm`, qui n'est pas le répertoire de cache de npm là-bas (`%LocalAppData%\npm-cache`) — le log le disait depuis toujours (`Cache not found for npm-Windows-…`, même la clé de repli). 99 s repayées à chaque jambe Windows. Le cache a disparu avec le build qu'il servait.
+- [x] **La grille de protocoles, décomposée selon ses deux axes** : l'axe **langage** (plug marche-t-il sous le résolveur de Java, de Python, de Node ?) est une propriété du CLIENT — il se prouve une fois par OS, sur les jambes compose. L'axe **protocole** (les huit traversent-ils ce réseau-là ?) est une propriété de la FAMILLE — swarm et k8s le prouvent avec `E2E_LANGS=go`. Rien n'est retiré : chaque assertion tourne là où elle veut dire quelque chose, au lieu que la jambe Windows/swarm dépense 276 s à re-prouver ce que la jambe compose venait d'établir sur Java.
+- [x] **L'image ne voyage plus en artefact** : `docker save` → gzip → upload → download → `docker load`, soit ~2 min pour déplacer des octets que les deux runners pouvaient tirer du registre. Le job `build-agent` ne subsiste que pour le dispatch manuel sans image ; `serve` tire directement. C'était sur le chemin critique de **chaque** jambe — aucune ne démarre avant que son cluster réponde, et l'attente mesurée était de 268 s.
 
 ### Post-2.10.0 (7 août 2026) — la dette de l'audit du 30/07, soldée
 - [x] **Un seul build d'image, et c'est celle qui est testée** : `compose-for.yml` construisait son propre `softwarity/plug:e2e` (amd64, `VERSION=dev`) pendant que `_docker.yml` en publiait un autre — même Dockerfile, deux artefacts, et l'écart possible est exactement celui qui a tué la 2.7.3 (`apk` et le fetch wintun refaits séparément). Les jambes **tirent** désormais le `sha-<court>` construit en amont ; elles l'**attendent** au lieu de l'exiger (le cluster démarre pendant le build, la référence étant prévisible). Le build par-jambe ne subsiste qu'en dispatch manuel sans image.

@@ -1,7 +1,20 @@
 bin/
 
-# e2e client binaries built locally (the CI builds its own on each runner)
+# What running the e2e leaves behind — locally, or on a runner whose bundle is
+# missing and which therefore falls back to building. The comment used to say
+# "the CI builds its own on each runner"; it does not any more (build-clients
+# does it once), but any of these can still appear from a bench run.
 e2e/clients/go/eclient
 e2e/clients/go/eclient.exe
+e2e/clients/java/target/
+e2e/clients/node/node_modules/
+e2e/clients/node/package-lock.json
+/e2e-clients/
+# Leading slash, or these would also match the SOURCE directories e2e/echo-local
+# and e2e/sink and quietly drop them from the repo.
+/echo-local
+/echo-local.exe
+/sink
+/sink.exe
 agent/helper/plug-agent
 cli/cli

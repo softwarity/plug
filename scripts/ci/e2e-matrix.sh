@@ -23,7 +23,21 @@ clients="$root/e2e/clients"
 cd "$root"
 envfile="${RUNNER_TEMP:-/tmp}/plug-e2e-env" # shared state, survives across steps
 
-LANGS="go node python java"
+# The protocol grid has two axes, and they do not belong in the same place.
+#
+#   · the LANGUAGE axis asks whether plug works under each runtime's own
+#     resolver and driver — Java's, Python's, Node's. That is a property of the
+#     CLIENT and of the OS it runs on; the cluster behind it does not
+#     participate. Proving it once per OS proves it.
+#   · the PROTOCOL axis asks whether those eight protocols cross this family's
+#     network — a bridge, a Swarm overlay, a kind CNI. That one IS per family.
+#
+# So the compose legs run the full grid (the language axis, per OS) and the
+# swarm and k8s legs run it with E2E_LANGS=go (the protocol axis, per family).
+# Nothing is dropped: each assertion runs where it means something. Measured on
+# the Windows swarm leg, the full grid cost 276s to re-prove what the compose
+# leg had already established about Java.
+LANGS="${E2E_LANGS:-go node python java}"
 # proto:host:port — the by-name target for each service.
 PROTOS="http:httpbin:8080 postgres:postgres:5432 redis:redis:6379 mongo:mongo:27017 amqp:rabbitmq:5672 mqtt:mosquitto:1883 grpc:grpc:50051 websocket:wsserver:8090"
 
@@ -41,6 +55,43 @@ esac
 ext=""; py="python3"
 case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) ext=".exe"; py="python" ;; esac
 SSH_OPTS="-p $port -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o BatchMode=yes"
+
+# --- prebuilt clients (see scripts/ci/build-clients.sh) -----------------------
+# PREBUILT_CLIENTS points at what one Linux runner produced for every leg: the
+# Go client and helpers cross-compiled per target, the jar, and node_modules.
+# Building those on each leg cost 493s of a 769s setup on Windows, three times
+# over, for bytes that are identical between legs.
+#
+# Unset — a local run, a manual dispatch — and everything builds as it always
+# did. That fallback is not decoration: it is how anyone runs this script
+# outside CI, so it stays exercised by the bench.
+prebuilt="${PREBUILT_CLIENTS:-}"
+case "$(uname -s)" in
+  Darwin)               gtag=darwin ;;
+  MINGW*|MSYS*|CYGWIN*) gtag=windows ;;
+  *)                    gtag=linux ;;
+esac
+case "$(uname -m)" in aarch64|arm64) gtag="$gtag-arm64" ;; *) gtag="$gtag-amd64" ;; esac
+
+# take_prebuilt <name> <destination> — install a cross-compiled binary if it is
+# there. Returns 1 when it is not, so every caller keeps its own build path: a
+# runner label we did not anticipate finds no binary for its $gtag and rebuilds,
+# which is slow but never wrong.
+#
+# chmod is not belt-and-braces: a GitHub artifact is a zip, and the executable
+# bit does not survive the round trip. Without it every cell fails on
+# "permission denied" from a file that is plainly there.
+take_prebuilt() {
+  [ -n "$prebuilt" ] && [ -f "$prebuilt/$1-$gtag$ext" ] || return 1
+  cp "$prebuilt/$1-$gtag$ext" "$2" && chmod +x "$2"
+}
+
+# helper_bin <name> — put e2e/<name>'s binary at $root/<name>$ext. echo-local is
+# rebuilt by NINE cells and sink by one; none of them needs its own compiler.
+helper_bin() {
+  take_prebuilt "$1" "$root/$1$ext" && return 0
+  ( cd "$root/e2e/$1" && go build -o "$root/$1$ext" . )
+}
 
 # --- wait for a cluster over the tailnet (echoes its IP once its agent answers) ---
 # 200×3s ≈ 10min: the cluster run builds the agent image in its own job and ships
@@ -154,12 +205,22 @@ do_setup() {
   "$PLUG" test --host "$ip" --port "$port" || { echo "installed plug cannot reach cluster A" >&2; exit 1; }
 
   echo "=== build clients ==="
-  build_go()     { ( cd "$clients/go" && go build -o "eclient$ext" . ); }
-  build_node()   { ( cd "$clients/node" && npm install --omit=dev --no-audit --no-fund ); }
+  # Each one takes what the shared build already produced, and falls back to
+  # building it. Only python has nothing to take: its wheels are compiled.
+  build_go()   { take_prebuilt eclient "$clients/go/eclient$ext" || ( cd "$clients/go" && go build -o "eclient$ext" . ); }
+  build_java() {
+    [ -n "$prebuilt" ] && [ -f "$prebuilt/client.jar" ] && {
+      mkdir -p "$clients/java/target" && cp "$prebuilt/client.jar" "$clients/java/target/client.jar"; return $?; }
+    ( cd "$clients/java" && mvn -e -B package ) # no -q: surface the goal on failure
+  }
+  build_node() {
+    [ -n "$prebuilt" ] && [ -f "$prebuilt/node_modules.tar.gz" ] && {
+      tar -xzf "$prebuilt/node_modules.tar.gz" -C "$clients/node"; return $?; }
+    ( cd "$clients/node" && npm install --omit=dev --no-audit --no-fund )
+  }
   # --break-system-packages: macOS runners ship a Homebrew Python that refuses a
   # plain `pip install` (externally-managed-environment).
   build_python() { $py -m pip install --quiet --disable-pip-version-check --user --break-system-packages -r "$clients/python/requirements.txt"; }
-  build_java()   { ( cd "$clients/java" && mvn -e -B package ); } # no -q: surface the goal on failure
   built=""
   for l in $LANGS; do
     if "build_$l" >"/tmp/build-$l.log" 2>&1; then
@@ -417,7 +478,7 @@ do_expose() {
     *) exposeport=18081 ;;
   esac
   echo "=== expose: $exname:$exposeport → this runner's :18086 ==="
-  if ! ( cd "$root/e2e/echo-local" && go build -o "$root/echo-local$ext" . ); then
+  if ! helper_bin echo-local; then
     echo "--- expose FAIL — echo-local did not build"; sum "**expose (cluster→local)** ❌ (build)"; return 1
   fi
   "$PLUG" --host "$ip" --port "$port" -s "$exname:$exposeport:18086" \
@@ -563,7 +624,7 @@ do_expose_var() {
     *) exposeport=18101 ;;
   esac
   echo "=== exposevar: $exname:$exposeport → a port plug picks, injected as {PORT} ==="
-  if ! ( cd "$root/e2e/echo-local" && go build -o "$root/echo-local$ext" . ); then
+  if ! helper_bin echo-local; then
     echo "--- exposevar FAIL — echo-local did not build"; sum "**expose, named port (-s …:PORT)** ❌ (build)"; return 1
   fi
   # echo-local defaults to :18086 when -addr is unusable — so an unsubstituted
@@ -600,7 +661,7 @@ do_gateway() {
     *) gwcport=18091 ;;
   esac
   echo "=== gateway callback: external POST → gateway → $gwname → our sink :$gwlocal ==="
-  if ! ( cd "$root/e2e/sink" && go build -o "$root/sink$ext" . ); then
+  if ! helper_bin sink; then
     echo "--- gateway FAIL — sink did not build"; sum "**gateway callback** ❌ (build)"; return 1
   fi
   # gw_call <expected> <json-body> — POST to the published gateway, retry (the
@@ -652,7 +713,7 @@ do_takeover() {
     *)                    tname=tko-linux tport=8085 ;;
   esac
   echo "=== takeover: park the deployed $tname, serve ours, restore ==="
-  if ! ( cd "$root/e2e/echo-local" && go build -o "$root/echo-local$ext" . ); then
+  if ! helper_bin echo-local; then
     echo "--- takeover FAIL — echo-local did not build"; sum "**takeover (park+restore)** ❌ (build)"; return 1
   fi
   probe() { plug curl -s --max-time 10 "http://prober:8097/fetch?url=http://$tname:$tport/" 2>/dev/null | tr -d '\r' | tail -1; }
@@ -711,7 +772,7 @@ do_multiport() {
     *)                    p1=18140 p2=18141 p3=18142 ;;
   esac
   echo "=== multi-port: $name:18131+18132+18133, one process, each port its own backend ==="
-  if ! ( cd "$root/e2e/echo-local" && go build -o "$root/echo-local$ext" . ); then
+  if ! helper_bin echo-local; then
     echo "--- multi-port FAIL — echo-local did not build"; sum "**one name, three ports** ❌ (build)"; return 1
   fi
   "$PLUG" --host "$ip" --port "$port" \
@@ -756,7 +817,7 @@ do_sameport() {
     *)                    pa=18121 pb=18122 ;;
   esac
   echo "=== same-port: $na:18120 AND $nb:18120, both live, both reachable ==="
-  if ! ( cd "$root/e2e/echo-local" && go build -o "$root/echo-local$ext" . ); then
+  if ! helper_bin echo-local; then
     echo "--- same-port FAIL — echo-local did not build"; sum "**same cluster port ×2** ❌ (build)"; return 1
   fi
   "$PLUG" --host "$ip" --port "$port" -s "$na:18120:$pa"     "$root/echo-local$ext" -addr 127.0.0.1:$pa -text "same-$na" >/tmp/samep-a.out 2>&1 &
@@ -790,7 +851,7 @@ do_collision() {
     *)                    cport=18084 ;;
   esac
   echo "=== collision: a second -s on $cname (held by a live session) must be refused ==="
-  if ! ( cd "$root/e2e/echo-local" && go build -o "$root/echo-local$ext" . ); then
+  if ! helper_bin echo-local; then
     echo "--- collision FAIL — echo-local did not build"; sum "**collision refused** ❌ (build)"; return 1
   fi
   # Session A holds the name for ~35s (natural end via -ttl — see do_takeover
@@ -856,7 +917,7 @@ do_lease() {
     *)                    lport=18130 lloc=18133 ;;
   esac
   echo "=== lease: $lname stays its own session's after the signpost is swept ==="
-  if ! ( cd "$root/e2e/echo-local" && go build -o "$root/echo-local$ext" . ); then
+  if ! helper_bin echo-local; then
     echo "--- lease FAIL — echo-local did not build"; sum "**name survives a swept signpost** ❌ (build)"; return 1
   fi
   # A holds the name for ~45s (natural end via -ttl — see do_takeover for why
@@ -921,7 +982,7 @@ do_resilience() {
   echo "=== resilience (cluster B): park $rname via $ragent, RESTART that agent, re-park, restore ==="
   local ip_b
   ip_b="$(wait_cluster "$peer_b")" || { echo "cluster $peer_b unreachable" >&2; sum "**resilience (agent crash)** ❌ (cluster B)"; return 1; }
-  if ! ( cd "$root/e2e/echo-local" && go build -o "$root/echo-local$ext" . ); then
+  if ! helper_bin echo-local; then
     echo "--- resilience FAIL — echo-local did not build"; sum "**resilience (agent crash)** ❌ (build)"; return 1
   fi
   bprobe() { plug_to "$ip_b" curl -s --max-time 10 "http://prober:8097/fetch?url=http://$rname:$rport/" 2>/dev/null | tr -d '\r' | tail -1; }
@@ -1197,7 +1258,7 @@ do_update_notify() {
   esac
   echo "    N-1 is $prev — its core carries the fixed check"
 
-  if [ ! -x "$root/echo-local$ext" ] && ! ( cd "$root/e2e/echo-local" && go build -o "$root/echo-local$ext" . ); then
+  if [ ! -x "$root/echo-local$ext" ] && ! helper_bin echo-local; then
     echo "--- update-notify FAIL — echo-local did not build"; sum "**update notify** ❌ (build)"; return 1
   fi
 
