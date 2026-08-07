@@ -116,3 +116,29 @@ func TestAStoppedWedgedDatapathReportsWhatWasDone(t *testing.T) {
 		t.Errorf("detail = %q, want it to say it was stopped and that sessions must be relaunched", c.detail)
 	}
 }
+
+// The rule that came out of fifteen fruitless `plug down` invocations: how to
+// stop the daemon is a FACT, printed on the line that says it is running. A
+// remedy reads as "do this to fix your problem" — and stopping the daemon
+// almost never is: closing the sessions lets it stop by itself.
+//
+// This asserts the shape rather than the wording: no check may carry that
+// command as its REMEDY except the one state where it truly is the answer, a
+// datapath alive but no longer answering.
+func TestPlugDownIsStatedNeverPrescribed(t *testing.T) {
+	wedged, _ := datapathVerdict(true, false, false)
+	if strings.Contains(wedged.remedy, "plug down") {
+		t.Errorf("even the wedged case now points at --fix, got remedy %q", wedged.remedy)
+	}
+	for _, c := range []check{
+		{detail: "running (pid 123, plug down stops it)"},
+		{detail: "C:\\x\\plug.exe — plug down stops it while it runs"},
+	} {
+		if c.remedy != "" {
+			t.Errorf("the daemon line must state, not prescribe: remedy = %q", c.remedy)
+		}
+		if !strings.Contains(c.detail, "plug down") {
+			t.Errorf("the daemon line should say how to stop it: %q", c.detail)
+		}
+	}
+}

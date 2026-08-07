@@ -56,7 +56,14 @@ func doctorOS(add func(check)) {
 				continue
 			}
 			pid, bin := f[0], f[1]
-			detail := "running (pid " + pid + ")"
+			// `plug down` belongs HERE and nowhere else: on the line that says
+			// something is running, as a statement of fact about how to stop it —
+			// never as a remedy. Printed as a remedy it reads as "do this to fix
+			// your problem", which it almost never is: closing the sessions lets
+			// the daemon stop by itself 30s later, and that is the answer to every
+			// version question. Fifteen fruitless invocations came out of that
+			// confusion.
+			detail := "running (pid " + pid + ", plug down stops it)"
 			if v := versionFromCorePath(bin); v != "" {
 				detail += ", core v" + v
 			} else {

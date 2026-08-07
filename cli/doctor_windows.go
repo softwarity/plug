@@ -47,6 +47,10 @@ func doctorOS(add func(check)) {
 				remedy = "the service keeps its install-time binary: re-run install-windows to refresh it"
 			}
 		}
+		// Same rule as macOS: how to stop it is a FACT about a running service,
+		// stated on its line — not a remedy. As a remedy it reads as the fix for
+		// whatever is wrong, and it almost never is.
+		detail += " — plug down stops it while it runs"
 		add(check{area: "local", name: "service", status: st, detail: detail, remedy: remedy})
 	}
 

@@ -35,10 +35,11 @@ alive, `plug doctor` says to close them (with the count — believing you had,
 while one was still open, is the whole trap), and `plug down` says what it is
 about to cost before doing it.
 
-The one case where `plug down` IS the answer is now detected instead of guessed:
-a daemon that is alive but whose resolver stopped answering. Nothing else
-reaches it — the reaper counts sessions, not health — so doctor calls it out
-with that remedy, and only there.
+`plug down` is now stated where it is a fact — on the line that says the daemon
+is running — and prescribed nowhere. Even the one state where stopping is the
+answer (a daemon alive but no longer answering its own resolver, which doctor
+now detects instead of guessing) is handled by `plug doctor --fix` rather than
+by sending you to another command.
 
 ### `plug doctor --fix` repairs the resolver it was already promising to repair
 
