@@ -1,6 +1,6 @@
 # plug — TODO / plan de travail
 
-_État : 1er août 2026 — **2.7.3 publiée**. L'historique des livraisons vit
+_État : 7 août 2026 — **2.10.0 publiée**. L'historique des livraisons vit
 désormais dans `RELEASE_NOTES.md` et la roadmap publique dans
 `docs/src/app/pages/roadmap.component.ts` ; ce fichier ne garde que ce qui est
 **ouvert** et le contexte qui ne tient pas ailleurs._
@@ -20,46 +20,9 @@ désormais dans `RELEASE_NOTES.md` et la roadmap publique dans
       notes de version **une fois le correctif livré** — c'est là qu'un défaut
       se raconte, pas avant.
 
-## 🟢 Ouvert — produit
+## 📋 Contexte
 
-- [ ] **Auto-update, ce qui reste** (le socle est livré : `plug config -p <c>
-      update=none|notify|auto` **par profil** — la gouvernance est une propriété
-      du cluster, pas du poste —, check quotidien en tâche de fond depuis le
-      core, avertissement au reconnect quand l'agent a bougé sous la session.
-      **Le check était mort-né en 2.9.0/2.9.1** — il demandait `version` sur le
-      canal tunnel, où ce verbe n'existe pas — corrigé le 05/08, donc réellement
-      fonctionnel à partir de la release qui suit.)
-      Restent deux trous : les déploiements sur **tag mouvant** (`latest`, une
-      branche) ne sont pas vérifiés — leur fraîcheur est une question de digest
-      que seul le cluster tranche, à ~31 s l'aller-retour, donc le check reste
-      muet pour eux ; et le mode `notify` ne **propose** rien, il informe. Le
-      « notify avec choix » demande un prompt, donc `term.IsTerminal` + une
-      échéance — le piège `askToStop` qui a bloqué une jambe Windows 16 min.
-
-- [ ] **Cellules e2e pour l'auto-update — attendre que N-1 porte le CORRECTIF**.
-      Tentée deux fois, retirée deux fois, même mécanisme à chaque coup : le
-      check tourne dans le CORE, et le core est celui que sert l'AGENT. Face à
-      `prev-agent-*` c'est donc le core N-1 qui s'exécute, jamais le code de la
-      branche.
-      · 01/08 : N-1 (2.7.3) ne connaissait pas le check → rien à tester.
-      · 05/08 : N-1 (2.9.0) le connaît mais il est CASSÉ (il demandait `version`
-        sur le canal tunnel, où ce verbe n'existe pas — corrigé le 05/08 dans la
-        branche, donc absent de 2.9.0). La cellule ne pouvait pas passer.
-      **Condition, cette fois vérifiable avant d'écrire quoi que ce soit** :
-      `docker run --rm --entrypoint sh softwarity/plug:$(bash
-      scripts/ci/previous-release.sh) -c 'strings /opt/plug/bin/plug-linux-amd64
-      | grep -c "unknown command"'` ne suffit PAS — il faut vérifier que N-1
-      contient le correctif, c.-à-d. que N-1 > 2.9.0. Autrement dit : réessayer
-      quand la release qui suit le 05/08 sera devenue N-1.
-      Quand ce sera le cas : `notify` se greffe dans `do_update_jump` (la
-      précondition — agent une release en retard sur une vraie image du registre
-      — y est déjà établie et vérifiée par la cellule elle-même) ; la session
-      doit durer (le check attend que le datapath se pose, puis dial + info +
-      registre) et le verdict se lit au lancement SUIVANT. `auto` demanderait un
-      agent N-1 dédié, car il ferait rouler le `prev-agent-*` dont la suite de
-      la cellule dépend.
-
-**Contexte.** La **2.0.0** est publiée. Elle apporte le **sens retour** : `plug -s
+La **2.0.0** est publiée. Elle apporte le **sens retour** : `plug -s
 name:cluster-port:local-port` publie ton process dans le cluster sous un nom
 (remote-forward sshd, connexion SSH dédiée à la session), le nom est
 **provisionné à la volée** (signpost Docker via le socket, service Swarm sur
@@ -75,22 +38,22 @@ Windows est désormais une **jambe e2e complète en CI**
 Windows » est bouclé.
 
 CI par push, 3 OS × **3 familles de clusters** (Compose, Swarm mono-nœud,
-Kubernetes/kind — 9 jambes, 6 clusters) : install-depuis-cluster → grille 4
-langages × 8 protocoles → multicluster simultané → outage recovery → env
-passthrough → `-s` → gateway callback → collision → takeover → compat
-launcher/core (famille Compose). L'image ne publie que si les 9 jambes sont
-vertes.
+Kubernetes/kind — 9 jambes amd64, plus une jambe Compose **arm64** depuis le
+07/08, 6 clusters) : install-depuis-cluster → grille 4 langages × 8 protocoles →
+multicluster simultané → outage recovery → env passthrough → `-s` → gateway
+callback → collision → takeover → auto-update → compat launcher/core (famille
+Compose). **Un seul build d'image** (`sha-<court>`, immuable), consommé tel quel
+par les jambes ; il n'est **promu** sous des noms qu'une fois tout vert — branche
+→ `:<branche>`, branche par défaut → `+ :latest`, tag `vx.y.z` posé sur HEAD →
+`+ :x.y.z, :x.y, :x`. Ce qui est publié est donc, au digest près, ce qui a été
+testé.
 
 ---
 
 ## 🟡 Ce qui reste hors CI (le banc → CI est bouclé)
-- [ ] **La cellule `resilience` entraîne les cellules `update` dans sa chute** (07/08) : elle crashe l'agent par conception ; si la restauration traîne, `update` et `update_tag` échouent sur « 2225 never came back » — trois cellules rouges pour une cause unique et transitoire. Mesuré : ça a coûté la publication de la 2.10.0 (`connection reset by peer` sur `res-tko-win`, le conteneur redémarrait encore). Elle attend déjà le retour du déployé, mais pas assez longtemps.
-- [ ] **Les noms de cellules e2e dérivent de `uname -s`, pas de la jambe** (07/08) : dix-huit `case "$(uname -s)"` dans `e2e-matrix.sh` produisent `exposed-linux`, `flaky-linux`, `tko-linux`, `lease-linux`… — donc DEUX jambes Linux sur un cluster partagé réclament les mêmes noms. Mesuré en ajoutant la jambe arm64 : elle a pris `exposed-linux` et fait tomber la jambe amd64, pas seulement elle-même. Tant que ce n'est pas corrigé, arm64 est limité aux cellules qui ne réservent rien (setup, env, matrix, multicluster). Les faire dériver de `$leg` — qui distingue déjà l'architecture — rendrait la couverture arm complète et supprimerait la restriction.
-- [ ] **arm64 publié, jamais exercé** (07/08) : `_docker.yml` construit et publie linux/arm64 à chaque release, et AUCUN e2e ne tourne dessus — les 9 jambes sont amd64. Le runner existe pourtant déjà (`ubuntu-24.04-arm`, utilisé pour ce build). **Partiellement fait (07/08)** : une jambe Compose arm64 exécute setup, env, la matrice de protocoles et le multicluster — l'artefact n'est plus publié à l'aveugle. Complet quand les noms de cellules dériveront de `$leg` (ligne au-dessus).
-- [ ] **Les e2e testent une AUTRE image que celle publiée** (07/08) : `compose-for.yml` fait son propre `docker build -t softwarity/plug:e2e` (amd64, `VERSION=dev`) au lieu de consommer le digest de `_docker.yml`. Même Dockerfile, même commit, deux artefacts — et l'écart possible est exactement celui qui a tué 2.7.3 (`apk` et le fetch wintun refaits séparément). La promotion a supprimé un build sur trois ; celui-ci reste. Chantier : publier par digest AVANT les e2e, leur faire tirer ce digest, ne poser les tags qu'après.
-- [ ] **Rien ne confronte les remèdes du code à la doc** (07/08) : la page `cli` disait juste (« le daemon s'arrête seul ~30 s après la dernière session »), le remède de `doctor` disait le contraire — et c'est le remède qui a été suivi, quinze fois. Piste : un golden test des remèdes (toute modification casse le test et impose la relecture), plus une assertion que chaque commande citée dans un remède est un verbe existant.
-- [ ] **Le launcher se remplace sur un NUMÉRO, pas sur un contenu** (07/08) : `launcherFollow` compare `local != remote`, donc un binaire identique entre deux versions est quand même retéléchargé (~9 Mo) et un fichier **setuid root** remplacé pour rien. L'agent expose déjà le digest (`fetchDigest`, interrogé à chaque lancement par `ensureVersion`) : comparer le hash du binaire installé avant de le remplacer.
-- [ ] **`fec0:0:0:ffff::1/2/3` en fallback sur Windows** (07/08) : Windows attribue ces résolveurs IPv6 par défaut à tout adaptateur sans DNS configuré ; ils ne répondent jamais. `relay()` les essaie l'un après l'autre avec un budget PAR serveur → 3 × 4 s quand le résolveur primaire devient muet (SRV/MX/PTR seulement, le chemin A n'utilise que `primary()`). Piste retenue plutôt que de filtrer la plage — qui serait une décision de politique sur « ce qui est un résolveur légitime » — : borner le budget GLOBAL du fallback au lieu de le compter par serveur.
+- [ ] **Le flake `resilience` — instrumenté le 07/08, pas encore diagnostiqué** : la cellule crashe l'agent par conception ; quand la restauration traîne, elle entraîne `update` et `update_tag` dans sa chute (« 2225 never came back ») — trois cellules rouges pour une cause unique. Ça a coûté la première publication de la 2.10.0. **Ce n'est pas un problème de délai** : `wait_agent` attend déjà 40 × 3 s et la boucle de restore 45 s ; allonger un timeout serait la troisième tentative du même geste. Les deux messages lus ensemble (`connection reset by peer` sur le service, puis le nom absent) désignent l'**agent** qui n'est pas revenu de son redémarrage — et c'est lui qui restaure le service parqué, via boot-gc. D'où `/agent-state` sur le service `chaos` (état du conteneur + 25 dernières lignes, `agent_state()` côté script) : à la prochaine occurrence, on lira au lieu de deviner.
+- [ ] **Couverture arm64 : 11 cellules sur 18 — OPTIONNEL, et le pourquoi compte** (07/08). Les noms de cellules dérivent de `$leg` depuis le 07/08 ; restent CINQ noms qui ne peuvent pas suivre parce qu'ils sont **déclarés côté cluster** : `flaky`, `tko`, `res-tko`, `res-agent`, `prev-agent`. Les faire dériver demande d'ajouter les variantes `-linuxarm` dans les trois manifestes (`e2e/compose.cluster.yml`, `swarm.cluster.yml`, `k8s.cluster.yaml`) avec des ports distincts, puis de remplacer les quatre `case "$(uname -s)"` restants (l. 380, 649, 916, 1088 de `e2e-matrix.sh`).
+      **Pas fait, délibérément** : ce que ces cinq cellules exercent (park/restore, takeover, compat launcher/core) est de l'orchestration côté agent au-dessus de l'API Docker — le même code Go, indifférent à l'architecture. Ce qui, lui, dépend vraiment du processeur — netstack gVisor, TUN userspace, checksums, atomiques — est déjà couvert sur arm par la matrice de protocoles et le multicluster. La dette initiale (« arm64 publié, jamais exercé ») est payée : l'artefact n'est plus publié à l'aveugle. **À rouvrir si** un bug spécifique arm apparaît, ou le jour où une deuxième jambe arm (swarm ou k8s) est ajoutée — là le coût marginal devient faible et la question change.
 - [ ] **Sessions longues & charge** : heures, gros transferts, sleep/wake. Piste actée : un workflow « soak » cron hebdo (session tenue 5-6 h, transferts gros volumes, asserts RSS/reconnexions) ; le sleep/wake réel reste un banc local assisté.
 
 ## 🟣 UDP par nom (relais de datagrammes) — REPORTÉ (décision 18/07)
@@ -138,13 +101,21 @@ d'unknown host).
 
 ## ✅ Acquis
 
+### Post-2.10.0 (7 août 2026) — la dette de l'audit du 30/07, soldée
+- [x] **Un seul build d'image, et c'est celle qui est testée** : `compose-for.yml` construisait son propre `softwarity/plug:e2e` (amd64, `VERSION=dev`) pendant que `_docker.yml` en publiait un autre — même Dockerfile, deux artefacts, et l'écart possible est exactement celui qui a tué la 2.7.3 (`apk` et le fetch wintun refaits séparément). Les jambes **tirent** désormais le `sha-<court>` construit en amont ; elles l'**attendent** au lieu de l'exiger (le cluster démarre pendant le build, la référence étant prévisible). Le build par-jambe ne subsiste qu'en dispatch manuel sans image.
+- [x] **Le repli du check d'update** : il interrogeait le registre depuis le POSTE, sans recours — derrière un proxy d'entreprise il ne trouvait rien, ne disait rien, et le silence ressemble à « tu es à jour ». Nouveau verbe agent `check-update`, qui réutilise `retarget(img)` — la résolution que fait déjà `self-update` — sans rien appliquer. Un agent trop ancien répond `unknown command`, que le CLI lit déjà comme « pas de réponse » : les clusters anciens gardent le silence d'avant au lieu de casser.
+- [x] **Les noms de cellules e2e dérivent de la jambe** : dix-huit `case "$(uname -s)"` produisaient `exposed-linux`, `lease-linux`… — donc deux jambes Linux sur un cluster partagé réclamaient les mêmes noms. Mesuré en ajoutant arm64 : elle a pris `exposed-linux` et **fait tomber la jambe amd64**, pas seulement elle-même. Les noms viennent de `$leg` : la jambe arm passe de 4 à 11 cellules. Restent cinq noms déclarés côté cluster — voir la ligne 🟡, qui explique pourquoi c'est un choix et pas un oubli.
+- [x] **Un golden test des remèdes** (`cli/remedies_test.go`) : il lit les **sources**, pas le paquet compilé, donc une machine de n'importe quel OS voit les remèdes des trois — le mauvais conseil qui a coûté une soirée vivait dans `doctor_darwin.go` et `doctor_windows.go`, invisibles depuis un run Linux. Trois règles : toute commande citée est un verbe qui existe, `plug down` n'est prescrit nulle part (il est un **fait** sur la ligne daemon, pas un remède), et un remède contient toujours quelque chose à faire.
+- [x] **Le launcher se remplace sur un contenu, plus sur un numéro** : `launcherFollow` comparait `local != remote`, donc un binaire identique entre deux versions était retéléchargé (~9 Mo) et un fichier **setuid root** remplacé pour rien. Le digest servi par l'agent est comparé avant. Un digest indisponible ne fait pas sauter la mise à jour — il fait retomber sur l'ancien critère.
+- [x] **`/agent-state` sur le service `chaos`** : état du conteneur + 25 dernières lignes, demandés depuis l'intérieur du cluster (avec `stripDockerFrames()` pour l'en-tête de multiplexage). Posé pour arrêter de deviner sur le flake `resilience`.
+
 ### Post-2.3.1 (23 juillet 2026)
 - [x] **Relicence AGPL-3.0 → FSL-1.1-Apache-2.0** : l'AGPL autorisait déjà un concurrent à intégrer `plug` dans un produit rival (ex. une gateway commercialisée) — à la seule condition qu'il republie son propre code, une obligation de partage, pas une interdiction. La FSL, elle, interdit directement cet usage concurrent (converge vers Apache-2.0 deux ans après chaque release, comme `meerkat` — cohérence de gamme). Tout le reste (usage libre, interne, intégration dans un produit non-concurrent) reste inchangé. `LICENSE`, badges, section README, `THIRD_PARTY_LICENSES.md`, page About du site mis à jour.
 
 ### Post-2.2.0 (19 juillet 2026)
 - [x] **`plug update`** : remonte la chaîne de distribution (registre → agent → launcher). Nouveau verbe agent `self-update` : k8s **rolling restart de son propre Deployment** (patch annotation ; le nœud re-pull le tag — RBAC officiel +`deployments get/list/patch`, 403 → remède exact), Swarm **service update forcé, digest retiré** (le manager re-résout le tag), conteneur plain **pull + commande de recréation** (il ne peut pas se recréer lui-même). Puis le **launcher se remplace depuis l'agent** (rename atomique, re-grant setuid/caps ; Windows : le service à la demande prend le nouveau binaire seul — le trou « version service vs launcher » fermé). Jamais de downgrade, jamais sur un build dev. Les sessions `-s` survivent au roll (self-heal). Cellule e2e `update` jambes compose (agents par-jambe), rolling k8s/swarm prouvé au banc M5.
 - [x] **`plug doctor`** : diagnostic lecture-seule de toute la chaîne avec remède par constat — binaires (launcher, cores en cache, **la version que le service/daemon exécute réellement** — le trou du bump, désormais détecté et nommé), état système (resolver plug SANS session = état sale ; daemon.json Docker Desktop ; sonde NXDOMAIN live sur le datapath qui tourne), et par profil : agent joignable/version, backend `-s` dynamique (nouveau verbe agent `info`), agent pre-2.2. En fin de rapport interactif : proposition d'**issue GitHub pré-remplie** (le navigateur = login + relecture ; hostnames/IPs rédigés, profils anonymisés — le repo est public). Banc M5 réel ✅ (a trouvé deux vrais problèmes du poste au passage), cellule e2e ×9 jambes.
-- [x] **Gate des images de release** : `docker-release.yml` attend désormais le **vert du run CI du commit taggé** avant de publier les images versionnées — le même contrat que `:latest` (leçon 2.2.0 : image saine partie pendant que la CI échouait sur une cellule cassée).
+- [x] **Gate des images de release** : `docker-release.yml` attendait le **vert du run CI du commit taggé** avant de publier les images versionnées — le même contrat que `:latest` (leçon 2.2.0 : image saine partie pendant que la CI échouait sur une cellule cassée). _Le fichier a été supprimé le 07/08 : la CI publie elle-même en fin de course, ce qui rend la gate structurelle au lieu de contractuelle — le job de promotion ne peut pas tourner si les jambes ne sont pas vertes. Effet de bord à connaître : un tag posé sur un commit construit AVANT ne publie plus rien, il faut relancer la CI sur ce commit._
 - [x] **Cellule resilience durcie** : agents de crash-test **par jambe** (`res-agent-<leg>`, chaos ciblé par label) — les trois jambes concurrentes ne s'entre-torpillent plus (le teardown perdait son agent quand les jambes s'alignaient) ; le prober témoin passe par l'agent principal, qui ne redémarre plus jamais.
 
 ### Post-2.1.0 (18-19 juillet 2026)

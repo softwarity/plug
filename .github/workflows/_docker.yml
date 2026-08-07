@@ -64,17 +64,16 @@ jobs:
         #
         # release-flow creates the release commit ("2.9.3", the resolved notes)
         # and tags it, pushing both. The push builds this image, and because the
-        # tag is on HEAD the image is stamped 2.9.3 — so docker-release only has
+        # tag is on HEAD the image is stamped 2.9.3 — so the publish job only has
         # to put the semver tags on that exact digest, which is also the digest
         # `latest` points at. Before, the tag rebuilt from the same sources, and
         # same sources is not the same artefact: `apk` and the wintun download
         # reach the network again, which is precisely how 2.7.3 died on someone
         # else's bad minute.
         #
-        # (The e2e legs build their own :e2e image from this Dockerfile rather
-        # than consuming this one, so "released == e2e-tested" is still not true.
-        # What this buys is that released == what the CI of that commit shipped,
-        # one build instead of two, and no network at release time.)
+        # The e2e legs PULL this image now instead of building their own, so
+        # "released == e2e-tested" holds at the digest: one build, tested, then
+        # renamed. No network at release time, nothing rebuilt on the way out.
         #
         # Any other commit → "dev" plus the short sha as build metadata, because
         # "dev" alone names every build of every branch: without the commit, two

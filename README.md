@@ -241,10 +241,15 @@ release your agent does not, and says so the next time you run plug:
 
 ```bash
 plug config -p neo                  # show that cluster's policy
-plug config -p neo update=notify    # default: say it, change nothing
+plug config -p neo update=notify    # default: tell you, and offer to apply
 plug config -p local update=auto    # apply it, on a cluster you govern
 plug config -p shared update=none   # never look, on one you do not
 ```
+
+`notify` asks, when there is a real terminal to ask in: it says what applying
+costs — rolling the cluster's agent, so every other session on it reconnects —
+the default is no, and it gives up after a few seconds. A script or a CI job
+sees the message and never a question.
 
 The policy belongs to the **profile**, not to the machine, because `auto`
 updates the **agent** — and an agent is shared. You may well govern your own
@@ -256,9 +261,16 @@ Nothing local is replaced under a running command — a session keeps the versio
 it started with, by design, because the core is holding your process. The new one
 is picked up the next time you launch.
 
-A deployment following a moving tag (`latest`, a branch) is not checked: whether
-such a tag has moved is a digest question only the cluster can answer, and asking
-costs about half a minute. Use `plug update` there.
+A deployment following a moving tag (`latest`, a branch) is checked too, on
+bytes rather than on a number: there is no version to compare — `latest` is
+always called `latest` — so plug asks the registry what that tag points at today
+and compares it with the digest the agent reports. Different digest, different
+image, and it says so.
+
+When the registry cannot be reached from your machine — a corporate proxy, a VPN
+that splits routes — plug asks the cluster instead, which pulls from that
+registry for a living. An agent too old to know the question stays silent, as
+before.
 
 ## Which DNS servers plug forwards to
 
