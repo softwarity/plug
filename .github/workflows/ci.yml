@@ -333,19 +333,21 @@ jobs:
         # GitHub expressions have no replace(), so the safe name is carried by
         # the matrix instead of computed from it.
         #
-        # The arm64 leg runs the CORE chain only — install, protocol matrix,
-        # multicluster, -s, gateway, collision, ports. The cells it skips are
-        # those bound to per-leg CLUSTER-SIDE resources (res-agent-<leg>,
-        # prev-agent-<leg>, flaky-<leg>, tko-<leg>, lease-<leg>): the cluster
-        # declares them for linux/mac/win, and a fourth leg either finds nothing
-        # under its own name or — worse — collides with the amd64 leg on names
-        # that are not per-leg at all. Measured: "lease-linux is already exposed
-        # by another live session", "want deployed-res-linuxarm".
+        # The arm64 leg runs setup, env passthrough, the protocol matrix and
+        # multicluster — and nothing that RESERVES a cluster-side name.
         #
-        # That is the right scope anyway. What was never exercised is the
-        # ARCHITECTURE — the datapath, the DNS, the tunnel, the protocols on a
-        # native arm64 client. Takeover and lease are about AGENT behaviour, and
-        # the agent is the same amd64 container in every leg.
+        # Every other cell derives its names from `uname -s` alone (exposed-linux,
+        # flaky-linux, tko-linux, lease-linux…), so a second Linux leg claims the
+        # very same ones: measured, arm64 took `exposed-linux` and broke the
+        # amd64 leg, not just itself. Eighteen such cases exist; rewriting them
+        # all to key off the leg is the clean fix, and it is not a thing to do
+        # the day before a release.
+        #
+        # This is the right scope regardless. What had NEVER been exercised is
+        # the architecture — install the arm64 binary from the cluster, bring up
+        # the datapath, resolve by name and speak 8 protocols in 4 languages,
+        # against two clusters at once. Takeover, lease and the update cells test
+        # AGENT behaviour, and the agent is the same amd64 container in every leg.
         include:
           - os: ubuntu-latest
             alias: ubuntu
@@ -431,19 +433,19 @@ jobs:
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh outage "$A" "$B" 2222
       - name: Expose — serve a local port to the cluster (-s)
-        if: always()
+        if: always() && matrix.os != 'ubuntu-24.04-arm'
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh expose "$A" "$B" 2222
       - name: Expose, named port — plug picks it, {PORT} carries it into the command
-        if: always()
+        if: always() && matrix.os != 'ubuntu-24.04-arm'
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh exposevar "$A" "$B" 2222
       - name: Gateway callback (external → published gateway → sink)
-        if: always()
+        if: always() && matrix.os != 'ubuntu-24.04-arm'
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh gateway "$A" "$B" 2222
       - name: Collision — a name already taken is refused
-        if: always()
+        if: always() && matrix.os != 'ubuntu-24.04-arm'
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh collision "$A" "$B" 2222
       - name: Name lease — a swept signpost must not free a live name
@@ -451,11 +453,11 @@ jobs:
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh lease "$A" "$B" 2222
       - name: Same cluster port — two names, both reachable
-        if: always()
+        if: always() && matrix.os != 'ubuntu-24.04-arm'
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh sameport "$A" "$B" 2222
       - name: Multi-port — one name, three cluster ports
-        if: always()
+        if: always() && matrix.os != 'ubuntu-24.04-arm'
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh multiport "$A" "$B" 2222
 
