@@ -1166,15 +1166,25 @@ do_update_notify() {
 
   # Session 1 — long enough for the check to settle, dial, ask `info` and reach
   # the registry. It writes the verdict; it does not announce it.
-  "$PLUG" --host "$ip_b" --port "$oldport" \
+  # -c: a pure client. Nothing to name and no port to reserve — this cell is
+  # about the background check, not about being reachable. (-s or -c is
+  # mandatory since 2.0: plug refuses to guess what a process is to the cluster.)
+  "$PLUG" --host "$ip_b" --port "$oldport" -c \
     "$root/echo-local$ext" -addr 127.0.0.1:18141 -text "notify-$leg" -ttl 40s >/tmp/notify1.out 2>&1 || true
 
   # Session 2 — the launcher reads what session 1 recorded, on its way past.
   local out2 rc2=0
-  out2="$("$PLUG" --host "$ip_b" --port "$oldport" \
+  out2="$("$PLUG" --host "$ip_b" --port "$oldport" -c \
           "$root/echo-local$ext" -addr 127.0.0.1:18142 -text "notify2-$leg" -ttl 3s </dev/null 2>&1)" || rc2=$?
   printf '%s\n' "$out2" | sed 's/^/    /'
 
+  # An invocation plug REFUSES prints its usage and exits — which reads as "said
+  # nothing about an update" and sent the first version of this cell chasing the
+  # check for nothing. Name that case for what it is.
+  if printf '%s' "$out2" | grep -q "tell plug what this process is"; then
+    echo "--- update-notify FAIL — plug refused the invocation (missing -s/-c), so no session ever ran"
+    sum "**update notify** ❌ — invocation refused"; return 1
+  fi
   if ! printf '%s' "$out2" | grep -q "update available"; then
     echo "--- update-notify FAIL — the second launch said nothing about an update, while the agent runs $prev and a newer release is published"
     echo "    (session 1 output follows)"; sed 's/^/    /' /tmp/notify1.out 2>/dev/null | tail -20
