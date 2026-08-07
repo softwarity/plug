@@ -2,6 +2,19 @@
 
 ## NEXT RELEASE
 
+### The auto-update check is now exercised end to end
+
+Written twice, pulled twice, for the same reason each time: the check runs in the
+CORE, and the core is whatever the AGENT serves — so against a one-release-behind
+agent it was N-1's code running, never the branch's. N-1 had no check (2.7.3),
+then had a broken one (2.9.0). The fix shipped in 2.9.2, so any N-1 from 2.9.3
+onwards carries it, and the cell verifies that rather than assuming it.
+
+It now proves the whole shape on all nine legs: one session lasts long enough for
+the background check to settle, dial the agent and reach the registry; the NEXT
+launch is the one that announces what it found — which is the design, since the
+session that finds it is busy running your command.
+
 ### Windows: the dead IPv6 resolvers are skipped, and said
 
 Windows gives `fec0:0:0:ffff::1/2/3` to every adapter that has no DNS of its

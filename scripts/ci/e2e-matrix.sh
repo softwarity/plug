@@ -1119,6 +1119,79 @@ fi
 # covered by the resilience cell. What this asserts is the DECISION.
 
 
+# update-notify: the BACKGROUND check, end to end — the one thing the update
+# cells never covered.
+#
+# It runs inside the CORE, and the core is whatever the AGENT serves. Against
+# prev-agent-* that is the N-1 core, never this branch's — which is why this cell
+# was written twice and pulled twice: N-1 either had no check (2.7.3) or had a
+# broken one (2.9.0 asked `version` on the tunnel channel, where the verb does
+# not exist). Both are now behind us: the fix shipped in 2.9.2, so any N-1 from
+# 2.9.3 on carries it. The condition is checked here rather than assumed.
+#
+# Shape imposed by the design: the check settles for 10s, then dials, asks the
+# agent `info` and queries the registry — so the session has to LAST. And its
+# verdict is deliberately not announced by the session that found it (that one is
+# busy running your command); it is read by the NEXT launch. Two sessions, then.
+do_update_notify() {
+  local oldport
+  case "$(uname -s)" in
+    Darwin)               oldport=2227 ;;
+    MINGW*|MSYS*|CYGWIN*) oldport=2228 ;;
+    *)                    oldport=2226 ;;
+  esac
+  echo "=== update-notify (cluster B): a session must FIND the newer release, the next one must SAY it ==="
+  local ip_b
+  ip_b="$(wait_cluster "$peer_b")" || { echo "cluster $peer_b unreachable" >&2; sum "**update notify** ❌ (cluster B)"; return 1; }
+
+  local prev
+  prev="$(ssh -n -p "$oldport" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+          -o LogLevel=ERROR "get@$ip_b" version 2>/dev/null | tr -d '\r')"
+  if ! printf '%s' "$prev" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+    echo "--- update-notify SKIP — the previous-release agent answered '${prev:-nothing}', not an x.y.z release"
+    sum "**update notify** – (no usable N-1)"; return 0
+  fi
+  # The precondition that sank this cell twice, now verified instead of hoped:
+  # the check itself must exist AND work in the core this agent serves.
+  case "$prev" in
+    2.7.*|2.8.*|2.9.0|2.9.1)
+      echo "--- update-notify SKIP — N-1 is $prev, whose background check predates the 05/08 fix (needs >= 2.9.2)"
+      sum "**update notify** – (N-1 $prev too old)"; return 0 ;;
+  esac
+  echo "    N-1 is $prev — its core carries the fixed check"
+
+  if [ ! -x "$root/echo-local$ext" ] && ! ( cd "$root/e2e/echo-local" && go build -o "$root/echo-local$ext" . ); then
+    echo "--- update-notify FAIL — echo-local did not build"; sum "**update notify** ❌ (build)"; return 1
+  fi
+
+  # Session 1 — long enough for the check to settle, dial, ask `info` and reach
+  # the registry. It writes the verdict; it does not announce it.
+  "$PLUG" --host "$ip_b" --port "$oldport" \
+    "$root/echo-local$ext" -addr 127.0.0.1:18141 -text "notify-$leg" -ttl 40s >/tmp/notify1.out 2>&1 || true
+
+  # Session 2 — the launcher reads what session 1 recorded, on its way past.
+  local out2 rc2=0
+  out2="$("$PLUG" --host "$ip_b" --port "$oldport" \
+          "$root/echo-local$ext" -addr 127.0.0.1:18142 -text "notify2-$leg" -ttl 3s </dev/null 2>&1)" || rc2=$?
+  printf '%s\n' "$out2" | sed 's/^/    /'
+
+  if ! printf '%s' "$out2" | grep -q "update available"; then
+    echo "--- update-notify FAIL — the second launch said nothing about an update, while the agent runs $prev and a newer release is published"
+    echo "    (session 1 output follows)"; sed 's/^/    /' /tmp/notify1.out 2>/dev/null | tail -20
+    sum "**update notify** ❌ — nothing announced"; return 1
+  fi
+  # It must name a release NEWER than the one running — announcing the version
+  # already deployed would be worse than silence.
+  local named
+  named="$(printf '%s' "$out2" | sed -n 's/.*update available: v\([0-9][0-9.]*\).*/\1/p' | head -1)"
+  if [ -z "$named" ] || [ "$named" = "$prev" ]; then
+    echo "--- update-notify FAIL — announced '${named:-nothing}' while running $prev"
+    sum "**update notify** ❌ — announced ${named:-nothing}"; return 1
+  fi
+  echo "update-notify OK — running $prev, a session found $named and the next launch announced it (rc $rc2)"
+  sum "**update notify** ✅ — $prev → $named announced by the following launch"
+}
+
 do_update_jump() {
   local oldport
   case "$(uname -s)" in
@@ -1269,6 +1342,7 @@ case "$phase" in
   multiport)    do_multiport ;;
   resilience)   do_resilience ;;
   update)       do_update ;;
+  updatenotify) do_update_notify ;;
   updatejump)   do_update_jump ;;
   updatetag)    do_update_tag ;;
   *) echo "unknown phase: $phase (want setup|env|matrix|multicluster|outage|expose|exposevar|gateway|takeover|collision|lease|resilience|update)" >&2; exit 2 ;;

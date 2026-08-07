@@ -403,6 +403,12 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh updatetag "$A" "$B" 2222
+      # BEFORE the jump: it needs the agent to still be one release behind, and
+      # the jump is what ends that.
+      - name: Update — the background check finds it, the next launch says it
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh updatenotify "$A" "$B" 2222
       - name: Update — a release agent retargets to the newest release
         if: always()
         shell: bash
@@ -536,6 +542,12 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh resilience "$A" "$B" 2222
+      # BEFORE the jump: it needs the agent to still be one release behind, and
+      # the jump is what ends that.
+      - name: Update — the background check finds it, the next launch says it
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh updatenotify "$A" "$B" 2222
       - name: Update — a release agent retargets to the newest release
         if: always()
         shell: bash
@@ -668,6 +680,12 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh resilience "$A" "$B" 2222
+      # BEFORE the jump: it needs the agent to still be one release behind, and
+      # the jump is what ends that.
+      - name: Update — the background check finds it, the next launch says it
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh updatenotify "$A" "$B" 2222
       - name: Update — a release agent retargets to the newest release
         if: always()
         shell: bash
