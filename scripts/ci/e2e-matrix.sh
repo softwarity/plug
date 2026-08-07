@@ -75,6 +75,21 @@ wait_agent() {
   return 1
 }
 
+# agent_state prints WHY an agent is not answering — its container state and its
+# own last lines, asked from inside the cluster through the chaos service.
+#
+# Written after three red cells pointed at one invisible cause: the resilience
+# cell restarts an agent by design, and when it did not come back every cell
+# using it failed saying only that. Two rounds of guessing at timeouts followed.
+# A cell that cannot explain its failure sends whoever reads it looking in the
+# wrong place — that is what this exists to stop.
+agent_state() {
+  as_ip="$1"; as_svc="$2"
+  echo "    --- state of $as_svc, from inside the cluster ---"
+  plug_to "$as_ip" curl -s --max-time 15 "http://chaos:8095/agent-state?svc=$as_svc" 2>/dev/null \
+    | tr -d '\r' | sed 's/^/    /' | tail -35
+}
+
 # -s is mandatory: every `plug <cmd>` names itself in the cluster. The UPWARD
 # families serve nothing, so they publish a throwaway name — ONE per OS leg (the
 # three legs share cluster A's agent and a remote-forward port binds once on it;
@@ -1054,6 +1069,10 @@ do_resilience() {
   fi
   echo "--- resilience FAIL — during='$during' after_crash='$after_crash' (want local-res-$leg) after='$after' (want deployed-res-$leg)"
   echo "    --- session output ---"; tail -15 /tmp/resilience.out 2>/dev/null | sed 's/^/    /'
+  # The agent it restarted is what restores the parked service through its boot
+  # gc, so when the service does not come back the agent is the first suspect —
+  # and it can say so itself.
+  agent_state "$ip_b" "$ragent"
   sum "**resilience (agent crash mid-session)** ❌ — during \`${during:-nothing}\` · post-crash \`${after_crash:-nothing}\` · after \`${after:-nothing}\`"; return 1
 }
 
@@ -1076,6 +1095,7 @@ do_update() {
   ip_b="$(wait_cluster "$peer_b")" || { echo "cluster $peer_b unreachable" >&2; sum "**plug update** ❌ (cluster B)"; return 1; }
   wait_agent "$ip_b" "$rsshport" || {
     echo "--- update FAIL — $rsshport never came back (the resilience cell crashes this agent)"
+    agent_state "$ip_b" "$ragent"
     sum "**plug update** ❌ — per-leg agent never came back"; return 1
   }
 

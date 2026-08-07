@@ -286,6 +286,70 @@ func main() {
 	// leaves the former alone — the agent keeps accepting new connections
 	// throughout, which is exactly what makes this a transport blip and not an
 	// outage.
+	// /agent-state?svc=<agent> — WHY an agent is not answering, instead of the
+	// cell reporting that it is not.
+	//
+	// The resilience cell restarts an agent by design and then waits for it. When
+	// it never came back the cell said exactly that and nothing else, so three
+	// red cells (the restore, then both update cells, which use that same agent)
+	// pointed at one invisible cause. Twice we guessed at timeouts; the honest
+	// first move is to look. Container state plus its last lines say whether it
+	// crashed, is restarting, or simply took longer than we waited.
+	mux.HandleFunc("/agent-state", func(w http.ResponseWriter, r *http.Request) {
+		svc := r.URL.Query().Get("svc")
+		if svc == "" {
+			svc = "agent"
+		}
+		if onK8s() {
+			http.Error(w, "agent-state is docker/swarm only (a pod's state is kubectl's job)", 501)
+			return
+		}
+		id, err := agentID(svc)
+		if err != nil {
+			http.Error(w, "no container for "+svc+": "+err.Error(), 500)
+			return
+		}
+		resp, err := docker("GET", "/containers/"+id+"/json")
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		var insp struct {
+			State struct {
+				Status     string `json:"Status"`
+				Running    bool   `json:"Running"`
+				Restarting bool   `json:"Restarting"`
+				ExitCode   int    `json:"ExitCode"`
+				Error      string `json:"Error"`
+				StartedAt  string `json:"StartedAt"`
+				FinishedAt string `json:"FinishedAt"`
+			} `json:"State"`
+			RestartCount int `json:"RestartCount"`
+		}
+		derr := json.NewDecoder(resp.Body).Decode(&insp)
+		resp.Body.Close()
+		if derr != nil {
+			http.Error(w, derr.Error(), 500)
+			return
+		}
+		fmt.Fprintf(w, "status=%s running=%v restarting=%v exit=%d restarts=%d started=%s finished=%s\n",
+			insp.State.Status, insp.State.Running, insp.State.Restarting,
+			insp.State.ExitCode, insp.RestartCount, insp.State.StartedAt, insp.State.FinishedAt)
+		if insp.State.Error != "" {
+			fmt.Fprintf(w, "error=%s\n", insp.State.Error)
+		}
+		// Its own last words. Docker multiplexes stdout/stderr with an 8-byte
+		// header per frame when there is no TTY; strip it rather than print the
+		// control bytes into a CI log.
+		lg, err := docker("GET", "/containers/"+id+"/logs?stdout=1&stderr=1&tail=25")
+		if err != nil {
+			return
+		}
+		defer lg.Body.Close()
+		raw, _ := io.ReadAll(io.LimitReader(lg.Body, 64<<10))
+		fmt.Fprint(w, "--- last lines ---\n"+stripDockerFrames(raw))
+	})
+
 	mux.HandleFunc("/kill-sessions", func(w http.ResponseWriter, r *http.Request) {
 		svc := r.URL.Query().Get("svc")
 		if svc == "" {
@@ -356,4 +420,21 @@ func main() {
 		fmt.Fprint(w, "removed")
 	})
 	panic(http.ListenAndServe(":8095", mux))
+}
+
+// stripDockerFrames removes the 8-byte stream header Docker puts in front of
+// every log frame when the container has no TTY. Without this the CI log gets
+// control bytes where the agent's own words should be.
+func stripDockerFrames(b []byte) string {
+	var out []byte
+	for len(b) >= 8 {
+		n := int(b[4])<<24 | int(b[5])<<16 | int(b[6])<<8 | int(b[7])
+		if n < 0 || n > len(b)-8 {
+			out = append(out, b[8:]...)
+			break
+		}
+		out = append(out, b[8:8+n]...)
+		b = b[8+n:]
+	}
+	return string(out)
 }

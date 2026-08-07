@@ -2,6 +2,19 @@
 
 ## NEXT RELEASE
 
+### The update check no longer goes silent when the registry is out of reach
+
+It asked the registry from YOUR machine and had no fallback: on a network that
+cannot reach it — a corporate proxy, a VPN that splits routes — the check found
+nothing, said nothing, and silence looks exactly like "you are up to date".
+
+The cluster can reach the registry; it pulls from it. So plug now asks the agent
+when it cannot ask itself. `plug update` always had that fallback, the
+background check never did.
+
+Needs an agent that knows the question: an older one answers `unknown command`,
+and plug keeps quiet exactly as before rather than inventing an answer.
+
 ---
 
 ## 2.10.0

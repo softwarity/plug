@@ -205,6 +205,49 @@ func dispatch(cmd []string) {
 			answer("version=%s backend=%s image=%s", ver, backend, img)
 		}
 		answer("version=%s backend=%s", ver, backend)
+	case "check-update":
+		// WHERE this deployment would go, without going there.
+		//
+		// The CLI's background check normally resolves this from the workstation,
+		// against the registry the image lives in. That has no fallback by
+		// design — "a timeout there is not a slower path, it is no check at all,
+		// silently" — so a machine whose network cannot reach the registry is
+		// never told anything. Measured on GitHub's macOS runners; it is also
+		// the shape of a corporate network, a proxy, or a VPN that splits
+		// routes, which is exactly where plug earns its keep.
+		//
+		// The cluster CAN reach the registry (it pulls from it), so ask it. One
+		// line, same first-word contract as self-update, and no side effect:
+		//   available <tag>   a newer release, or a moving tag that moved
+		//   current           nothing to take
+		//   error: …          could not tell (the CLI stays quiet, as before)
+		//
+		// An agent that predates this answers `unknown command`, which the CLI
+		// already treats as "no answer" — so old clusters keep today's silence
+		// rather than breaking.
+		{
+			img := ""
+			switch {
+			case k8sAvailable():
+				_, _, img, _, _ = k8sAgentDeployment()
+			case dockerAvailable():
+				if self, err := dockerSelf(); err == nil {
+					img = self.image
+				}
+			}
+			if img == "" {
+				answer("error: this agent cannot name its own image")
+			}
+			target, _, note := retarget(img)
+			if target == "" || target == img || retargetImageOnly(target) == retargetImageOnly(img) {
+				answer("current")
+			}
+			_, _, tag := parseImageRef(target)
+			if note != "" {
+				answer("available %s (%s)", tag, note)
+			}
+			answer("available %s", tag)
+		}
 	case "resolve":
 		// Does <name> exist in THIS cluster? The CLI asks before minting a fake
 		// IP for a bare name, so an absent name gets an honest NXDOMAIN instead

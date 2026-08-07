@@ -80,3 +80,24 @@ func TestNoTerminalMeansNoPrompt(t *testing.T) {
 		t.Error("offerUpdate ran an update with no terminal attached")
 	}
 }
+
+// The fallback's contract, tested where it matters: what the agent's one line
+// means. Anything that is not an explicit "available <tag>" must yield "" —
+// including `unknown command`, which is what an agent too old to know the verb
+// answers. Guessing there would announce an update that nobody can name.
+func TestTheAgentFallbackOnlyTrustsAnExplicitAnswer(t *testing.T) {
+	for _, tc := range []struct{ answer, want string }{
+		{"available 2.10.0", "2.10.0"},
+		{"available latest (moving tag)", "latest"},
+		{"available 2.10.0\n", "2.10.0"},
+		{"current", ""},
+		{"error: this agent cannot name its own image", ""},
+		{`error: unknown command "check-update"`, ""}, // an agent from before this
+		{"", ""},
+		{"available", ""}, // truncated: a tag was promised and not given
+	} {
+		if got := parseAgentUpdateAnswer(tc.answer); got != tc.want {
+			t.Errorf("agent said %q → %q, want %q", tc.answer, got, tc.want)
+		}
+	}
+}

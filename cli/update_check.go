@@ -207,6 +207,17 @@ func probeUpdate(cfg config) (found, img string, ok bool) {
 	host, repo, _ := parseImageRef(img)
 	tags, err := registryTagsWithin(host, repo, 20*time.Second)
 	if err != nil {
+		// This machine cannot reach the registry. Until now that ended the check
+		// — no answer, no message, and silence is indistinguishable from "you
+		// are up to date". It is also the machine plug is most useful on: a
+		// corporate network, a proxy, a VPN that splits routes. Measured on
+		// GitHub's macOS runners, where Docker Hub times out.
+		//
+		// The cluster reaches the registry (it pulls from it), so ask the agent.
+		// `plug update` has always had this fallback; the check never did.
+		if av := askAgentForUpdate(tr); av != "" {
+			return av, img, true
+		}
 		return "", "", false
 	}
 	apply, current, errMsg, delegate := decideClient(img, before, "", tags)
@@ -229,6 +240,34 @@ func probeUpdate(cfg config) (found, img string, ok bool) {
 		return "", img, true // up to date, and that IS an answer worth recording
 	}
 	return apply, img, true
+}
+
+// askAgentForUpdate asks the cluster what this deployment would move to, for
+// when this machine cannot ask the registry itself.
+//
+// Returns the available tag, or "" for anything else — including an agent too
+// old to know the verb, which answers `unknown command`. That case keeps the
+// previous behaviour (say nothing) rather than inventing one, so an old cluster
+// is no worse off than before.
+func askAgentForUpdate(tr *tunnel.Transport) string {
+	out, err := tr.Exec("check-update")
+	if err != nil {
+		return ""
+	}
+	return parseAgentUpdateAnswer(out)
+}
+
+// parseAgentUpdateAnswer reads the agent's one line. Split from the call so the
+// contract can be tested without a cluster — and the contract is: trust nothing
+// but an explicit "available <tag>". "current", an error, or the `unknown
+// command` of an agent too old all mean the same thing here, which is say
+// nothing.
+func parseAgentUpdateAnswer(out string) string {
+	f := strings.Fields(strings.TrimSpace(out))
+	if len(f) < 2 || f[0] != "available" {
+		return ""
+	}
+	return f[1]
 }
 
 // announceUpdate is the launcher's half: say what a previous session found, on
