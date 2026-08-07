@@ -391,10 +391,15 @@ do_outage() {
 # have a plain cluster workload (prober) fetch it. ONE name+port per OS leg.
 do_expose() {
   local exname exposeport
+  # Named from $leg, not from uname: two Linux legs (amd64 and arm64) would
+  # otherwise claim the same name on a shared cluster — measured, and it took
+  # the amd64 leg down with it. The port stays per-OS: it is local to this
+  # machine, and two signposts may share a cluster port anyway (see sameport).
+  exname="exposed-$leg"
   case "$(uname -s)" in
-    Darwin) exname=exposed-mac; exposeport=18082 ;;
-    MINGW*|MSYS*|CYGWIN*) exname=exposed-win; exposeport=18083 ;;
-    *) exname=exposed-linux; exposeport=18081 ;;
+    Darwin) exposeport=18082 ;;
+    MINGW*|MSYS*|CYGWIN*) exposeport=18083 ;;
+    *) exposeport=18081 ;;
   esac
   echo "=== expose: $exname:$exposeport → this runner's :18086 ==="
   if ! ( cd "$root/e2e/echo-local" && go build -o "$root/echo-local$ext" . ); then
@@ -536,10 +541,11 @@ do_expose() {
 # this asserts: a body, by name, through the cluster.
 do_expose_var() {
   local exname exposeport
+  exname="exposedvar-$leg"
   case "$(uname -s)" in
-    Darwin) exname=exposedvar-mac; exposeport=18102 ;;
-    MINGW*|MSYS*|CYGWIN*) exname=exposedvar-win; exposeport=18103 ;;
-    *) exname=exposedvar-linux; exposeport=18101 ;;
+    Darwin) exposeport=18102 ;;
+    MINGW*|MSYS*|CYGWIN*) exposeport=18103 ;;
+    *) exposeport=18101 ;;
   esac
   echo "=== exposevar: $exname:$exposeport → a port plug picks, injected as {PORT} ==="
   if ! ( cd "$root/e2e/echo-local" && go build -o "$root/echo-local$ext" . ); then
@@ -572,10 +578,11 @@ do_expose_var() {
 # on our sink; the sink answers "<path> <id>" back. Two calls: root and deep path.
 do_gateway() {
   local gwname gwcport gwlocal=18096
+  gwname="gwsink-$leg"
   case "$(uname -s)" in
-    Darwin) gwname=gwsink-mac; gwcport=18092 ;;
-    MINGW*|MSYS*|CYGWIN*) gwname=gwsink-win; gwcport=18093 ;;
-    *) gwname=gwsink-linux; gwcport=18091 ;;
+    Darwin) gwcport=18092 ;;
+    MINGW*|MSYS*|CYGWIN*) gwcport=18093 ;;
+    *) gwcport=18091 ;;
   esac
   echo "=== gateway callback: external POST → gateway → $gwname → our sink :$gwlocal ==="
   if ! ( cd "$root/e2e/sink" && go build -o "$root/sink$ext" . ); then
@@ -682,10 +689,11 @@ do_takeover() {
 # inside the cluster — reaching the wrong one is the bug this cell pins down.
 do_multiport() {
   local name p1 p2 p3
+  name="multip-$leg"
   case "$(uname -s)" in
-    Darwin)               name=multip-mac   p1=18143 p2=18144 p3=18145 ;;
-    MINGW*|MSYS*|CYGWIN*) name=multip-win   p1=18146 p2=18147 p3=18148 ;;
-    *)                    name=multip-linux p1=18140 p2=18141 p3=18142 ;;
+    Darwin)               p1=18143 p2=18144 p3=18145 ;;
+    MINGW*|MSYS*|CYGWIN*) p1=18146 p2=18147 p3=18148 ;;
+    *)                    p1=18140 p2=18141 p3=18142 ;;
   esac
   echo "=== multi-port: $name:18131+18132+18133, one process, each port its own backend ==="
   if ! ( cd "$root/e2e/echo-local" && go build -o "$root/echo-local$ext" . ); then
@@ -726,10 +734,11 @@ do_multiport() {
 # cluster, at the same time.
 do_sameport() {
   local na nb pa pb
+  na="samep-a-$leg" nb="samep-b-$leg"
   case "$(uname -s)" in
-    Darwin)               na=samep-a-mac   nb=samep-b-mac   pa=18123 pb=18124 ;;
-    MINGW*|MSYS*|CYGWIN*) na=samep-a-win   nb=samep-b-win   pa=18125 pb=18126 ;;
-    *)                    na=samep-a-linux nb=samep-b-linux pa=18121 pb=18122 ;;
+    Darwin)               pa=18123 pb=18124 ;;
+    MINGW*|MSYS*|CYGWIN*) pa=18125 pb=18126 ;;
+    *)                    pa=18121 pb=18122 ;;
   esac
   echo "=== same-port: $na:18120 AND $nb:18120, both live, both reachable ==="
   if ! ( cd "$root/e2e/echo-local" && go build -o "$root/echo-local$ext" . ); then
@@ -759,10 +768,11 @@ do_sameport() {
 
 do_collision() {
   local cname cport
+  cname="col-$leg"
   case "$(uname -s)" in
-    Darwin)               cname=col-mac   cport=18085 ;;
-    MINGW*|MSYS*|CYGWIN*) cname=col-win   cport=18086 ;;
-    *)                    cname=col-linux cport=18084 ;;
+    Darwin)               cport=18085 ;;
+    MINGW*|MSYS*|CYGWIN*) cport=18086 ;;
+    *)                    cport=18084 ;;
   esac
   echo "=== collision: a second -s on $cname (held by a live session) must be refused ==="
   if ! ( cd "$root/e2e/echo-local" && go build -o "$root/echo-local$ext" . ); then
@@ -824,10 +834,11 @@ do_collision() {
 # is the same code on all three families.
 do_lease() {
   local lname lport lloc
+  lname="lease-$leg"
   case "$(uname -s)" in
-    Darwin)               lname=lease-mac   lport=18131 lloc=18134 ;;
-    MINGW*|MSYS*|CYGWIN*) lname=lease-win   lport=18132 lloc=18135 ;;
-    *)                    lname=lease-linux lport=18130 lloc=18133 ;;
+    Darwin)               lport=18131 lloc=18134 ;;
+    MINGW*|MSYS*|CYGWIN*) lport=18132 lloc=18135 ;;
+    *)                    lport=18130 lloc=18133 ;;
   esac
   echo "=== lease: $lname stays its own session's after the signpost is swept ==="
   if ! ( cd "$root/e2e/echo-local" && go build -o "$root/echo-local$ext" . ); then

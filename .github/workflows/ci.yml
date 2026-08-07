@@ -168,7 +168,7 @@ jobs:
     secrets: inherit
 
   image:
-    name: Promote the tested image
+    name: Publish the tested image
     # Publish ONLY once EVERY test has passed — unit tests, the TUN selftests on
     # all three OSes, and the full mesh e2e on BOTH cluster families (compose
     # and kubernetes: protocol matrix + multicluster + takeover, ×3 OS each). An
@@ -189,6 +189,9 @@ jobs:
     if: success() && needs.platforms.outputs.verdict == 'pass' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-tags: true # a release is recognised by the tag pointing at HEAD
       - uses: docker/setup-buildx-action@v4
       - name: Log in to Docker Hub
         uses: docker/login-action@v4
@@ -198,15 +201,42 @@ jobs:
       # A new manifest list over the SAME digests the e2e legs just ran against.
       # Nothing is rebuilt, so "what we publish" and "what was tested" are the
       # same bytes — which was NOT true while the legs built their own image.
-      - name: Move the branch tags onto the tested digest
+      #
+      # Publishing is not a special act reserved for releases: it is one rule,
+      # and the ref decides which names the tested digest earns.
+      #
+      #   any branch            → :<branch>
+      #   the default branch    → :latest as well
+      #   a v-tag on HEAD       → :x.y.z, :x.y and :x on top
+      #
+      # A release used to be a separate workflow, triggered by the tag, waiting
+      # on this very run to finish before promoting. That existed because the tag
+      # once REBUILT the image; it does not any more. Folding it back here
+      # removes the gate that re-asks what this job already knows, the race
+      # between release-flow's two pushes, and the manual re-run when either side
+      # tripped — which is exactly what 2.10.0 cost.
+      #
+      # The one case it drops: a tag pushed onto a commit built EARLIER publishes
+      # nothing, since this job has already run for it. Re-run the CI on that
+      # commit and it lands.
+      - name: Put the names this ref earns on the tested digest
         env:
           IMAGE: docker.io/softwarity/plug
           SRC: ${{ needs.image-build.outputs.image }}
         run: |
-          branch="${GITHUB_REF_NAME//\//-}"   # a tag cannot carry a slash
+          branch="${GITHUB_REF_NAME//\//-}"   # a docker tag cannot carry a slash
           tags="-t $IMAGE:$branch"
           if [ "$GITHUB_REF_NAME" = "${{ github.event.repository.default_branch }}" ]; then
             tags="$tags -t $IMAGE:latest"
+          fi
+          v=$(git tag --points-at HEAD --list 'v*' | sort -V | tail -1)
+          if [ -n "$v" ]; then
+            ver=${v#v}; maj=${ver%%.*}; min=${ver#*.}; min=${min%%.*}
+            # The image itself is stamped with this version (see "Resolve
+            # version" in _docker.yml), so the semver tags and the binaries
+            # inside them cannot disagree: same commit, same build, one truth.
+            tags="$tags -t $IMAGE:$ver -t $IMAGE:$maj.$min -t $IMAGE:$maj"
+            echo "release $ver — publishing the semver tags too"
           fi
           echo "promoting $SRC → $tags"
           docker buildx imagetools create $tags "$SRC"
@@ -333,21 +363,18 @@ jobs:
         # GitHub expressions have no replace(), so the safe name is carried by
         # the matrix instead of computed from it.
         #
-        # The arm64 leg runs setup, env passthrough, the protocol matrix and
-        # multicluster — and nothing that RESERVES a cluster-side name.
+        # The arm64 leg runs everything whose names it can own: the cells that
+        # create their own names through -s now derive them from $leg, so a
+        # second Linux leg no longer claims exposed-linux, col-linux, lease-linux
+        # and the rest from under the amd64 one (measured — it took that leg down
+        # with it, not just itself).
         #
-        # Every other cell derives its names from `uname -s` alone (exposed-linux,
-        # flaky-linux, tko-linux, lease-linux…), so a second Linux leg claims the
-        # very same ones: measured, arm64 took `exposed-linux` and broke the
-        # amd64 leg, not just itself. Eighteen such cases exist; rewriting them
-        # all to key off the leg is the clean fix, and it is not a thing to do
-        # the day before a release.
-        #
-        # This is the right scope regardless. What had NEVER been exercised is
-        # the architecture — install the arm64 binary from the cluster, bring up
-        # the datapath, resolve by name and speak 8 protocols in 4 languages,
-        # against two clusters at once. Takeover, lease and the update cells test
-        # AGENT behaviour, and the agent is the same amd64 container in every leg.
+        # What it still skips are the cells bound to services the CLUSTER
+        # declares per leg: flaky-<leg>, tko-<leg>, res-tko-<leg>, res-agent-<leg>,
+        # prev-agent-<leg>. Those exist for linux/mac/win only, and adding a
+        # fourth set would double the Linux load on a shared cluster to re-prove
+        # AGENT behaviour — which cannot depend on the client's architecture,
+        # since the agent is the same amd64 container in every leg.
         include:
           - os: ubuntu-latest
             alias: ubuntu
@@ -433,31 +460,31 @@ jobs:
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh outage "$A" "$B" 2222
       - name: Expose — serve a local port to the cluster (-s)
-        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh expose "$A" "$B" 2222
       - name: Expose, named port — plug picks it, {PORT} carries it into the command
-        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh exposevar "$A" "$B" 2222
       - name: Gateway callback (external → published gateway → sink)
-        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh gateway "$A" "$B" 2222
       - name: Collision — a name already taken is refused
-        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh collision "$A" "$B" 2222
       - name: Name lease — a swept signpost must not free a live name
-        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh lease "$A" "$B" 2222
       - name: Same cluster port — two names, both reachable
-        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh sameport "$A" "$B" 2222
       - name: Multi-port — one name, three cluster ports
-        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh multiport "$A" "$B" 2222
 

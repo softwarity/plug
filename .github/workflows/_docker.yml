@@ -143,13 +143,13 @@ jobs:
             type=ref,event=branch,enable=${{ !inputs.immutable_only }}
             type=raw,value=latest,enable=${{ !inputs.immutable_only && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
             # The immutable handle on this exact build: `sha-<short>`. It is what
-            # docker-release promotes to the semver tags, and it has to be a tag
-            # nothing else ever moves — `latest` cannot serve, since another push
-            # to main moves it between the CI and the release.
+            # the e2e legs pull and what the publish job promotes, so it has to
+            # be a tag nothing else ever moves — `latest` cannot serve, since
+            # another push to main would move it under them.
             type=sha
-            # Only reachable if this reusable workflow is ever called on a tag
-            # ref. The release path does NOT: it promotes the digest the CI
-            # already built and blessed, rather than building again.
+            # Dead unless this reusable workflow is ever called on a tag ref,
+            # which the release path does not do: the semver tags are put on the
+            # tested digest by the publish job at the end of the CI.
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}

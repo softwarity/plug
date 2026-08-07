@@ -19,7 +19,9 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          # Persist the PAT so release-flow's tag push carries it (→ triggers docker-release.yml).
+          # Persist the PAT so release-flow's push carries it — a push made with the
+          # default GITHUB_TOKEN triggers no workflow, and the CI run of this very
+          # commit is what builds, tests and publishes the release image.
           token: ${{ secrets.PAT_TOKEN }}
 
       - name: Release
