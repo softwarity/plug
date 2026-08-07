@@ -6,6 +6,21 @@ name: Reusable Docker build & publish
 # the same logic serves branch pushes (CI) and version tags (release).
 on:
   workflow_call:
+    inputs:
+      immutable_only:
+        description: >-
+          Only put the immutable `sha-<short>` tag on the manifest, leaving
+          `latest` and the branch name for later. That is what lets the e2e
+          legs pull THIS build and be the thing that decides whether it earns
+          the moving tags — a digest nobody has exercised must never be what
+          `latest` points at.
+        type: boolean
+        required: false
+        default: false
+    outputs:
+      image:
+        description: The immutable reference this build published (softwarity/plug:sha-<short>)
+        value: ${{ jobs.merge.outputs.image }}
 
 env:
   IMAGE: docker.io/softwarity/plug
@@ -109,6 +124,8 @@ jobs:
     name: Merge manifest list
     runs-on: ubuntu-latest
     needs: build
+    outputs:
+      image: ${{ steps.ref.outputs.image }}
     steps:
       - name: Download digests
         uses: actions/download-artifact@v7
@@ -123,8 +140,8 @@ jobs:
         with:
           images: ${{ env.IMAGE }}
           tags: |
-            type=ref,event=branch
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch,enable=${{ !inputs.immutable_only }}
+            type=raw,value=latest,enable=${{ !inputs.immutable_only && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
             # The immutable handle on this exact build: `sha-<short>`. It is what
             # docker-release promotes to the semver tags, and it has to be a tag
             # nothing else ever moves — `latest` cannot serve, since another push
@@ -149,3 +166,8 @@ jobs:
             $(printf '${{ env.IMAGE }}@sha256:%s ' *)
       - name: Inspect
         run: docker buildx imagetools inspect "${{ env.IMAGE }}:${{ steps.meta.outputs.version }}"
+      # What the e2e clusters pull. A tag rather than a bare digest: the cluster
+      # manifests and compose files take an image reference, and `sha-<short>`
+      # names this build and only this build.
+      - id: ref
+        run: echo "image=${{ env.IMAGE }}:sha-$(echo ${{ github.sha }} | cut -c1-7)" >> "$GITHUB_OUTPUT"

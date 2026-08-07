@@ -155,8 +155,20 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  # Build FIRST, so the e2e legs run against the image we actually publish
+  # instead of one they build themselves. It carries only `sha-<short>` at this
+  # point: a digest nobody has exercised must never be what `latest` points at.
+  image-build:
+    name: Build image (immutable tag only)
+    needs: test
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/_docker.yml
+    with:
+      immutable_only: true
+    secrets: inherit
+
   image:
-    name: Build & publish image
+    name: Promote the tested image
     # Publish ONLY once EVERY test has passed — unit tests, the TUN selftests on
     # all three OSes, and the full mesh e2e on BOTH cluster families (compose
     # and kubernetes: protocol matrix + multicluster + takeover, ×3 OS each). An
@@ -173,10 +185,32 @@ jobs:
     # `platforms` reads the markers those jobs wrote, which is the only record
     # that cannot lie — without it the image of 33f8c40 shipped with a red
     # Windows selftest, past a comment promising the opposite.
-    needs: [build, selftest, platforms, e2e-compose, e2e-k8s, e2e-swarm]
+    needs: [image-build, build, selftest, platforms, e2e-compose, e2e-k8s, e2e-swarm]
     if: success() && needs.platforms.outputs.verdict == 'pass' && github.event_name != 'pull_request'
-    uses: ./.github/workflows/_docker.yml
-    secrets: inherit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/setup-buildx-action@v4
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_RW }}
+      # A new manifest list over the SAME digests the e2e legs just ran against.
+      # Nothing is rebuilt, so "what we publish" and "what was tested" are the
+      # same bytes — which was NOT true while the legs built their own image.
+      - name: Move the branch tags onto the tested digest
+        env:
+          IMAGE: docker.io/softwarity/plug
+          SRC: ${{ needs.image-build.outputs.image }}
+        run: |
+          branch="${GITHUB_REF_NAME//\//-}"   # a tag cannot carry a slash
+          tags="-t $IMAGE:$branch"
+          if [ "$GITHUB_REF_NAME" = "${{ github.event.repository.default_branch }}" ]; then
+            tags="$tags -t $IMAGE:latest"
+          fi
+          echo "promoting $SRC → $tags"
+          docker buildx imagetools create $tags "$SRC"
+          docker buildx imagetools inspect "$IMAGE:$branch" | head -5
 
   # The e2e that native-Linux Docker can't give us: run plug NATIVELY on each OS
   # against a REAL cluster, reaching services BY NAME over a Tailscale mesh (the
@@ -201,6 +235,7 @@ jobs:
   # always() as long as this job succeeded, e2e skipped or not).
   start-cluster:
     name: start clusters
+    needs: image-build
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
@@ -221,26 +256,32 @@ jobs:
       - id: dispatch_a
         env:
           GH_TOKEN: ${{ github.token }}
+          CLUSTER_IMAGE: ${{ needs.image-build.outputs.image }}
         run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-a)" >> "$GITHUB_OUTPUT"
       - id: dispatch_b
         env:
           GH_TOKEN: ${{ github.token }}
+          CLUSTER_IMAGE: ${{ needs.image-build.outputs.image }}
         run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-b)" >> "$GITHUB_OUTPUT"
       - id: dispatch_ka
         env:
           GH_TOKEN: ${{ github.token }}
+          CLUSTER_IMAGE: ${{ needs.image-build.outputs.image }}
         run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-ka k8s-for.yml)" >> "$GITHUB_OUTPUT"
       - id: dispatch_kb
         env:
           GH_TOKEN: ${{ github.token }}
+          CLUSTER_IMAGE: ${{ needs.image-build.outputs.image }}
         run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-kb k8s-for.yml)" >> "$GITHUB_OUTPUT"
       - id: dispatch_sa
         env:
           GH_TOKEN: ${{ github.token }}
+          CLUSTER_IMAGE: ${{ needs.image-build.outputs.image }}
         run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-sa swarm-for.yml)" >> "$GITHUB_OUTPUT"
       - id: dispatch_sb
         env:
           GH_TOKEN: ${{ github.token }}
+          CLUSTER_IMAGE: ${{ needs.image-build.outputs.image }}
         run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-sb swarm-for.yml)" >> "$GITHUB_OUTPUT"
       # The compat cell needs the LAST PUBLISHED launcher for every OS, but only
       # this Linux job has Docker — extract all of them from the published image
@@ -271,7 +312,13 @@ jobs:
     strategy:
       fail-fast: false # one OS failing must not cancel the others
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # ubuntu-24.04-arm is the leg that was missing: linux/arm64 has been
+        # built and published on every release since the multi-arch image
+        # existed, and NOTHING ever ran it — every leg was amd64. Same cluster,
+        # same cells, a native arm64 client. Compose only: the gap is the
+        # ARCHITECTURE, and replaying it on three families would cost three
+        # times as much to learn the same thing.
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -405,6 +452,12 @@ jobs:
         run: bash scripts/ci/e2e-matrix.sh updatetag "$A" "$B" 2222
       # BEFORE the jump: it needs the agent to still be one release behind, and
       # the jump is what ends that.
+      #
+      # COMPOSE ONLY, like the compat cell and for the same reason: what this
+      # proves — a session finds the newer release, the NEXT launch announces it
+      # — happens between the CLI, the agent and the registry. No backend takes
+      # part, so replaying it on Swarm and k8s costs 45s a leg to learn the same
+      # thing three times.
       - name: Update — the background check finds it, the next launch says it
         if: always()
         shell: bash
@@ -542,12 +595,6 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh resilience "$A" "$B" 2222
-      # BEFORE the jump: it needs the agent to still be one release behind, and
-      # the jump is what ends that.
-      - name: Update — the background check finds it, the next launch says it
-        if: always()
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh updatenotify "$A" "$B" 2222
       - name: Update — a release agent retargets to the newest release
         if: always()
         shell: bash
@@ -680,12 +727,6 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh resilience "$A" "$B" 2222
-      # BEFORE the jump: it needs the agent to still be one release behind, and
-      # the jump is what ends that.
-      - name: Update — the background check finds it, the next launch says it
-        if: always()
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh updatenotify "$A" "$B" 2222
       - name: Update — a release agent retargets to the newest release
         if: always()
         shell: bash

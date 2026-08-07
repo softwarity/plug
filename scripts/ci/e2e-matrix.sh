@@ -85,6 +85,12 @@ case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) leg=win;   sport=18073 ;;
   *)                    leg=linux; sport=18071 ;;
 esac
+# Two Linux legs now share cluster A — amd64 and arm64 — and they must not share
+# a NAME or a port: `-s run-linux` twice is a collision, which is a different
+# cell's subject entirely. The architecture is what tells them apart.
+case "$(uname -m)" in
+  aarch64|arm64) [ "$leg" = linux ] && { leg=linuxarm; sport=18074; } ;;
+esac
 serve="-s run-${leg}:${sport}:9"   # hyphen only — an underscore is not a valid DNS label
 
 # Per-cell timeout: a client with no timeout of its own must not hang the job.

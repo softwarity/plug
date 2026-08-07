@@ -2,6 +2,21 @@
 
 ## NEXT RELEASE
 
+### The image we publish is now the image that was tested — on arm64 too
+
+The e2e legs used to build their own copy of the agent image, so the artefact
+they validated was never the one shipped. Same Dockerfile and same commit is not
+the same artefact: `apk` and the wintun download reach the network on every
+build, which is exactly how 2.7.3 died after a green CI.
+
+The build now happens FIRST, carrying only its immutable `sha-<commit>` tag; the
+clusters pull that; and `latest` is moved onto the very digest the nine legs ran
+against, once they are green. Six redundant builds per run disappear with it.
+
+That also closes an older gap: linux/arm64 has been built and published for
+every release, and nothing ever ran it — every leg was amd64. A native arm64 leg
+now runs the full Compose chain.
+
 ### The auto-update check is now exercised end to end
 
 Written twice, pulled twice, for the same reason each time: the check runs in the

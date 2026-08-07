@@ -14,7 +14,10 @@ title="${wf%.yml}-$corr" # each workflow names its runs `run-name: <basename>-<c
 
 # Trigger it ON THIS RUN'S REF (a branch run must get a cluster built from its
 # own branch); keep gh's chatter off stdout (stdout must carry only the id).
-gh workflow run "$wf" -r "${GITHUB_REF_NAME:-main}" -f corr="$corr" >&2
+# The image ci.yml just published for this commit, so the cluster PULLS the
+# artefact we ship instead of building its own. Empty is allowed (a manual
+# dispatch): the cluster then builds from its checkout, as it always did.
+gh workflow run "$wf" -r "${GITHUB_REF_NAME:-main}" -f corr="$corr" -f image="${CLUSTER_IMAGE:-}" >&2
 
 echo "waiting for the cluster run ($title) to appear..." >&2
 for _ in $(seq 1 20); do

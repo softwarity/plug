@@ -15,6 +15,14 @@ on:
       corr:
         description: correlation id (the caller's run id) — names the tailnet node
         required: true
+      image:
+        description: >-
+          The agent image to run — the reference ci.yml just published for this
+          commit. Pulled, not rebuilt: the whole point is that the legs exercise
+          the artefact we ship. Empty falls back to building from this checkout,
+          so a manual dispatch still works on its own.
+        required: false
+        default: ""
 
 run-name: compose-for-${{ inputs.corr }}
 
@@ -28,16 +36,28 @@ jobs:
   # installer/binaries that every OS leg installs from. Two jobs mean two
   # runners, so the image travels as an artifact (docker save → docker load).
   build-agent:
-    name: build the agent image (this branch)
+    name: get the agent image (published, or built here)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Build
+      # PULL what ci.yml published for this commit rather than building again.
+      # Same Dockerfile and same commit is NOT the same artefact — `apk` and the
+      # wintun download reach the network on every build, which is exactly how
+      # 2.7.3 died — so a leg that builds its own image cannot vouch for the one
+      # we ship. Falls back to building when dispatched by hand with no image.
+      - name: Get the agent image
         run: |
-          docker build -f agent/Dockerfile -t softwarity/plug:e2e .
+          if [ -n "${{ inputs.image }}" ]; then
+            echo "pulling ${{ inputs.image }} (the build this commit published)"
+            docker pull -q "${{ inputs.image }}"
+            docker tag "${{ inputs.image }}" softwarity/plug:e2e
+          else
+            echo "no image given (manual dispatch) — building from this checkout"
+            docker build -f agent/Dockerfile -t softwarity/plug:e2e .
+          fi
           # --entrypoint: the image's entrypoint ignores its args and execs sshd in
           # the foreground — without the override this docker run never returns.
-          echo "agent image built — serves plug version: $(docker run --rm --entrypoint cat softwarity/plug:e2e /opt/plug/VERSION)" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "agent image ready — serves plug version: $(docker run --rm --entrypoint cat softwarity/plug:e2e /opt/plug/VERSION)" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Save the image for the serve job
         run: docker save softwarity/plug:e2e | gzip > /tmp/agent-image.tar.gz
       - uses: actions/upload-artifact@v7
