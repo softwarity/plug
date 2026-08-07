@@ -66,6 +66,11 @@ func doctorOS(add func(check)) {
 		}
 	}
 
+	// Alive is not the same as working: probe the datapath's own resolver.
+	if c, show := datapathVerdict(daemons > 0, tun.DatapathResponsive(2*time.Second)); show {
+		add(c)
+	}
+
 	// System resolver: pointed at plug? Legitimate while sessions live; STALE
 	// (the daemon crashed / teardown missed) when nothing runs — the state that
 	// broke machine-wide DNS once.
@@ -77,9 +82,21 @@ func doctorOS(add func(check)) {
 	}
 	switch {
 	case plugged && sessions == 0 && daemons == 0:
-		add(check{area: "local", name: "system resolver", status: stFail,
-			detail: "still pointed at plug with NO live daemon and no session (stale override)",
-			remedy: "plug down (restores the resolver), then re-check"})
+		// THE dirty state: a daemon died without tidying up, so the machine's
+		// resolver points at an address nothing answers on — nothing resolves,
+		// system-wide. It is also the one thing here that repairs itself with no
+		// judgement call, which is why --fix does it rather than printing a
+		// remedy. `plug down` reaches the same code, but naming it here taught
+		// everyone to use a teardown command as a repair tool.
+		if doctorFix {
+			tun.RestoreOrphanDNS(globalKey)
+			add(check{area: "local", name: "system resolver", status: stOK,
+				detail: "was left pointed at plug by a daemon that died — resolver restored"})
+		} else {
+			add(check{area: "local", name: "system resolver", status: stFail,
+				detail: "still pointed at plug with NO live daemon and no session (stale override)",
+				remedy: "plug doctor --fix (restores the resolver)"})
+		}
 	case plugged && sessions == 0:
 		// The daemon lives, the last client just left: the self-teardown window,
 		// a legitimate in-between (it restores the resolver on its way out).
@@ -137,7 +154,7 @@ func doctorOS(add func(check)) {
 		if len(addrs) > 0 {
 			addr = addrs[0]
 		}
-		add(nxdomainVerdict(addr, err, time.Since(start)))
+		add(nxdomainVerdict(addr, err, time.Since(start), sessions))
 	}
 }
 
@@ -164,7 +181,7 @@ const probeStall = 2 * time.Second
 //     lie. On Docker Desktop the cause is almost always the loop: the agent's
 //     own lookup is forwarded upstream, upstream is this Mac, and this Mac is
 //     plugged — the question comes back to the stub that asked it.
-func nxdomainVerdict(addr string, err error, took time.Duration) check {
+func nxdomainVerdict(addr string, err error, took time.Duration, sessions int) check {
 	const name = "honest NXDOMAIN"
 	minted := err == nil && strings.HasPrefix(addr, "198.18.")
 	switch {
@@ -174,9 +191,15 @@ func nxdomainVerdict(addr string, err error, took time.Duration) check {
 				"so plug minted rather than answer for a cluster it could not ask", took.Round(100*time.Millisecond)),
 			remedy: `Docker Desktop is sending the agent's lookups back to this Mac. Settings → Docker Engine, add "dns": ["1.1.1.1"], apply & restart`}
 	case minted:
+		// The datapath predates the check, or never got an answer. Either way the
+		// fix is the same and it is NOT `plug down`: the daemon stops by itself
+		// once nothing has used it for 30s, and the next launch starts one on the
+		// current core. Say how many sessions stand in the way — the reason this
+		// looks like it "does nothing" is always that one is still open.
 		return check{area: "local", name: name, status: stWarn,
 			detail: "an absent name minted a fake IP immediately — the running datapath did not check whether it exists",
-			remedy: "plug down, then relaunch — stopping the sessions is NOT enough on macOS, the daemon outlives them (compare `cached cores` with the agent version above)"}
+			remedy: fmt.Sprintf("close ALL your plug sessions (%d still open) and wait ~30s — the daemon stops on its own, "+
+				"and the next launch picks up the core the agent now serves (compare `cached cores` with the agent version above)", sessions)}
 	case err != nil && took >= probeStall:
 		// No address, but far too slow to call it a clean NXDOMAIN: something on
 		// the path is timing out. Saying OK here would hide exactly the problem

@@ -79,9 +79,19 @@ func doctorOS(add func(check)) {
 		base.Close()
 		switch {
 		case stale:
-			add(check{area: "local", name: "system resolver", status: stFail,
-				detail: "a plug NRPT rule remains with NO running service and no session (stale override)",
-				remedy: "plug down (clears it), then re-check"})
+			// `plug down` was advised here and could not possibly work: this state
+			// is DEFINED by no service running, so there is nothing for it to stop
+			// and the rule stays exactly where it is. --fix removes it directly,
+			// which is safe precisely because no datapath is up to own it.
+			if doctorFix {
+				tun.ClearOrphanNRPT()
+				add(check{area: "local", name: "system resolver", status: stOK,
+					detail: "a plug NRPT rule was left behind by a service that is gone — removed"})
+			} else {
+				add(check{area: "local", name: "system resolver", status: stFail,
+					detail: "a plug NRPT rule remains with NO running service and no session (stale override)",
+					remedy: "plug doctor --fix (removes it)"})
+			}
 		case sessions > 0:
 			add(check{area: "local", name: "system resolver", status: stOK,
 				detail: fmt.Sprintf("plugged (%d live client(s))", sessions)})

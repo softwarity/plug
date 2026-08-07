@@ -22,6 +22,36 @@ Absent names fail immediately, and say so.
 Pinning `"dns"` in Docker Desktop is no longer needed to avoid this — it goes
 back to being the belt-and-braces measure it was always described as.
 
+### `plug down` is no longer the answer to "I updated and nothing changed"
+
+It never was. The datapath a running session uses is fixed when that session
+starts; a new one is picked up simply by closing **all** your sessions — the
+daemon stops on its own about 30 seconds later, and the next launch uses what
+the agent now serves. `plug down` only skips that wait, and it strands whatever
+is still running.
+
+So `plug update` now says how many sessions are keeping the previous datapath
+alive, `plug doctor` says to close them (with the count — believing you had,
+while one was still open, is the whole trap), and `plug down` says what it is
+about to cost before doing it.
+
+The one case where `plug down` IS the answer is now detected instead of guessed:
+a daemon that is alive but whose resolver stopped answering. Nothing else
+reaches it — the reaper counts sessions, not health — so doctor calls it out
+with that remedy, and only there.
+
+### `plug doctor --fix` repairs the resolver it was already promising to repair
+
+A datapath that dies without tidying up leaves the machine pointed at an address
+nothing answers on, and nothing resolves system-wide until someone notices.
+`--fix` claimed to restore that; it never did. It does now, on macOS (the DNS
+override) and on Windows (the leftover NRPT rule) — where the previous advice
+was to run `plug down`, a command that could not possibly help since that state
+is defined by having no daemon left to stop.
+
+`plug update` repairs it directly when it sees it, rather than sending you to
+another command for a state you did not cause.
+
 ### Fixed: `plug doctor` blamed the wrong thing, and gave a remedy that could not work
 
 The live NXDOMAIN check reported "the RUNNING datapath predates 2.2" and advised

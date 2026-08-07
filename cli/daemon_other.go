@@ -11,3 +11,12 @@ func daemonMain(_ []string) int { return 1 }
 func cmdDown(_ []string) {
 	info("plug has no daemon on this OS — each launch is autonomous")
 }
+
+// repairOrphanResolver is a no-op here: Linux never touches a global resolver
+// (each launch repoints its own bind-mounted resolv.conf, which dies with it),
+// so there is no machine-wide state a dead datapath could leave behind.
+func repairOrphanResolver() {}
+
+// liveSessions is always 0 here: there is no shared datapath to lag behind, so
+// nothing an update leaves running on an older core.
+func liveSessions() int { return 0 }

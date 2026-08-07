@@ -14,7 +14,7 @@ import (
 // ("relaunch, the new core takes over") that cannot work — the datapath WAS the
 // new core. It has to name the timeout, and the loop that causes it.
 func TestASlowMintIsTheExistenceCheckTimingOut(t *testing.T) {
-	c := nxdomainVerdict("198.18.0.5", nil, 3030*time.Millisecond)
+	c := nxdomainVerdict("198.18.0.5", nil, 3030*time.Millisecond, 1)
 
 	if c.status != stWarn {
 		t.Errorf("status = %v, want a warning", c.status)
@@ -36,20 +36,25 @@ func TestASlowMintIsTheExistenceCheckTimingOut(t *testing.T) {
 	}
 }
 
-// An IMMEDIATE mint is the other cause, and it needs the opposite remedy: the
-// datapath never checked. Stopping the sessions does not fix it on macOS — the
-// daemon outlives them, which is what sent the user round in circles.
-func TestAnImmediateMintBlamesTheDatapathAndSaysPlugDown(t *testing.T) {
-	c := nxdomainVerdict("198.18.0.5", nil, 12*time.Millisecond)
+// An IMMEDIATE mint is the other cause: the datapath never checked. The remedy
+// is to close EVERY session — the daemon stops on its own 30s later and the next
+// launch takes the current core. Not `plug down`, which strands them instead.
+func TestAnImmediateMintTellsYouToCloseYourSessions(t *testing.T) {
+	c := nxdomainVerdict("198.18.0.5", nil, 12*time.Millisecond, 2)
 
 	if c.status != stWarn {
 		t.Errorf("status = %v, want a warning", c.status)
 	}
-	if !strings.Contains(c.remedy, "plug down") {
-		t.Errorf("remedy = %q, want `plug down`", c.remedy)
+	// NOT `plug down`: it strands the very sessions it asks about. Closing them
+	// is the whole fix — the daemon stops on its own 30s later.
+	if strings.Contains(c.remedy, "plug down") {
+		t.Errorf("remedy = %q — plug down strands running sessions; closing them is the fix", c.remedy)
 	}
-	if !strings.Contains(strings.ToLower(c.remedy), "not enough") {
-		t.Errorf("remedy = %q — it must say that stopping the sessions does not suffice", c.remedy)
+	if !strings.Contains(c.remedy, "close ALL") {
+		t.Errorf("remedy = %q, want it to say close ALL sessions", c.remedy)
+	}
+	if !strings.Contains(c.remedy, "2 still open") {
+		t.Errorf("remedy = %q, want the session COUNT — not knowing one was left open is the whole trap", c.remedy)
 	}
 	if strings.Contains(c.remedy, "Docker Engine") {
 		t.Errorf("remedy = %q, that is the timeout's remedy, not this one", c.remedy)
@@ -59,15 +64,15 @@ func TestAnImmediateMintBlamesTheDatapathAndSaysPlugDown(t *testing.T) {
 // The two causes must never produce the same advice: that is the whole point of
 // measuring, and the regression to guard.
 func TestTheTwoCausesGiveDifferentRemedies(t *testing.T) {
-	slow := nxdomainVerdict("198.18.0.5", nil, 3*time.Second)
-	fast := nxdomainVerdict("198.18.0.5", nil, time.Millisecond)
+	slow := nxdomainVerdict("198.18.0.5", nil, 3*time.Second, 1)
+	fast := nxdomainVerdict("198.18.0.5", nil, time.Millisecond, 1)
 	if slow.remedy == fast.remedy {
 		t.Errorf("both causes advise %q — the measurement is being ignored", slow.remedy)
 	}
 }
 
 func TestACleanNXDOMAINIsHealthy(t *testing.T) {
-	c := nxdomainVerdict("", errors.New("no such host"), 8*time.Millisecond)
+	c := nxdomainVerdict("", errors.New("no such host"), 8*time.Millisecond, 1)
 	if c.status != stOK {
 		t.Errorf("status = %v (%s), want OK — this is the working case", c.status, c.detail)
 	}
@@ -77,7 +82,7 @@ func TestACleanNXDOMAINIsHealthy(t *testing.T) {
 // three seconds is a path that times out, and reporting OK would bury exactly
 // what this check exists to surface.
 func TestASlowFailureIsNotHealth(t *testing.T) {
-	c := nxdomainVerdict("", errors.New("no such host"), 3*time.Second)
+	c := nxdomainVerdict("", errors.New("no such host"), 3*time.Second, 1)
 	if c.status != stWarn {
 		t.Errorf("status = %v, want a warning: %s", c.status, c.detail)
 	}
@@ -89,7 +94,7 @@ func TestASlowFailureIsNotHealth(t *testing.T) {
 // A wildcard resolver, or a machine where that name genuinely exists, proves
 // nothing either way — and must not be reported as a plug fault.
 func TestAnAnswerThatIsNotOursProvesNothing(t *testing.T) {
-	c := nxdomainVerdict("93.184.216.34", nil, 5*time.Millisecond)
+	c := nxdomainVerdict("93.184.216.34", nil, 5*time.Millisecond, 1)
 	if c.status != stOK {
 		t.Errorf("status = %v, want OK — the address is not in plug's range: %s", c.status, c.detail)
 	}

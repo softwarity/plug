@@ -59,3 +59,47 @@ func TestVersionsFromCorePathParsing(t *testing.T) {
 		t.Fatal("an absent profile must error, not fatal")
 	}
 }
+
+// `plug down` has exactly one legitimate trigger, and doctor is the only thing
+// that can spot it: a daemon that is alive but whose netstack has stopped
+// answering. Nothing else reaches that state — the reaper counts sessions, not
+// health, so it keeps a corpse running as long as one client is registered.
+//
+// Without this check the command would have no entry point at all, which is
+// what makes it look like it exists for nothing.
+func TestOnlyAWedgedDatapathSendsYouToPlugDown(t *testing.T) {
+	c, show := datapathVerdict(true, false)
+	if !show {
+		t.Fatal("an alive-but-mute datapath must be reported")
+	}
+	if c.status != stFail {
+		t.Errorf("status = %v, want a failure — cluster names cannot resolve in this state", c.status)
+	}
+	if !strings.Contains(c.remedy, "plug down") {
+		t.Errorf("remedy = %q — this is the one case where plug down is the answer", c.remedy)
+	}
+	if !strings.Contains(c.detail, "will not stop on its own") {
+		t.Errorf("detail = %q, want it to say why waiting does not help", c.detail)
+	}
+}
+
+// The healthy case must stay quiet about that command, or we are back to
+// teaching people to use a teardown as routine maintenance.
+func TestAWorkingDatapathNeverMentionsPlugDown(t *testing.T) {
+	c, show := datapathVerdict(true, true)
+	if !show || c.status != stOK {
+		t.Fatalf("alive and answering must report OK, got show=%v status=%v", show, c.status)
+	}
+	if strings.Contains(c.detail+c.remedy, "plug down") {
+		t.Errorf("a healthy datapath mentions plug down: %q / %q", c.detail, c.remedy)
+	}
+}
+
+// No daemon at all is not this check's business: the resolver checks own that
+// story, and two checks describing the same state in different words is how a
+// user ends up applying the wrong remedy.
+func TestNoDaemonProducesNoDatapathCheck(t *testing.T) {
+	if _, show := datapathVerdict(false, false); show {
+		t.Error("with no daemon running, this check must stay silent")
+	}
+}

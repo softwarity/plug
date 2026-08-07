@@ -193,3 +193,18 @@ func clearSystemNRPT(dnsIP string) {
 func flushDNS() {
 	_, _, _ = windows.NewLazySystemDLL("dnsapi.dll").NewProc("DnsFlushResolverCache").Call()
 }
+
+// ClearOrphanNRPT removes a plug NRPT rule left behind by a datapath that died
+// without tidying up — the Windows counterpart of RestoreOrphanDNS. Without it
+// Windows keeps routing the ".plug" suffix to an address nothing answers on.
+//
+// Every instance's resolver address is tried: the rule records which one it
+// pointed at, and the caller cannot know which instance died. Removing a rule
+// that is not there is a no-op, so this is safe to call at any time — but never
+// while a datapath is up, or it would strip a LIVE session's rule.
+func ClearOrphanNRPT() {
+	for n := 0; n < maxInstances; n++ {
+		_, dnsIP, _ := instanceNet(n)
+		clearSystemNRPT(dnsIP)
+	}
+}

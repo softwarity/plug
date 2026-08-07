@@ -121,6 +121,45 @@ func cmdUpdate(args []string) {
 	}
 
 	updateLauncher(cfg, after)
+	repairOrphanResolver()
+	reportDatapathLag()
+}
+
+// reportDatapathLag says what the update does NOT change: a running datapath
+// keeps the core it started with, for its whole life. It is not a problem to
+// fix — nothing is broken, and it will pick the new core up by itself — but
+// staying silent is how someone updates, sees no difference, and starts
+// hunting. `plug down` is deliberately not offered here: it would leave those
+// sessions without a datapath, which is worse than waiting.
+func reportDatapathLag() {
+	if m := datapathLagMessage(liveSessions()); m != "" {
+		info("%s", m)
+	}
+}
+
+// datapathLagMessage is the wording, separated from the counting so it can be
+// tested — and so the one rule that matters can be asserted: it must never send
+// anyone to `plug down`. That command strands the very sessions it would be
+// asking about, and advising it as an update step is the mistake this whole
+// change exists to undo.
+func datapathLagMessage(sessions int) string {
+	if sessions == 0 {
+		return "" // nothing running: the next launch starts fresh on the new core
+	}
+	return fmt.Sprintf("%d plug session(s) are running: their datapath keeps the core it started with.\n"+
+		"      Close them ALL and it stops on its own ~30s later — the next launch uses what the agent now serves.", sessions)
+}
+
+// downStrandsSessions is what `plug down` must say BEFORE killing the daemon:
+// the sessions keep running while the ground disappears under them — their
+// connections drop, cluster names stop resolving, and nothing restarts them.
+// Empty when there is nothing to strand.
+func downStrandsSessions(sessions int) string {
+	if sessions == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d plug session(s) are running — they lose their datapath and must be relaunched.\n"+
+		"      To pick up a new core instead, just close them: the daemon stops by itself ~30s later.", sessions)
 }
 
 // updateWord is the agent's one-word verdict (the protocol's first token).

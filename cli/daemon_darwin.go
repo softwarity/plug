@@ -147,6 +147,26 @@ func lastLogLine(path string) string {
 	return strings.TrimPrefix(strings.TrimSpace(lines[len(lines)-1]), "[plug] ")
 }
 
+// repairOrphanResolver puts the machine's DNS back when a daemon died without
+// tidying up — the resolver still points at plug, nothing answers there, and
+// NOTHING resolves system-wide until someone notices.
+//
+// Done here, silently and on the spot, because `plug update` is exactly when a
+// user is already looking: telling them to run another command to repair a
+// state they did not cause is how `plug down` ended up being treated as routine
+// maintenance. Repairing is safe — it only restores what plug itself saved.
+func repairOrphanResolver() {
+	if tun.DaemonAlive(globalKey) {
+		return // a live daemon owns the override legitimately
+	}
+	out, _ := exec.Command("scutil", "--dns").Output()
+	if !strings.Contains(string(out), "198.18.") {
+		return // not pointed at us: nothing to undo
+	}
+	tun.RestoreOrphanDNS(globalKey)
+	info("the system resolver was still pointed at plug by a daemon that is gone — restored")
+}
+
 // cmdDown stops the running global datapath daemon (`plug down`).
 func cmdDown(_ []string) {
 	if !tun.DaemonAlive(globalKey) {
@@ -159,8 +179,27 @@ func cmdDown(_ []string) {
 		info("plug daemon: unknown pid")
 		return
 	}
+	// What it costs, BEFORE doing it. Killing the daemon pulls the datapath out
+	// from under every running session: their connections drop and cluster names
+	// stop resolving, while the processes themselves keep running as if nothing
+	// happened. Nothing restarts them — there is no watcher. Said plainly here
+	// because this command was routinely handed out as an update step, and the
+	// sessions it stranded were the reason it "did nothing".
+	if m := downStrandsSessions(liveSessions()); m != "" {
+		info("%s", m)
+	}
 	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
 		fatal("stopping daemon (pid %d): %v", pid, err)
 	}
 	info("stopped the plug daemon")
+}
+
+// liveSessions counts the plug sessions running on this machine, all clusters
+// together — the registry is the daemon's own client list.
+func liveSessions() int {
+	n := 0
+	for _, k := range tun.ActiveClusters() {
+		n += tun.LiveClients(k)
+	}
+	return n
 }

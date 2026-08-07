@@ -137,6 +137,31 @@ func cmdDoctor(args []string) {
 // user's own sessions or the cluster stays a printed remedy on purpose.
 var doctorFix bool
 
+// datapathVerdict is the ONE place `plug down` is the right answer: a daemon
+// that is alive but whose netstack has stopped answering. Nothing else reaches
+// it — the reaper only counts clients, so it will keep this corpse running for
+// as long as one session is registered, and closing the sessions frees it only
+// after the fact.
+//
+// Split out from the probing so the decision is testable, and so the rule stays
+// visible: alive AND responsive is the normal state and says nothing; alive and
+// mute is the only state that warrants stopping it by hand.
+func datapathVerdict(alive, responsive bool) (check, bool) {
+	const name = "datapath"
+	switch {
+	case !alive:
+		return check{}, false // no daemon: other checks own that story
+	case responsive:
+		return check{area: "local", name: name, status: stOK,
+			detail: "the running datapath answers its own resolver"}, true
+	default:
+		return check{area: "local", name: name, status: stFail,
+			detail: "the daemon is alive but its resolver stopped answering — cluster names cannot resolve, " +
+				"and it will not stop on its own (the reaper only counts sessions)",
+			remedy: "plug down, then relaunch your sessions — this is what that command is for"}, true
+	}
+}
+
 // doctorLocal collects the machine-side checks: binaries, cache, privilege,
 // the service/daemon, the system resolver state, Docker Desktop.
 func doctorLocal(add func(check)) {
