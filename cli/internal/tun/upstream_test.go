@@ -285,3 +285,56 @@ func TestPublishedUpstreamsRoundTrip(t *testing.T) {
 		t.Errorf("after clearing, CurrentUpstreams = %v, want empty", got)
 	}
 }
+
+// Windows hands fec0:0:0:ffff::1/2/3 to every adapter that has no DNS of its
+// own. They never answer, and relay() spends its full per-server budget on each
+// before moving on: three dead servers, three timeouts, on every SRV/MX/PTR
+// lookup once the real resolver goes quiet.
+//
+// They are dropped — and REPORTED. Dropping them declares an address family
+// "not a resolver", which will be wrong on some network one day; the trace is
+// what makes that discoverable instead of silent.
+func TestSiteLocalV6IsDroppedAndReported(t *testing.T) {
+	got, dropped := pickUpstreamsTraced([]dnsCandidate{
+		up("192.168.1.1", 25),
+		up("fec0:0:0:ffff::1", 25),
+		up("fec0:0:0:ffff::2", 25),
+		up("fec0:0:0:ffff::3", 25),
+	})
+	if len(got) != 1 || got[0] != "192.168.1.1" {
+		t.Errorf("upstreams = %v, want only the real resolver", got)
+	}
+	if len(dropped) != 3 {
+		t.Errorf("dropped = %v, want the three site-local ones reported so the choice is visible", dropped)
+	}
+}
+
+// The rule is fec0::/10, not "any IPv6": a real IPv6 resolver must go through
+// untouched, or plug would be unusable on an IPv6-only network.
+func TestRealIPv6ResolversAreKept(t *testing.T) {
+	got, dropped := pickUpstreamsTraced([]dnsCandidate{
+		up("2001:4860:4860::8888", 10),
+		up("fd00::1", 20), // unique-local: legitimate, NOT the deprecated range
+	})
+	if len(got) != 2 {
+		t.Errorf("upstreams = %v, want both IPv6 resolvers kept", got)
+	}
+	if len(dropped) != 0 {
+		t.Errorf("dropped = %v, want nothing — neither is site-local", dropped)
+	}
+}
+
+// The boundary of fec0::/10 itself: fec0 through feff is in, fe80 (link-local)
+// is not — and link-local must not be silently swept in with it.
+func TestTheSiteLocalBoundaryIsExact(t *testing.T) {
+	for _, in := range []string{"fec0::1", "fedc::1", "feff::1"} {
+		if !siteLocalV6(in) {
+			t.Errorf("%s should be site-local (fec0::/10)", in)
+		}
+	}
+	for _, out := range []string{"fe80::1", "fd00::1", "2001:db8::1", "192.168.1.1", "not-an-ip"} {
+		if siteLocalV6(out) {
+			t.Errorf("%s must NOT be treated as site-local", out)
+		}
+	}
+}

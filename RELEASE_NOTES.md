@@ -2,6 +2,39 @@
 
 ## NEXT RELEASE
 
+### Windows: the dead IPv6 resolvers are skipped, and said
+
+Windows gives `fec0:0:0:ffff::1/2/3` to every adapter that has no DNS of its
+own, so they end up in the resolver list of most machines. They never answer.
+Once the real resolver goes quiet, plug tried each of them in turn — a full
+timeout each — before giving up on an SRV, MX or PTR lookup.
+
+They are now skipped. And named in the log while being skipped, because doing so
+declares a whole address family "not a resolver", which will be wrong on some
+network one day: whoever hits that will see the line rather than an
+unexplainable failure. A real IPv6 resolver is untouched — the rule is the
+deprecated site-local range (RFC 3879), not IPv6.
+
+### Deployments following `latest` (or a branch) are checked at last
+
+The update check answered nothing for a moving tag. There is no version to
+compare — `latest` is always called `latest` — so it gave up, and anyone whose
+cluster follows a stream was never told anything.
+
+There is something to compare, though: bytes. The agent reports its running
+image with the digest it resolved to, so plug now asks the registry what that
+tag points at today. Different digest, different image, and it says so — with
+wording that suits the case, since "update available: vlatest" would be nonsense.
+
+### `notify` offers, instead of only telling
+
+With a real terminal, plug now asks whether to apply the update it just found,
+rather than mentioning it and leaving you to retype a command. It says what that
+costs before asking — applying rolls the cluster's agent, and every other
+session on it reconnects — the default is no, and it gives up after a few
+seconds. No terminal, no prompt: a script or a CI job sees the message it saw
+before, never a question.
+
 ---
 
 ## 2.9.4

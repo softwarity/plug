@@ -85,11 +85,18 @@ func configure(dev any, _ int, _, cidr, dnsIP string, up *upstreamDNS, log logfn
 	// (smart multi-homed name resolution). Dotted names land here too, and
 	// whichever answer comes back first wins — so answering them badly, or
 	// quickly with NXDOMAIN, is worse than not answering at all.
-	ups := systemDNS(luid)
+	ups, skipped := systemDNSTraced(luid)
 	if len(ups) == 0 {
 		log.f("tun[win]: no system nameserver found — dotted names will go to a public resolver")
 	} else {
 		log.f("tun[win]: forwarding dotted names to %v", ups)
+	}
+	// Named, not hidden. Skipping them is a judgement about a whole address
+	// family, and the only way to learn it was wrong on some network is for the
+	// person on that network to see this line and tell us.
+	if len(skipped) > 0 {
+		log.f("tun[win]: ignoring %v — IPv6 site-local (RFC 3879), which Windows puts on every adapter "+
+			"without DNS and which never answers. If one of these IS your resolver, say so: they are being skipped.", skipped)
 	}
 	return ups, "", cleanup, nil
 }
@@ -102,9 +109,18 @@ func configure(dev any, _ int, _, cidr, dnsIP string, up *upstreamDNS, log logfn
 // saved state: it is the same source Windows itself resolves against, and it is
 // already correct when a VPN brought its own resolver up before plug started.
 func systemDNS(self winipcfg.LUID) []string {
+	out, _ := systemDNSTraced(self)
+	return out
+}
+
+// systemDNSTraced is systemDNS, also returning the site-local IPv6 resolvers it
+// dropped — see pickUpstreamsTraced. Windows puts fec0:0:0:ffff::1/2/3 on every
+// adapter that has no DNS of its own, so this is not an exotic case: it is most
+// machines, and they cost a full timeout each once the real resolver goes quiet.
+func systemDNSTraced(self winipcfg.LUID) (out, dropped []string) {
 	adapters, err := winipcfg.GetAdaptersAddresses(windows.AF_UNSPEC, winipcfg.GAAFlagDefault)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	var cands []dnsCandidate
 	for _, a := range adapters {
@@ -122,7 +138,7 @@ func systemDNS(self winipcfg.LUID) []string {
 			})
 		}
 	}
-	return pickUpstreams(cands)
+	return pickUpstreamsTraced(cands)
 }
 
 // NRPT rules live under this policy key, one subkey (a GUID) per rule. plug writes

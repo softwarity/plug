@@ -49,12 +49,41 @@ func inFakeRange(addr string) bool {
 // VPN up, that is the VPN's resolver, which is the only one that knows the
 // internal names.
 func pickUpstreams(cands []dnsCandidate) []string {
+	out, _ := pickUpstreamsTraced(cands)
+	return out
+}
+
+// siteLocalV6 reports whether addr is in fec0::/10 — the IPv6 site-local range,
+// deprecated by RFC 3879 in 2004. Windows hands fec0:0:0:ffff::1/2/3 to any
+// adapter with no DNS of its own, so they turn up in the adapter table of most
+// machines, and they never answer.
+func siteLocalV6(addr string) bool {
+	ip := net.ParseIP(addr)
+	return ip != nil && ip.To4() == nil && len(ip) == net.IPv6len && ip[0] == 0xfe && ip[1]&0xc0 == 0xc0
+}
+
+// pickUpstreamsTraced is pickUpstreams, also returning what it dropped for being
+// site-local IPv6 — so the caller can SAY it.
+//
+// Dropping them is a judgement: it declares a whole address family "not a real
+// resolver", and one day, on a network nobody here imagined, that will be wrong.
+// Saying it out loud is what makes the judgement reversible — whoever hits it
+// sees the line, and we learn we were wrong instead of guessing. Silence would
+// turn a working resolver into an unexplainable failure.
+func pickUpstreamsTraced(cands []dnsCandidate) (out, dropped []string) {
 	keep := make([]dnsCandidate, 0, len(cands))
 	for _, c := range cands {
 		switch {
 		case !c.up, c.loopback, c.own:
 			continue
 		case c.addr == "", inFakeRange(c.addr):
+			continue
+		case siteLocalV6(c.addr):
+			// Kept out of the forwarding list AND named: they never answer, and
+			// relay() spends its whole per-server budget on each before moving on
+			// — three dead servers cost three timeouts on every SRV/MX/PTR lookup
+			// once the real resolver goes quiet.
+			dropped = append(dropped, c.addr)
 			continue
 		}
 		keep = append(keep, c)
@@ -64,12 +93,28 @@ func pickUpstreams(cands []dnsCandidate) []string {
 	// which resolver plug uses vary between runs on the same machine.
 	sort.SliceStable(keep, func(i, j int) bool { return keep[i].metric < keep[j].metric })
 
-	out := make([]string, 0, len(keep))
+	out = make([]string, 0, len(keep))
 	seen := map[string]bool{}
 	for _, c := range keep {
 		if !seen[c.addr] {
 			seen[c.addr] = true
 			out = append(out, c.addr)
+		}
+	}
+	return out, dedupe(dropped)
+}
+
+// dedupe keeps the first occurrence of each entry, order preserved.
+func dedupe(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
 		}
 	}
 	return out
