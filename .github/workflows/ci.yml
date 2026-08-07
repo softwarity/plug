@@ -155,6 +155,17 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  # The three e2e families must run the SAME cells, in the same order, under the
+  # same names — that is the only way three jobs read as a comparison instead of
+  # three separate stories. Drift is silent, so it is checked here rather than
+  # noticed months later. No `needs`: it costs seconds and should fail early.
+  ci-shape:
+    name: The three e2e blocks are identical
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - run: bash scripts/ci/check-common-block.sh
+
   # The e2e clients, built ONCE for every leg.
   #
   # Measured on the Windows swarm leg: 493s of a 769s setup went into building
@@ -229,7 +240,7 @@ jobs:
     # `platforms` reads the markers those jobs wrote, which is the only record
     # that cannot lie — without it the image of 33f8c40 shipped with a red
     # Windows selftest, past a comment promising the opposite.
-    needs: [image-build, build, selftest, platforms, e2e-compose, e2e-k8s, e2e-swarm]
+    needs: [image-build, build, selftest, platforms, ci-shape, e2e-compose, e2e-k8s, e2e-swarm]
     if: success() && needs.platforms.outputs.verdict == 'pass' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
@@ -435,10 +446,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0 # the compat cell decides by ANCESTRY (launcher rev vs fix commit)
-      # Only where the full language grid runs: with E2E_LANGS=go there is no
-      # jar to launch, and a JDK download is 20-30s of nothing on six legs.
       - uses: actions/setup-java@v4 # pin the JRE — the runners' ambient Java differs by OS; no maven cache, nothing builds here
-        if: env.E2E_LANGS == ''
         with:
           distribution: temurin
           java-version: '21'
@@ -460,7 +468,6 @@ jobs:
       # which pointed at ~/.npm and therefore NEVER hit on Windows, where npm
       # caches in %LocalAppData% — this one is right on all three.
       - uses: actions/cache@v4
-        if: env.E2E_LANGS == '' # nothing pips on a Go-only leg
         with:
           # One path per OS; actions/cache ignores the ones that do not exist.
           path: |
@@ -487,6 +494,21 @@ jobs:
       # with `if: always()` so one failing never hides the others (Git Bash on
       # Windows too). The compat step closes the set: the last published launcher
       # must still drive THIS branch's core (the inter-version channel).
+      # ── THE COMMON BLOCK ─────────────────────────────────────────────────
+      # Identical, to the character, in e2e-compose, e2e-swarm and e2e-k8s: the
+      # same cells, in the same order, under the same names. That is the point.
+      # These assertions are about PLUG, and plug must behave the same whichever
+      # backend provisions the name — so seeing three identical lists side by
+      # side is what makes a family-specific divergence visible at a glance.
+      #
+      # The names say what is ASSERTED, never how the backend does it: "park the
+      # deployed service" is one test, whether the script stops a container,
+      # scales a service to 0 or repoints a Service. Naming the mechanism made
+      # three identical tests look like three different ones.
+      #
+      # scripts/ci/check-common-block.sh fails the build if the three drift.
+      # Anything a single family needs goes BELOW this block, under its own
+      # heading — there is nothing there today.
       - name: Setup — install plug from the cluster + build clients
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh setup "$A" "$B" 2222
@@ -534,7 +556,6 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh multiport "$A" "$B" 2222
-
       - name: Takeover — park the deployed service, serve ours, restore it
         if: always() && matrix.os != 'ubuntu-24.04-arm'
         shell: bash
@@ -547,29 +568,14 @@ jobs:
         if: always() && matrix.os != 'ubuntu-24.04-arm'
         shell: bash
         run: bash scripts/ci/compat-launcher.sh "$A" 2222
-      # Last on purpose: its docker-backend pull attempt targets the res-agent's
-      # local-only :e2e tag (clean failure by design) — nothing after it depends
-      # on that agent's image anymore.
       - name: Update — plug update verb + launcher path (per-leg agent)
         if: always() && matrix.os != 'ubuntu-24.04-arm'
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh update "$A" "$B" 2222
-      # The published-release agents (2.4.1) live for these two. REFUSALS FIRST:
-      # one of them needs an agent that predates `update <tag>`, and on Swarm/k8s
-      # the jump below actually rolls that agent forward — after which it is no
-      # longer old enough to prove anything.
       - name: Update — <tag> refuses an unpublished tag, and an agent too old
         if: always() && matrix.os != 'ubuntu-24.04-arm'
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh updatetag "$A" "$B" 2222
-      # BEFORE the jump: it needs the agent to still be one release behind, and
-      # the jump is what ends that.
-      #
-      # COMPOSE ONLY, like the compat cell and for the same reason: what this
-      # proves — a session finds the newer release, the NEXT launch announces it
-      # — happens between the CLI, the agent and the registry. No backend takes
-      # part, so replaying it on Swarm and k8s costs 45s a leg to learn the same
-      # thing three times.
       - name: Update — the background check finds it, the next launch says it
         if: always() && matrix.os != 'ubuntu-24.04-arm'
         shell: bash
@@ -578,13 +584,6 @@ jobs:
         if: always() && matrix.os != 'ubuntu-24.04-arm'
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh updatejump "$A" "$B" 2222
-
-  # The SAME chain, replayed against the KUBERNETES family (k8s-for.yml / kind):
-  # what was "coded but never executed at runtime" — the k8s Service backend for
-  # -s (Services-only RBAC), the k8s takeover (selector repointed, annotation
-  # receipt, restore), NodePort reach — is now proven on every push, from all
-  # three OSes. No compat step here: launcher↔core is backend-independent and
-  # already covered by the compose legs.
   e2e-k8s:
     name: e2e-k8s (${{ matrix.os }}, same chain on kind)
     needs: [test, start-cluster, build-clients]
@@ -596,21 +595,13 @@ jobs:
       # Where the shared client bundle lands (relative to the workspace, so Git
       # Bash on Windows reads it the same way every other shell does).
       PREBUILT_CLIENTS: e2e-clients
-      # Go only. The other three runtimes prove a CLIENT property — that
-      # plug works under each language's resolver — which the compose legs
-      # establish once per OS. What this family adds is its network, and one
-      # language crosses it as truthfully as four (276s of the Windows leg).
-      E2E_LANGS: go
     strategy:
       fail-fast: false # one OS failing must not cancel the others
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v6
-      # Only where the full language grid runs: with E2E_LANGS=go there is no
-      # jar to launch, and a JDK download is 20-30s of nothing on six legs.
       - uses: actions/setup-java@v4 # pin the JRE — the runners' ambient Java differs by OS; no maven cache, nothing builds here
-        if: env.E2E_LANGS == ''
         with:
           distribution: temurin
           java-version: '21'
@@ -632,7 +623,6 @@ jobs:
       # which pointed at ~/.npm and therefore NEVER hit on Windows, where npm
       # caches in %LocalAppData% — this one is right on all three.
       - uses: actions/cache@v4
-        if: env.E2E_LANGS == '' # nothing pips on a Go-only leg
         with:
           # One path per OS; actions/cache ignores the ones that do not exist.
           path: |
@@ -641,6 +631,10 @@ jobs:
             ~\AppData\Local\pip\Cache
           key: pip-${{ runner.os }}-${{ hashFiles('e2e/clients/python/requirements.txt') }}
           restore-keys: pip-${{ runner.os }}-
+      - uses: actions/download-artifact@v7 # the last published launchers, for the compat cell
+        with:
+          name: latest-launchers
+          path: latest-launchers
       - name: Join the tailnet
         uses: tailscale/github-action@v3
         with:
@@ -649,6 +643,21 @@ jobs:
           tags: tag:ci
           hostname: plug-k8s-${{ matrix.os }}-${{ github.run_id }}
           args: --accept-dns=false # reach the cluster by tailnet IP; don't let Tailscale drive DNS
+      # ── THE COMMON BLOCK ─────────────────────────────────────────────────
+      # Identical, to the character, in e2e-compose, e2e-swarm and e2e-k8s: the
+      # same cells, in the same order, under the same names. That is the point.
+      # These assertions are about PLUG, and plug must behave the same whichever
+      # backend provisions the name — so seeing three identical lists side by
+      # side is what makes a family-specific divergence visible at a glance.
+      #
+      # The names say what is ASSERTED, never how the backend does it: "park the
+      # deployed service" is one test, whether the script stops a container,
+      # scales a service to 0 or repoints a Service. Naming the mechanism made
+      # three identical tests look like three different ones.
+      #
+      # scripts/ci/check-common-block.sh fails the build if the three drift.
+      # Anything a single family needs goes BELOW this block, under its own
+      # heading — there is nothing there today.
       - name: Setup — install plug from the cluster + build clients
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh setup "$A" "$B" 2222
@@ -656,7 +665,7 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh env "$A" "$B" 2222
-      - name: Protocol matrix (8 protocols across this family's network)
+      - name: Protocol matrix (4 langs × 8 protocols)
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh matrix "$A" "$B" 2222
@@ -665,7 +674,7 @@ jobs:
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh multicluster "$A" "$B" 2222
       - name: Outage recovery
-        if: always()
+        if: always() && matrix.os != 'ubuntu-24.04-arm'
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh outage "$A" "$B" 2222
       - name: Expose — serve a local port to the cluster (-s)
@@ -684,6 +693,10 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh collision "$A" "$B" 2222
+      - name: Name lease — a swept signpost must not free a live name
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh lease "$A" "$B" 2222
       - name: Same cluster port — two names, both reachable
         if: always()
         shell: bash
@@ -692,39 +705,34 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh multiport "$A" "$B" 2222
-      - name: Takeover — repoint the deployed Service, serve ours, restore it
-        if: always()
+      - name: Takeover — park the deployed service, serve ours, restore it
+        if: always() && matrix.os != 'ubuntu-24.04-arm'
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh takeover "$A" "$B" 2222
-      # The retarget DECISION is backend-independent, but applying it is not:
-      # Swarm rewrites the service image, k8s patches the Deployment — both roll
-      # the agent for real, where Compose can only pull. Run it on all three.
-      - name: Name lease — a swept signpost must not free a live name
-        if: always()
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh lease "$A" "$B" 2222
-      - name: Update — plug update verb + launcher path (per-leg agent)
-        if: always()
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh update "$A" "$B" 2222
-      - name: Update — <tag> refuses an unpublished tag
-        if: always()
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh updatetag "$A" "$B" 2222
       - name: Resilience — agent restarted mid-session (self-heal, boot-gc, re-park)
-        if: always()
+        if: always() && matrix.os != 'ubuntu-24.04-arm'
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh resilience "$A" "$B" 2222
+      - name: Launcher compat — latest published launcher, this branch's core
+        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        shell: bash
+        run: bash scripts/ci/compat-launcher.sh "$A" 2222
+      - name: Update — plug update verb + launcher path (per-leg agent)
+        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh update "$A" "$B" 2222
+      - name: Update — <tag> refuses an unpublished tag, and an agent too old
+        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh updatetag "$A" "$B" 2222
+      - name: Update — the background check finds it, the next launch says it
+        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh updatenotify "$A" "$B" 2222
       - name: Update — a release agent retargets to the newest release
-        if: always()
+        if: always() && matrix.os != 'ubuntu-24.04-arm'
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh updatejump "$A" "$B" 2222
-
-  # The SAME chain, third family: a real single-node SWARM (swarm-for.yml) —
-  # the agent as a Swarm service on a non-attachable overlay, -s names as
-  # Swarm-service signposts, and the takeover scaling the deployed service to
-  # 0 and back to its ORIGINAL replica count (the tko targets run 2 replicas).
-  # What only the bench had proven for Swarm now runs on every push, ×3 OSes.
   e2e-swarm:
     name: e2e-swarm (${{ matrix.os }}, same chain on swarm)
     needs: [test, start-cluster, build-clients]
@@ -736,21 +744,13 @@ jobs:
       # Where the shared client bundle lands (relative to the workspace, so Git
       # Bash on Windows reads it the same way every other shell does).
       PREBUILT_CLIENTS: e2e-clients
-      # Go only. The other three runtimes prove a CLIENT property — that
-      # plug works under each language's resolver — which the compose legs
-      # establish once per OS. What this family adds is its network, and one
-      # language crosses it as truthfully as four (276s of the Windows leg).
-      E2E_LANGS: go
     strategy:
       fail-fast: false # one OS failing must not cancel the others
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v6
-      # Only where the full language grid runs: with E2E_LANGS=go there is no
-      # jar to launch, and a JDK download is 20-30s of nothing on six legs.
       - uses: actions/setup-java@v4 # pin the JRE — the runners' ambient Java differs by OS; no maven cache, nothing builds here
-        if: env.E2E_LANGS == ''
         with:
           distribution: temurin
           java-version: '21'
@@ -772,7 +772,6 @@ jobs:
       # which pointed at ~/.npm and therefore NEVER hit on Windows, where npm
       # caches in %LocalAppData% — this one is right on all three.
       - uses: actions/cache@v4
-        if: env.E2E_LANGS == '' # nothing pips on a Go-only leg
         with:
           # One path per OS; actions/cache ignores the ones that do not exist.
           path: |
@@ -781,6 +780,10 @@ jobs:
             ~\AppData\Local\pip\Cache
           key: pip-${{ runner.os }}-${{ hashFiles('e2e/clients/python/requirements.txt') }}
           restore-keys: pip-${{ runner.os }}-
+      - uses: actions/download-artifact@v7 # the last published launchers, for the compat cell
+        with:
+          name: latest-launchers
+          path: latest-launchers
       - name: Join the tailnet
         uses: tailscale/github-action@v3
         with:
@@ -789,6 +792,21 @@ jobs:
           tags: tag:ci
           hostname: plug-swarm-${{ matrix.os }}-${{ github.run_id }}
           args: --accept-dns=false # reach the cluster by tailnet IP; don't let Tailscale drive DNS
+      # ── THE COMMON BLOCK ─────────────────────────────────────────────────
+      # Identical, to the character, in e2e-compose, e2e-swarm and e2e-k8s: the
+      # same cells, in the same order, under the same names. That is the point.
+      # These assertions are about PLUG, and plug must behave the same whichever
+      # backend provisions the name — so seeing three identical lists side by
+      # side is what makes a family-specific divergence visible at a glance.
+      #
+      # The names say what is ASSERTED, never how the backend does it: "park the
+      # deployed service" is one test, whether the script stops a container,
+      # scales a service to 0 or repoints a Service. Naming the mechanism made
+      # three identical tests look like three different ones.
+      #
+      # scripts/ci/check-common-block.sh fails the build if the three drift.
+      # Anything a single family needs goes BELOW this block, under its own
+      # heading — there is nothing there today.
       - name: Setup — install plug from the cluster + build clients
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh setup "$A" "$B" 2222
@@ -796,7 +814,7 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh env "$A" "$B" 2222
-      - name: Protocol matrix (8 protocols across this family's network)
+      - name: Protocol matrix (4 langs × 8 protocols)
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh matrix "$A" "$B" 2222
@@ -805,7 +823,7 @@ jobs:
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh multicluster "$A" "$B" 2222
       - name: Outage recovery
-        if: always()
+        if: always() && matrix.os != 'ubuntu-24.04-arm'
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh outage "$A" "$B" 2222
       - name: Expose — serve a local port to the cluster (-s)
@@ -824,6 +842,10 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh collision "$A" "$B" 2222
+      - name: Name lease — a swept signpost must not free a live name
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh lease "$A" "$B" 2222
       - name: Same cluster port — two names, both reachable
         if: always()
         shell: bash
@@ -832,46 +854,34 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh multiport "$A" "$B" 2222
-      - name: Takeover — scale the deployed service to 0, serve ours, restore it
-        if: always()
+      - name: Takeover — park the deployed service, serve ours, restore it
+        if: always() && matrix.os != 'ubuntu-24.04-arm'
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh takeover "$A" "$B" 2222
-      # The retarget DECISION is backend-independent, but applying it is not:
-      # Swarm rewrites the service image, k8s patches the Deployment — both roll
-      # the agent for real, where Compose can only pull. Run it on all three.
-      - name: Name lease — a swept signpost must not free a live name
-        if: always()
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh lease "$A" "$B" 2222
-      - name: Update — plug update verb + launcher path (per-leg agent)
-        if: always()
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh update "$A" "$B" 2222
-      - name: Update — <tag> refuses an unpublished tag
-        if: always()
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh updatetag "$A" "$B" 2222
       - name: Resilience — agent restarted mid-session (self-heal, boot-gc, re-park)
-        if: always()
+        if: always() && matrix.os != 'ubuntu-24.04-arm'
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh resilience "$A" "$B" 2222
+      - name: Launcher compat — latest published launcher, this branch's core
+        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        shell: bash
+        run: bash scripts/ci/compat-launcher.sh "$A" 2222
+      - name: Update — plug update verb + launcher path (per-leg agent)
+        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh update "$A" "$B" 2222
+      - name: Update — <tag> refuses an unpublished tag, and an agent too old
+        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh updatetag "$A" "$B" 2222
+      - name: Update — the background check finds it, the next launch says it
+        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh updatenotify "$A" "$B" 2222
       - name: Update — a release agent retargets to the newest release
-        if: always()
+        if: always() && matrix.os != 'ubuntu-24.04-arm'
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh updatejump "$A" "$B" 2222
-
-  # A family's clusters die with THAT family, not with the whole run.
-  #
-  # One kill job waiting on all three meant the compose clusters idled until k8s
-  # and swarm were also done — and the wait is the slowest OS leg of each, so a
-  # single slow (or wedged) Windows leg kept all SIX clusters alive, holding
-  # runner slots the queue needed. That is how one hung leg starved the next run
-  # into a ten-minute cluster wait it never recovered from.
-  #
-  # Three jobs, one per family, each cancelling only its own pair. k8s typically
-  # finishes several minutes before the others and now hands its two slots back
-  # there and then. The cluster runs' own idle-until-caller-done stays the
-  # backstop for whatever these miss.
   kill-compose:
     name: kill compose clusters
     needs: [start-cluster, e2e-compose]

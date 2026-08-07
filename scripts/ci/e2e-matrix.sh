@@ -23,20 +23,22 @@ clients="$root/e2e/clients"
 cd "$root"
 envfile="${RUNNER_TEMP:-/tmp}/plug-e2e-env" # shared state, survives across steps
 
-# The protocol grid has two axes, and they do not belong in the same place.
+# All four languages, on every family. The override exists for a bench run, not
+# for CI — and there is a reason worth keeping written down.
 #
-#   · the LANGUAGE axis asks whether plug works under each runtime's own
-#     resolver and driver — Java's, Python's, Node's. That is a property of the
-#     CLIENT and of the OS it runs on; the cluster behind it does not
-#     participate. Proving it once per OS proves it.
-#   · the PROTOCOL axis asks whether those eight protocols cross this family's
-#     network — a bridge, a Swarm overlay, a kind CNI. That one IS per family.
+# It was briefly used to cut swarm and k8s down to Go, on the argument that the
+# LANGUAGE axis tests the client (four resolvers: the JVM's cache, c-ares in
+# Node, libc in Python, Go's own) while the PROTOCOL axis tests the family's
+# network — so the two would be orthogonal and the compose legs could carry the
+# languages alone. That argument is WRONG, and cost 276s on one leg to be so.
 #
-# So the compose legs run the full grid (the language axis, per OS) and the
-# swarm and k8s legs run it with E2E_LANGS=go (the protocol axis, per family).
-# Nothing is dropped: each assertion runs where it means something. Measured on
-# the Windows swarm leg, the full grid cost 276s to re-prove what the compose
-# leg had already established about Java.
+# Each language does not merely resolve differently: it brings its OWN
+# IMPLEMENTATION of the wire protocol. AMQP is amqp091-go, amqplib, pika and
+# com.rabbitmq — four codebases with different framing, heartbeats, pooling and
+# write sizes. That traffic crosses the tunnel and then the family's network,
+# where a VXLAN overlay's 1450-byte MTU does not answer a driver writing in
+# large blocks the way it answers one writing small. Language and family are not
+# independent, and nobody had measured that they were.
 LANGS="${E2E_LANGS:-go node python java}"
 # proto:host:port — the by-name target for each service.
 PROTOS="http:httpbin:8080 postgres:postgres:5432 redis:redis:6379 mongo:mongo:27017 amqp:rabbitmq:5672 mqtt:mosquitto:1883 grpc:grpc:50051 websocket:wsserver:8090"
@@ -291,9 +293,21 @@ do_env() {
 
   echo "=== client-only (-c): consume the cluster, nothing served ==="
   # The DB-tool shape: no name, no agent port, outbound only.
-  local co
-  co="$(perl -e 'alarm 45; exec @ARGV or exit 127' "$PLUG" --host "$ip" --port "$port" -c \
-    curl -s --max-time 10 -o /dev/null -w '%{http_code}' http://httpbin:8080/get 2>/dev/null | tr -d '\r' | tail -1)"
+  #
+  # Two attempts, for the same reason do_matrix takes two: the mesh datapath can
+  # blip on the first hit. This cell was single-shot and got away with it while
+  # setup took 769s — twelve minutes of building clients during which the cluster
+  # finished settling. Setup is now ~70s, so the first cell arrives while the
+  # stack may still be coming up, and `wait_cluster` only proves the AGENT
+  # answers, not that httpbin does. Shortening the run did not create the race;
+  # it stopped hiding it.
+  local co _try
+  for _try in 1 2; do
+    co="$(perl -e 'alarm 45; exec @ARGV or exit 127' "$PLUG" --host "$ip" --port "$port" -c \
+      curl -s --max-time 10 -o /dev/null -w '%{http_code}' http://httpbin:8080/get 2>/dev/null | tr -d '\r' | tail -1)"
+    [ "$co" = "200" ] && break
+    [ "$_try" = 1 ] && { echo "    (got '${co:-nothing}' — one retry, the datapath may still be settling)"; sleep 5; }
+  done
   if [ "$co" = "200" ]; then
     echo "client-only OK — -c reached httpbin by name with nothing served"
     sum "**client-only (-c)** ✅"
