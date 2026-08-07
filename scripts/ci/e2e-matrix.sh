@@ -1164,6 +1164,26 @@ do_update_notify() {
     echo "--- update-notify FAIL — echo-local did not build"; sum "**update notify** ❌ (build)"; return 1
   fi
 
+  # The check queries the registry FROM THIS MACHINE and has no fallback — by
+  # design: "a timeout there is not a slower path, it is no check at all,
+  # silently". So a machine that cannot reach the registry cannot prove or
+  # disprove anything here, and saying "the check is broken" would be a lie
+  # about the code. Measured on the GitHub macOS runners, where Docker Hub
+  # times out (the update cell right after this one shows the same thing and
+  # falls back to asking the agent — this one has nothing to fall back to).
+  #
+  # 15s, close to the check's own 20s budget: a registry that answers within
+  # this will answer within that, so a skip here means a real check would have
+  # failed too.
+  local rcode
+  rcode="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 https://registry-1.docker.io/v2/ 2>/dev/null || echo 000)"
+  case "$rcode" in
+    200|401) : ;;  # reachable (401 = reachable, just unauthenticated)
+    *)
+      echo "--- update-notify SKIP — this machine cannot reach registry-1.docker.io (HTTP ${rcode}); the background check has no fallback there"
+      sum "**update notify** – (registry unreachable from this runner)"; return 0 ;;
+  esac
+
   # Session 1 — long enough for the check to settle, dial, ask `info` and reach
   # the registry. It writes the verdict; it does not announce it.
   # -c: a pure client. Nothing to name and no port to reserve — this cell is
