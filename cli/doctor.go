@@ -131,10 +131,18 @@ func cmdDoctor(args []string) {
 	}
 }
 
-// doctorFix — --fix applies the SAFE repairs while checking: purge a
-// truncated cached core (it re-downloads on next use), restore a resolver
-// left stale with no session (plug down). Anything touching privileges, the
-// user's own sessions or the cluster stays a printed remedy on purpose.
+// doctorFix — --fix applies the SAFE repairs while checking: purge a truncated
+// cached core (it re-downloads on next use), restore a resolver left stale by a
+// datapath that died, and stop a datapath that is alive but no longer answering.
+//
+// That last one touches the user's sessions, which the others deliberately do
+// not — the exception holds because in THAT state the sessions are already
+// broken: their resolver is mute, cluster names do not resolve, and nothing will
+// free them (the reaper counts sessions, not health). Preserving them preserves
+// nothing. The diagnosis is confirmed twice before acting, so a probe that times
+// out on a loaded machine cannot cost a healthy daemon.
+//
+// Anything touching privileges or the cluster stays a printed remedy on purpose.
 var doctorFix bool
 
 // datapathVerdict is the ONE place `plug down` is the right answer: a daemon
@@ -146,7 +154,7 @@ var doctorFix bool
 // Split out from the probing so the decision is testable, and so the rule stays
 // visible: alive AND responsive is the normal state and says nothing; alive and
 // mute is the only state that warrants stopping it by hand.
-func datapathVerdict(alive, responsive bool) (check, bool) {
+func datapathVerdict(alive, responsive, stopped bool) (check, bool) {
 	const name = "datapath"
 	switch {
 	case !alive:
@@ -154,11 +162,14 @@ func datapathVerdict(alive, responsive bool) (check, bool) {
 	case responsive:
 		return check{area: "local", name: name, status: stOK,
 			detail: "the running datapath answers its own resolver"}, true
+	case stopped:
+		return check{area: "local", name: name, status: stOK,
+			detail: "the daemon was alive but no longer answering — stopped it; relaunch your sessions"}, true
 	default:
 		return check{area: "local", name: name, status: stFail,
 			detail: "the daemon is alive but its resolver stopped answering — cluster names cannot resolve, " +
 				"and it will not stop on its own (the reaper only counts sessions)",
-			remedy: "plug down, then relaunch your sessions — this is what that command is for"}, true
+			remedy: "plug doctor --fix (stops it), then relaunch your sessions"}, true
 	}
 }
 

@@ -66,9 +66,21 @@ func doctorOS(add func(check)) {
 		}
 	}
 
-	// Alive is not the same as working: probe the datapath's own resolver.
-	if c, show := datapathVerdict(daemons > 0, tun.DatapathResponsive(2*time.Second)); show {
-		add(c)
+	// Alive is not the same as working: probe the datapath's own resolver. A
+	// second probe before condemning it — the first can time out on a loaded
+	// machine, and --fix acts on this verdict.
+	if daemons > 0 {
+		ok := tun.DatapathResponsive(2 * time.Second)
+		if !ok {
+			ok = tun.DatapathResponsive(2 * time.Second)
+		}
+		stopped := false
+		if !ok && doctorFix {
+			stopped = stopDaemon()
+		}
+		if c, show := datapathVerdict(true, ok, stopped); show {
+			add(c)
+		}
 	}
 
 	// System resolver: pointed at plug? Legitimate while sessions live; STALE

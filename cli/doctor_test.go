@@ -67,16 +67,16 @@ func TestVersionsFromCorePathParsing(t *testing.T) {
 //
 // Without this check the command would have no entry point at all, which is
 // what makes it look like it exists for nothing.
-func TestOnlyAWedgedDatapathSendsYouToPlugDown(t *testing.T) {
-	c, show := datapathVerdict(true, false)
+func TestAWedgedDatapathIsTheOneThingFixMayStop(t *testing.T) {
+	c, show := datapathVerdict(true, false, false)
 	if !show {
 		t.Fatal("an alive-but-mute datapath must be reported")
 	}
 	if c.status != stFail {
 		t.Errorf("status = %v, want a failure — cluster names cannot resolve in this state", c.status)
 	}
-	if !strings.Contains(c.remedy, "plug down") {
-		t.Errorf("remedy = %q — this is the one case where plug down is the answer", c.remedy)
+	if !strings.Contains(c.remedy, "doctor --fix") {
+		t.Errorf("remedy = %q — --fix stops it, no separate command to run", c.remedy)
 	}
 	if !strings.Contains(c.detail, "will not stop on its own") {
 		t.Errorf("detail = %q, want it to say why waiting does not help", c.detail)
@@ -86,7 +86,7 @@ func TestOnlyAWedgedDatapathSendsYouToPlugDown(t *testing.T) {
 // The healthy case must stay quiet about that command, or we are back to
 // teaching people to use a teardown as routine maintenance.
 func TestAWorkingDatapathNeverMentionsPlugDown(t *testing.T) {
-	c, show := datapathVerdict(true, true)
+	c, show := datapathVerdict(true, true, false)
 	if !show || c.status != stOK {
 		t.Fatalf("alive and answering must report OK, got show=%v status=%v", show, c.status)
 	}
@@ -99,7 +99,20 @@ func TestAWorkingDatapathNeverMentionsPlugDown(t *testing.T) {
 // story, and two checks describing the same state in different words is how a
 // user ends up applying the wrong remedy.
 func TestNoDaemonProducesNoDatapathCheck(t *testing.T) {
-	if _, show := datapathVerdict(false, false); show {
+	if _, show := datapathVerdict(false, false, false); show {
 		t.Error("with no daemon running, this check must stay silent")
+	}
+}
+
+// And once --fix has stopped it, the report says so plainly: the user has to
+// relaunch their sessions, and a check that quietly went green would leave them
+// wondering why nothing works.
+func TestAStoppedWedgedDatapathReportsWhatWasDone(t *testing.T) {
+	c, show := datapathVerdict(true, false, true)
+	if !show || c.status != stOK {
+		t.Fatalf("after stopping it the check must report OK, got show=%v status=%v", show, c.status)
+	}
+	if !strings.Contains(c.detail, "stopped it") || !strings.Contains(c.detail, "relaunch") {
+		t.Errorf("detail = %q, want it to say it was stopped and that sessions must be relaunched", c.detail)
 	}
 }

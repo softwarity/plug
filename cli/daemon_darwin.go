@@ -174,11 +174,6 @@ func cmdDown(_ []string) {
 		info("no plug daemon running")
 		return
 	}
-	pid := tun.DaemonPID(globalKey)
-	if pid == 0 {
-		info("plug daemon: unknown pid")
-		return
-	}
 	// What it costs, BEFORE doing it. Killing the daemon pulls the datapath out
 	// from under every running session: their connections drop and cluster names
 	// stop resolving, while the processes themselves keep running as if nothing
@@ -188,10 +183,26 @@ func cmdDown(_ []string) {
 	if m := downStrandsSessions(liveSessions()); m != "" {
 		info("%s", m)
 	}
+	if !stopDaemon() {
+		info("plug daemon: unknown pid")
+		return
+	}
+	info("stopped the plug daemon")
+}
+
+// stopDaemon sends the daemon its stop signal. Shared by `plug down` and by
+// `plug doctor --fix` when it finds one wedged, so both take exactly the same
+// path — a repair that differed from the documented command would be its own
+// kind of surprise. Reports whether there was a pid to signal.
+func stopDaemon() bool {
+	pid := tun.DaemonPID(globalKey)
+	if pid == 0 {
+		return false
+	}
 	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
 		fatal("stopping daemon (pid %d): %v", pid, err)
 	}
-	info("stopped the plug daemon")
+	return true
 }
 
 // liveSessions counts the plug sessions running on this machine, all clusters
