@@ -1,14 +1,18 @@
 package main
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/term"
 
 	"github.com/softwarity/plug/cli/internal/tun"
 	"github.com/softwarity/plug/cli/internal/tunnel"
@@ -150,6 +154,22 @@ func applyUpdate(cfg config, tag string) {
 	info("agent update to v%s: %s", tag, verdict)
 }
 
+// updateNotice words what a previous session found. Two different findings
+// arrive here through the same field, and they must not be worded the same:
+//
+//   - a RELEASE (2.9.4): there is a newer version, and it has a number.
+//   - a moving TAG (latest, main, a branch): there is no newer number — the
+//     stream simply points at different bytes than what the cluster runs. Saying
+//     "update available: vlatest" would be nonsense, which is the trap of
+//     carrying both in one string.
+func updateNotice(available string) string {
+	const how = "run `plug update` to take it (plug config update=auto to apply it for you, =none to stop saying it)"
+	if _, ok := parseExactRelease(available); ok {
+		return fmt.Sprintf("agent update available: v%s — %s", available, how)
+	}
+	return fmt.Sprintf("the agent follows %q and that tag now points at a different image — %s", available, how)
+}
+
 // probeUpdate returns the release available beyond what the agent runs, the
 // image it was judged against, and whether the question could be answered at
 // all. It answers nothing for a moving tag (latest, a branch): whether one of
@@ -191,7 +211,19 @@ func probeUpdate(cfg config) (found, img string, ok bool) {
 	}
 	apply, current, errMsg, delegate := decideClient(img, before, "", tags)
 	if delegate || errMsg != "" {
-		return "", "", false // a moving tag, or a dev agent: not decidable from here
+		// A moving tag (latest, main, a branch) has no version to compare — but
+		// it does have BYTES. The agent reports its image with the digest it
+		// resolved to, so ask the registry what that tag points at now. This used
+		// to be given up on ("only the cluster can settle it"), which left every
+		// deployment following a stream permanently unchecked.
+		if tag := movingTagOf(img); tag != "" {
+			if here := imageDigest(img); here != "" {
+				if there, derr := registryDigestWithin(host, repo, tag, 10*time.Second); derr == nil && there != here {
+					return tag, img, true // the stream moved under this deployment
+				}
+			}
+		}
+		return "", "", false // a dev agent, or a stream we could not resolve
 	}
 	if current != "" {
 		return "", img, true // up to date, and that IS an answer worth recording
@@ -207,7 +239,69 @@ func announceUpdate(cfg config) {
 		return
 	}
 	if st := loadUpdateState(cfg); st.available != "" {
-		info("agent update available: v%s — run `plug update` to take it "+
-			"(plug config update=auto to apply it for you, =none to stop saying it)", st.available)
+		// Offer it when someone is actually there to answer; fall back to saying
+		// it otherwise (a script, a CI job, a pipe).
+		if !offerUpdate(cfg, st.available) {
+			info("%s", updateNotice(st.available))
+		}
 	}
+}
+
+// offerUpdateDeadline is deliberately short. askToStop can afford two minutes:
+// it interrupts someone who is already deciding something. This one interrupts
+// nobody — it appears before a command the user typed and wants to run, so an
+// unanswered prompt must cost seconds, not minutes.
+const offerUpdateDeadline = 12 * time.Second
+
+// offerUpdate asks whether to apply the update now, and applies it if told to.
+// Returns whether it ran one.
+//
+// Guarded three ways, because the cost of a wrong "yes" is not local: applying
+// rolls the AGENT, which is shared — on a common cluster every other developer's
+// session reconnects. So the prompt says that out loud, the default is NO, and
+// it never appears without a real terminal (the askToStop trap: a context we
+// mistook for interactive once wedged a Windows leg for 16 minutes).
+//
+// The update runs as a SUBPROCESS rather than in-process: cmdUpdate calls
+// fatal() on failure, and a failed update must never cost the user the command
+// they actually typed.
+func offerUpdate(cfg config, available string) bool {
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return false
+	}
+	tty, err := os.Open(ttyDevice)
+	if err != nil {
+		return false
+	}
+	defer tty.Close()
+	fmt.Fprintf(os.Stderr, "[plug] %s\n", updateNotice(available))
+	fmt.Fprint(os.Stderr, "[plug] apply it now? it rolls the cluster's agent, and any other session on it reconnects [y/N]: ")
+	answer := make(chan string, 1)
+	go func() {
+		line, rerr := bufio.NewReader(tty).ReadString('\n')
+		if rerr != nil {
+			line = "n"
+		}
+		answer <- strings.ToLower(strings.TrimSpace(line))
+	}()
+	var a string
+	select {
+	case a = <-answer:
+	case <-time.After(offerUpdateDeadline):
+		fmt.Fprintln(os.Stderr, "\n[plug] no answer — leaving the agent as it is")
+		return false
+	}
+	if a != "y" && a != "yes" && a != "o" && a != "oui" {
+		return false
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	cmd := exec.Command(self, "update", "-H", cfg.host, "--port", cfg.port)
+	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+	if err := cmd.Run(); err != nil {
+		info("the update did not complete (%v) — carrying on with your command", err)
+	}
+	return true
 }

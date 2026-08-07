@@ -362,3 +362,82 @@ func decideClient(img, before, want string, tags []string) (apply, current, errM
 // wantNewestReleaseCLI mirrors the agent's `tag` keyword: the newest release,
 // as opposed to naming one stream or one exact version.
 const wantNewestReleaseCLI = "tag"
+
+// imageDigest returns the digest a reference pins, or "" when it names none.
+// The agent's `info` reports its running image WITH the digest it resolved to
+// (softwarity/plug:latest@sha256:…), which is what makes a moving tag decidable
+// from here at all.
+func imageDigest(ref string) string {
+	if i := strings.Index(ref, "@"); i > 0 {
+		return ref[i+1:]
+	}
+	return ""
+}
+
+// movingTagOf returns the tag a reference follows when that tag MOVES (latest,
+// main, a branch) — "" for a release pin, which a tag listing already answers,
+// and "" for a bare digest, which by definition cannot move.
+func movingTagOf(ref string) string {
+	if !imageHasTag(ref) {
+		return ""
+	}
+	_, _, tag := parseImageRef(ref)
+	if isReleaseTag(tag) {
+		return ""
+	}
+	return tag
+}
+
+// registryDigestWithin resolves what a tag points to RIGHT NOW — the manifest
+// digest, from the registry's own header.
+//
+// This is the question a tag listing cannot answer. "Is there a newer release?"
+// is settled by comparing version numbers; "has `latest` moved?" has no version
+// to compare, only bytes. One request, so a short budget is plenty.
+//
+// Accept lists both manifest-list and single-manifest types: asking for only one
+// makes a registry answer with a DIFFERENT digest (the one it converted to),
+// which would read as a move on every single check.
+func registryDigestWithin(host, repo, tag string, budget time.Duration) (string, error) {
+	cl := &http.Client{Timeout: budget}
+	endpoint := "https://" + host + "/v2/" + repo + "/manifests/" + tag
+	accept := strings.Join([]string{
+		"application/vnd.oci.image.index.v1+json",
+		"application/vnd.docker.distribution.manifest.list.v2+json",
+		"application/vnd.oci.image.manifest.v1+json",
+		"application/vnd.docker.distribution.manifest.v2+json",
+	}, ", ")
+	var token string
+	for attempt := 0; attempt < 2; attempt++ {
+		req, err := http.NewRequest("HEAD", endpoint, nil)
+		if err != nil {
+			return "", err
+		}
+		req.Header.Set("Accept", accept)
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		resp, err := cl.Do(req)
+		if err != nil {
+			return "", err
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusUnauthorized && attempt == 0 {
+			t, terr := registryToken(cl, resp.Header.Get("WWW-Authenticate"))
+			if terr != nil {
+				return "", terr
+			}
+			token = t
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			return "", fmt.Errorf("%s: %s", endpoint, resp.Status)
+		}
+		d := resp.Header.Get("Docker-Content-Digest")
+		if d == "" {
+			return "", fmt.Errorf("%s: no Docker-Content-Digest header", endpoint)
+		}
+		return d, nil
+	}
+	return "", fmt.Errorf("%s: unauthorized", endpoint)
+}
