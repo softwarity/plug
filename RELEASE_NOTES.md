@@ -41,6 +41,17 @@ answer (a daemon alive but no longer answering its own resolver, which doctor
 now detects instead of guessing) is handled by `plug doctor --fix` rather than
 by sending you to another command.
 
+### Fixed: `plug update` could fail at its very last step, after migrating the cluster
+
+The agent rolls, answers "I am the new version" from its new pod — and the next
+connection lands while the endpoint is still switching over. One i/o timeout
+there aborted the whole update, with the cluster already migrated and only the
+launcher left behind. Seen on Kubernetes, where the rollout makes the window
+widest.
+
+The launcher download now retries, because the instability is one `plug update`
+causes itself. A first try that works costs nothing.
+
 ### `plug doctor --fix` repairs the resolver it was already promising to repair
 
 A datapath that dies without tidying up leaves the machine pointed at an address

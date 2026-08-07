@@ -1,8 +1,10 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 // THE regression to hold, and it has already happened twice: telling someone to
@@ -84,4 +86,64 @@ func atoiTest(s string) int {
 		n = n*10 + int(c-'0')
 	}
 	return n
+}
+
+// The k8s failure this came from: the agent rolled, answered "I am 2.9.3" from
+// the new pod, and the NEXT connection timed out while the endpoint switched —
+// so `plug update` died at its last step with the cluster already migrated.
+// A transient failure followed by success must produce success.
+func TestADownloadThatFailsOnceStillSucceeds(t *testing.T) {
+	calls := 0
+	data, err := fetchWithRetry(func() ([]byte, error) {
+		calls++
+		if calls == 1 {
+			return nil, errors.New("dial tcp 100.78.249.127:2226: i/o timeout")
+		}
+		return []byte("binary"), nil
+	}, 3, func(int) time.Duration { return 0 })
+
+	if err != nil {
+		t.Fatalf("err = %v, want success on the second try", err)
+	}
+	if string(data) != "binary" {
+		t.Errorf("data = %q, want the payload of the successful try", data)
+	}
+	if calls != 2 {
+		t.Errorf("fetched %d times, want exactly 2 — it must stop at the first success", calls)
+	}
+}
+
+// And it must give up: retrying forever would hang an update against a cluster
+// that is genuinely unreachable, which is worse than failing with the reason.
+func TestADownloadThatKeepsFailingReportsTheLastError(t *testing.T) {
+	calls := 0
+	_, err := fetchWithRetry(func() ([]byte, error) {
+		calls++
+		return nil, errors.New("still down")
+	}, 3, func(int) time.Duration { return 0 })
+
+	if err == nil {
+		t.Fatal("want the failure to surface")
+	}
+	if !strings.Contains(err.Error(), "still down") {
+		t.Errorf("err = %v, want the underlying reason", err)
+	}
+	if calls != 3 {
+		t.Errorf("fetched %d times, want exactly 3", calls)
+	}
+}
+
+// A first try that works must not pay for the retry logic — no sleep, no extra
+// call. This is the normal path for every user.
+func TestTheHappyPathFetchesOnce(t *testing.T) {
+	calls := 0
+	if _, err := fetchWithRetry(func() ([]byte, error) {
+		calls++
+		return []byte("x"), nil
+	}, 3, func(int) time.Duration { t.Error("must not sleep when the first try works"); return 0 }); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if calls != 1 {
+		t.Errorf("fetched %d times, want 1", calls)
+	}
 }

@@ -162,6 +162,29 @@ func downStrandsSessions(sessions int) string {
 		"      To pick up a new core instead, just close them: the daemon stops by itself ~30s later.", sessions)
 }
 
+// fetchWithRetry runs fetch up to attempts times, pausing delay(n) between
+// tries, and returns the last error if none succeed. The fetch is injected so
+// the policy can be tested without a cluster — how many tries, and that a late
+// success still counts.
+//
+// Deliberately NOT inside getDownload: everywhere else, a failed download has a
+// caller that already handles it (ensureVersion falls back to the launcher and
+// says so). Here there is no fallback and the timing problem is one we created,
+// so the retry belongs here rather than being spread over every download.
+func fetchWithRetry(fetch func() ([]byte, error), attempts int, delay func(int) time.Duration) ([]byte, error) {
+	var err error
+	for i := 1; i <= attempts; i++ {
+		var data []byte
+		if data, err = fetch(); err == nil {
+			return data, nil
+		}
+		if i < attempts {
+			time.Sleep(delay(i))
+		}
+	}
+	return nil, err
+}
+
 // updateWord is the agent's one-word verdict (the protocol's first token).
 func updateWord(s string) string {
 	if f := strings.Fields(s); len(f) > 0 {
@@ -323,7 +346,14 @@ func updateLauncher(cfg config, remote string) {
 	if err != nil {
 		fatal("%v", err)
 	}
-	data, err := getDownload(cfg, runtime.GOOS+"-"+runtime.GOARCH, shortVersion(remote))
+	// Retry, because we CAUSED the instability we are about to hit: the agent was
+	// just rolled, it already answers "which version?" from the new pod, and the
+	// very next connection can still land while the endpoint is switching over.
+	// One i/o timeout there failed the whole update at its last step, with the
+	// cluster already migrated — the worst possible place to give up.
+	data, err := fetchWithRetry(func() ([]byte, error) {
+		return getDownload(cfg, runtime.GOOS+"-"+runtime.GOARCH, shortVersion(remote))
+	}, 3, func(attempt int) time.Duration { return time.Duration(attempt) * 2 * time.Second })
 	if err != nil {
 		fatal("downloading %s: %v", shortVersion(remote), err)
 	}
