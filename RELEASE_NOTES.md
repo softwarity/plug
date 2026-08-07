@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.10.0
+
 ### The image we publish is now the image that was tested — on arm64 too
 
 The e2e legs used to build their own copy of the agent image, so the artefact
