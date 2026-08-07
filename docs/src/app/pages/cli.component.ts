@@ -137,7 +137,7 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
 
     <h3>Rarely needed</h3>
     <ul>
-      <li><code>plug down</code> — tear down plug's background state now (it does so by itself ~30&nbsp;s after the last session; this is the impatient path, and the remedy <a routerLink="/getting-started">doctor</a> points at for a stale resolver).</li>
+      <li><code>plug down</code> — tear down plug's background state now (it does so by itself ~30&nbsp;s after the last session; this is the impatient path). It is never needed to pick up a new version — closing your sessions is — and a resolver left stale by a datapath that died is repaired by <code>plug doctor --fix</code>.</li>
       <li><code>plug install-service</code> / <code>plug remove-service</code> — Windows only: create/remove the datapath service (one elevated run; the <a routerLink="/getting-started">installer</a> already does it).</li>
       <li><code>plug init</code> — run the profile wizard explicitly (it runs by itself when no profile exists).</li>
     </ul>
