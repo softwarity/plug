@@ -48,8 +48,16 @@ jobs:
       - name: Get the agent image
         run: |
           if [ -n "${{ inputs.image }}" ]; then
-            echo "pulling ${{ inputs.image }} (the build this commit published)"
-            docker pull -q "${{ inputs.image }}"
+            # WAIT for it rather than require it: the caller dispatches us before
+            # the build finishes, on purpose — the reference is predictable, so
+            # booting this runner, checking out and joining the tailnet all
+            # happen while the image is still being built. Only the pull waits.
+            echo "waiting for ${{ inputs.image }} (built in parallel by the caller)"
+            for i in $(seq 1 60); do
+              docker pull -q "${{ inputs.image }}" && break
+              [ "$i" = 60 ] && { echo "::error::${{ inputs.image }} never appeared — did the image build fail?"; exit 1; }
+              sleep 15
+            done
             docker tag "${{ inputs.image }}" softwarity/plug:e2e
           else
             echo "no image given (manual dispatch) — building from this checkout"

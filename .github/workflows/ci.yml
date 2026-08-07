@@ -235,7 +235,12 @@ jobs:
   # always() as long as this job succeeded, e2e skipped or not).
   start-cluster:
     name: start clusters
-    needs: image-build
+    # NOT waiting for image-build. This job only DISPATCHES; what needs the image
+    # is a job inside each cluster run, several steps later — and the reference
+    # is predictable (sha-<commit>), so it can be handed over before it exists.
+    # The cluster's pull waits for it while the runner boots, checks out and
+    # joins the tailnet. Making the dispatch wait for the build serialised two
+    # things that have no reason to be in sequence.
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
@@ -250,38 +255,42 @@ jobs:
       swarm_id_b: ${{ steps.dispatch_sb.outputs.id }}
     steps:
       - uses: actions/checkout@v6
+      # The tag metadata-action will put on this build: sha-<7>. Computed here so
+      # the dispatch does not have to wait for the build that produces it.
+      - id: ref
+        run: echo "short=$(echo ${{ github.sha }} | cut -c1-7)" >> "$GITHUB_OUTPUT"
       # TWO clusters per family, so the e2e can assert multicluster: the same
       # service name must reach the RIGHT backend through each plug (each
       # cluster's `ident` answers its own corr id).
       - id: dispatch_a
         env:
           GH_TOKEN: ${{ github.token }}
-          CLUSTER_IMAGE: ${{ needs.image-build.outputs.image }}
+          CLUSTER_IMAGE: docker.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}
         run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-a)" >> "$GITHUB_OUTPUT"
       - id: dispatch_b
         env:
           GH_TOKEN: ${{ github.token }}
-          CLUSTER_IMAGE: ${{ needs.image-build.outputs.image }}
+          CLUSTER_IMAGE: docker.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}
         run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-b)" >> "$GITHUB_OUTPUT"
       - id: dispatch_ka
         env:
           GH_TOKEN: ${{ github.token }}
-          CLUSTER_IMAGE: ${{ needs.image-build.outputs.image }}
+          CLUSTER_IMAGE: docker.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}
         run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-ka k8s-for.yml)" >> "$GITHUB_OUTPUT"
       - id: dispatch_kb
         env:
           GH_TOKEN: ${{ github.token }}
-          CLUSTER_IMAGE: ${{ needs.image-build.outputs.image }}
+          CLUSTER_IMAGE: docker.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}
         run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-kb k8s-for.yml)" >> "$GITHUB_OUTPUT"
       - id: dispatch_sa
         env:
           GH_TOKEN: ${{ github.token }}
-          CLUSTER_IMAGE: ${{ needs.image-build.outputs.image }}
+          CLUSTER_IMAGE: docker.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}
         run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-sa swarm-for.yml)" >> "$GITHUB_OUTPUT"
       - id: dispatch_sb
         env:
           GH_TOKEN: ${{ github.token }}
-          CLUSTER_IMAGE: ${{ needs.image-build.outputs.image }}
+          CLUSTER_IMAGE: docker.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}
         run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-sb swarm-for.yml)" >> "$GITHUB_OUTPUT"
       # The compat cell needs the LAST PUBLISHED launcher for every OS, but only
       # this Linux job has Docker — extract all of them from the published image
@@ -319,6 +328,19 @@ jobs:
         # ARCHITECTURE, and replaying it on three families would cost three
         # times as much to learn the same thing.
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+        # `alias` exists for ONE reason: a Tailscale hostname must be a DNS
+        # label, and ubuntu-24.04-arm is the only runner name carrying dots.
+        # GitHub expressions have no replace(), so the safe name is carried by
+        # the matrix instead of computed from it.
+        include:
+          - os: ubuntu-latest
+            alias: ubuntu
+          - os: ubuntu-24.04-arm
+            alias: ubuntu-arm
+          - os: macos-latest
+            alias: macos
+          - os: windows-latest
+            alias: windows
     steps:
       - uses: actions/checkout@v6
         with:
@@ -363,7 +385,7 @@ jobs:
           oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
           oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
           tags: tag:ci
-          hostname: plug-${{ matrix.os }}-${{ github.run_id }}
+          hostname: plug-${{ matrix.alias }}-${{ github.run_id }}
           args: --accept-dns=false # reach the cluster by tailnet IP; don't let Tailscale drive DNS
       - uses: actions/download-artifact@v7 # the last published launchers, for the compat cell
         with:
