@@ -28,6 +28,13 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 out="${1:-$root/e2e-clients}"
 mkdir -p "$out"
+# ABSOLUTE, and this line is the whole reason the first run of this script
+# produced 2 artefacts out of 14. Every `go build` below runs in a subshell that
+# has cd'd into a module directory, so a relative -o resolves against THAT
+# directory — and `go build` creates the parent, so nothing fails: the binaries
+# land in e2e/clients/go/e2e-clients/ and are never seen again. The workflow
+# passes a relative path; the local test that vetted this passed an absolute one.
+out="$(cd "$out" && pwd)"
 
 # Exactly the four targets the CI legs run on — darwin-amd64 is deliberately
 # absent, macos-latest being arm64. If that label ever flips, `gtag` finds no
