@@ -18,3 +18,14 @@ e2e/clients/node/package-lock.json
 /sink.exe
 agent/helper/plug-agent
 cli/cli
+
+# Go services built locally. e2e/services/chaos/chaos — a 9 MB Mach-O arm64
+# binary for a service that only ever runs in a Linux container — reached a
+# public repo through a `git add -A`, and nothing was watching. These build
+# where their source lives, so the pattern has to match by path, not by name.
+e2e/services/*/chaos
+e2e/services/*/prober
+e2e/services/*/flaky
+e2e/services/*/gateway
+e2e/services/*/grpc
+e2e/services/*/websocket
