@@ -18,6 +18,24 @@ they outlasted the caller.
 They are now one question. The answer they share is the same one, and it arrives
 in the time a single lookup takes.
 
+### What a release has been through, restructured
+
+The three cluster families — Compose, Swarm, Kubernetes — exist to prove plug
+behaves the same whichever backend provisions a name. That only reads as a
+comparison if they run the same checks, and they had drifted: the same test
+carried three different names, the order diverged, and two checks ran against
+one family alone for no reason anyone could point at. They now run one identical
+block of nineteen, in one order, and a release cannot be published if the three
+ever diverge again.
+
+A native arm64 client has its own leg rather than sitting inside the Compose
+matrix, since what it asks is an architecture question, not a cluster one.
+
+The suite also runs in about half the time — the same checks, an end-to-end run
+of roughly fifteen minutes instead of twenty-eight. That is not cosmetic: the
+DNS fix above had been there all along, and only became visible once nothing was
+being asked at leisure any more.
+
 ### The update check no longer goes silent when the registry is out of reach
 
 It asked the registry from YOUR machine and had no fallback: on a network that
