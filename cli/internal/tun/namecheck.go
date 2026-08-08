@@ -48,16 +48,41 @@ func newNameChecker(dialers func() []Dialer, log logfn) nameChecker {
 		found bool
 		until time.Time
 	}
+	// A lookup already on the wire, so N concurrent questions about ONE name
+	// cost one round trip instead of N.
+	//
+	// The cache alone does not cover this: it only helps once an answer is
+	// back. Windows asks about the same name several times AT ONCE — its search
+	// suffix turns `svc` into a query for `svc.plug` and one for `svc`, both
+	// landing on this same key, and its resolver re-sends after about a second
+	// while nothing has answered yet. Each of those used to open its own
+	// session and wait out the agent's budget, and an ABSENT name costs that
+	// budget in full by definition: the agent cannot say "no" before it has
+	// finished looking. Stacked up, they outlasted what the client would wait —
+	// one leg gave up resolving after 8s on a name plug decides in under two.
+	type flight struct {
+		done  chan struct{}
+		found bool
+	}
 	var mu sync.Mutex
 	cache := map[string]verdict{}
+	inflight := map[string]*flight{}
 	return func(name string) bool {
 		mu.Lock()
 		if v, hit := cache[name]; hit && time.Now().Before(v.until) {
 			mu.Unlock()
 			return v.found
 		}
+		if f, busy := inflight[name]; busy {
+			mu.Unlock()
+			<-f.done
+			return f.found
+		}
+		f := &flight{done: make(chan struct{})}
+		inflight[name] = f
 		mu.Unlock()
 
+		started := time.Now()
 		answered, found := false, false
 		for _, d := range dialers() {
 			cr, is := d.(clusterNameResolver)
@@ -74,15 +99,26 @@ func newNameChecker(dialers func() []Dialer, log logfn) nameChecker {
 				break
 			}
 		}
-		if !answered {
-			return true
-		}
-		if !found && nxLimiter.allow(name) {
-			log.f("tun: %s is in no connected cluster — NXDOMAIN (repeats hidden 30s)", name)
-		}
+		took := time.Since(started)
+
+		// Nobody could answer (no transport yet, an agent too old): mint, as
+		// plug always did, and do NOT cache a verdict we never got.
+		result := true
 		mu.Lock()
-		cache[name] = verdict{found: found, until: time.Now().Add(checkTTL)}
+		delete(inflight, name)
+		if answered {
+			result = found
+			cache[name] = verdict{found: found, until: time.Now().Add(checkTTL)}
+		}
 		mu.Unlock()
-		return found
+
+		if answered && !found && nxLimiter.allow(name) {
+			// The duration is here because it is the number that decides
+			// whether a slow NXDOMAIN is the agent thinking or the link.
+			log.f("tun: %s is in no connected cluster — NXDOMAIN in %s (repeats hidden 30s)", name, took.Round(time.Millisecond))
+		}
+		f.found = result
+		close(f.done)
+		return result
 	}
 }

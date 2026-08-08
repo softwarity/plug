@@ -2,6 +2,22 @@
 
 ## NEXT RELEASE
 
+### A name that is in no cluster now fails fast on Windows
+
+Asking for a name nothing serves could take longer than the program asking was
+willing to wait — it gave up on the lookup rather than being told, cleanly, that
+the name does not exist.
+
+Windows asks about one name several times at once: its search suffix turns `svc`
+into a query for `svc.plug` and one for `svc`, and its resolver re-sends after
+about a second while nothing has answered yet. Each of those was a separate
+question to the cluster, and a name that is genuinely absent is the slowest kind
+to answer — the agent has to finish looking before it can say no. Stacked up,
+they outlasted the caller.
+
+They are now one question. The answer they share is the same one, and it arrives
+in the time a single lookup takes.
+
 ### The update check no longer goes silent when the registry is out of reach
 
 It asked the registry from YOUR machine and had no fallback: on a network that

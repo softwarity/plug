@@ -2,6 +2,7 @@ package tun
 
 import (
 	"net"
+	"sync"
 	"testing"
 	"time"
 )
@@ -66,6 +67,65 @@ func TestNameCheckerAnyClusterWins(t *testing.T) {
 	check := newNameChecker(func() []Dialer { return []Dialer{a, b} }, logfn(func(string, ...any) {}))
 	if !check("svc") {
 		t.Fatal("a name present in ANY connected cluster must mint")
+	}
+}
+
+// slowResolver answers after a delay, and counts how many times it was asked.
+type slowResolver struct {
+	delay time.Duration
+	mu    sync.Mutex
+	calls int
+}
+
+func (s *slowResolver) DialCluster(string) (net.Conn, error) { return nil, nil }
+func (s *slowResolver) ResolveInCluster(string) (bool, bool) {
+	s.mu.Lock()
+	s.calls++
+	s.mu.Unlock()
+	time.Sleep(s.delay)
+	return false, true // answered: the name is absent
+}
+func (s *slowResolver) count() int { s.mu.Lock(); defer s.mu.Unlock(); return s.calls }
+
+// The Windows shape, and the reason this cost a CI leg: one name is asked about
+// SEVERAL TIMES AT ONCE. The search suffix turns `svc` into a query for
+// `svc.plug` and one for `svc` — both land on this key — and the resolver
+// re-sends after about a second while nothing has answered yet.
+//
+// The cache cannot help there: it only holds an answer once one is back. So
+// each question used to open its own session and wait out the agent's budget,
+// which an ABSENT name burns in full by definition — the agent cannot say "no"
+// before it has finished looking. Stacked up, they outlasted what a client
+// waits: a leg gave up resolving after 8s on a name plug decides in under two.
+func TestConcurrentQuestionsAboutOneNameCostOneRoundTrip(t *testing.T) {
+	slow := &slowResolver{delay: 200 * time.Millisecond}
+	check := newNameChecker(func() []Dialer { return []Dialer{slow} }, logfn(func(string, ...any) {}))
+
+	const askers = 8
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	minted := make([]bool, askers)
+	for i := 0; i < askers; i++ {
+		wg.Add(1)
+		go func(i int) { defer wg.Done(); <-start; minted[i] = check("absent") }(i)
+	}
+	began := time.Now()
+	close(start)
+	wg.Wait()
+	took := time.Since(began)
+
+	if n := slow.count(); n != 1 {
+		t.Fatalf("one name asked %d times at once cost %d agent round trips — want 1", askers, n)
+	}
+	// Serialised, eight of these would take 1.6s. The bound is deliberately
+	// loose: what is asserted is that they did not queue, not a stopwatch.
+	if took > time.Second {
+		t.Fatalf("the questions queued: %s for %d concurrent lookups of one name", took.Round(time.Millisecond), askers)
+	}
+	for i, m := range minted {
+		if m {
+			t.Fatalf("asker %d minted a name the agent said was absent — a waiter got the wrong verdict", i)
+		}
 	}
 }
 
