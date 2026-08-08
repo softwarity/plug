@@ -240,7 +240,7 @@ jobs:
     # `platforms` reads the markers those jobs wrote, which is the only record
     # that cannot lie — without it the image of 33f8c40 shipped with a red
     # Windows selftest, past a comment promising the opposite.
-    needs: [image-build, build, selftest, platforms, ci-shape, e2e-compose, e2e-k8s, e2e-swarm]
+    needs: [image-build, build, selftest, platforms, ci-shape, e2e-compose, e2e-k8s, e2e-swarm, e2e-arm64]
     if: success() && needs.platforms.outputs.verdict == 'pass' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
@@ -409,35 +409,18 @@ jobs:
     strategy:
       fail-fast: false # one OS failing must not cancel the others
       matrix:
-        # ubuntu-24.04-arm is the leg that was missing: linux/arm64 has been
-        # built and published on every release since the multi-arch image
-        # existed, and NOTHING ever ran it — every leg was amd64. Same cluster,
-        # same cells, a native arm64 client. Compose only: the gap is the
-        # ARCHITECTURE, and replaying it on three families would cost three
-        # times as much to learn the same thing.
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
-        # `alias` exists for ONE reason: a Tailscale hostname must be a DNS
-        # label, and ubuntu-24.04-arm is the only runner name carrying dots.
-        # GitHub expressions have no replace(), so the safe name is carried by
-        # the matrix instead of computed from it.
-        #
-        # The arm64 leg runs everything whose names it can own: the cells that
-        # create their own names through -s now derive them from $leg, so a
-        # second Linux leg no longer claims exposed-linux, col-linux, lease-linux
-        # and the rest from under the amd64 one (measured — it took that leg down
-        # with it, not just itself).
-        #
-        # What it still skips are the cells bound to services the CLUSTER
-        # declares per leg: flaky-<leg>, tko-<leg>, res-tko-<leg>, res-agent-<leg>,
-        # prev-agent-<leg>. Those exist for linux/mac/win only, and adding a
-        # fourth set would double the Linux load on a shared cluster to re-prove
-        # AGENT behaviour — which cannot depend on the client's architecture,
-        # since the agent is the same amd64 container in every leg.
+        # The same three OSes as e2e-swarm and e2e-k8s, and that is the point:
+        # three matrices of three legs running one identical block read as a
+        # comparison. A fourth leg here made compose look like a different test.
+        # The arm64 client lives in e2e-arm64 — it asks an ARCHITECTURE question,
+        # not a cluster-family one.
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        # `alias` names the tailnet node; a Tailscale hostname must be a DNS
+        # label, so it is carried by the matrix rather than computed from the
+        # runner label (GitHub expressions have no replace()).
         include:
           - os: ubuntu-latest
             alias: ubuntu
-          - os: ubuntu-24.04-arm
-            alias: ubuntu-arm
           - os: macos-latest
             alias: macos
           - os: windows-latest
@@ -525,7 +508,7 @@ jobs:
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh multicluster "$A" "$B" 2222
       - name: Outage recovery
-        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh outage "$A" "$B" 2222
       - name: Expose — serve a local port to the cluster (-s)
@@ -557,33 +540,126 @@ jobs:
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh multiport "$A" "$B" 2222
       - name: Takeover — park the deployed service, serve ours, restore it
-        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh takeover "$A" "$B" 2222
       - name: Resilience — agent restarted mid-session (self-heal, boot-gc, re-park)
-        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh resilience "$A" "$B" 2222
       - name: Launcher compat — latest published launcher, this branch's core
-        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        if: always()
         shell: bash
         run: bash scripts/ci/compat-launcher.sh "$A" 2222
       - name: Update — plug update verb + launcher path (per-leg agent)
-        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh update "$A" "$B" 2222
       - name: Update — <tag> refuses an unpublished tag, and an agent too old
-        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh updatetag "$A" "$B" 2222
       - name: Update — the background check finds it, the next launch says it
-        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh updatenotify "$A" "$B" 2222
       - name: Update — a release agent retargets to the newest release
-        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh updatejump "$A" "$B" 2222
+  # The arm64 client. This asks an ARCHITECTURE question — does a NATIVE arm64
+  # plug reach cluster services by name — not a cluster-family one. It used to be
+  # a fourth leg of e2e-compose, which made three matrices that should read as
+  # one comparison look like two identical blocks and an odd one out.
+  #
+  # linux/arm64 has been built and published on every release since the
+  # multi-arch image existed, and nothing ever ran it: every leg was amd64.
+  #
+  # It borrows the compose cluster — the lightest — and owns its own names: the
+  # cells that create names through -s derive them from $leg, which tells the
+  # architectures apart (before that, this leg claimed exposed-linux and took the
+  # amd64 leg down with it, measured). What it does NOT run are the cells bound
+  # to services the CLUSTER declares per leg — flaky-<leg>, tko-<leg>, res-*,
+  # prev-agent-<leg> — which exist for linux/mac/win only. A fourth set would
+  # double the Linux load on a shared cluster to re-prove AGENT behaviour, and
+  # the agent is the same amd64 container whatever the client's architecture.
+  e2e-arm64:
+    name: e2e-arm64 (a native arm64 client, on the compose cluster)
+    needs: [test, start-cluster, build-clients]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 25
+    env:
+      A: plug-cluster-${{ github.run_id }}-a
+      B: plug-cluster-${{ github.run_id }}-b
+      PREBUILT_CLIENTS: e2e-clients
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/download-artifact@v7
+        with:
+          name: e2e-clients
+          path: e2e-clients
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+          key: pip-${{ runner.os }}-arm64-${{ hashFiles('e2e/clients/python/requirements.txt') }}
+          restore-keys: pip-${{ runner.os }}-arm64-
+      - name: Join the tailnet
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
+          tags: tag:ci
+          hostname: plug-ubuntu-arm-${{ github.run_id }}
+          args: --accept-dns=false # reach the cluster by tailnet IP; don't let Tailscale drive DNS
+      - name: Setup — install plug from the cluster + build clients
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh setup "$A" "$B" 2222
+      - name: Env passthrough
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh env "$A" "$B" 2222
+      - name: Protocol matrix (4 langs × 8 protocols)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh matrix "$A" "$B" 2222
+      - name: Multicluster (simultaneous)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh multicluster "$A" "$B" 2222
+      - name: Expose — serve a local port to the cluster (-s)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh expose "$A" "$B" 2222
+      - name: Expose, named port — plug picks it, {PORT} carries it into the command
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh exposevar "$A" "$B" 2222
+      - name: Gateway callback (external → published gateway → sink)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh gateway "$A" "$B" 2222
+      - name: Collision — a name already taken is refused
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh collision "$A" "$B" 2222
+      - name: Name lease — a swept signpost must not free a live name
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh lease "$A" "$B" 2222
+      - name: Same cluster port — two names, both reachable
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh sameport "$A" "$B" 2222
+      - name: Multi-port — one name, three cluster ports
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh multiport "$A" "$B" 2222
+
   e2e-k8s:
     name: e2e-k8s (${{ matrix.os }}, same chain on kind)
     needs: [test, start-cluster, build-clients]
@@ -674,7 +750,7 @@ jobs:
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh multicluster "$A" "$B" 2222
       - name: Outage recovery
-        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh outage "$A" "$B" 2222
       - name: Expose — serve a local port to the cluster (-s)
@@ -706,31 +782,31 @@ jobs:
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh multiport "$A" "$B" 2222
       - name: Takeover — park the deployed service, serve ours, restore it
-        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh takeover "$A" "$B" 2222
       - name: Resilience — agent restarted mid-session (self-heal, boot-gc, re-park)
-        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh resilience "$A" "$B" 2222
       - name: Launcher compat — latest published launcher, this branch's core
-        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        if: always()
         shell: bash
         run: bash scripts/ci/compat-launcher.sh "$A" 2222
       - name: Update — plug update verb + launcher path (per-leg agent)
-        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh update "$A" "$B" 2222
       - name: Update — <tag> refuses an unpublished tag, and an agent too old
-        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh updatetag "$A" "$B" 2222
       - name: Update — the background check finds it, the next launch says it
-        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh updatenotify "$A" "$B" 2222
       - name: Update — a release agent retargets to the newest release
-        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh updatejump "$A" "$B" 2222
   e2e-swarm:
@@ -823,7 +899,7 @@ jobs:
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh multicluster "$A" "$B" 2222
       - name: Outage recovery
-        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh outage "$A" "$B" 2222
       - name: Expose — serve a local port to the cluster (-s)
@@ -855,31 +931,31 @@ jobs:
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh multiport "$A" "$B" 2222
       - name: Takeover — park the deployed service, serve ours, restore it
-        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh takeover "$A" "$B" 2222
       - name: Resilience — agent restarted mid-session (self-heal, boot-gc, re-park)
-        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh resilience "$A" "$B" 2222
       - name: Launcher compat — latest published launcher, this branch's core
-        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        if: always()
         shell: bash
         run: bash scripts/ci/compat-launcher.sh "$A" 2222
       - name: Update — plug update verb + launcher path (per-leg agent)
-        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh update "$A" "$B" 2222
       - name: Update — <tag> refuses an unpublished tag, and an agent too old
-        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh updatetag "$A" "$B" 2222
       - name: Update — the background check finds it, the next launch says it
-        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh updatenotify "$A" "$B" 2222
       - name: Update — a release agent retargets to the newest release
-        if: always() && matrix.os != 'ubuntu-24.04-arm'
+        if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh updatejump "$A" "$B" 2222
   kill-compose:

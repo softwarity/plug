@@ -34,6 +34,19 @@ if len(ref) < 15:
     sys.exit(f"only {len(ref)} cells parsed from {jobs[0]} — the extraction is broken, not the workflow")
 
 bad = False
+
+# The same LEGS too, and this is not cosmetic. The arm64 client sat in
+# e2e-compose as a fourth leg, so the run graph showed 4 · 3 · 3 and read as
+# "compose runs something the others do not" — which was untrue and impossible
+# to tell apart from a real divergence at a glance. It has its own job now.
+# A leg that answers a question other than "which backend?" does not belong in
+# these matrices.
+legs = {j: d["jobs"][j]["strategy"]["matrix"]["os"] for j in jobs}
+if len(set(map(tuple, legs.values()))) != 1:
+    bad = True
+    print("\nthe three families do not run on the same legs:")
+    for j, os_ in legs.items():
+        print(f"  {j}: {os_}")
 for job in jobs[1:]:
     got = block(job)
     if got == ref:
