@@ -342,6 +342,10 @@ jobs:
       actions: write # dispatch the cluster runs
       contents: read
     outputs:
+      # The e2e legs read this to tell "the cluster is broken" from "the image
+      # it runs was not published yet" — two states that look identical from a
+      # leg, and only one of which is the cluster's fault.
+      short_sha: ${{ steps.ref.outputs.short }}
       cluster_id_a: ${{ steps.dispatch_a.outputs.id }}
       cluster_id_b: ${{ steps.dispatch_b.outputs.id }}
       k8s_id_a: ${{ steps.dispatch_ka.outputs.id }}
@@ -413,6 +417,7 @@ jobs:
     env:
       A: plug-cluster-${{ github.run_id }}-a
       B: plug-cluster-${{ github.run_id }}-b
+      AGENT_IMAGE: docker.io/softwarity/plug:sha-${{ needs.start-cluster.outputs.short_sha }}
       # Where the shared client bundle lands (relative to the workspace, so Git
       # Bash on Windows reads it the same way every other shell does).
       PREBUILT_CLIENTS: e2e-clients
@@ -601,6 +606,7 @@ jobs:
     env:
       A: plug-cluster-${{ github.run_id }}-a
       B: plug-cluster-${{ github.run_id }}-b
+      AGENT_IMAGE: docker.io/softwarity/plug:sha-${{ needs.start-cluster.outputs.short_sha }}
       PREBUILT_CLIENTS: e2e-clients
     steps:
       - uses: actions/checkout@v6
@@ -678,6 +684,7 @@ jobs:
     env:
       A: plug-k8s-${{ github.run_id }}-ka
       B: plug-k8s-${{ github.run_id }}-kb
+      AGENT_IMAGE: docker.io/softwarity/plug:sha-${{ needs.start-cluster.outputs.short_sha }}
       # Where the shared client bundle lands (relative to the workspace, so Git
       # Bash on Windows reads it the same way every other shell does).
       PREBUILT_CLIENTS: e2e-clients
@@ -827,6 +834,7 @@ jobs:
     env:
       A: plug-swarm-${{ github.run_id }}-sa
       B: plug-swarm-${{ github.run_id }}-sb
+      AGENT_IMAGE: docker.io/softwarity/plug:sha-${{ needs.start-cluster.outputs.short_sha }}
       # Where the shared client bundle lands (relative to the workspace, so Git
       # Bash on Windows reads it the same way every other shell does).
       PREBUILT_CLIENTS: e2e-clients

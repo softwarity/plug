@@ -191,9 +191,34 @@ sum()   { echo "$*" >> "${GITHUB_STEP_SUMMARY:-/dev/stderr}"; }
 # setup: the real user flow — install plug FROM the cluster (the installer grants
 # the privilege the real way: setcap / setuid helper / SCM SYSTEM service), build
 # the four language clients, and record PLUG/ip/built for the family phases.
+# why_no_cluster prints the ONE fact that tells the two causes apart: was the
+# agent image this cluster runs even published yet?
+#
+# A ten-legged run said "cluster never became reachable" ten times over, and the
+# cause was neither the clusters nor the legs — the amd64 image build had taken
+# 18m30 instead of its usual 2m30, so every cluster gave up pulling before it
+# existed. From a leg the two states are identical, and reading them the wrong
+# way round costs an hour of looking at the wrong thing.
+why_no_cluster() {
+  [ -n "${AGENT_IMAGE:-}" ] || return 0
+  wn_repo="${AGENT_IMAGE#*/}"; wn_repo="${wn_repo%%:*}"; wn_tag="${AGENT_IMAGE##*:}"
+  wn_tok="$(curl -s --max-time 20 "https://auth.docker.io/token?service=registry.docker.io&scope=repository:${wn_repo}:pull" \
+            | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
+  [ -n "$wn_tok" ] || { echo "    (could not ask the registry — no verdict on the image)" >&2; return 0; }
+  wn_code="$(curl -s --max-time 20 -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $wn_tok" \
+             -H "Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json" \
+             "https://registry-1.docker.io/v2/${wn_repo}/manifests/${wn_tag}")"
+  if [ "$wn_code" = 200 ]; then
+    echo "    $AGENT_IMAGE IS published — so the image is not the reason; look at the cluster run" >&2
+  else
+    echo "    $AGENT_IMAGE is NOT published yet (registry said $wn_code) — the clusters had nothing to pull." >&2
+    echo "    This is the image build being slow, not the cluster or this leg. Re-run once it is up." >&2
+  fi
+}
+
 do_setup() {
   echo "=== wait for cluster A ($peer:$port) ==="
-  ip="$(wait_cluster "$peer")" || { echo "cluster $peer never became reachable" >&2; exit 1; }
+  ip="$(wait_cluster "$peer")" || { echo "cluster $peer never became reachable" >&2; why_no_cluster; exit 1; }
   echo "cluster A reachable at $ip:$port"
 
   echo "=== install plug from the cluster (real user flow) ==="
