@@ -213,9 +213,19 @@ jobs:
   # Build FIRST, so the e2e legs run against the image we actually publish
   # instead of one they build themselves. It carries only `sha-<short>` at this
   # point: a digest nobody has exercised must never be what `latest` points at.
+  #
+  # No `needs`, and that is worth a minute and three quarters on EVERY leg. It
+  # used to wait for `test` — all three OSes — so the image landed at 02:20:48 of
+  # a run that started at 02:16:32, and no cluster can answer before it has
+  # pulled. Ten legs sat on that.
+  #
+  # Nothing is loosened by it: this image only ever carries `sha-<short>`, and
+  # the `image` job below still requires test, selftest, platforms, ci-shape and
+  # all four e2e jobs before a single name is put on that digest. The e2e legs
+  # keep their own `needs: test`, so a red test still skips them — the whole cost
+  # of a failing run is one runner building an image nobody will publish.
   image-build:
     name: Build image (immutable tag only)
-    needs: test
     if: github.event_name != 'pull_request'
     uses: ./.github/workflows/_docker.yml
     with:
