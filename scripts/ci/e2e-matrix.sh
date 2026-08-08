@@ -165,6 +165,15 @@ serve="-s run-${leg}:${sport}:9"   # hyphen only — an underscore is not a vali
 # perl's alarm is on every runner (incl. Git Bash) and survives exec.
 plug_to() { to="$1"; shift; perl -e 'alarm shift @ARGV; exec @ARGV or exit 127' 45 "$PLUG" --host "$to" --port "$port" $serve "$@"; }
 plug()    { plug_to "$ip" "$@"; }
+# plug_serving <-s name:cport:lport> <cmd…> — plug() with a name of OUR choosing
+# instead of the leg's single one, so several sessions can run at once. Claiming
+# `$serve` twice at the same moment is a collision, which is another cell's
+# subject entirely.
+plug_serving() { pv="$1"; shift; perl -e 'alarm shift @ARGV; exec @ARGV or exit 127' 45 "$PLUG" --host "$ip" --port "$port" $pv "$@"; }
+# A free block of cluster ports, four per leg: the cells use up to 18148, and
+# the legs are spaced so two of them never overlap (linux 18150, mac 18154,
+# win 18158, arm 18162).
+mport_base=$(( 18150 + (sport - 18071) * 4 ))
 cmd_go()     { echo "$clients/go/eclient$ext"; }
 cmd_node()   { echo "node $clients/node/client.js"; }
 cmd_python() { echo "$py $clients/python/client.py"; }
@@ -331,6 +340,50 @@ do_env() {
 }
 
 # protocol matrix: every language client, UNDER plug, reaches each cluster
+# matrix_lang <lang> <port-base> <index> — ONE language against all eight
+# protocols, under a name of its own so it can run beside the other three.
+#
+# Prints "RESULT <lang> <proto> PASS|FAIL" lines the caller collects, and any
+# diagnosis a failure earns. It runs in a background subshell, so nothing it
+# assigns survives: the file it writes is the only thing that comes back.
+matrix_lang() {
+  ml_l="$1"; ml_base="$2"; ml_i="$3"
+  ml_serve="-s run-${leg}-${ml_l}:$(( ml_base + ml_i )):9"
+  for ml_entry in $PROTOS; do
+    ml_proto="${ml_entry%%:*}"; ml_target="${ml_entry#*:}"
+    # 2 attempts: the mesh datapath can blip transiently on the first hit.
+    ml_r=FAIL; ml_out=""
+    for ml_attempt in 1 2; do
+      ml_out="$(plug_serving "$ml_serve" $("cmd_$ml_l") "$ml_proto" "$ml_target" 2>&1)"
+      if printf '%s' "$ml_out" | grep -q "E2E-OK"; then ml_r=PASS; break; fi
+      sleep 2
+    done
+    echo "RESULT $ml_l $ml_proto $ml_r"
+    [ "$ml_r" = PASS ] && continue
+    echo "--- $ml_l / $ml_proto FAIL ---"; printf '%s\n' "$ml_out" | tail -8 | sed 's/^/    /'
+    # go-on-mac only: the failure pattern (5/8 pass) rules out a plain "wrong
+    # resolver" story — capture, INSIDE a live plug session, what the system
+    # resolver config looks like and which resolver path Go actually takes.
+    if [ "$ml_l" = go ] && [ "$(uname -s)" = Darwin ]; then
+      echo "    --- go/mac TIMED diagnosis (inside a live session) ---"
+      ml_host=${ml_target%%:*}
+      plug_serving "$ml_serve" bash -c "
+        TIMEFORMAT='    [%Rs]'
+        echo '--- timed: dscacheutil $ml_host (getaddrinfo path) ---'
+        time dscacheutil -q host -a name $ml_host
+        echo '--- timed: dig $ml_host.plug @198.18.0.53 (in-stack direct) ---'
+        time dig +time=4 +tries=1 +short $ml_host.plug @198.18.0.53
+        echo '--- timed: tailscale ping (mesh RTT) ---'
+        time tailscale ping -c 2 $peer
+        echo '--- timed: client, FORCED pure-Go resolver (resolv.conf path) ---'
+        time env GODEBUG=netdns=go+1 perl -e 'alarm 15; exec @ARGV' $clients/go/eclient$ext $ml_proto $ml_target
+        echo '--- timed: client, default cgo resolver ---'
+        time env GODEBUG=netdns=2 perl -e 'alarm 15; exec @ARGV' $clients/go/eclient$ext $ml_proto $ml_target
+      " 2>&1 | head -60 | sed 's/^/    diag| /'
+    fi
+  done
+}
+
 # service BY NAME over the mesh. The 4×8 grid is rendered into the step summary.
 do_matrix() {
   echo "=== matrix: each client UNDER plug → service by name ==="
@@ -350,46 +403,33 @@ do_matrix() {
     sum "**protocol matrix** ❌ — client(s) that never built:$missing"
     return 1
   fi
-  for entry in $PROTOS; do
-    proto="${entry%%:*}"; target="${entry#*:}"
-    for l in $LANGS; do
-      case " $built " in *" $l "*) : ;; *) results="$results$l $proto SKIP
-"; continue ;; esac
-      # 2 attempts: the mesh datapath can blip transiently on the first hit.
-      r=FAIL; out=""
-      for _attempt in 1 2; do
-        out="$(plug $("cmd_$l") "$proto" "$target" 2>&1)"
-        if printf '%s' "$out" | grep -q "E2E-OK"; then r=PASS; break; fi
-        sleep 2
-      done
-      results="$results$l $proto $r
-"
-      if [ "$r" != PASS ]; then
-        fails=$((fails + 1))
-        echo "--- $l / $proto FAIL ---"; printf '%s\n' "$out" | tail -8 | sed 's/^/    /'
-        # go-on-mac only: the failure pattern (5/8 pass) rules out a plain "wrong
-        # resolver" story — capture, INSIDE a live plug session, what the system
-        # resolver config looks like and which resolver path Go actually takes.
-        if [ "$l" = go ] && [ "$(uname -s)" = Darwin ]; then
-          echo "    --- go/mac TIMED diagnosis (inside a live session) ---"
-          local host_only=${target%%:*}
-          plug bash -c "
-            TIMEFORMAT='    [%Rs]'
-            echo '--- timed: dscacheutil $host_only (getaddrinfo path) ---'
-            time dscacheutil -q host -a name $host_only
-            echo '--- timed: dig $host_only.plug @198.18.0.53 (in-stack direct) ---'
-            time dig +time=4 +tries=1 +short $host_only.plug @198.18.0.53
-            echo '--- timed: tailscale ping (mesh RTT) ---'
-            time tailscale ping -c 2 $peer
-            echo '--- timed: client, FORCED pure-Go resolver (resolv.conf path) ---'
-            time env GODEBUG=netdns=go+1 perl -e 'alarm 15; exec @ARGV' $clients/go/eclient$ext $proto $target
-            echo '--- timed: client, default cgo resolver ---'
-            time env GODEBUG=netdns=2 perl -e 'alarm 15; exec @ARGV' $clients/go/eclient$ext $proto $target
-          " 2>&1 | head -60 | sed 's/^/    diag| /'
-        fi
-      fi
-    done
+  # The four languages run AT THE SAME TIME, each with its own name and port.
+  #
+  # Measured before this: 187s for 32 invocations — 5.8s each — of which the
+  # protocol exchange is a sliver. What costs is starting a session: the SSH
+  # connection, the datapath, provisioning the name. Thirty-two of those, one
+  # after another, to run eight protocols four ways.
+  #
+  # Each language keeps its protocols in ORDER (its eight run one after another,
+  # against one cluster) — what overlaps is the four languages, which have
+  # nothing to say to each other. Output goes to a file per language and is
+  # printed after the join, or four concurrent failures would interleave into
+  # something nobody can read.
+  local li=0 pids="" pid
+  for l in $LANGS; do
+    matrix_lang "$l" "$mport_base" "$li" > "/tmp/matrix-$l.log" 2>&1 &
+    pids="$pids $!"
+    li=$((li + 1))
   done
+  for pid in $pids; do wait "$pid"; done
+  for l in $LANGS; do
+    results="$results$(sed -n 's/^RESULT //p' "/tmp/matrix-$l.log")
+"
+    grep -v '^RESULT ' "/tmp/matrix-$l.log" || true   # what it had to say, if anything
+  done
+  # Counted from the collected lines, not incremented as we go: the four
+  # languages ran in subshells, and a counter bumped there dies with them.
+  fails=$(printf '%s\n' "$results" | grep -c ' FAIL$' || true)
   # --- render the grid into the step summary ---
   local protolist="" p
   for entry in $PROTOS; do protolist="$protolist ${entry%%:*}"; done
