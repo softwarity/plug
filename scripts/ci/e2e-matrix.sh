@@ -337,10 +337,16 @@ do_env() {
   # stack may still be coming up, and `wait_cluster` only proves the AGENT
   # answers, not that httpbin does. Shortening the run did not create the race;
   # it stopped hiding it.
+  # -sS, and curl's stderr KEPT. It was `-s` with `2>/dev/null`, which threw away
+  # the one thing worth having: 000 means "no HTTP response", and covers a name
+  # that did not resolve, a connection refused and a timeout alike — three
+  # different problems that plug answers three different ways. Twice this cell
+  # went red on a 000 nobody could attribute, because the cause had been
+  # discarded one character at a time.
   local co _try
   for _try in 1 2; do
     co="$(perl -e 'alarm 45; exec @ARGV or exit 127' "$PLUG" --host "$ip" --port "$port" -c \
-      curl -s --max-time 10 -o /dev/null -w '%{http_code}' http://httpbin:8080/get 2>/dev/null | tr -d '\r' | tail -1)"
+      curl -sS --max-time 10 -o /dev/null -w '%{http_code}' http://httpbin:8080/get 2>/tmp/client-only.err | tr -d '\r' | tail -1)"
     [ "$co" = "200" ] && break
     [ "$_try" = 1 ] && { echo "    (got '${co:-nothing}' — one retry, the datapath may still be settling)"; sleep 5; }
   done
@@ -349,7 +355,18 @@ do_env() {
     sum "**client-only (-c)** ✅"
   else
     echo "--- client-only FAIL — got '${co:-nothing}' (want 200)"
-    sum "**client-only (-c)** ❌ — \`${co:-nothing}\`"; return 1
+    echo "    curl said: $(tr -d '\r' < /tmp/client-only.err | tail -3 | tr '\n' ' ')"
+    # Which of the three it is decides where to look: an unresolved name is the
+    # pre-mint check saying the cluster does not have it; a refusal is the name
+    # being there with nothing behind it; a timeout is neither, and would be the
+    # only one of the three that points at plug.
+    echo "    --- what plug thinks, right now ---"
+    # doctor, NOT inside a plug session: it is read-only and needs no datapath,
+    # and nesting it in the very session under suspicion would tell us about the
+    # wrong thing (and can take longer than the answer is worth).
+    perl -e 'alarm 40; exec @ARGV or exit 127' "$PLUG" doctor 2>&1 \
+      | grep -iE "resolver|daemon|datapath|agent|profile" | head -8 | sed 's/^/    /'
+    sum "**client-only (-c)** ❌ — \`${co:-nothing}\` · $(tr -d '\r' < /tmp/client-only.err | tail -1)"; return 1
   fi
 
   echo "=== doctor: the health checks must pass on a healthy leg ==="
