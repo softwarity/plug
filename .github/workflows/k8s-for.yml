@@ -65,6 +65,12 @@ jobs:
     # this job too, and no cluster would ever come up.
     if: always() && (needs.build-agent.result == 'success' || needs.build-agent.result == 'skipped')
     runs-on: ubuntu-latest
+    # A job with no timeout gets GitHub's default of six hours. The TTL backstop
+    # inside this job only arms once the serve step runs, so anything that hangs
+    # BEFORE it — a wedged docker pull, measured at over an hour — holds a runner
+    # with nothing watching. The e2e legs give up on a missing cluster after ten
+    # minutes; forty is already far past the point of being useful to anyone.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v6
       # PULL what ci.yml published for this commit rather than building again.
@@ -80,11 +86,21 @@ jobs:
         if: inputs.image != ''
         run: |
           echo "waiting for ${{ inputs.image }} (built in parallel by the caller)"
-          for i in $(seq 1 60); do
-            docker pull -q "${{ inputs.image }}" && break
-            [ "$i" = 60 ] && { echo "::error::${{ inputs.image }} never appeared — did the image build fail?"; exit 1; }
-            sleep 15
+          # Bounded by the CLOCK, not by a number of attempts. The loop used to
+          # count tries — which silently assumes `docker pull` always returns.
+          # It does not: one runner's pull hung past forty minutes while its
+          # twin, on another runner, pulled the same digest in seconds. No retry
+          # ever fired, no error was ever printed, the cluster never came up,
+          # and the legs blamed "cluster never became reachable" — pointing at
+          # the wrong thing entirely. So: a timeout per attempt, and a deadline
+          # on the whole wait.
+          ok=""
+          deadline=$(( SECONDS + 900 ))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            if timeout 120 docker pull -q "${{ inputs.image }}"; then ok=1; break; fi
+            sleep 10
           done
+          [ -n "$ok" ] || { echo "::error::${{ inputs.image }} never pulled inside 15 minutes — did the image build fail, or is the registry throttling?"; exit 1; }
           docker tag "${{ inputs.image }}" softwarity/plug:e2e
       - uses: actions/download-artifact@v7
         if: inputs.image == ''
