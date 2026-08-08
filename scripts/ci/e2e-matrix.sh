@@ -246,6 +246,33 @@ do_setup() {
     fi
   done
 
+  # wait_cluster proves the AGENT answers ssh. It says nothing about the
+  # SERVICES the cells reach by name — on kind especially, pods are still
+  # starting well after the agent is up.
+  #
+  # That gap was invisible while setup spent 769s building four language
+  # clients: everything had long finished settling by the time the first cell
+  # ran. Setup takes about a minute now, and `client-only` failed twice in a day
+  # with curl code 000 on a cluster that was simply not up yet — a retry inside
+  # the cell did not help, because the wait needed is tens of seconds, not five.
+  #
+  # So wait HERE, once, for the whole run rather than in each early cell. The
+  # probe is the same shape as the first assertion that needs it: `-c` reaching
+  # httpbin by name. How long it waited is printed on purpose — if that number
+  # ever grows, it is the cluster getting slower to come up, and this line is
+  # where you would see it rather than a cell failing for a reason of its own.
+  echo "=== wait for the cluster's services (an agent answering is not a cluster ready) ==="
+  svc_t=0
+  while [ "$svc_t" -lt 150 ]; do
+    if [ "$(perl -e 'alarm shift @ARGV; exec @ARGV or exit 127' 45 "$PLUG" --host "$ip" --port "$port" -c \
+            curl -s --max-time 10 -o /dev/null -w '%{http_code}' http://httpbin:8080/get 2>/dev/null | tr -d '\r' | tail -1)" = 200 ]; then
+      echo "services answering after ${svc_t}s"
+      break
+    fi
+    sleep 10; svc_t=$((svc_t + 10))
+  done
+  [ "$svc_t" -lt 150 ] || echo "--- services still not answering after ${svc_t}s — the cells will say what that costs"
+
   { echo "PLUG='$PLUG'"; echo "ip='$ip'"; echo "built='$built'"; } > "$envfile"
   echo "state → $envfile"
   sum "### plug mesh e2e — $(uname -s)"
