@@ -450,7 +450,7 @@ func launcherRun(args []string) {
 		}
 	}
 	announceUpdate(cfg) // what a previous session found, said before the core takes over
-	bin, err := ensureVersion(remote, cfg)
+	core, err := ensureVersion(remote, cfg)
 	if err != nil {
 		info("cannot fetch v%s (%v) — falling back to this launcher (v%s)", remote, err, version)
 		attachExposes(&cfg, opts.exposes)
@@ -488,7 +488,13 @@ func launcherRun(args []string) {
 	if opts.client {
 		cmdArgs = append([]string{"-c"}, cmdArgs...) // same wire format as -s: the core strips it back
 	}
-	child := exec.Command(bin, cmdArgs...)
+	// Named through the descriptor we verified, not through its path — see
+	// execTarget. The descriptor stays open until the child is started; the child
+	// inherits it as fd 3, which is what it is then executed from.
+	target, extra := execTarget(core)
+	defer core.Close()
+	child := exec.Command(target, cmdArgs...)
+	child.ExtraFiles = extra
 	child.Stdin, child.Stdout, child.Stderr = os.Stdin, os.Stdout, os.Stderr
 	child.Env = env
 	// The launcher is the process the SHELL waits on. A terminal Ctrl-C is
@@ -738,13 +744,13 @@ func versionsDir() string {
 	return filepath.Join(plugDir(), "versions")
 }
 
-func ensureVersion(v string, cfg config) (string, error) {
+func ensureVersion(v string, cfg config) (*os.File, error) {
 	// v is whatever the AGENT answered to `version` — a remote string, and this
 	// is the one place it becomes a filesystem path (and then an executable we
 	// run, on macOS as root). filepath.Join cleans "..", it does not confine:
 	// only this charset does. Releases are "2.5.4", branch builds "dev+9f2a1c".
 	if !safeVersionRe.MatchString(v) {
-		return "", fmt.Errorf("the agent reports version %q, which is not a version plug will use as a cache path — "+
+		return nil, fmt.Errorf("the agent reports version %q, which is not a version plug will use as a cache path — "+
 			"redeploy the softwarity/plug image", v)
 	}
 	dir := filepath.Join(versionsDir(), v)
@@ -765,13 +771,13 @@ func ensureVersion(v string, cfg config) (string, error) {
 	// project plug is launching — would be running with it. ~30ms for 9MB.
 	want, derr := fetchDigest(cfg, osArch)
 	if fi, err := os.Stat(bin); err == nil && fi.Size() > 1<<20 && derr == nil {
-		got, herr := fileSHA256(bin)
+		f, herr := openVerified(bin, want)
 		switch {
-		case herr == nil && got == want:
+		case herr == nil:
 			own()
 			ensureWintunBeside(bin)
-			return bin, nil
-		case herr == nil:
+			return f, nil
+		case errors.Is(herr, errCoreDigest):
 			// A RELEASE version names one commit, so the same version can only
 			// mean the same bytes: a mismatch there is corruption or tampering
 			// and is worth saying out loud. A dev or branch build legitimately
@@ -784,43 +790,45 @@ func ensureVersion(v string, cfg config) (string, error) {
 		}
 	}
 	if derr != nil {
-		return "", fmt.Errorf("the agent could not tell what v%s should hash to (%v).\n"+
+		return nil, fmt.Errorf("the agent could not tell what v%s should hash to (%v).\n"+
 			"      plug verifies the cached binary before running it with privilege, and will not skip that.\n"+
 			"      Redeploy the softwarity/plug image so the agent can answer", v, derr)
 	}
 	data, err := getDownload(cfg, osArch, "v"+v)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if len(data) < 1<<20 || !looksLikeBinary(data) {
-		return "", fmt.Errorf("downloaded binary looks invalid (%d bytes)", len(data))
+		return nil, fmt.Errorf("downloaded binary looks invalid (%d bytes)", len(data))
 	}
 	if got := fmt.Sprintf("%x", sha256.Sum256(data)); got != want {
-		return "", fmt.Errorf("the downloaded v%s does not hash to what the agent announced — refusing to install it", v)
+		return nil, fmt.Errorf("the downloaded v%s does not hash to what the agent announced — refusing to install it", v)
 	}
 	guardUserPath(dir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
+		return nil, err
 	}
 	tmp, err := os.CreateTemp(dir, ".plug-*")
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer os.Remove(tmp.Name())
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
-		return "", err
+		return nil, err
 	}
 	tmp.Chmod(0o755)
 	if err := tmp.Close(); err != nil {
-		return "", err
+		return nil, err
 	}
 	if err := os.Rename(tmp.Name(), bin); err != nil {
-		return "", err
+		return nil, err
 	}
 	own()
 	ensureWintunBeside(bin)
-	return bin, nil
+	// Verified again, through a descriptor this time: the bytes were checked in
+	// memory before the write, but what gets RUN is what is on disk now.
+	return openVerified(bin, want)
 }
 
 // ensureWintunBeside copies wintun.dll next to a versioned binary on Windows.
@@ -1045,11 +1053,49 @@ func fileSHA256(path string) (string, error) {
 		return "", err
 	}
 	defer f.Close()
+	return readerSHA256(f)
+}
+
+func readerSHA256(r io.Reader) (string, error) {
 	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
+	if _, err := io.Copy(h, r); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
+// errCoreDigest: the bytes are not the ones the agent announced.
+var errCoreDigest = errors.New("the cached core does not hash to what the agent serves")
+
+// openVerified opens bin and hashes WHAT THE DESCRIPTOR HOLDS, then hands that
+// descriptor on. Every caller runs the descriptor, never the path.
+//
+// The distinction is the whole point. Verifying a path and then executing that
+// path leaves a gap between the two, and the core is executed with the privilege
+// plug holds — root on macOS, ambient capabilities on Linux. Whatever can write
+// into the cache during that gap runs with it, and what can write there is
+// anything running as the user: the postinstall of the very project plug is
+// launching, say. A descriptor is bound to an inode, so a file swapped in at
+// that path afterwards is a different file, not this one.
+func openVerified(bin, want string) (*os.File, error) {
+	f, err := os.Open(bin)
+	if err != nil {
+		return nil, err
+	}
+	got, err := readerSHA256(f)
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	if got != want {
+		f.Close()
+		return nil, errCoreDigest
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
 }
 
 // fetchDigest is the digest lookup, indirected so a test can exercise the cache

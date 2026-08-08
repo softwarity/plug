@@ -7,7 +7,37 @@ désormais dans `RELEASE_NOTES.md` et la roadmap publique dans
 
 ## 🔴 Ouvert — issu de l'audit du 30/07
 
-- [ ] **Durcissement de l'exécution du core mis en cache** — suivi en PRIVÉ
+- [ ] **Durcissement de l'exécution du core mis en cache — LINUX FAIT (08/08), macOS et Windows à faire.**
+      Conception arrêtée avec François le 08/08, après avoir vérifié le privilège
+      réellement détenu par OS : macOS `chown root:wheel` + `chmod u+s` (root
+      complet), Windows service SYSTEM, **Linux `setcap cap_net_admin,
+      cap_sys_admin,cap_net_bind_service`** — des capacités, ni `cap_dac_override`
+      ni `cap_chown`. Linux ne peut donc pas écrire dans un répertoire root, et
+      lui ajouter `cap_dac_override` transformerait un grant restreint en grant
+      quasi-général : mauvais échange. D'où deux chemins, chacun avec la primitive
+      qui existe là :
+      · **Linux — livré** : `ensureVersion` rend le *descripteur* vérifié, et le
+        launcher exécute `/proc/self/fd/3` (le descripteur passé à l'enfant en
+        `ExtraFiles`). Un descripteur est lié à l'inode. Aucun changement de
+        privilège, aucun changement de layout, aucune seconde lecture. Test de
+        régression avec contre-épreuve dans `coreexec_linux_test.go`.
+      · **macOS / Windows — à faire** : sortir le magasin de `$HOME` (il ne suffit
+        pas que `versions/` appartienne à root — l'utilisateur possède `~/.plug/`
+        et peut le renommer, donc toute la chaîne d'ancêtres doit lui échapper),
+        vers `/usr/local/lib/plug/versions` et `%ProgramData%`. Le processus
+        privilégié le possède et le nettoie : l'utilisateur ne tape jamais `sudo`,
+        il tape `plug`. Effet de bord agréable : un cache partagé entre comptes.
+      **Deux points ouverts avant d'écrire cette moitié** : (1) la **migration**
+      des installations existantes, qui ont `~/.plug/versions` — migrer, ou
+      laisser des orphelins que `prune` ne connaît pas ; (2) `plug uninstall` doit
+      retirer **le magasin avant lui-même**, sinon il devient orphelin et exige le
+      `sudo` que toute cette conception évite. Les chemins ne peuvent pas être
+      littéralement identiques (Linux reste écrivable par l'utilisateur), mais le
+      **contrat** peut l'être : un seul accesseur — `plugDir()` renvoie `~/.plug`
+      en dur aujourd'hui — que l'installation, `uninstall` et `doctor` lisent.
+      **Rien dans les notes de version tant que les trois OS ne sont pas couverts** :
+      raconter la moitié corrigée revient à désigner celle qui ne l'est pas.
+- [ ] **Contexte de l'avis** — suivi en PRIVÉ
       (avis de sécurité GitHub, brouillon), pas ici : ce dépôt est public, et
       décrire par le menu un défaut non corrigé revient à en publier le mode
       d'emploi. Ce qui peut se dire sans rien donner : l'**empreinte servie par

@@ -46,9 +46,12 @@ func TestEnsureVersionCacheHit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a cache hit that MATCHES must not error: %v", err)
 	}
-	if got != bin {
-		t.Fatalf("ensureVersion = %q, want the cached %q", got, bin)
+	// It hands back the DESCRIPTOR it verified, not a path — that is what the
+	// launcher then executes, so that nothing can be swapped in between.
+	if got.Name() != bin {
+		t.Fatalf("ensureVersion = %q, want the cached %q", got.Name(), bin)
 	}
+	got.Close()
 
 	// Same file, a digest that no longer matches: the cache must be discarded
 	// rather than executed. The download that follows fails fast here (no
