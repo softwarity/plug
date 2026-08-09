@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.11.0
+
 ### The cached core is run from what was verified, not from where it was verified
 
 plug caches the core each cluster serves and checks it, on every launch, against
