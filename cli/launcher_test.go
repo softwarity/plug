@@ -21,7 +21,16 @@ func TestEnsureVersionCacheHit(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
-	dir := filepath.Join(tmp, ".plug", "versions", "9.9.9")
+	// The store is not under $HOME on every platform any more (macOS runs the
+	// core as root, so it lives somewhere the user cannot write). Point it at the
+	// temp dir the same way fetchDigest is redirected, rather than assuming a
+	// layout that is now per-OS.
+	store := filepath.Join(tmp, "store")
+	savedStore := versionsDir
+	versionsDir = func() string { return store }
+	defer func() { versionsDir = savedStore }()
+
+	dir := filepath.Join(store, "9.9.9")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

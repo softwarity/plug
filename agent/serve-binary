@@ -126,6 +126,13 @@ if [ "$os" = linux ]; then
   fi
 elif [ "$os" = darwin ]; then
   echo "plug: installing the privileged helper (one sudo now → future runs need none)…"
+  # The core store, created root-owned while we already hold this one sudo.
+  # macOS runs the cached core AS ROOT (the setuid helper drops privilege for
+  # YOUR command, not for the core), so a store the user can write is a store
+  # the user can hand root a different binary from. plug creates and cleans it
+  # itself afterwards — nobody types sudo again, including to uninstall.
+  sudo install -d -o root -g wheel -m 755 /var/db/plug /var/db/plug/versions 2>/dev/null \
+    || echo "plug: could not create /var/db/plug — plug will say so on first run" >&2
   if sudo chown root:wheel "$dest/plug" && sudo chmod u+s "$dest/plug"; then
     echo "plug: ready — 'plug <command>' runs without sudo"
   else

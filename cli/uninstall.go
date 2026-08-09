@@ -52,10 +52,26 @@ func uninstall(args []string) {
 	// leftovers actually exist.
 	cleanupLegacyDaemon()
 
-	// 2. every plug binary we can locate
+	// 2. the core store, BEFORE the binaries. Where it belongs to root, plug is
+	// the only thing that may delete it — and plug is what we are about to
+	// remove. The other order leaves a root-owned directory behind and demands
+	// exactly the sudo this whole arrangement exists to avoid.
+	for _, d := range []string{versionsDir(), legacyVersionsDir()} {
+		if d == "" || d == filepath.Join(plugDir, "versions") {
+			continue // that one goes with the config below
+		}
+		if err := os.RemoveAll(d); err != nil {
+			info("could not remove the core store at %s (%v) — remove it by hand", d, err)
+		} else if _, err := os.Stat(filepath.Dir(d)); err == nil {
+			os.Remove(filepath.Dir(d)) // only if now empty; harmless otherwise
+			info("removed the core store at %s", d)
+		}
+	}
+
+	// 3. every plug binary we can locate
 	removeBinaries(home, plugDir)
 
-	// 3. profiles / config
+	// 4. profiles / config
 	if purge {
 		os.RemoveAll(plugDir)
 		info("removed all config in %s", plugDir)

@@ -2,6 +2,37 @@
 
 ## NEXT RELEASE
 
+### The cached core is run from what was verified, not from where it was verified
+
+plug caches the core each cluster serves and checks it, on every launch, against
+the digest that agent announces. That check has been there since 2.7.2. What it
+could not cover on its own is that verifying a file and then running it are two
+separate lookups of the same name, and the core runs with the privilege plug
+holds — root on macOS, network capabilities on Linux. Anything able to write into
+the cache between the two would have inherited that privilege, and what can write
+there is anything running as you.
+
+Both platforms now close that, each with the tool it actually has:
+
+**Linux** hands the launcher the descriptor it hashed, and runs that. A
+descriptor is bound to a file, not to a name, so the bytes that were checked are
+the bytes that run.
+
+**macOS** moves the store out of your home directory, to `/var/db/plug/versions`,
+owned by root. plug is setuid there, so it writes and cleans the store itself:
+nothing asks you for `sudo`, including `plug uninstall`. plug refuses to use the
+store at all if any part of that path turns out to be writable by someone else,
+and tells you the command that fixes it.
+
+Existing installs need nothing. The store is created on first launch, and the old
+cache under `~/.plug/versions` is cleared by `plug prune` — a cached core is
+disposable, re-downloaded on demand and verified every time, so nothing was
+migrated and nothing is lost.
+
+**Windows** was already outside this: it elevates per launch through its service,
+which runs the installed launcher rather than a cached core, so there was never a
+privilege there to inherit.
+
 ### A name that is in no cluster now fails fast on Windows
 
 Asking for a name nothing serves could take longer than the program asking was

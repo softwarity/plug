@@ -7,7 +7,7 @@ désormais dans `RELEASE_NOTES.md` et la roadmap publique dans
 
 ## 🔴 Ouvert — issu de l'audit du 30/07
 
-- [ ] **Durcissement de l'exécution du core mis en cache — LINUX FAIT (08/08), macOS et Windows à faire.**
+- [x] **Durcissement de l'exécution du core mis en cache — FAIT (08-09/08), les trois OS.**
       Conception arrêtée avec François le 08/08, après avoir vérifié le privilège
       réellement détenu par OS : macOS `chown root:wheel` + `chmod u+s` (root
       complet), Windows service SYSTEM, **Linux `setcap cap_net_admin,
@@ -21,22 +21,37 @@ désormais dans `RELEASE_NOTES.md` et la roadmap publique dans
         `ExtraFiles`). Un descripteur est lié à l'inode. Aucun changement de
         privilège, aucun changement de layout, aucune seconde lecture. Test de
         régression avec contre-épreuve dans `coreexec_linux_test.go`.
-      · **macOS / Windows — à faire** : sortir le magasin de `$HOME` (il ne suffit
+      · **Windows — sans objet, vérifié** : le launcher n'y est **jamais élevé**
+        (« plug elevates per launch… it never runs the child from an inherited
+        root euid » — `privdrop_windows.go`, où `guardUserPath` est un no-op pour
+        cette raison exacte). Le privilège vit dans le service SYSTEM, qui exécute
+        le **launcher installé**, pas un core en cache. Substituer ce core ne
+        donne rien que l'attaquant n'ait déjà.
+      · **macOS — livré** : `applyPrivDrop` ne s'applique qu'à **ta commande**
+        (`main.go:1538`), pas au core — qui tourne donc en `euid 0`. Le magasin est
+        sorti de `$HOME` (il ne suffit
         pas que `versions/` appartienne à root — l'utilisateur possède `~/.plug/`
         et peut le renommer, donc toute la chaîne d'ancêtres doit lui échapper),
-        vers `/usr/local/lib/plug/versions` et `%ProgramData%`. Le processus
-        privilégié le possède et le nettoie : l'utilisateur ne tape jamais `sudo`,
-        il tape `plug`. Effet de bord agréable : un cache partagé entre comptes.
-      **Deux points ouverts avant d'écrire cette moitié** : (1) la **migration**
-      des installations existantes, qui ont `~/.plug/versions` — migrer, ou
-      laisser des orphelins que `prune` ne connaît pas ; (2) `plug uninstall` doit
-      retirer **le magasin avant lui-même**, sinon il devient orphelin et exige le
-      `sudo` que toute cette conception évite. Les chemins ne peuvent pas être
+        vers **`/var/db/plug/versions`** — et pas `/usr/local`, qui appartient
+        couramment à l'humain sur un Mac Intel avec Homebrew, ce qui remettrait le
+        magasin à portée par son parent. `guardStorePath` le **vérifie** plutôt que
+        de s'y fier : chaque composant existant doit appartenir à root et n'être
+        écrivable que par lui, sans quoi plug refuse avec la commande exacte à
+        lancer. L'installeur le crée `root:wheel 755` avec le sudo qu'il tient
+        déjà ; plug le nettoie ensuite lui-même.
+      **Migration : aucune, et c'est le bon choix** (tranché par François) — un core
+      en cache est *jetable*, re-téléchargé à la demande et vérifié à chaque
+      lancement. Il n'y a rien à migrer, seulement à ne pas laisser derrière :
+      `prune` connaît l'ancien chemin et le vide. `plug uninstall` retire le
+      magasin **avant les binaires** — dans l'autre ordre, seul plug peut effacer
+      un répertoire root, et on vient de le supprimer. Les chemins ne peuvent pas être
       littéralement identiques (Linux reste écrivable par l'utilisateur), mais le
       **contrat** peut l'être : un seul accesseur — `plugDir()` renvoie `~/.plug`
       en dur aujourd'hui — que l'installation, `uninstall` et `doctor` lisent.
-      **Rien dans les notes de version tant que les trois OS ne sont pas couverts** :
-      raconter la moitié corrigée revient à désigner celle qui ne l'est pas.
+      **Reste à faire** : `doctor` liste les cores en cache mais ne signale pas un
+      reliquat dans l'ancien répertoire — `prune` le nettoie, doctor devrait le
+      dire. Et **les notes de version peuvent maintenant raconter l'histoire**,
+      les trois OS étant couverts.
 - [ ] **Contexte de l'avis** — suivi en PRIVÉ
       (avis de sécurité GitHub, brouillon), pas ici : ce dépôt est public, et
       décrire par le menu un défaut non corrigé revient à en publier le mode

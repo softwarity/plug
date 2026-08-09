@@ -740,10 +740,6 @@ func runCore(cfg config, cmdArgs []string) {
 	os.Exit(coreRun(cfg, args))
 }
 
-func versionsDir() string {
-	return filepath.Join(plugDir(), "versions")
-}
-
 func ensureVersion(v string, cfg config) (*os.File, error) {
 	// v is whatever the AGENT answered to `version` — a remote string, and this
 	// is the one place it becomes a filesystem path (and then an executable we
@@ -762,7 +758,17 @@ func ensureVersion(v string, cfg config) (*os.File, error) {
 	// Hand the cache back to the user: the setuid helper writes it as euid 0, so
 	// without this it lands root-owned (can't be listed/cleaned without sudo). Also
 	// self-heals a cache an earlier privileged run already left root-owned.
-	own := func() { chownToUser(versionsDir()); chownToUser(dir); chownToUser(bin) }
+	// Hand the cache back to the user — but only where it IS the user's: a store
+	// that belongs to root is the point of the arrangement, not an accident to
+	// be undone.
+	own := func() {
+		if storeIsSystem() {
+			return
+		}
+		chownToUser(versionsDir())
+		chownToUser(dir)
+		chownToUser(bin)
+	}
 	osArch := fmt.Sprintf("%s-%s", runtime.GOOS, runtime.GOARCH)
 	// What the agent says this binary must hash to. Asked EVERY launch, because
 	// the tamper we are guarding against happens after the download: the cached
@@ -804,7 +810,7 @@ func ensureVersion(v string, cfg config) (*os.File, error) {
 	if got := fmt.Sprintf("%x", sha256.Sum256(data)); got != want {
 		return nil, fmt.Errorf("the downloaded v%s does not hash to what the agent announced — refusing to install it", v)
 	}
-	guardUserPath(dir)
+	guardStorePath(dir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}

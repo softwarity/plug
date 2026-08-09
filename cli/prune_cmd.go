@@ -54,6 +54,22 @@ func cmdPrune() {
 		}
 	}
 
+	// The store moved on some platforms, and a cached core is disposable — it is
+	// re-downloaded on demand and verified on every launch — so nothing was
+	// migrated. What must not happen is leaving the old place behind for a prune
+	// that no longer looks at it: clear it here, unconditionally. Every version
+	// in there is by definition one no cluster is served from any more.
+	if old := legacyVersionsDir(); old != "" {
+		if entries, err := os.ReadDir(old); err == nil && len(entries) > 0 {
+			freed := dirSize(old)
+			if err := os.RemoveAll(old); err != nil {
+				info("could not clear the old cache at %s (%v)", old, err)
+			} else {
+				info("cleared %d core(s) from the old cache at %s (%.1f MB)", len(entries), old, float64(freed)/(1<<20))
+			}
+		}
+	}
+
 	entries, err := os.ReadDir(versionsDir())
 	if err != nil {
 		info("nothing cached — %s does not exist yet", versionsDir())

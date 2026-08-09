@@ -53,11 +53,19 @@ func TestMaxCachedRelease(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home) // what os.UserHomeDir reads on Windows
+	// The store is per-OS now — on macOS it sits outside $HOME, because the core
+	// is run as root there. Point it at the temp dir rather than rebuilding a
+	// path that is no longer the same on every platform.
+	store := filepath.Join(home, "store")
+	savedStore := versionsDir
+	versionsDir = func() string { return store }
+	defer func() { versionsDir = savedStore }()
+
 	if got := maxCachedRelease(); got != "" {
 		t.Fatalf("empty cache: got %q", got)
 	}
 	for _, d := range []string{"dev+abc", "2.2.0+x", "2.10.0+y", "not-a-version"} {
-		if err := os.MkdirAll(filepath.Join(home, ".plug", "versions", d), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(store, d), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
