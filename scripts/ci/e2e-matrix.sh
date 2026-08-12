@@ -797,6 +797,25 @@ do_gateway() {
       [ "$out" = "$want" ] && { echo PASS; return; }
       sleep 3
     done
+    # Three attempts spanning ~39s all landed inside ONE tailnet outage on the
+    # 2.11.0 release run, and the sink's own log recorded
+    # "re-provisioned and verified after reconnect" seconds after this cell had
+    # already given up. Retrying harder would be guessing at a duration for the
+    # third time; ask the session instead. plug says when it is rebuilding the
+    # path and when it is done, so judge after it says so — and only then.
+    if grep -q "re-arming" /tmp/gw.out 2>/dev/null; then
+      echo "    (the session is re-arming after a transport blip — waiting for it to say it is back)" >&2
+      for _ in $(seq 1 20); do
+        grep -q "re-provisioned and verified" /tmp/gw.out 2>/dev/null && break
+        sleep 3
+      done
+      for _ in 1 2 3; do
+        out="$(curl -s --max-time 10 -X POST "http://$ip:18090/call" \
+          -H 'content-type: application/json' -d "$body" 2>>/tmp/gw-post.err | tr -d '\r' | tail -1)"
+        [ "$out" = "$want" ] && { echo PASS; return; }
+        sleep 3
+      done
+    fi
     echo "FAIL|$out"
   }
   "$PLUG" --host "$ip" --port "$port" -s "$gwname:$gwcport:$gwlocal" \
