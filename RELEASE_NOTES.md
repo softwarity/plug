@@ -2,6 +2,23 @@
 
 ## NEXT RELEASE
 
+### `plug doctor` now checks the resolver your programs use, not only its own
+
+It could report a clean bill of health on a machine where nothing resolved at
+all. Every local check asked plug's own resolver — which answered in
+milliseconds, because it was fine — while `getaddrinfo`, the path every program
+actually takes, failed after thirty seconds. doctor printed "no problems", then
+offered its one remedy for a slow lookup, which points at Docker Desktop and had
+nothing to do with it.
+
+There is now a check that resolves a dotted name the way a program resolves it.
+When that fails or drags, the remedy names the **system** resolver — flushing
+mDNSResponder, `resolvectl`, the DNS Client service — and never a container
+runtime that is not involved.
+
+It also reports cores left where the store used to live before 2.11.0. `plug
+prune` clears them; nothing else would have mentioned they were there.
+
 ---
 
 ## 2.11.0
