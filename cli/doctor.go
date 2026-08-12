@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/softwarity/plug/cli/internal/tun"
 	"github.com/softwarity/plug/cli/internal/tunnel"
@@ -218,11 +219,81 @@ func doctorLocal(add func(check)) {
 		add(check{area: "local", name: "cached cores", status: st, detail: detail, remedy: remedy})
 	}
 
+	// Leftovers where the store used to live. prune clears them; doctor's job is
+	// to say they are there, since nothing else will — the current store is
+	// somewhere else and a `cached cores` line about it would look like the whole
+	// truth.
+	if old := legacyVersionsDir(); old != "" {
+		if entries, err := os.ReadDir(old); err == nil && len(entries) > 0 {
+			add(check{area: "local", name: "old core cache", status: stWarn,
+				detail: fmt.Sprintf("%d core(s) left in %s, where the store used to be", len(entries), old),
+				remedy: "plug prune (it clears that directory; nothing runs from there any more)"})
+		}
+	}
+
 	// Per-OS: privilege grant, service/daemon state + version, resolver state.
 	doctorOS(add)
 
+	// Can the machine resolve AT ALL, through the path applications use?
+	doctorResolution(add)
+
 	// Sessions currently registered (the graft/registry view).
 	doctorSessions(add)
+}
+
+// resolveProbeHost is a name plug itself needs — the registry it asks about
+// updates — rather than an arbitrary third party picked to have something to
+// look up.
+const resolveProbeHost = "registry-1.docker.io"
+
+// resolveStall: a working resolver answers a dotted name in milliseconds. This
+// is not a performance opinion, it is the line past which something is timing
+// out and retrying rather than answering.
+const resolveStall = 2 * time.Second
+
+// doctorResolution asks the one question every other check here skips: can this
+// machine resolve a name THROUGH THE PATH APPLICATIONS USE?
+//
+// Everything else probes plug's own stub, and the stub is rarely the thing that
+// breaks. It cost an afternoon: the stub answered in 15ms, `getaddrinfo`
+// failed after 30 seconds, nothing on the machine could resolve anything — and
+// doctor printed "no problems", then pointed at Docker Desktop because its one
+// canned remedy for slowness lives there.
+//
+// So: one dotted name, resolved the way a program resolves it. If that fails
+// while the datapath is healthy, the OS resolver is not delivering the stub's
+// answers, and no amount of Docker configuration will change it.
+func doctorResolution(add func(check)) {
+	const name = "name resolution"
+	start := time.Now()
+	_, err := net.LookupHost(resolveProbeHost)
+	took := time.Since(start)
+
+	add(resolutionVerdict(err, took))
+}
+
+// resolutionVerdict turns ONE measurement into a check — split from the probe
+// so the reasoning is testable without a network, the same way nxdomainVerdict
+// is. That split is not a formality here: the verdict is what was wrong, not
+// the measurement.
+func resolutionVerdict(err error, took time.Duration) check {
+	const name = "name resolution"
+	switch {
+	case err != nil:
+		return check{area: "local", name: name, status: stWarn,
+			detail: fmt.Sprintf("%s did not resolve (%s) — through getaddrinfo, the path your programs use. "+
+				"plug's own resolver may well be answering; this says the system one is not passing it on",
+				resolveProbeHost, took.Round(100*time.Millisecond)),
+			remedy: resolverRestartRemedy()}
+	case took >= resolveStall:
+		return check{area: "local", name: name, status: stWarn,
+			detail: fmt.Sprintf("%s resolved, but took %s — something on the system resolver path is retrying rather than answering",
+				resolveProbeHost, took.Round(100*time.Millisecond)),
+			remedy: resolverRestartRemedy()}
+	default:
+		return check{area: "local", name: name, status: stOK,
+			detail: fmt.Sprintf("dotted names resolve through getaddrinfo (%s in %s)", resolveProbeHost, took.Round(time.Millisecond))}
+	}
 }
 
 // doctorProfile checks one cluster: reachability + agent version over the get

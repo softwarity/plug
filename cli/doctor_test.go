@@ -1,9 +1,11 @@
 package main
 
 import (
+	"errors"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The issue body must never carry the user's topology: the repo is public.
@@ -140,5 +142,50 @@ func TestPlugDownIsStatedNeverPrescribed(t *testing.T) {
 		if !strings.Contains(c.detail, "plug down") {
 			t.Errorf("the daemon line should say how to stop it: %q", c.detail)
 		}
+	}
+}
+
+// The check that was missing the afternoon plug's stub answered in 15ms, every
+// program on the machine was blind, and doctor printed "no problems" — then
+// pointed at Docker Desktop, because its one canned remedy for slowness lives
+// there.
+//
+// Every other local check asks plug's OWN resolver, which is the one path an
+// application never takes. These assert the three readings of the path they DO
+// take, and that the remedy names the system resolver rather than a container
+// runtime that has nothing to do with it.
+func TestResolutionVerdict(t *testing.T) {
+	cases := []struct {
+		name   string
+		err    error
+		took   time.Duration
+		status checkStatus
+		says   string
+	}{
+		{"resolves fast", nil, 20 * time.Millisecond, stOK, "getaddrinfo"},
+		{"resolves, far too slowly", nil, 6 * time.Second, stWarn, "retrying rather than answering"},
+		{"does not resolve at all", errors.New("no such host"), 30 * time.Second, stWarn, "the system one is not passing it on"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := resolutionVerdict(c.err, c.took)
+			if got.status != c.status {
+				t.Errorf("status = %v, want %v (%s)", got.status, c.status, got.detail)
+			}
+			if !strings.Contains(got.detail, c.says) {
+				t.Errorf("detail does not say %q:\n  %s", c.says, got.detail)
+			}
+			if c.status == stOK {
+				return
+			}
+			if got.remedy == "" {
+				t.Fatal("a warning with no remedy — the reader is left with a symptom")
+			}
+			// The whole point: this is NOT a Docker problem, and saying so sent a
+			// user to the wrong settings page for an afternoon.
+			if strings.Contains(strings.ToLower(got.remedy), "docker") {
+				t.Errorf("the remedy blames Docker for a system-resolver failure:\n  %s", got.remedy)
+			}
+		})
 	}
 }

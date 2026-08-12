@@ -138,3 +138,9 @@ func doctorSessions(add func(check)) {
 	}
 	add(check{area: "local", name: "sessions", status: stOK, detail: strings.Join(parts, " · ")})
 }
+
+// resolverRestartRemedy: the DNS Client service holds the cache Windows answers
+// from.
+func resolverRestartRemedy() string {
+	return "ipconfig /flushdns (elevated: Restart-Service Dnscache)"
+}

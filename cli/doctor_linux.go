@@ -55,3 +55,10 @@ func doctorSessions(add func(check)) {
 	add(check{area: "local", name: "sessions", status: stOK,
 		detail: "per-launch datapaths (no machine-wide state on Linux)"})
 }
+
+// resolverRestartRemedy: systemd-resolved on most distributions; on a machine
+// without it, the stub is libc reading /etc/resolv.conf and there is nothing to
+// restart — which the wording has to allow for.
+func resolverRestartRemedy() string {
+	return "sudo resolvectl flush-caches (or restart systemd-resolved); without systemd-resolved, check /etc/resolv.conf"
+}

@@ -263,3 +263,10 @@ func versionFromCorePath(p string) string {
 	}
 	return ""
 }
+
+// resolverRestartRemedy: on macOS the system resolver is mDNSResponder, and the
+// state it gets into is cleared by a flush plus a HUP — the same pair plug does
+// internally when it re-asserts its own override.
+func resolverRestartRemedy() string {
+	return "sudo dscacheutil -flushcache && sudo killall -HUP mDNSResponder"
+}
