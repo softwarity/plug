@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.11.1
+
 ### `plug doctor` now checks the resolver your programs use, not only its own
 
 It could report a clean bill of health on a machine where nothing resolved at
