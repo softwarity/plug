@@ -259,6 +259,25 @@ func dispatch(cmd []string) {
 		if len(cmd) != 2 || !nameRe.MatchString(cmd[1]) {
 			answer("error: usage: resolve <name>")
 		}
+		// The witness starts NOW, beside the lookup, not after it.
+		//
+		// It used to run only once the lookup had timed out, so an absent name on
+		// a cluster whose resolver is a network hop away paid 800ms and THEN the
+		// witness — two waits in series, of which only the second decides. That
+		// is the same cascade this file already fixed once, one level down.
+		//
+		// It matters per family, and the measurement says so: four failures of
+		// the honest-NXDOMAIN cell in ten runs, ALL of them on Kubernetes. The
+		// witness there is kubernetes.default, answered by CoreDNS — a pod, a
+		// network hop; on Docker and Swarm it is this agent's own container name,
+		// answered by the daemon from memory in single-digit milliseconds. The
+		// budgets were sized for the second and the first inherited them.
+		//
+		// Run side by side, the worst case is the LONGER of the two rather than
+		// their sum, which is what pays for the witness's larger budget.
+		witness := make(chan bool, 1)
+		go func() { witness <- clusterResolverHealthy() }()
+
 		ctx, cancel := context.WithTimeout(context.Background(), resolveLookupBudget)
 		addrs, lerr := net.DefaultResolver.LookupHost(ctx, cmd[1])
 		cancel()
@@ -291,7 +310,7 @@ func dispatch(cmd []string) {
 		// not, the resolver is the problem and we must not pass judgement on the
 		// name. Anything the CLI does not recognise makes it fail open (mint as
 		// before), so this needs no client change and old clients behave right.
-		if lerr != nil && !clusterResolverHealthy() {
+		if lerr != nil && !<-witness {
 			answer("unreachable")
 		}
 		answer("nxdomain")
@@ -378,8 +397,13 @@ func clusterResolverHealthy() bool {
 // milliseconds. Anything slower is not a cluster name being resolved — it is a
 // question that has left the cluster.
 const (
-	resolveLookupBudget  = 800 * time.Millisecond
-	resolveWitnessBudget = 700 * time.Millisecond
+	resolveLookupBudget = 800 * time.Millisecond
+	// 1.5s, and it costs nothing it did not already: the witness runs BESIDE the
+	// lookup now, so the worst case is the longer of the two (1.5s) rather than
+	// their sum — less than the 1.5s the old 800+700 cascade spent, with twice
+	// the room for a resolver that answers over the network instead of from
+	// memory. CoreDNS on a loaded kind node is exactly that resolver.
+	resolveWitnessBudget = 1500 * time.Millisecond
 	// cliResolveBudget mirrors the client's timeout (cli/internal/tunnel:
 	// "a wedged session must not stall DNS"). Duplicated deliberately — the two
 	// modules do not share code — and asserted in the tests, because the day it
