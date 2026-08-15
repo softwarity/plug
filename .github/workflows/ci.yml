@@ -82,9 +82,12 @@ jobs:
           cache: false
       - name: selftest
         shell: bash
-        # Windows is WIP (WinTUN route config unfinished) — tolerate its failure;
-        # the marker still records the real result for the grid.
-        continue-on-error: ${{ matrix.os == 'windows-latest' }}
+        # No tolerance any more. It was granted while the WinTUN route config was
+        # unfinished, and that has been done for a long time: the Windows selftest
+        # has passed ten runs out of ten. Keeping it meant a job that went green on
+        # a failure — the marker held the truth, and the release gate reads the
+        # marker, so nothing shipped wrongly. But a green job that failed is the
+        # exact shape of lie this suite spent a week removing everywhere else.
         env:
           PLAT_OS: ${{ matrix.os }}
         run: bash scripts/selftest.sh
