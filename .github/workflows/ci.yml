@@ -99,17 +99,17 @@ jobs:
           path: cli/plat/*.txt
           retention-days: 30 # the release gate re-reads them; see plat-test above
 
-  # One-glance platform grid in the run Summary, from the REAL per-OS results
-  # (not the job status — the Windows selftest is continue-on-error, so its true
-  # PASS/FAIL only lives in the marker it wrote).
+  # One-glance platform grid in the run Summary, built from the REAL per-OS
+  # results each job recorded rather than from job statuses.
   platforms:
     name: Platform coverage
     needs: [test, selftest]
     if: always()
     runs-on: ubuntu-latest
-    # The verdict the image gate reads. It comes from the MARKERS, because the
-    # job statuses cannot answer this: the Windows selftest is continue-on-error,
-    # so a real FAIL leaves its job green — 33f8c40 published an image that way.
+    # The verdict the image gate reads, built from the MARKERS. Kept that way now
+    # that no job may fail quietly: a marker records what happened even when a job
+    # is skipped or cancelled, and 33f8c40 published an image because a status said
+    # green where a marker said fail.
     outputs:
       verdict: ${{ steps.grid.outputs.verdict }}
     steps:
@@ -248,11 +248,13 @@ jobs:
     # cluster, never latest. Off PRs (secrets). Delete stale branch tags from
     # Docker Hub after merge.
     #
-    # `needs: selftest` is NOT enough on its own: that job is continue-on-error on
-    # Windows, so it reports success on a selftest that failed. The verdict from
-    # `platforms` reads the markers those jobs wrote, which is the only record
-    # that cannot lie — without it the image of 33f8c40 shipped with a red
-    # Windows selftest, past a comment promising the opposite.
+    # `needs: selftest` is NOT enough on its own. It was written when that job was
+    # continue-on-error on Windows and reported success on a selftest that failed;
+    # the tolerance is gone, but the reasoning stands — `needs` is satisfied by a
+    # job that was skipped or cancelled too. The verdict from `platforms` reads the
+    # markers those jobs wrote, which is the only record that cannot lie: without
+    # it the image of 33f8c40 shipped with a red Windows selftest, past a comment
+    # promising the opposite.
     needs: [image-build, build, selftest, platforms, ci-shape, e2e-compose, e2e-k8s, e2e-swarm, e2e-arm64]
     if: success() && needs.platforms.outputs.verdict == 'pass' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
