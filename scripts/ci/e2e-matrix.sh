@@ -340,12 +340,27 @@ do_env() {
   # answers. A not-found is the one verdict that fails: nothing but plug can
   # produce it for a name that plainly has MX records.
   if [ -x "$(cmd_go)" ]; then
-    local dr
-    dr="$(plug "$(cmd_go)" dns mx:google.com 2>&1 | tr -d '\r' | tail -1)"
+    local dr dout
+    # The WHOLE output, and the verdict looked up in it — not `tail -1`. plug
+    # refuses a held name over several lines, and the last of them reads "the
+    # holder is on another machine or another account": taken alone it was
+    # reported as a DNS relay failure, for a session that never started at all.
+    dout="$(plug "$(cmd_go)" dns mx:google.com 2>&1 | tr -d '\r')"
+    dr="$(printf '%s\n' "$dout" | grep -m1 '^E2E-OK' || printf '%s\n' "$dout" | tail -1)"
     case "$dr" in
       E2E-OK*) echo "dns relay OK — $dr"; sum "**dns relay (non-A → upstream)** ✅" ;;
-      *)       echo "--- dns relay FAIL — ${dr:-<nothing>}"
-               sum "**dns relay (non-A → upstream)** ❌ — \`${dr:-nothing}\`"; return 1 ;;
+      *)
+        if printf '%s' "$dout" | grep -q "It frees itself once that session ends"; then
+          # A refusal is not a relay verdict. Say which it is, because the two
+          # send whoever reads this to opposite places.
+          echo "--- dns relay FAIL — plug REFUSED to start: the name is still held, so the relay never ran"
+          sum "**dns relay (non-A → upstream)** ❌ — plug refused to start (name still held)"
+        else
+          echo "--- dns relay FAIL — ${dr:-<nothing>}"
+          sum "**dns relay (non-A → upstream)** ❌ — \`${dr:-nothing}\`"
+        fi
+        printf '%s\n' "$dout" | tail -8 | sed 's/^/    /'
+        return 1 ;;
     esac
   else
     echo "dns relay SKIP — the go client was not built on this leg"
