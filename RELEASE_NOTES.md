@@ -2,6 +2,26 @@
 
 ## NEXT RELEASE
 
+### Kubernetes clusters answer "that name does not exist" in time again
+
+_Shipped in 2.11.1, which went out before this was written down._
+
+To tell you a name is absent rather than guess, the agent proves its cluster's
+resolver is alive at all — otherwise "I cannot find it" and "my DNS is broken"
+are the same sentence. That proof is not the same work everywhere: on Docker and
+Swarm it is this agent's own name, answered from memory in a millisecond or two;
+on Kubernetes it goes to CoreDNS, a pod, across the network. The time allowed was
+sized for the first.
+
+It also ran *after* the lookup rather than beside it, so a Kubernetes cluster
+waited for both in turn. Past the client's patience, plug stops waiting and mints
+an address rather than lie — which is correct, and which meant an absent name
+could answer instead of failing cleanly.
+
+The two now run side by side, and the proof has twice the room. The worst case
+did not grow.
+
+
 ---
 
 ## 2.11.1
