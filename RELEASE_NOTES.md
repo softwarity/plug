@@ -2,9 +2,9 @@
 
 ## NEXT RELEASE
 
-### Kubernetes clusters answer "that name does not exist" in time again
+## 2.11.1
 
-_Shipped in 2.11.1, which went out before this was written down._
+### Kubernetes clusters answer "that name does not exist" in time again
 
 To tell you a name is absent rather than guess, the agent proves its cluster's
 resolver is alive at all — otherwise "I cannot find it" and "my DNS is broken"
@@ -23,8 +23,6 @@ did not grow.
 
 
 ---
-
-## 2.11.1
 
 ### `plug doctor` now checks the resolver your programs use, not only its own
 
