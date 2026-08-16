@@ -369,32 +369,32 @@ jobs:
       - id: dispatch_a
         env:
           GH_TOKEN: ${{ github.token }}
-          CLUSTER_IMAGE: docker.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}
+          CLUSTER_IMAGE: docker.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}-amd64
         run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-a)" >> "$GITHUB_OUTPUT"
       - id: dispatch_b
         env:
           GH_TOKEN: ${{ github.token }}
-          CLUSTER_IMAGE: docker.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}
+          CLUSTER_IMAGE: docker.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}-amd64
         run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-b)" >> "$GITHUB_OUTPUT"
       - id: dispatch_ka
         env:
           GH_TOKEN: ${{ github.token }}
-          CLUSTER_IMAGE: docker.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}
+          CLUSTER_IMAGE: docker.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}-amd64
         run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-ka k8s-for.yml)" >> "$GITHUB_OUTPUT"
       - id: dispatch_kb
         env:
           GH_TOKEN: ${{ github.token }}
-          CLUSTER_IMAGE: docker.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}
+          CLUSTER_IMAGE: docker.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}-amd64
         run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-kb k8s-for.yml)" >> "$GITHUB_OUTPUT"
       - id: dispatch_sa
         env:
           GH_TOKEN: ${{ github.token }}
-          CLUSTER_IMAGE: docker.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}
+          CLUSTER_IMAGE: docker.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}-amd64
         run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-sa swarm-for.yml)" >> "$GITHUB_OUTPUT"
       - id: dispatch_sb
         env:
           GH_TOKEN: ${{ github.token }}
-          CLUSTER_IMAGE: docker.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}
+          CLUSTER_IMAGE: docker.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}-amd64
         run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-sb swarm-for.yml)" >> "$GITHUB_OUTPUT"
       # The compat cell needs the LAST PUBLISHED launcher for every OS, but only
       # this Linux job has Docker — extract all of them from the published image
@@ -422,7 +422,7 @@ jobs:
     env:
       A: plug-cluster-${{ github.run_id }}-a
       B: plug-cluster-${{ github.run_id }}-b
-      AGENT_IMAGE: docker.io/softwarity/plug:sha-${{ needs.start-cluster.outputs.short_sha }}
+      AGENT_IMAGE: docker.io/softwarity/plug:sha-${{ needs.start-cluster.outputs.short_sha }}-amd64
       # Where the shared client bundle lands (relative to the workspace, so Git
       # Bash on Windows reads it the same way every other shell does).
       PREBUILT_CLIENTS: e2e-clients
@@ -611,7 +611,7 @@ jobs:
     env:
       A: plug-cluster-${{ github.run_id }}-a
       B: plug-cluster-${{ github.run_id }}-b
-      AGENT_IMAGE: docker.io/softwarity/plug:sha-${{ needs.start-cluster.outputs.short_sha }}
+      AGENT_IMAGE: docker.io/softwarity/plug:sha-${{ needs.start-cluster.outputs.short_sha }}-amd64
       PREBUILT_CLIENTS: e2e-clients
     steps:
       - uses: actions/checkout@v6
@@ -689,7 +689,7 @@ jobs:
     env:
       A: plug-k8s-${{ github.run_id }}-ka
       B: plug-k8s-${{ github.run_id }}-kb
-      AGENT_IMAGE: docker.io/softwarity/plug:sha-${{ needs.start-cluster.outputs.short_sha }}
+      AGENT_IMAGE: docker.io/softwarity/plug:sha-${{ needs.start-cluster.outputs.short_sha }}-amd64
       # Where the shared client bundle lands (relative to the workspace, so Git
       # Bash on Windows reads it the same way every other shell does).
       PREBUILT_CLIENTS: e2e-clients
@@ -839,7 +839,7 @@ jobs:
     env:
       A: plug-swarm-${{ github.run_id }}-sa
       B: plug-swarm-${{ github.run_id }}-sb
-      AGENT_IMAGE: docker.io/softwarity/plug:sha-${{ needs.start-cluster.outputs.short_sha }}
+      AGENT_IMAGE: docker.io/softwarity/plug:sha-${{ needs.start-cluster.outputs.short_sha }}-amd64
       # Where the shared client bundle lands (relative to the workspace, so Git
       # Bash on Windows reads it the same way every other shell does).
       PREBUILT_CLIENTS: e2e-clients

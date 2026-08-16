@@ -106,6 +106,24 @@ jobs:
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ env.PLATFORM_PAIR }}
           cache-to: type=gha,mode=max,scope=${{ env.PLATFORM_PAIR }}
+      # The clusters never needed the manifest list: they all run on amd64
+      # runners. Waiting for it has now cost two whole runs — the merge job is
+      # last, and it competes for a runner with the sixteen jobs waiting on its
+      # output. Queued ten minutes behind them once, its tag appeared after every
+      # leg had already given up looking for a cluster.
+      #
+      # So name this digest the moment it exists. It is a registry-side
+      # operation, no transfer, in a job that is here and authenticated already.
+      #
+      # `sha-<short>` — the multi-arch one — is untouched and remains what gets
+      # promoted, so "published == tested" still holds: the amd64 digest the legs
+      # exercised is the one inside that manifest.
+      - name: Name this digest for the clusters
+        if: matrix.platform == 'linux/amd64'
+        run: |
+          docker buildx imagetools create \
+            --tag "$IMAGE:sha-${GITHUB_SHA::7}-amd64" \
+            "$IMAGE@${{ steps.build.outputs.digest }}"
       - name: Export digest
         run: |
           mkdir -p "${{ runner.temp }}/digests"
@@ -142,9 +160,15 @@ jobs:
             type=ref,event=branch,enable=${{ !inputs.immutable_only }}
             type=raw,value=latest,enable=${{ !inputs.immutable_only && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
             # The immutable handle on this exact build: `sha-<short>`. It is what
-            # the e2e legs pull and what the publish job promotes, so it has to
-            # be a tag nothing else ever moves — `latest` cannot serve, since
-            # another push to main would move it under them.
+            # the publish job promotes, so it has to be a tag nothing else ever
+            # moves — `latest` cannot serve, since another push to main would
+            # move it under it.
+            #
+            # The clusters do NOT wait for this one. They pull `sha-<short>-amd64`,
+            # named by the amd64 build job the moment its digest exists, because
+            # this manifest is assembled last and queues behind everything that
+            # depends on it. The amd64 digest is inside this manifest either way,
+            # so what the legs exercised is what gets promoted.
             type=sha
             # Dead unless this reusable workflow is ever called on a tag ref,
             # which the release path does not do: the semver tags are put on the
