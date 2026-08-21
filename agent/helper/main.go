@@ -2230,6 +2230,55 @@ type k8sReceipt struct {
 	Ports    json.RawMessage   `json:"ports"`
 }
 
+// k8sRepointPatch builds the merge patch that points an EXISTING Service at the
+// agent — the ONE place both branches (a real workload taken over, and a plug
+// Service reclaimed from a linger or a crash) build it, because they had drifted
+// apart and only one of them was right.
+//
+// The reclaim branch wrote a bare {app: plug}. Under RFC 7386 a map MERGES, so
+// on any Service whose selector carried more than that key, `app: plug` was
+// ADDED to the original keys instead of replacing them — and a selector demanding
+// app=plug AND app.kubernetes.io/name=<the workload> matches no pod at all. The
+// Service ends up with zero endpoints and the name times out, which is the exact
+// failure selectorPatch exists to prevent.
+func k8sRepointPatch(pairs []portPair, current map[string]string, ann map[string]any) map[string]any {
+	return map[string]any{
+		"metadata": map[string]any{"annotations": ann},
+		"spec": map[string]any{
+			"selector": selectorPatch(map[string]string{"app": "plug"}, current),
+			"ports":    k8sPorts(pairs),
+		},
+	}
+}
+
+// k8sUnroutable explains why an EXISTING Service cannot carry a plug name, or
+// returns "" when it can. Two shapes cannot, and NEITHER fails at patch time:
+//
+//   - headless (clusterIP: None): there is no virtual IP, so the name resolves
+//     straight to pod IPs and targetPort is never applied. A caller would reach
+//     the agent pod on the CLUSTER port — where nothing listens, the session's
+//     forward sitting on a port sshd allocated.
+//   - type: ExternalName: a DNS alias elsewhere, carrying no endpoints and no
+//     ports at all.
+//
+// Both patch cleanly and then time out, which is exactly how one real session
+// spent 90s and 95 attempts blaming the cluster's scheduler. clusterIP is
+// immutable, so there is no in-place fix to suggest: the Service goes, or the
+// name does.
+func k8sUnroutable(name, typ, clusterIP string) string {
+	switch {
+	case clusterIP == "None":
+		return fmt.Sprintf("the Service %q is headless (clusterIP: None) — the name resolves straight to pod IPs "+
+			"and targetPort is never applied, so plug cannot route a session through it. Delete it and let plug "+
+			"create the name (kubectl delete service %s), or serve a different name", name, name)
+	case typ == "ExternalName":
+		return fmt.Sprintf("the Service %q is a type: ExternalName — a DNS alias carrying no endpoints and no ports, "+
+			"so plug cannot route a session through it. Delete it and let plug create the name "+
+			"(kubectl delete service %s), or serve a different name", name, name)
+	}
+	return ""
+}
+
 // k8sPorts renders the pairs as a Service's ports. The per-port name is
 // REQUIRED by k8s as soon as there is more than one — a multi-port service
 // (HTTP+SMTP+POP3 on one name) is exactly the case this serves.
@@ -2313,11 +2362,25 @@ func k8sServe(name string, pairs []portPair) {
 				Annotations map[string]string `json:"annotations"`
 			} `json:"metadata"`
 			Spec struct {
-				Selector map[string]string `json:"selector"`
-				Ports    json.RawMessage   `json:"ports"`
+				Selector  map[string]string `json:"selector"`
+				Ports     json.RawMessage   `json:"ports"`
+				Type      string            `json:"type"`
+				ClusterIP string            `json:"clusterIP"`
 			} `json:"spec"`
 		}
 		_, gerr := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/services/"+name, nil, &existing)
+		// A Service plug cannot route THROUGH is refused here, in the millisecond
+		// the agent already holds the object — not 90 seconds later as a timeout
+		// the caller has to interpret. Repointing one SUCCEEDS (selector and ports
+		// patch cleanly) and yields a name that answers nobody: the worst of both,
+		// since the deployed workload is parked and the replacement never carries
+		// traffic. Checked before the ownership split, so it covers a takeover and
+		// a stale plug Service alike.
+		if gerr == nil {
+			if why := k8sUnroutable(name, existing.Spec.Type, existing.Spec.ClusterIP); why != "" {
+				answer("error: %s", why)
+			}
+		}
 		if gerr != nil || existing.Metadata.Labels[k8sManaged] != "plug" {
 			if gerr == nil {
 				receipt := existing.Metadata.Annotations[k8sParkedAnn]
@@ -2328,13 +2391,7 @@ func k8sServe(name string, pairs []portPair) {
 					}
 					receipt = string(b)
 				}
-				patch := map[string]any{
-					"metadata": map[string]any{"annotations": map[string]any{k8sParkedAnn: receipt}},
-					"spec": map[string]any{
-						"selector": selectorPatch(map[string]string{"app": "plug"}, existing.Spec.Selector),
-						"ports":    k8sPorts(pairs),
-					},
-				}
+				patch := k8sRepointPatch(pairs, existing.Spec.Selector, map[string]any{k8sParkedAnn: receipt})
 				if _, perr := k8sMergePatch("/api/v1/namespaces/"+ns+"/services/"+name, patch); perr != nil {
 					answer("error: parking the Service %q (repointing it at the agent): %v", name, perr)
 				}
@@ -2356,13 +2413,7 @@ func k8sServe(name string, pairs []portPair) {
 		// this Service was left lingering by a clean unserve or orphaned by a
 		// crash. Only if the patch itself fails do we fall back to the old
 		// replace, reporting the real cause.
-		patch := map[string]any{
-			"metadata": map[string]any{"annotations": map[string]any{lingerLabel: nil}},
-			"spec": map[string]any{
-				"selector": map[string]string{"app": "plug"},
-				"ports":    k8sPorts(pairs),
-			},
-		}
+		patch := k8sRepointPatch(pairs, existing.Spec.Selector, map[string]any{lingerLabel: nil})
 		if _, perr := k8sMergePatch("/api/v1/namespaces/"+ns+"/services/"+name, patch); perr != nil {
 			_, _ = k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/services/"+name, nil, nil)
 			if _, rerr := k8sAPI("POST", "/api/v1/namespaces/"+ns+"/services", svc, nil); rerr != nil {

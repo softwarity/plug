@@ -2,6 +2,41 @@
 
 ## NEXT RELEASE
 
+### A Kubernetes name plug reclaimed could point at no pod at all
+
+When plug takes back a Service it created itself — one left warm by a linger, or
+orphaned by a crash — it repoints it at the agent by writing `{app: plug}` into
+the selector. A merge patch merges maps key by key: on a Service whose selector
+carried anything else, that key was ADDED to the originals instead of replacing
+them. The selector then demanded `app=plug` *and* the original workload's labels,
+which no pod satisfies. The Service ended up with zero endpoints, every
+connection to the name timed out, and ninety seconds later the session reported
+the name "not reachable inside the cluster" — pointing at the cluster's
+scheduler, which had nothing to do with it.
+
+Taking over someone else's workload always did the right thing: it nulls the
+extra keys explicitly. The two paths now build the same patch in the same place,
+so they cannot drift apart again.
+
+
+---
+
+### Two shapes of Service are refused up front instead of timing out
+
+A headless Service (`clusterIP: None`) has no virtual IP — the name resolves
+straight to pod IPs and `targetPort` is never applied. An `ExternalName` is a DNS
+alias carrying no endpoints and no ports. Repointing either one SUCCEEDS, since
+the patch itself is valid, and yields a name that answers nobody.
+
+That used to surface ninety seconds later as a timeout, with the deployed
+workload parked the whole time. The agent now refuses while it still holds the
+object, naming the shape and the way out. `clusterIP` is immutable, so there is
+no in-place fix to suggest: the Service goes, or the name does.
+
+
+---
+
+
 ## 2.11.1
 
 ### Kubernetes clusters answer "that name does not exist" in time again
