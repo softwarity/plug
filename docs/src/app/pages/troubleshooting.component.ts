@@ -40,6 +40,16 @@ import { CodeComponent } from '../code/code.component';
       still works.
     </p>
     <p>
+      On Kubernetes, one cause hides better than the others: a Service reconciled by a GitOps
+      controller (<strong>Argo CD</strong>, <strong>Flux</strong>, <strong>Fleet</strong>) is put
+      back to its declared state minutes after plug repoints it, so the name stops serving your
+      session without anything failing loudly. Check the Service's annotations for
+      <code>argocd.argoproj.io/tracking-id</code> or
+      <code>kustomize.toolkit.fluxcd.io/name</code> —
+      <a routerLink="/kubernetes">Kubernetes</a> covers what to do about it.
+    </p>
+
+    <p>
       If every launch sits at the slow end, the cause is usually the daemon rather than plug: a Swarm
       manager carrying a long history of dead tasks and stopped containers schedules noticeably
       slower. <code>docker system prune</code> and a restart bring it back down.

@@ -81,6 +81,59 @@ kubectl -n my-namespace port-forward svc/plug 2222:2222</app-code>
       and the <a routerLink="/security">security model</a> spell out exactly what the grant allows.
     </p>
 
+    <h3>When a GitOps controller owns the name</h3>
+    <p>
+      Taking over a Service means patching two fields it owns —
+      <code>spec.selector</code> and <code>spec.ports</code>. If that Service is reconciled
+      continuously by <strong>Argo CD</strong>, <strong>Flux</strong> or <strong>Rancher
+      Fleet</strong>, the controller sees the change as drift and puts the declared state back,
+      typically within minutes. plug's patch is valid and applies cleanly; it is simply undone
+      afterwards, so the session ends up serving nobody.
+    </p>
+    <p>
+      It shows up as one of two warnings, depending on whether the real workload is running:
+      <code>is not reachable inside the cluster</code> when it is not (the Service is left with a
+      selector matching no pod, hence no endpoints), or
+      <code>is answered by something else</code> when it is (the name goes back to the deployed
+      pods, and your local process never sees a request). Both name the symptom, not this cause —
+      look for <code>argocd.argoproj.io/tracking-id</code>,
+      <code>argocd.argoproj.io/instance</code> or
+      <code>kustomize.toolkit.fluxcd.io/name</code> in the Service's annotations to confirm it.
+      Note that <code>app.kubernetes.io/managed-by: Helm</code> on its own is <em>not</em> a
+      problem: Helm only acts on an upgrade, it does not reconcile.
+    </p>
+    <p>
+      The fix is to tell the controller not to compare those two fields. On Argo CD, per
+      Application:
+    </p>
+    <app-code lang="yaml">spec:
+  ignoreDifferences:
+    - group: ""
+      kind: Service
+      name: my-service
+      namespace: my-namespace
+      jsonPointers:
+        - /spec/selector
+        - /spec/ports</app-code>
+    <p>
+      Everything else about the Service keeps being reconciled. On a cluster where plug is used
+      routinely, the same rule can be set once for every Service through
+      <code>resource.customizations</code> in the <code>argocd-cm</code> ConfigMap, rather than
+      Application by Application. Flux accepts an annotation on the resource itself
+      (<code>kustomize.toolkit.fluxcd.io/reconcile: disabled</code>), which is narrower still.
+    </p>
+    <p>
+      Turning off <strong>Self Heal</strong> (Argo CD: <em>App Details → Sync Policy</em>) also
+      works and needs no manifest change, but it suspends drift correction for the whole
+      Application — a switch that is easy to forget, and a Git push or a manual sync re-applies
+      the Service anyway. Prefer it for a one-off, not for daily work.
+    </p>
+    <p>
+      One detail worth knowing when you clean up: the extra selector key plug adds is not removed
+      by a sync — the controller only manages fields it knows about. Ending the session properly
+      (Ctrl-C) is what restores the Service, from the receipt plug stored on it.
+    </p>
+
     <p>
       The image, tags, how it also serves the CLI, and the under-the-hood notes are identical on
       every platform — see <a routerLink="/swarm">Swarm</a> for those.
