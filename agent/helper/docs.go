@@ -17,11 +17,9 @@ const (
 	docHome       = ""
 	docKubernetes = "kubernetes"
 	docSwarm      = "swarm"
-)
-
-// In-page anchors, matching an id= in the page's template.
-const (
-	anchorGitOps = "gitops"
+	// Why a name served with -s can stop pointing at the developer's machine: a
+	// CD controller (Argo CD, Flux, Fleet, Crossplane) reverting the takeover.
+	docContinuousDeployment = "continuous-deployment"
 )
 
 // docURL renders the link to a page, optionally to a section within it. Deep

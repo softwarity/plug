@@ -16,7 +16,8 @@ func TestDocURL(t *testing.T) {
 	}{
 		{"home", docHome, nil, "https://softwarity.github.io/plug/"},
 		{"a page", docKubernetes, nil, "https://softwarity.github.io/plug/kubernetes"},
-		{"a section", docKubernetes, []string{anchorGitOps}, "https://softwarity.github.io/plug/kubernetes#gitops"},
+		{"the CD page", docContinuousDeployment, nil, "https://softwarity.github.io/plug/continuous-deployment"},
+		{"a section", docKubernetes, []string{"names"}, "https://softwarity.github.io/plug/kubernetes#names"},
 		{"empty anchor is no anchor", docSwarm, []string{""}, "https://softwarity.github.io/plug/swarm"},
 	}
 	for _, c := range cases {
@@ -60,7 +61,7 @@ func TestDocPagesAreRealRoutes(t *testing.T) {
 		t.Skipf("doc site not present (%v) — nothing to check against", err)
 	}
 	src := string(b)
-	for _, page := range []string{docKubernetes, docSwarm, docSecurity, docTroubleshooting, docProfiles} {
+	for _, page := range []string{docKubernetes, docSwarm, docSecurity, docTroubleshooting, docProfiles, docContinuousDeployment} {
 		if !strings.Contains(src, "path: '"+page+"'") {
 			t.Errorf("docs.go points at %q, which %s does not route", page, routes)
 		}

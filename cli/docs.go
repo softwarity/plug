@@ -21,13 +21,14 @@ const (
 	docSecurity        = "security"
 	docTroubleshooting = "troubleshooting"
 	docProfiles        = "profiles"
+	// Why a name served with -s can stop pointing at this machine: a CD
+	// controller (Argo CD, Flux, Fleet, Crossplane) reverting the takeover.
+	docContinuousDeployment = "continuous-deployment"
 )
 
 // In-page anchors, matching an id= in the page's template. Kept next to the
 // pages so a renamed section is one edit, not a search across error strings.
-const (
-	anchorGitOps = "gitops"
-)
+// (None needed yet — every page linked from a message is the whole answer.)
 
 // docURL renders the link to a page, optionally to a section within it.
 //

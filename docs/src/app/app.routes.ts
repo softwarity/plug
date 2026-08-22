@@ -36,6 +36,11 @@ export const routes: Routes = [
     loadComponent: () =>
       import('./pages/troubleshooting.component').then((m) => m.TroubleshootingComponent),
   },
+  {
+    path: 'continuous-deployment',
+    loadComponent: () =>
+      import('./pages/continuous-deployment.component').then((m) => m.ContinuousDeploymentComponent),
+  },
   { path: 'agent', redirectTo: 'swarm', pathMatch: 'full' },
   {
     path: 'security',

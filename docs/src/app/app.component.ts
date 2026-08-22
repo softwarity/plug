@@ -31,6 +31,7 @@ export class AppComponent {
     { path: '/kubernetes', label: 'Kubernetes', icon: 'hub' },
     { path: '/security', label: 'Security model', icon: 'shield' },
     { path: '/troubleshooting', label: 'Troubleshooting', icon: 'troubleshoot' },
+    { path: '/continuous-deployment', label: 'CD & GitOps', icon: 'autorenew' },
     { path: '/coverage', label: 'Coverage matrix', icon: 'table_chart' },
     { path: '/roadmap', label: 'Roadmap', icon: 'map' },
   ];
