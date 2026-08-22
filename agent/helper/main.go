@@ -76,6 +76,11 @@ func main() {
 		case "preflight":
 			preflight()
 			return
+		case "serve":
+			// The container's whole process: what entrypoint.sh and sshd did
+			// between them, in one binary that never forks a privileged helper.
+			serve(args[1:])
+			return
 		}
 	}
 	// ForceCommand path: the client's command line arrives in SSH_ORIGINAL_COMMAND.

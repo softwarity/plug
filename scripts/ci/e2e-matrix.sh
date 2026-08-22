@@ -860,7 +860,7 @@ do_gateway() {
 # (parking a shared one would break the other legs) on this leg's own PORT
 # (the -s remote-forward binds that port on the agent globally, and the legs
 # run concurrently — a shared port made the second leg's forward be denied by
-# sshd). The prober is the in-cluster witness: what does
+# the agent). The prober is the in-cluster witness: what does
 # http://tko-<leg>:<port>/ answer — before, during, after.
 do_takeover() {
   local tname tport
@@ -918,7 +918,7 @@ do_takeover() {
 #
 # One process, one -s name, three cluster ports (HTTP+SMTP+POP3 style): one
 # signpost carries the name and listens on ALL of them, each relayed to its own
-# sshd-allocated agent port. Every port must reach ITS OWN local listener from
+# agent-allocated port. Every port must reach ITS OWN local listener from
 # inside the cluster — reaching the wrong one is the bug this cell pins down.
 do_multiport() {
   local name p1 p2 p3
@@ -1187,7 +1187,7 @@ do_resilience() {
   #
   # A restarted agent cannot show this: its boot gc sweeps its own signposts, so
   # the address is legitimately gone and there is nothing left to reuse. Killing
-  # only the sshd SESSIONS — listener untouched — is what leaves something.
+  # only the SSH SESSIONS - listener untouched - is what leaves something.
   # Targeted at THIS LEG's agent, never the shared one: three legs run
   # concurrently. Docker/Swarm only (pod exec needs SPDY the chaos service does
   # not speak), so k8s reports rather than asserts.

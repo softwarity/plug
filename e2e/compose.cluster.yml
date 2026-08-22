@@ -63,7 +63,7 @@ services:
   # the other legs mid-run. Same echo image as ident: distinctive fixed answer.
   # One cluster PORT per leg too (8085/8086/8087): the -s remote-forward binds
   # that port on the AGENT, globally — two legs on the same port would collide
-  # (sshd denies the second tcpip-forward) since the legs run concurrently.
+  # (the agent denies the second tcpip-forward) since the legs run concurrently.
   tko-linux:
     image: hashicorp/http-echo
     command: ["-listen=:8085", "-text=deployed-tko-linux"]

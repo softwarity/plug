@@ -4,7 +4,7 @@
 #
 # One file, one command — the agent AND the reverse direction's dynamic name
 # provisioning (plug -s). Deploy it in the SAME namespace as the services you
-# want to reach: the agent's sshd resolves short names (myservice) via the pod's
+# want to reach: the agent resolves short names (myservice) via the pod's
 # resolver (CoreDNS) from inside that namespace and opens the connection itself,
 # over an SSH direct-tcpip channel. No subnet, no CIDR — resolution happens by
 # name, in-cluster. Cross-namespace? Use the FQDN in your code
@@ -13,10 +13,13 @@
 # How the data path works (for context): the `plug` CLI captures the child
 # process's cluster traffic at the IP layer with a userspace TUN (gVisor
 # netstack), then splices each flow — by name — through a single SSH tunnel to
-# this agent. sshd here does the actual name resolution and dialing from inside
-# the cluster. There is no SOCKS proxy and no server-side code of ours: just
-# stock openssh forwarding. Trusted dev clusters only — the transport has no
-# authentication by design (see the repo's security model).
+# this agent, which does the actual name resolution and dialing from inside the
+# cluster. There is no SOCKS proxy: the agent is a small SSH server (a few
+# hundred lines over golang.org/x/crypto/ssh) whose entire exposed surface is
+# two accounts, one fixed command each, and the two forwarding primitives - no
+# shell, no setuid binary, no sshd configuration. Trusted dev clusters only:
+# the transport authenticates the software, not a person, by design (see the
+# repo's security model).
 #
 # The reverse direction (plug -s <name>:<cport>:<lport>) has the agent CREATE
 # and DELETE a Service pointing that name at itself, per session — no name

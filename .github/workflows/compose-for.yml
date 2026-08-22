@@ -110,8 +110,8 @@ jobs:
         if: inputs.image == ''
         run: gunzip -c /tmp/agent-image.tar.gz | docker load
       - name: Say what it serves
-        # --entrypoint: the image's entrypoint ignores its args and execs sshd in
-        # the foreground — without the override this docker run never returns.
+        # --entrypoint: the image's entrypoint ignores its args and runs the agent
+        # in the foreground - without the override this docker run never returns.
         run: |
           echo "agent image ready — serves plug version: $(docker run --rm --entrypoint cat softwarity/plug:e2e /opt/plug/VERSION)" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Join the tailnet
