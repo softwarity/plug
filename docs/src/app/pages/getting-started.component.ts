@@ -104,7 +104,7 @@ ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@$
       plug runs your command as a named member of the cluster: it answers to
       <code>my-app:8080</code> (forwarded to its local <code>:3000</code>), and in your code you
       address cluster services by name - <code>http://pdfbox:8080</code>, <code>mongodb:27017</code>
- - which resolve inside the cluster. <kbd>Ctrl-C</kbd> stops your process; when the last one
+      - which resolve inside the cluster. <kbd>Ctrl-C</kbd> stops your process; when the last one
       exits, your machine is back exactly as it was. No sudo, no admin.
     </p>
     <p>
@@ -180,7 +180,7 @@ plug -s e2e:8080:PORT npm run serve -- --port=&#123;PORT&#125;</app-code>
     </p>
     <p>
       Moving itself means the deployment's <strong>tag is rewritten</strong> when it pins a release
- - <code>softwarity/plug:2.3.0</code> becomes <code>softwarity/plug:2.4.0</code>, majors
+      - <code>softwarity/plug:2.3.0</code> becomes <code>softwarity/plug:2.4.0</code>, majors
       included. plug is infrastructure carrying your sessions, not an application dependency you
       hold back for reproducibility; and re-resolving a pinned tag could only ever return the same
       image, which made <code>update</code> a no-op exactly where it was needed. Each backend

@@ -48,7 +48,7 @@ services:
     ports: ["2222:22"]
     # required - the agent creates your -s name through it (see below)
     volumes:
- - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/docker.sock:/var/run/docker.sock
     # Swarm only, for -s: the signpost is a service, so run the agent on a
     # manager (any single-node swarm node IS a manager) as a single replica.
     # Ignored by plain Compose.
@@ -146,7 +146,7 @@ services:
     image: docker.io/softwarity/plug:latest
     ports: ["2222:22"]
     volumes:
- - /var/run/docker.sock:/var/run/docker.sock   # required: the agent creates your -s name
+      - /var/run/docker.sock:/var/run/docker.sock   # required: the agent creates your -s name
 ```
 
 The Docker socket is root on the host - mount it only on a cluster you trust

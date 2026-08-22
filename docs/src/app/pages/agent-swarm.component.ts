@@ -89,7 +89,7 @@ ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@$
       in the cluster under a DNS name, for the lifetime of the session. A dev runs
       <code>plug -s service1:8081:4200 npm start</code> and any workload calling
       <code>http://service1:8081</code> lands on their machine's <code>:4200</code>
- - <strong>no name pre-declared, no redeploy</strong>. When the session ends the name is gone.
+      - <strong>no name pre-declared, no redeploy</strong>. When the session ends the name is gone.
     </p>
     <p>
       For that the agent needs to create the DNS name on the fly, which means the Docker socket -

@@ -12,18 +12,18 @@ html {
 }
 
 :root {
- --bg-gradient: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
- --bg-primary: #161b22;
- --bg-secondary: #21262d;
- --text-primary: #e6edf3;
- --text-secondary: #c9d1d9;
- --text-muted: #8b949e;
- --accent-blue: #58a6ff;
- --accent-green: #238636;
- --accent-purple: #a371f7;
- --accent-red: #f85149;
- --accent-yellow: #d29922;
- --border-color: #30363d;
+  --bg-gradient: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+  --bg-primary: #161b22;
+  --bg-secondary: #21262d;
+  --text-primary: #e6edf3;
+  --text-secondary: #c9d1d9;
+  --text-muted: #8b949e;
+  --accent-blue: #58a6ff;
+  --accent-green: #238636;
+  --accent-purple: #a371f7;
+  --accent-red: #f85149;
+  --accent-yellow: #d29922;
+  --border-color: #30363d;
 }
 
 // Material Symbols glyph class (the Google css2 stylesheet ships only the @font-face, not this
@@ -39,7 +39,7 @@ html {
   white-space: nowrap;
   word-wrap: normal;
   direction: ltr;
- -webkit-font-smoothing: antialiased;
+  -webkit-font-smoothing: antialiased;
   font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
 }
 
