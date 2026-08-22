@@ -121,7 +121,7 @@ Several clusters? Just name one with -p — plug creates the profile on first ru
 
   plug -p staging -s my-app:8080:3000 npm run start:dev
 
-Docs: https://softwarity.github.io/plug/
+Docs: ` + docURL(docHome) + `
 `)
 }
 

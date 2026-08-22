@@ -81,7 +81,7 @@ kubectl -n my-namespace port-forward svc/plug 2222:2222</app-code>
       and the <a routerLink="/security">security model</a> spell out exactly what the grant allows.
     </p>
 
-    <h3>When a GitOps controller owns the name</h3>
+    <h3 id="gitops">When a GitOps controller owns the name</h3>
     <p>
       Taking over a Service means patching two fields it owns —
       <code>spec.selector</code> and <code>spec.ports</code>. If that Service is reconciled
@@ -103,8 +103,48 @@ kubectl -n my-namespace port-forward svc/plug 2222:2222</app-code>
       problem: Helm only acts on an upgrade, it does not reconcile.
     </p>
     <p>
-      The fix is to tell the controller not to compare those two fields. On Argo CD, per
-      Application:
+      The fix is always the same idea — tell the controller not to compare those two fields — but
+      <strong>where</strong> you write it depends on the controller, and it is almost never in the
+      chart. The chart describes the resource; what you are configuring is the thing that keeps
+      re-applying it.
+    </p>
+    <table>
+      <thead>
+        <tr><th>Controller</th><th>Where the directive goes</th><th>What to write</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Argo CD</td>
+          <td>the <code>Application</code> (CRD, usually in the <code>argocd</code> namespace) — or
+            the <code>argocd-cm</code> ConfigMap for every Service at once</td>
+          <td><code>spec.ignoreDifferences</code> /
+            <code>resource.customizations.ignoreDifferences._Service</code></td>
+        </tr>
+        <tr>
+          <td>Flux</td>
+          <td><strong>on the resource itself</strong> — so here, the chart <em>is</em> the right
+            place — or in the <code>Kustomization</code></td>
+          <td><code>kustomize.toolkit.fluxcd.io/reconcile: disabled</code></td>
+        </tr>
+        <tr>
+          <td>Rancher Fleet</td>
+          <td>the bundle's <code>fleet.yaml</code></td>
+          <td><code>diff.comparePatches</code></td>
+        </tr>
+        <tr>
+          <td>Crossplane</td>
+          <td>the <code>Object</code> resource or the Composition managing the Service</td>
+          <td><code>managementPolicies: ["Observe"]</code></td>
+        </tr>
+        <tr>
+          <td>a bespoke operator</td>
+          <td>—</td>
+          <td>no standard lever: suspend the operator, or serve a name it does not own</td>
+        </tr>
+      </tbody>
+    </table>
+    <p>
+      Argo CD, per Application:
     </p>
     <app-code lang="yaml">spec:
   ignoreDifferences:
@@ -117,11 +157,20 @@ kubectl -n my-namespace port-forward svc/plug 2222:2222</app-code>
         - /spec/ports</app-code>
     <p>
       Everything else about the Service keeps being reconciled. On a cluster where plug is used
-      routinely, the same rule can be set once for every Service through
-      <code>resource.customizations</code> in the <code>argocd-cm</code> ConfigMap, rather than
-      Application by Application. Flux accepts an annotation on the resource itself
-      (<code>kustomize.toolkit.fluxcd.io/reconcile: disabled</code>), which is narrower still.
+      routinely, set the rule once for every Service in the <code>argocd-cm</code> ConfigMap
+      instead of Application by Application — the empty group prefix below is how the core API
+      group is spelled:
     </p>
+    <app-code lang="yaml">apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-cm
+  namespace: argocd
+data:
+  resource.customizations.ignoreDifferences._Service: |
+    jsonPointers:
+      - /spec/selector
+      - /spec/ports</app-code>
     <p>
       Turning off <strong>Self Heal</strong> (Argo CD: <em>App Details → Sync Policy</em>) also
       works and needs no manifest change, but it suspends drift correction for the whole

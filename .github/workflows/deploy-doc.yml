@@ -52,6 +52,19 @@ jobs:
         working-directory: docs
         run: npm run build -- --base-href /plug/
 
+      # Pages serves 404.html for any path it has no file for, and this site is a
+      # single-page app routed BY PATH: /plug/kubernetes is not a file, so every
+      # deep link — a section someone shares, the doc link in a plug error
+      # message — used to land on Pages' own 404. Copying index.html there hands
+      # the URL to the Angular router instead, which resolves it normally.
+      #
+      # The HTTP status stays 404 (only a prerendered build would return 200, and
+      # that means pulling in @angular/ssr). Browsers do not care; search engines
+      # do, which is the trade to revisit if the deep pages ever need indexing.
+      - name: Serve deep links (SPA fallback)
+        working-directory: docs
+        run: cp dist/doc-site/browser/index.html dist/doc-site/browser/404.html
+
       # The social media kit (mp4 / gif / hero png) is DERIVED from the animated
       # SVG — rendered here and served by Pages under /plug/media/, never
       # committed (binaries would bloat the git history on every re-render).

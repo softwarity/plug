@@ -98,7 +98,7 @@ func preflight() {
 		"      (on Swarm, also run it as a service on a MANAGER node)\n" +
 		"  Kubernetes: apply the RBAC that lets it manage Services\n" +
 		"      kubectl apply -f deploy/plug-k8s.yaml\n" +
-		"  Full stack files: https://softwarity.github.io/plug/")
+		"  Full stack files: " + docURL(docHome))
 }
 
 func fatal(format string, a ...any) {
