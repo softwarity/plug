@@ -105,7 +105,7 @@ export class CodeComponent implements AfterViewInit {
         setTimeout(() => this.copied.set(false), 1500);
       })
       .catch(() => {
-        /* clipboard blocked (e.g. denied permission) — no-op */
+        /* clipboard blocked (e.g. denied permission) - no-op */
       });
   }
 }

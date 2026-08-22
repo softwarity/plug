@@ -21,18 +21,18 @@ export type FileState = 'collapsed' | 'opened' | 'expanded';
  * Renders a build-time-embedded asset file (e.g. a pinned deploy manifest, see
  * scripts/gen-version.mjs) with three states, cycled by clicking the header:
  *
- *   collapsed — the filename + copy/download buttons only
- *   opened    — the first `preview` lines
- *   expanded  — the whole file
+ *   collapsed - the filename + copy/download buttons only
+ *   opened - the first `preview` lines
+ *   expanded - the whole file
  *
  * `states` lists which states the header cycles through, in order (default all
  * three); `initial` picks the starting one (default the first of `states`).
  * When the whole file already fits within `preview`, 'opened' and 'expanded'
- * would render identically, so 'expanded' is dropped from the cycle — no click
+ * would render identically, so 'expanded' is dropped from the cycle - no click
  * with no visible effect.
  * `maxLines` caps the visible height (opened AND expanded) to that many lines,
- * scrolling past it — omit for no cap. Highlighting reuses Prism — the same
- * highlighter and theme as <app-code> — on the fetched string, so there is no
+ * scrolling past it - omit for no cap. Highlighting reuses Prism - the same
+ * highlighter and theme as <app-code> - on the fetched string, so there is no
  * second syntax-highlighting library.
  *
  *   <app-file src="assets/plug-k8s.yaml" download="plug-k8s.yaml" [preview]="14" [maxLines]="22" />
@@ -219,7 +219,7 @@ export class FileComponent implements OnInit {
   );
 
   // 'opened' and 'expanded' render identically once the whole file already
-  // fits within `preview` (nothing left to reveal) — drop 'expanded' from the
+  // fits within `preview` (nothing left to reveal) - drop 'expanded' from the
   // cycle in that case, so clicking the header never produces a step with no
   // visible change. Recomputes once the file loads, so it self-corrects if the
   // file later grows past `preview`.
@@ -240,7 +240,7 @@ export class FileComponent implements OnInit {
   constructor() {
     // Re-highlight when the visible slice (or state) changes and the <code> is in
     // the DOM. Resetting textContent clears the previous spans, then Prism
-    // re-tokenises — the same path as <app-code>, no innerHTML / sanitiser.
+    // re-tokenises - the same path as <app-code>, no innerHTML / sanitiser.
     effect(() => {
       const el = this.codeEl()?.nativeElement;
       if (!el || this.current() === 'collapsed') return;
@@ -295,7 +295,7 @@ export class FileComponent implements OnInit {
         setTimeout(() => this.copied.set(false), 1500);
       })
       .catch(() => {
-        /* clipboard blocked — no-op */
+        /* clipboard blocked - no-op */
       });
   }
 

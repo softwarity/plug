@@ -1,6 +1,6 @@
 import { Injectable, signal } from '@angular/core';
 
-// The deploy snippets show a PINNED image tag — the latest release — instead of
+// The deploy snippets show a PINNED image tag - the latest release - instead of
 // the moving `:latest`. The tag is resolved at build time into a static resource
 // (assets/version.json, see scripts/gen-version.mjs) that this service reads once,
 // same-origin, so there is no GitHub API call and no rate limit. The constant is

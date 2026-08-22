@@ -62,17 +62,17 @@ import { RouterLink } from '@angular/router';
         <text x="671" y="250" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#3fb950">service1</text>
 
         <line x1="244" y1="176" x2="596" y2="176" stroke="#a371f7" stroke-width="2.3" marker-end="url(#hiw-out)" />
-        <text x="410" y="169" text-anchor="middle" font-size="10.5" fill="#a371f7" font-weight="600">outbound — reach db by name</text>
+        <text x="410" y="169" text-anchor="middle" font-size="10.5" fill="#a371f7" font-weight="600">outbound - reach db by name</text>
         <text x="360" y="199" text-anchor="middle" font-size="9.5" fill="#6e7681">name → fake IP → SSH channel → sshd dials db</text>
 
         <line x1="596" y1="228" x2="244" y2="228" stroke="#3fb950" stroke-width="2.3" marker-end="url(#hiw-in)" />
-        <text x="410" y="245" text-anchor="middle" font-size="10.5" fill="#3fb950" font-weight="600">inbound — -s publishes service1</text>
+        <text x="410" y="245" text-anchor="middle" font-size="10.5" fill="#3fb950" font-weight="600">inbound - -s publishes service1</text>
         <text x="410" y="286" text-anchor="middle" font-size="9.5" fill="#6e7681">a cluster workload hits service1 → sshd remote-forward → your local :3000</text>
 
         <line x1="70" y1="360" x2="100" y2="360" stroke="#a371f7" stroke-width="2.6" />
-        <text x="108" y="364" font-size="11.5" fill="#8b949e">outbound — SSH direct-tcpip (sshd opens the real connection)</text>
+        <text x="108" y="364" font-size="11.5" fill="#8b949e">outbound - SSH direct-tcpip (sshd opens the real connection)</text>
         <line x1="500" y1="360" x2="530" y2="360" stroke="#3fb950" stroke-width="2.6" />
-        <text x="538" y="364" font-size="11.5" fill="#8b949e">inbound — sshd remote-forward (-s)</text>
+        <text x="538" y="364" font-size="11.5" fill="#8b949e">inbound - sshd remote-forward (-s)</text>
       </svg>
     </div>
 
@@ -80,7 +80,7 @@ import { RouterLink } from '@angular/router';
     <ol>
       <li>
         <strong>Your command connects by name.</strong> It asks for
-        <code>my-service:8080</code> exactly as it would inside the cluster — no proxy variables, no
+        <code>my-service:8080</code> exactly as it would inside the cluster - no proxy variables, no
         rewritten URL.
       </li>
       <li>
@@ -93,7 +93,7 @@ import { RouterLink } from '@angular/router';
       <li>
         <strong>plug reads the packet and splices the flow.</strong> The <code>connect()</code>
         surfaces as a packet in plug's stack; because plug minted the stand-in IP, it knows the real
-        name, terminates the flow, and splices it onto the single SSH tunnel — carrying the
+        name, terminates the flow, and splices it onto the single SSH tunnel - carrying the
         <em>name</em>, not an IP.
       </li>
       <li>
@@ -107,7 +107,7 @@ import { RouterLink } from '@angular/router';
     <ul>
       <li>
         <strong>Every runtime, no config.</strong> The app's socket is never touched, so it covers
-        Node, the JVM (Spring/Quarkus/Netty), Python, Ruby, PHP, curl — and, crucially,
+        Node, the JVM (Spring/Quarkus/Netty), Python, Ruby, PHP, curl - and, crucially,
         <strong>Go and other statically-linked binaries, and gRPC</strong>, the exact cases an
         <code>LD_PRELOAD</code>/proxy approach cannot reach.
       </li>
@@ -126,25 +126,25 @@ import { RouterLink } from '@angular/router';
 
     <h3>The privilege, granted once</h3>
     <p>
-      Creating the TUN, setting routes and repointing DNS needs privilege — granted
+      Creating the TUN, setting routes and repointing DNS needs privilege - granted
       <strong>once at install</strong> so day-to-day <code>plug &lt;cmd&gt;</code> needs none. Each OS
       does it the native way:
     </p>
     <ul>
       <li>
-        <strong>Linux</strong> — file capabilities (<code>cap_net_admin</code>,
+        <strong>Linux</strong> - file capabilities (<code>cap_net_admin</code>,
         <code>cap_sys_admin</code>, <code>cap_net_bind_service</code>). Each launch also gets a
         private resolver in its own mount namespace, which is what lets several clusters run side by
         side for free.
       </li>
       <li>
-        <strong>macOS</strong> — a setuid-root helper holds the TUN + DNS, then drops your command
+        <strong>macOS</strong> - a setuid-root helper holds the TUN + DNS, then drops your command
         back to your user. Because macOS repoints DNS machine-wide, the data path lives in a small
         per-cluster <strong>daemon</strong> that survives each run and restores your DNS ~30 s after
         the last <code>plug</code> of that cluster exits (<code>plug down</code> stops it now).
       </li>
       <li>
-        <strong>Windows</strong> — the data path lives in a <strong>SYSTEM service</strong> installed
+        <strong>Windows</strong> - the data path lives in a <strong>SYSTEM service</strong> installed
         once (elevated); every <code>plug</code> run is a non-elevated launcher that starts it on
         demand and delegates to it, so the command itself never needs admin.
       </li>
@@ -152,18 +152,18 @@ import { RouterLink } from '@angular/router';
 
     <h3>Several clusters at once</h3>
     <p>
-      Two different clusters can run side by side — <code>plug -p a</code> and
-      <code>plug -p b</code> — with the same service names resolving to the right backend each time.
+      Two different clusters can run side by side - <code>plug -p a</code> and
+      <code>plug -p b</code> - with the same service names resolving to the right backend each time.
       How plug keeps them apart depends on the OS:
     </p>
     <ul>
-      <li><strong>Linux</strong> gives every launch a private resolver in its own mount namespace, so two launches never share DNS — isolation for free.</li>
-      <li><strong>Windows</strong> repoints the system resolver machine-wide, so the SYSTEM service holds one tunnel per cluster and disambiguates each flow <strong>at <code>connect()</code></strong>: the source port maps to the owning process, whose ancestry is walked back to the <code>plug -p x</code> that launched it — that is its cluster (PID-at-connect).</li>
-      <li><strong>macOS</strong> — the global daemon holds one tunnel per cluster and attributes each flow by PID at connect, like Windows (proven simultaneously in CI).</li>
+      <li><strong>Linux</strong> gives every launch a private resolver in its own mount namespace, so two launches never share DNS - isolation for free.</li>
+      <li><strong>Windows</strong> repoints the system resolver machine-wide, so the SYSTEM service holds one tunnel per cluster and disambiguates each flow <strong>at <code>connect()</code></strong>: the source port maps to the owning process, whose ancestry is walked back to the <code>plug -p x</code> that launched it - that is its cluster (PID-at-connect).</li>
+      <li><strong>macOS</strong> - the global daemon holds one tunnel per cluster and attributes each flow by PID at connect, like Windows (proven simultaneously in CI).</li>
     </ul>
     <p>
       One honest limit: if a process <strong>fully detaches</strong> from the <code>plug</code> that
-      launched it — a rare case, where it re-parents to the system and the ancestry link is lost —
+      launched it - a rare case, where it re-parents to the system and the ancestry link is lost -
       plug can no longer tell which cluster it belongs to, so it <strong>declines</strong> that
       connection rather than risk routing it to the wrong cluster.
     </p>
@@ -173,21 +173,21 @@ import { RouterLink } from '@angular/router';
       The transport carries the other way too: <code>plug -s
       &lt;name&gt;:&lt;cluster-port&gt;:&lt;local-port&gt; &lt;cmd&gt;</code> opens a
       <strong>dedicated SSH connection for the session</strong> and asks the agent's
-      <code>sshd</code> for a standard <strong>remote forward</strong> — the agent listens on the
+      <code>sshd</code> for a standard <strong>remote forward</strong> - the agent listens on the
       cluster port, and every connection a cluster workload makes rides that connection back to your
       local port (dedicated, so the port's lifetime is exactly the session's, even where the forward
       datapath lives in a shared daemon). The cluster <em>name</em> that points at it is
       <strong>provisioned by the agent on the fly</strong>: a signpost container carrying the DNS
       alias (Docker, via the socket) or a Service selecting the agent pod (Kubernetes, via a
-      Services-only role) — created on <code>-s</code>, removed when the session ends, and
+      Services-only role) - created on <code>-s</code>, removed when the session ends, and
       re-provisioned automatically after a reconnect, with no stack redeploy. plug verifies the whole
       loop at startup through the cluster's own DNS. A <strong>deployed</strong> service owning the
       name is <strong>parked</strong> for the session (containers stopped / Swarm scaled to 0 / k8s
-      Service repointed) and <strong>restored on exit</strong> — your process substitutes for it; a
+      Service repointed) and <strong>restored on exit</strong> - your process substitutes for it; a
       name held by another live plug session is refused, and the refusal
       <a routerLink="/troubleshooting">names the process holding it</a>. That claim is the agent's,
       not the signpost's: it leases the name to the session serving it, so the name stays that
-      session's even in the moments no signpost exists — right after an agent restart, for
+      session's even in the moments no signpost exists - right after an agent restart, for
       instance. A session is only ever held to be alive while its own forward still answers, so
       nothing stays locked after a session dies.
       See <a routerLink="/swarm">Swarm</a> and
@@ -195,7 +195,7 @@ import { RouterLink } from '@angular/router';
     </p>
 
     <h3>Built with open source</h3>
-    <p>plug stands on the shoulders of these projects — thank you:</p>
+    <p>plug stands on the shoulders of these projects - thank you:</p>
     <table>
       <thead>
         <tr><th>Dependency</th><th>Role</th><th>License</th></tr>
@@ -203,8 +203,8 @@ import { RouterLink } from '@angular/router';
       <tbody>
         <tr><td><a href="https://www.openssh.com/" target="_blank" rel="noopener">OpenSSH</a></td><td>The transport: client (<code>golang.org/x/crypto/ssh</code>, in-process) and <code>sshd</code> in the agent doing the <code>direct-tcpip</code> dials</td><td>BSD</td></tr>
         <tr><td><a href="https://github.com/WireGuard/wireguard-go" target="_blank" rel="noopener">wireguard-go</a> + <a href="https://gvisor.dev/" target="_blank" rel="noopener">gVisor</a></td><td>The userspace TUN device and network stack that answer DNS and terminate flows in-process</td><td>MIT · Apache-2.0</td></tr>
-        <tr><td><a href="https://go.dev/" target="_blank" rel="noopener">Go</a></td><td>The CLI — one static binary per platform, no runtime dependencies</td><td>BSD</td></tr>
-        <tr><td><a href="https://www.alpinelinux.org/" target="_blank" rel="noopener">Alpine Linux</a></td><td>Base of the agent image — just <code>sshd</code> + the served binaries</td><td>MIT</td></tr>
+        <tr><td><a href="https://go.dev/" target="_blank" rel="noopener">Go</a></td><td>The CLI - one static binary per platform, no runtime dependencies</td><td>BSD</td></tr>
+        <tr><td><a href="https://www.alpinelinux.org/" target="_blank" rel="noopener">Alpine Linux</a></td><td>Base of the agent image - just <code>sshd</code> + the served binaries</td><td>MIT</td></tr>
       </tbody>
     </table>
   `,

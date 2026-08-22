@@ -17,18 +17,18 @@ import { CodeComponent } from '../code/code.component';
     <h3>Automatic selection</h3>
     <p>
       The <a routerLink="/getting-started">installer</a> normally creates a profile for you, named
-      after the cluster host it reads from your <code>ssh get@&lt;host&gt;</code> command — so the
+      after the cluster host it reads from your <code>ssh get@&lt;host&gt;</code> command - so the
       wizard below is really just the fallback when no profile exists yet. Install from several
       clusters and each gets its own profile.
     </p>
     <ul>
       <li><strong>No profile</strong> → a short wizard asks for a name, the cluster host and the agent port (default <code>2222</code>), saves the profile and uses it immediately.</li>
       <li><strong>One profile</strong> → used as is (plug prints which one, for transparency).</li>
-      <li><strong>Several profiles</strong> → interactive numbered choice — or skip the question with <code>-p &lt;name&gt;</code>.</li>
+      <li><strong>Several profiles</strong> → interactive numbered choice - or skip the question with <code>-p &lt;name&gt;</code>.</li>
     </ul>
 
     <app-code lang="text">$ plug -s my-app:8080:3000 npm run start:dev
-[plug] no profile in /Users/you/.plug — let's create one
+[plug] no profile in /Users/you/.plug - let's create one
 profile name [default]:
 cluster host: swarm-node.example.com
 agent port [2222]:
@@ -36,7 +36,7 @@ agent port [2222]:
 [plug] running your command</app-code>
 
     <h3>The profile file</h3>
-    <p>Created by the wizard, editable by hand — just a host and a port:</p>
+    <p>Created by the wizard, editable by hand - just a host and a port:</p>
     <app-code lang="text"># ~/.plug/staging.conf
 host = swarm-node.example.com
 port = 2222</app-code>
@@ -53,23 +53,23 @@ port = 2222</app-code>
 
     <h3>Several clusters at once</h3>
     <p>
-      Run the same process against two clusters in parallel — each stays isolated:
+      Run the same process against two clusters in parallel - each stays isolated:
     </p>
-    <app-code lang="bash">plug -p prod    -s my-app:8080:3000 npm run start   # → cluster prod
+    <app-code lang="bash">plug -p prod -s my-app:8080:3000 npm run start   # → cluster prod
 plug -p staging -s my-app:8080:3000 npm run start   # → cluster staging, side by side</app-code>
     <p>How plug keeps parallel clusters apart differs by OS:</p>
     <ul>
       <li>
-        <strong>Linux</strong> — each launch runs in its own <strong>mount namespace</strong> with a
+        <strong>Linux</strong> - each launch runs in its own <strong>mount namespace</strong> with a
         private resolver, so two launches never share DNS: isolation for free.
       </li>
       <li>
-        <strong>Windows</strong> — the SYSTEM service holds <strong>one tunnel per cluster</strong>
+        <strong>Windows</strong> - the SYSTEM service holds <strong>one tunnel per cluster</strong>
         and attributes each connection to the right one <strong>at <code>connect()</code></strong>,
         walking the process back to the <code>plug -p</code> that launched it (PID-at-connect).
       </li>
       <li>
-        <strong>macOS</strong> — the <strong>same PID-at-connect design</strong> as Windows: the global
+        <strong>macOS</strong> - the <strong>same PID-at-connect design</strong> as Windows: the global
         daemon holds one tunnel per cluster and routes each flow to the right one at
         <code>connect()</code> (proven simultaneously in CI).
       </li>
@@ -85,27 +85,27 @@ plug test [profile]      # check an agent is reachable (prints its version)
 plug rn default prod     # rename a profile (alias: plug mv)
 plug rm staging          # remove a profile</app-code>
     <p>
-      <code>plug test</code> connects to the agent and reports its version — handy to confirm a
+      <code>plug test</code> connects to the agent and reports its version - handy to confirm a
       cluster is reachable before running your app.
     </p>
 
     <h3>One-shot, without a profile</h3>
     <p>
       Point plug straight at a cluster with <code>--host</code> (and <code>--port</code> if it isn't
-      <code>2222</code>) — handy for a quick try or for CI. It overrides the selected profile for
+      <code>2222</code>) - handy for a quick try or for CI. It overrides the selected profile for
       that one run:
     </p>
     <app-code lang="bash">plug --host swarm-node.example.com --port 2222 -s my-app:8080:3000 npm run start:dev</app-code>
 
-    <h3>Versions — the launcher model</h3>
+    <h3>Versions - the launcher model</h3>
     <p>
       plug is a small <strong>launcher</strong>, like <code>nvm</code> or <code>rustup</code>. The
       binary on your <code>PATH</code> does almost nothing itself: on each run it asks the agent
       which version it speaks, then executes <em>that exact version</em> from
-      <code>~/.plug/versions/</code> — downloading it once from the cluster if missing.
+      <code>~/.plug/versions/</code> - downloading it once from the cluster if missing.
     </p>
     <ul>
-      <li><strong>Each cluster runs its own version.</strong> A cluster on 1.1 and one on 1.3 both work — no in-place replacement, no upgrade churn on the binary you installed.</li>
+      <li><strong>Each cluster runs its own version.</strong> A cluster on 1.1 and one on 1.3 both work - no in-place replacement, no upgrade churn on the binary you installed.</li>
       <li><strong>Correct by construction.</strong> The CLI can never drift from the agent it talks to, because it literally runs the agent's version.</li>
       <li><strong>Cheap.</strong> Cached binaries are a few MB each; the first connect to a new version pays one small download.</li>
     </ul>
@@ -113,7 +113,7 @@ plug rm staging          # remove a profile</app-code>
 plug versions        # launcher + every cached cluster version</app-code>
     <p>
       The launcher itself almost never needs updating: the download protocol it speaks to the agent
-      (<code>version</code> + <code>&lt;os-arch&gt;</code>) is frozen — if it ever must change, just
+      (<code>version</code> + <code>&lt;os-arch&gt;</code>) is frozen - if it ever must change, just
       reinstall it from the cluster.
     </p>
   `,

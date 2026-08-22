@@ -15,7 +15,7 @@ import { CodeComponent } from '../code/code.component';
 
     <h3>Running a command</h3>
     <p>
-      One invocation shape, two stances — a process either <strong>serves a name</strong> in the
+      One invocation shape, two stances - a process either <strong>serves a name</strong> in the
       cluster or is a <strong>pure client</strong> of it (one or the other, never neither):
     </p>
     <app-code lang="bash">plug [-p profile] -s my-app:8080:3000 npm run start:dev   # a service: the cluster calls it by name
@@ -54,7 +54,7 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
         <td><code>plug update [-p profile] [&lt;tag&gt;]</code></td>
         <td>
           the agent refreshes itself from its registry, then this launcher from the agent.
-          A tag <strong>switches the channel</strong> the deployment follows —
+          A tag <strong>switches the channel</strong> the deployment follows -
           <code>tag</code> for the newest release, <code>latest</code> for the latest stream, or a
           branch tag such as <code>feat-09</code>. The agent checks the tag exists before
           repointing anything.
@@ -75,7 +75,7 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
         <td><code>plug version [-p profile]</code></td>
         <td>
           bare: this launcher's version; with a profile (or <code>-H</code>): that cluster
-          <em>agent's</em> version — one bare value, script-friendly
+          <em>agent's</em> version - one bare value, script-friendly
         </td>
         <td><a routerLink="/profiles">Versions</a></td>
       </tr>
@@ -91,7 +91,7 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
       </tr>
       <tr>
         <td><code>plug uninstall</code></td>
-        <td>remove plug from this machine (binary, cache, profiles — it lists, you confirm)</td>
+        <td>remove plug from this machine (binary, cache, profiles - it lists, you confirm)</td>
         <td></td>
       </tr>
     </table>
@@ -118,14 +118,14 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
         <td>
           serve this process under a cluster name for the session (repeatable; a deployed owner of
           the name is parked, then restored). <code>local-port</code> may be a
-          <strong>name</strong> instead of a number — plug then picks a free port per session and
+          <strong>name</strong> instead of a number - plug then picks a free port per session and
           writes it into your command wherever <code>&#123;NAME&#125;</code> appears
         </td>
         <td><a routerLink="/getting-started">Getting started</a></td>
       </tr>
       <tr>
         <td><code>-c, --client</code></td>
-        <td>pure consumer — nothing named, no port reserved on the agent</td>
+        <td>pure consumer - nothing named, no port reserved on the agent</td>
         <td><a routerLink="/getting-started">Getting started</a></td>
       </tr>
       <tr>
@@ -137,9 +137,9 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
 
     <h3>Rarely needed</h3>
     <ul>
-      <li><code>plug down</code> — tear down plug's background state now (it does so by itself ~30&nbsp;s after the last session; this is the impatient path). It is never needed to pick up a new version — closing your sessions is — and a resolver left stale by a datapath that died is repaired by <code>plug doctor --fix</code>.</li>
-      <li><code>plug install-service</code> / <code>plug remove-service</code> — Windows only: create/remove the datapath service (one elevated run; the <a routerLink="/getting-started">installer</a> already does it).</li>
-      <li><code>plug init</code> — run the profile wizard explicitly (it runs by itself when no profile exists).</li>
+      <li><code>plug down</code> - tear down plug's background state now (it does so by itself ~30&nbsp;s after the last session; this is the impatient path). It is never needed to pick up a new version - closing your sessions is - and a resolver left stale by a datapath that died is repaired by <code>plug doctor --fix</code>.</li>
+      <li><code>plug install-service</code> / <code>plug remove-service</code> - Windows only: create/remove the datapath service (one elevated run; the <a routerLink="/getting-started">installer</a> already does it).</li>
+      <li><code>plug init</code> - run the profile wizard explicitly (it runs by itself when no profile exists).</li>
     </ul>
   `,
 })

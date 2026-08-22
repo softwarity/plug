@@ -76,19 +76,19 @@ interface Hole {
   template: `
     <h2>Coverage matrix</h2>
     <p class="lead">
-      What works where, and where the holes are — features × OS. One process run
+      What works where, and where the holes are - features × OS. One process run
       <strong>as if it were inside the cluster</strong>, via a userspace TUN over an SSH tunnel.
     </p>
     <p class="snap">snapshot {{ snapshot }} · CI re-proves install → grid → multicluster → reverse path → takeover → crash-recovery on every push, on 3 OSes × 3 cluster families (compose, Swarm, Kubernetes); rows noted <em>bench</em> are runtime-proven locally, not yet in CI</p>
 
     <div class="legend">
       <span><i class="dot d-ok">✓</i> works (proven at runtime)</span>
-      <span><i class="dot d-warn">!</i> partial — not yet e2e-validated</span>
+      <span><i class="dot d-warn">!</i> partial - not yet e2e-validated</span>
       <span><i class="dot d-no">✕</i> not yet</span>
-      <span><i class="dot d-na">–</i> n/a by design</span>
+      <span><i class="dot d-na">-</i> n/a by design</span>
     </div>
 
-    <h3>Biggest holes — priority order</h3>
+    <h3>Biggest holes - priority order</h3>
     <div class="holes">
       @for (h of holes; track h.t; let i = $index) {
         <div class="hole" [style.--sev]="h.sev === 'no' ? 'var(--cov-no)' : 'var(--cov-warn)'">
@@ -139,8 +139,8 @@ interface Hole {
       <strong>How this matrix is proven.</strong> Every CI run installs plug FROM the cluster on
       all three OSes (the real one-liners and privilege grants), runs the 4-language ×
       8-protocol grid natively over a mesh, and asserts simultaneous multicluster, outage
-      recovery, env passthrough, the reverse direction (a cluster workload — and an
-      external caller through a published gateway — reaches a runner-served name) and
+      recovery, env passthrough, the reverse direction (a cluster workload - and an
+      external caller through a published gateway - reaches a runner-served name) and
       launcher/core version compat. See
       <a routerLink="/how-it-works">How it works</a>
       and the <a routerLink="/roadmap">roadmap</a>.
@@ -152,14 +152,14 @@ export class CoverageComponent {
   protected readonly os = ['Linux', 'macOS', 'Windows'];
 
   protected glyph(s: St): string {
-    return { ok: '✓', warn: '!', no: '✕', na: '–' }[s];
+    return { ok: '✓', warn: '!', no: '✕', na: '-' }[s];
   }
 
   protected readonly holes: Hole[] = [
     {
       sev: 'warn',
       t: 'Windows under a real corporate VPN client',
-      d: 'What a VPN does to DNS is now proven in CI on all three OSes: the selftest fabricates an extra adapter carrying a resolver that knows a name nothing else knows, and asserts plug follows it — and follows it back down when the VPN goes away. What no CI runner can bring is a real corporate client: split-tunnel routing, Windows conditional-DNS (NRPT) rules pushed by policy, MTU, and clients that intercept DNS on a loopback address. Everything else on Windows is proven in CI, including self-heal.',
+      d: 'What a VPN does to DNS is now proven in CI on all three OSes: the selftest fabricates an extra adapter carrying a resolver that knows a name nothing else knows, and asserts plug follows it - and follows it back down when the VPN goes away. What no CI runner can bring is a real corporate client: split-tunnel routing, Windows conditional-DNS (NRPT) rules pushed by policy, MTU, and clients that intercept DNS on a loopback address. Everything else on Windows is proven in CI, including self-heal.',
     },
     {
       sev: 'warn',
@@ -188,16 +188,16 @@ export class CoverageComponent {
         { feat: 'Cluster-name DNS (real apps)', os: ['ok', 'ok', 'ok'], note: 'private resolv.conf · scutil store · WinTUN search-suffix + NRPT' },
         { feat: 'Single-label name via <code>getaddrinfo</code>', os: ['ok', 'ok', 'ok'], note: 'the real app path; Windows needs the <code>.plug</code> search suffix to issue a DNS query' },
         { feat: 'Works under a corporate VPN', os: ['ok', 'ok', 'warn'], note: 'macOS proven w/ GlobalProtect; a real Windows corporate client is still unproven (split-tunnel, NRPT-by-policy)' },
-        { feat: 'Follows the resolver when a VPN comes up, drops, or the network changes', os: ['ok', 'ok', 'ok'], note: 'the servers are not a startup fact — <b>in CI on all three OSes</b>: the selftest fabricates a VPN (an extra adapter carrying a resolver that knows a name nothing else knows) and asserts that name resolves <i>through plug</i>, then stops when the VPN goes away. Includes what a VPN does not cause: on macOS one network service serves every SSID, so changing Wi-Fi moves the resolvers without moving the service. <code>plug doctor</code> reports where lookups actually go' },
+        { feat: 'Follows the resolver when a VPN comes up, drops, or the network changes', os: ['ok', 'ok', 'ok'], note: 'the servers are not a startup fact - <b>in CI on all three OSes</b>: the selftest fabricates a VPN (an extra adapter carrying a resolver that knows a name nothing else knows) and asserts that name resolves <i>through plug</i>, then stops when the VPN goes away. Includes what a VPN does not cause: on macOS one network service serves every SSID, so changing Wi-Fi moves the resolvers without moving the service. <code>plug doctor</code> reports where lookups actually go' },
         { feat: 'Every runtime (Node/JVM/Py/Go/gRPC)', os: ['ok', 'ok', 'ok'], note: 'IP-level capture, socket never touched' },
         { feat: 'Native selftest (datapath proof)', os: ['ok', 'ok', 'ok'], note: 'green on all three in CI' },
-        { feat: 'e2e protocol matrix (8 protos × 4 langs)', os: ['ok', 'ok', 'ok'], note: 'native over a Tailscale mesh, against all THREE cluster families — compose, Swarm and Kubernetes (kind) — the same by-name path on Linux, macOS and Windows' },
-        { feat: 'Split-horizon (short→cluster, FQDN→direct)', os: ['ok', 'ok', 'ok'], note: 'decided by the shape of the name — no config' },
-        { feat: 'Reverse: serve a local port to the cluster (<code>-s</code>)', os: ['ok', 'ok', 'ok'], note: 'sshd remote-forward — a cluster workload fetches the runner in CI, path self-verified at startup; re-arm after reconnect <b>in CI</b> (the resilience cell restarts the agent mid-session)' },
-        { feat: 'Reverse: external caller → published gateway → runner (HTTP)', os: ['ok', 'ok', 'ok'], note: 'a POST to a PUBLISHED cluster gateway calls a <code>-s</code> name that lands on the runner\'s local sink; the correlation id AND the full request path round-trip back (root and a deep path) — the API-gateway use case, proven from outside the cluster' },
-        { feat: '<code>-s</code> name provisioned dynamically (no redeploy)', os: ['ok', 'ok', 'ok'], note: 'CI serves a name declared nowhere, from a linux/mac/win client, on all three backends: docker-sock signpost container (Compose), Swarm-service signpost on a <b>non-attachable overlay</b> (Swarm), Service through the Services-only RBAC (k8s) — created &amp; torn down per session, swept on agent restart' },
-        { feat: 'Takeover of a deployed name (default)', os: ['ok', 'ok', 'ok'], note: 'a deployed workload owning a <code>-s</code> name is parked for the session and restored on exit — <b>all three backends in CI</b>: containers stopped (Compose), Swarm service scaled to 0 &amp; back to its <b>original replica count</b> (the CI target runs 2), k8s Service repointed via annotation receipt (ClusterIP identical through park/restore). Another session\'s name stays refused. Boot-gc restore after an agent crash AND the re-park on reconnect are <b>in CI</b> (resilience cell)' },
-        { feat: 'Self-heal (VPN / sleep / agent restart)', os: ['ok', 'ok', 'ok'], note: 'keepalive times out a zombie connection then reconnects &amp; re-provisions — <b>in CI on all three OSes</b>: the resilience cell restarts the agent mid-session and traffic re-parks in seconds (boot-gc restores, the reconnect re-arms)' },
+        { feat: 'e2e protocol matrix (8 protos × 4 langs)', os: ['ok', 'ok', 'ok'], note: 'native over a Tailscale mesh, against all THREE cluster families - compose, Swarm and Kubernetes (kind) - the same by-name path on Linux, macOS and Windows' },
+        { feat: 'Split-horizon (short→cluster, FQDN→direct)', os: ['ok', 'ok', 'ok'], note: 'decided by the shape of the name - no config' },
+        { feat: 'Reverse: serve a local port to the cluster (<code>-s</code>)', os: ['ok', 'ok', 'ok'], note: 'sshd remote-forward - a cluster workload fetches the runner in CI, path self-verified at startup; re-arm after reconnect <b>in CI</b> (the resilience cell restarts the agent mid-session)' },
+        { feat: 'Reverse: external caller → published gateway → runner (HTTP)', os: ['ok', 'ok', 'ok'], note: 'a POST to a PUBLISHED cluster gateway calls a <code>-s</code> name that lands on the runner\'s local sink; the correlation id AND the full request path round-trip back (root and a deep path) - the API-gateway use case, proven from outside the cluster' },
+        { feat: '<code>-s</code> name provisioned dynamically (no redeploy)', os: ['ok', 'ok', 'ok'], note: 'CI serves a name declared nowhere, from a linux/mac/win client, on all three backends: docker-sock signpost container (Compose), Swarm-service signpost on a <b>non-attachable overlay</b> (Swarm), Service through the Services-only RBAC (k8s) - created &amp; torn down per session, swept on agent restart' },
+        { feat: 'Takeover of a deployed name (default)', os: ['ok', 'ok', 'ok'], note: 'a deployed workload owning a <code>-s</code> name is parked for the session and restored on exit - <b>all three backends in CI</b>: containers stopped (Compose), Swarm service scaled to 0 &amp; back to its <b>original replica count</b> (the CI target runs 2), k8s Service repointed via annotation receipt (ClusterIP identical through park/restore). Another session\'s name stays refused. Boot-gc restore after an agent crash AND the re-park on reconnect are <b>in CI</b> (resilience cell)' },
+        { feat: 'Self-heal (VPN / sleep / agent restart)', os: ['ok', 'ok', 'ok'], note: 'keepalive times out a zombie connection then reconnects &amp; re-provisions - <b>in CI on all three OSes</b>: the resilience cell restarts the agent mid-session and traffic re-parks in seconds (boot-gc restores, the reconnect re-arms)' },
       ],
     },
     {
@@ -210,14 +210,14 @@ export class CoverageComponent {
       ],
     },
     {
-      title: 'Multicluster — different clusters at once',
+      title: 'Multicluster - different clusters at once',
       rows: [
-        { feat: 'Simultaneous different clusters', os: ['ok', 'ok', 'ok'], note: 'proven simultaneously in CI on all three — mount-ns · daemon · SYSTEM service' },
-        { feat: 'PID-at-connect attribution', os: ['na', 'ok', 'ok'], note: '<code>multiDial</code> shared — proven in CI on macOS and Windows (2 live clusters, same name, right backend)' },
+        { feat: 'Simultaneous different clusters', os: ['ok', 'ok', 'ok'], note: 'proven simultaneously in CI on all three - mount-ns · daemon · SYSTEM service' },
+        { feat: 'PID-at-connect attribution', os: ['na', 'ok', 'ok'], note: '<code>multiDial</code> shared - proven in CI on macOS and Windows (2 live clusters, same name, right backend)' },
         { feat: 'ppidOf', os: ['ok', 'ok', 'ok'], note: '/proc · ps · ToolHelp (unit-tested)', sub: true },
         { feat: 'pidForLocalPort', os: ['ok', 'ok', 'ok'], note: '/proc/net · lsof · GetExtendedTcpTable (unit-tested)', sub: true },
-        { feat: 'procStart (recycle guard)', os: ['ok', 'ok', 'ok'], note: 'ps lstart · /proc stat · GetProcessTimes — rejects a reused PID', sub: true },
-        { feat: 'N-tunnel global daemon', os: ['na', 'ok', 'ok'], note: 'one tunnel per cluster in the daemon/service — proven simultaneously in CI (2 live clusters)' },
+        { feat: 'procStart (recycle guard)', os: ['ok', 'ok', 'ok'], note: 'ps lstart · /proc stat · GetProcessTimes - rejects a reused PID', sub: true },
+        { feat: 'N-tunnel global daemon', os: ['na', 'ok', 'ok'], note: 'one tunnel per cluster in the daemon/service - proven simultaneously in CI (2 live clusters)' },
       ],
     },
     {
@@ -233,9 +233,9 @@ export class CoverageComponent {
       title: 'Agent deployment',
       flat: true,
       rows: [
-        { feat: 'Docker Compose / Swarm', st: 'ok', note: 'agent image joins the stack network — both in CI (Swarm: a real single-node swarm, the agent as a Swarm service on a non-attachable overlay)' },
-        { feat: 'Kubernetes — NodePort', st: 'ok', note: '<code>deploy/plug-k8s.yaml</code> applied as published (kind) — the CI legs install and run through it on every push' },
-        { feat: 'Kubernetes — kubectl port-forward', st: 'ok', note: 'zero exposed port, API-server RBAC — the k8s cluster job answers the agent contract through a live port-forward on every push' },
+        { feat: 'Docker Compose / Swarm', st: 'ok', note: 'agent image joins the stack network - both in CI (Swarm: a real single-node swarm, the agent as a Swarm service on a non-attachable overlay)' },
+        { feat: 'Kubernetes - NodePort', st: 'ok', note: '<code>deploy/plug-k8s.yaml</code> applied as published (kind) - the CI legs install and run through it on every push' },
+        { feat: 'Kubernetes - kubectl port-forward', st: 'ok', note: 'zero exposed port, API-server RBAC - the k8s cluster job answers the agent contract through a live port-forward on every push' },
         { feat: 'Cross-namespace', st: 'ok', note: 'via FQDN <code>svc.othernamespace</code>' },
       ],
     },

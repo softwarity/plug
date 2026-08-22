@@ -182,20 +182,20 @@ import { MatIconModule } from '@angular/material/icon';
 
     <p>
       <strong>plug</strong> runs a process on your machine as a
-      <strong>full member of your cluster</strong> — in both directions. Your process reaches
+      <strong>full member of your cluster</strong> - in both directions. Your process reaches
       cluster services by their real names, and it is itself reachable from inside the cluster under
-      a name. No code change, no proxy configuration — you just prefix your usual command:
+      a name. No code change, no proxy configuration - you just prefix your usual command:
     </p>
 
     <app-code lang="text">plug -s my-app:8080:3000 npm run start:dev</app-code>
 
     <div class="diagram">
-      <img src="assets/about-diagram.svg" alt="plug in two animated rounds: the browser's GET data is served by the deployed service1, then plug parks it and the same request is served by your machine — which also queries postgres by name." />
+      <img src="assets/about-diagram.svg" alt="plug in two animated rounds: the browser's GET data is served by the deployed service1, then plug parks it and the same request is served by your machine - which also queries postgres by name." />
     </div>
     <p class="cap">
       One SSH tunnel carries both directions: your process reaches the cluster by name, and the
       cluster reaches your process by the name you serve with <code>-s</code>. Already deployed?
-      plug <strong>parks</strong> the in-cluster <code>service1</code> for the session — your
+      plug <strong>parks</strong> the in-cluster <code>service1</code> for the session - your
       process takes its place, and it is restored when the session ends.
     </p>
 
@@ -203,21 +203,21 @@ import { MatIconModule } from '@angular/material/icon';
       <div class="dir">
         <span class="dir-tag out">outbound</span><br />
         <strong>Reach the cluster by name.</strong> Your process addresses
-        <code>postgres</code>, <code>my-service:8080</code> — the same names any workload inside
+        <code>postgres</code>, <code>my-service:8080</code> - the same names any workload inside
         uses. No port-forwards, no <code>localhost:PORT</code> mappings. Only consuming (a DB
         tool, a one-off script)? That's <code>plug -c</code>.
       </div>
       <div class="dir">
         <span class="dir-tag in">inbound</span><br />
         <strong>Be reachable by name.</strong> With <code>-s</code>, a name you serve is reachable
-        from inside the cluster — a gateway, another service, or a browser through the ingress lands
+        from inside the cluster - a gateway, another service, or a browser through the ingress lands
         on your machine. No name pre-declared, no redeploy.
       </div>
     </div>
 
     <div class="callout">
       <strong>Two pieces.</strong> A tiny <a routerLink="/swarm">agent container</a> (Alpine + sshd)
-      deployed once on the cluster — and a single static <code>plug</code> binary on each dev
+      deployed once on the cluster - and a single static <code>plug</code> binary on each dev
       machine. Set up once per cluster; after that, day-to-day runs need no sudo or admin.
     </div>
 
@@ -226,22 +226,22 @@ import { MatIconModule } from '@angular/material/icon';
       <a routerLink="/how-it-works" class="feature-card">
         <mat-icon class="feature-icon">dns</mat-icon>
         <span class="feature-title">Names, resolved cluster-side</span>
-        <span class="feature-desc">Address <code>my-service:8080</code> by its real name — no <code>localhost:PORT</code> mappings, no <code>/etc/hosts</code> edits.</span>
+        <span class="feature-desc">Address <code>my-service:8080</code> by its real name - no <code>localhost:PORT</code> mappings, no <code>/etc/hosts</code> edits.</span>
       </a>
       <a routerLink="/how-it-works" class="feature-card">
         <mat-icon class="feature-icon">all_inclusive</mat-icon>
         <span class="feature-title">Every runtime, unchanged</span>
-        <span class="feature-desc">Traffic is captured at the IP layer, so your app's socket is never touched — Node, the JVM, Python, <strong>Go</strong>, curl, gRPC, DB drivers all just work.</span>
+        <span class="feature-desc">Traffic is captured at the IP layer, so your app's socket is never touched - Node, the JVM, Python, <strong>Go</strong>, curl, gRPC, DB drivers all just work.</span>
       </a>
       <a routerLink="/how-it-works" class="feature-card">
         <mat-icon class="feature-icon">swap_horiz</mat-icon>
         <span class="feature-title">Reachable from the cluster</span>
-        <span class="feature-desc"><code>-s</code> publishes a local port under a cluster name — a gateway or workload reaches your process, for the session. A deployed service owning the name is <strong>parked</strong> meanwhile, restored on exit.</span>
+        <span class="feature-desc"><code>-s</code> publishes a local port under a cluster name - a gateway or workload reaches your process, for the session. A deployed service owning the name is <strong>parked</strong> meanwhile, restored on exit.</span>
       </a>
       <a routerLink="/profiles" class="feature-card">
         <mat-icon class="feature-icon">hub</mat-icon>
         <span class="feature-title">Several clusters at once</span>
-        <span class="feature-desc">Run the same process against two clusters in parallel — each session stays isolated.</span>
+        <span class="feature-desc">Run the same process against two clusters in parallel - each session stays isolated.</span>
       </a>
       <a routerLink="/swarm" class="feature-card">
         <mat-icon class="feature-icon">devices</mat-icon>
@@ -251,18 +251,18 @@ import { MatIconModule } from '@angular/material/icon';
       <a routerLink="/security" class="feature-card">
         <mat-icon class="feature-icon">shield</mat-icon>
         <span class="feature-title">Honest security model</span>
-        <span class="feature-desc">Deliberately auth-less, for trusted dev clusters — read the model before deploying.</span>
+        <span class="feature-desc">Deliberately auth-less, for trusted dev clusters - read the model before deploying.</span>
       </a>
     </section>
 
     <h3>How plug compares</h3>
     <p>
-      plug isn't the only way to run local code against a remote cluster —
+      plug isn't the only way to run local code against a remote cluster -
       <a href="https://metalbear.com/mirrord/" target="_blank" rel="noopener">mirrord</a> and
       <a href="https://telepresence.io/" target="_blank" rel="noopener">Telepresence</a> are the
       well-known <strong>Kubernetes-native</strong> tools, more mature on Kubernetes and on team
       workflows. plug's angle is different: it works the same on Docker, Compose, Swarm
-      <em>and</em> Kubernetes, it is fully open source, and it is deliberately simple — and
+      <em>and</em> Kubernetes, it is fully open source, and it is deliberately simple - and
       auth-less, so only for dev clusters you trust.
     </p>
     <div class="cmp">
@@ -276,19 +276,19 @@ import { MatIconModule } from '@angular/material/icon';
           <tr><td>Both directions</td><td>reach by name + be reachable by name</td><td>steal / mirror incoming + outbound context</td><td>intercept incoming + outbound</td></tr>
           <tr><td>Any runtime, no code change</td><td>✓ (IP layer)</td><td>✓</td><td>✓</td></tr>
           <tr><td>Cluster-side</td><td>one agent container</td><td>none (uses your kubeconfig)</td><td>traffic-manager install</td></tr>
-          <tr><td>Auth</td><td>none — trusted dev cluster</td><td>your kubeconfig / RBAC</td><td>your kubeconfig / RBAC</td></tr>
+          <tr><td>Auth</td><td>none - trusted dev cluster</td><td>your kubeconfig / RBAC</td><td>your kubeconfig / RBAC</td></tr>
           <tr><td>Per-dev isolation on a shared service</td><td>one name, one session</td><td>Operator (header / queue split)</td><td>intercept filtering (header / path)</td></tr>
           <tr><td>Price</td><td><strong>Free · FSL-1.1</strong></td><td>Free OSS · $40/seat/mo Teams · Enterprise custom</td><td>Free OSS · paid cloud features</td></tr>
         </tbody>
       </table>
     </div>
     <p class="cmp-note">
-      <strong>Why plug:</strong> it brings the cluster onto your own machine — you build your service
+      <strong>Why plug:</strong> it brings the cluster onto your own machine - you build your service
       exactly as if it lived inside the stack, calling the others by their real names and answering
       to its own name when they call back, with no code change. And, above all,
       <strong>it works the same everywhere</strong>: Docker, Compose, Swarm <em>and</em> Kubernetes,
-      on Linux, macOS and Windows — where mirrord and Telepresence stop at Kubernetes. Fully open
-      source, no paid tier, just one tiny agent — and because it captures at the IP layer, every
+      on Linux, macOS and Windows - where mirrord and Telepresence stop at Kubernetes. Fully open
+      source, no paid tier, just one tiny agent - and because it captures at the IP layer, every
       runtime works unchanged, Go and gRPC included.
     </p>
 

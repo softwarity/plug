@@ -27,8 +27,8 @@ import { MatIconModule } from '@angular/material/icon';
     <h2>Roadmap</h2>
 
     <div class="callout">
-      <strong>How we got here.</strong> plug went through a few data paths — sshuttle, then userspace
-      proxies with an injected <code>connect()</code>/DNS hook — before settling on today's
+      <strong>How we got here.</strong> plug went through a few data paths - sshuttle, then userspace
+      proxies with an injected <code>connect()</code>/DNS hook - before settling on today's
       <strong>userspace TUN</strong>. Answering DNS in-stack and capturing at the IP layer is what
       finally made it work under a corporate VPN <em>and</em> cover every runtime (Go and gRPC
       included) with no per-service config, while keeping several clusters isolated. See
@@ -40,29 +40,29 @@ import { MatIconModule } from '@angular/material/icon';
       The agent already runs on Kubernetes (a <a routerLink="/kubernetes">manifest</a> with a NodePort, or
       <code>kubectl port-forward</code> for an RBAC-gated tunnel with no exposed port). Planned next:
       a <code>kubectl exec</code> transport (tunnel through <code>kubectl exec</code> to a plain pod:
-      zero exposed port, access governed by each developer's kubeconfig RBAC — which also softens the
+      zero exposed port, access governed by each developer's kubeconfig RBAC - which also softens the
       <a routerLink="/security">no-auth trade-off</a>).
     </p>
 
     <h3>UDP by name</h3>
     <p>
-      The tunnel carries <strong>TCP only</strong> — SSH's <code>direct-tcpip</code> is stream-only,
+      The tunnel carries <strong>TCP only</strong> - SSH's <code>direct-tcpip</code> is stream-only,
       so UDP to a cluster service is not forwarded today (DNS is the exception, answered in-stack;
       see <a routerLink="/how-it-works">How it works</a>). Planned: a <strong>datagram relay</strong>.
-      The agent gains a small <code>udp-relay</code> helper — invoked over SSH exactly like the
-      <code>-s</code> provisioning — while plug frames datagrams over a channel and pumps them both
+      The agent gains a small <code>udp-relay</code> helper - invoked over SSH exactly like the
+      <code>-s</code> provisioning - while plug frames datagrams over a channel and pumps them both
       ways, reusing the same by-name lookup and per-cluster attribution as TCP. The trade-off is
       honest: datagrams then ride a reliable, ordered stream (with head-of-line blocking), which fits
       DNS-over-UDP, StatsD, syslog and request/response UDP, but not real-time media. QUIC and HTTP/3
-      (UDP-based) would stop being silently dropped — though most clients already fall back to TCP.
+      (UDP-based) would stop being silently dropped - though most clients already fall back to TCP.
       Landing first, on its own: cluster UDP that is dropped today fails <em>silently</em> (it looks
-      like a hang) — plug will <strong>log</strong> it instead, so it fails loud.
+      like a hang) - plug will <strong>log</strong> it instead, so it fails loud.
     </p>
 
     <h3>API-gateway integration</h3>
     <p>
       The end game: no dedicated agent at all. The (Java) API gateway already deployed in the
-      cluster hosts the tunnel endpoint and turns it on and off dynamically — dev tooling that
+      cluster hosts the tunnel endpoint and turns it on and off dynamically - dev tooling that
       piggybacks on infrastructure you already trust, with the gateway's own authentication in
       front. The install and versioning contract already exists (see below); the gateway will
       simply expose the same surface, so the CLI will not need to relearn anything. That gateway is
@@ -72,14 +72,14 @@ import { MatIconModule } from '@angular/material/icon';
 
     <div class="callout">
       <strong>Shipped already:</strong> installing the CLI from the cluster and per-cluster version
-      matching were on this roadmap — they now work over the agent's SSH port. The passwordless
+      matching were on this roadmap - they now work over the agent's SSH port. The passwordless
       <code>get</code> user serves an installer (<code>ssh get&#64;host install | sh</code>), and the
       <a routerLink="/profiles">launcher</a> runs each cluster's exact version. No GitHub access
       required, no extra port, no HTTP server.
     </div>
 
     <div class="callout">
-      <strong>No Homebrew tap, by design.</strong> plug is distributed <em>from the cluster</em> —
+      <strong>No Homebrew tap, by design.</strong> plug is distributed <em>from the cluster</em> -
       the agent image is the single source of the CLI (<code>ssh get&#64;host install | sh</code>).
       A separate package channel (brew, apt…) would be a second source to keep in sync, so it is a
       deliberate non-goal.
@@ -89,8 +89,8 @@ import { MatIconModule } from '@angular/material/icon';
     <p>
       A session prints what it does and otherwise stays out of the way, which leaves two questions
       unanswered while it runs: <em>is my name actually reachable right now</em>, and <em>what is
-      that other session of mine still holding</em>. Planned: a separate command —
-      <code>plug status</code> — listing the sessions alive on this machine, the names they serve
+      that other session of mine still holding</em>. Planned: a separate command -
+      <code>plug status</code> - listing the sessions alive on this machine, the names they serve
       and the state of each path, plus verbs to act on one (stop it, re-provision its name) from
       any terminal.
     </p>
@@ -100,7 +100,7 @@ import { MatIconModule } from '@angular/material/icon';
       reads <code>rs</code>, a REPL reads everything. Any key plug claimed would be a key stolen
       from the program it launched, and there is no key that is free across every runtime someone
       might run under it. An out-of-band command has none of that problem, works from a terminal
-      you still have, and — unlike a keystroke — reaches the session whose terminal you closed.
+      you still have, and - unlike a keystroke - reaches the session whose terminal you closed.
     </p>
 
     <h3>Status</h3>
@@ -126,7 +126,7 @@ import { MatIconModule } from '@angular/material/icon';
         <tr><td><code>kubectl exec</code> transport (no exposed port)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
         <tr><td>Gateway hosting the tunnel + install surface (<a href="https://softwarity.github.io/meerkat/" target="_blank" rel="noopener">Meerkat</a>)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
         <tr><td>IPv6 fake-pool + v6-literal tunnelling (overlays are IPv4 today)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
-        <tr><td>UDP by name — framed datagram relay over the tunnel (TCP-only today)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
+        <tr><td>UDP by name - framed datagram relay over the tunnel (TCP-only today)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
         <tr><td>Native protocol e2e on every OS (8 protocols × 4 languages, by name over a mesh)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
       </tbody>
     </table>

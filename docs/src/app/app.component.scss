@@ -22,7 +22,7 @@
   gap: 12px;
   margin-bottom: 24px;
   // The shared <softwarity-projects> menu keeps its (hidden) fly-out submenus in
-  // layout — position:absolute, cascading rightward well past the viewport — which
+  // layout - position:absolute, cascading rightward well past the viewport - which
   // forced a page-wide horizontal scrollbar. Clip the header's horizontal overflow:
   // `clip` (not `hidden`) leaves overflow-y visible so the dropdown still opens
   // downward, and unlike `hidden` it never breaks the sticky sidebar below.

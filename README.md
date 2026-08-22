@@ -10,15 +10,15 @@
 
 Run a local process as a member of your cluster: it resolves cluster service
 names, reaches cluster services, and is itself reachable in the cluster under a
-name — with no code change and no proxy settings in your app.
+name - with no code change and no proxy settings in your app.
 
 ```bash
 plug -s my-app:8080:3000 npm run start:dev
-# reaches cluster services by name — and is itself reachable in the cluster
+# reaches cluster services by name - and is itself reachable in the cluster
 # as my-app:8080, forwarded to its local :3000
 ```
 
-Prefix any command with `plug` and it joins the cluster by name — Node, the
+Prefix any command with `plug` and it joins the cluster by name - Node, the
 JVM, Python, Go, curl, gRPC, database drivers, anything. Stop the command and
 your machine is exactly as it was.
 
@@ -26,11 +26,11 @@ your machine is exactly as it was.
 
 ## What you get
 
-- Reach cluster services by their real names, from your laptop — no port-forwards
+- Reach cluster services by their real names, from your laptop - no port-forwards
   to wire up, no `localhost:PORT` mappings, no `/etc/hosts` edits.
-- Be reachable in the cluster under your own name — workloads call `my-app:8080`
+- Be reachable in the cluster under your own name - workloads call `my-app:8080`
   and land on your local process, for the life of the session.
-- Works with any language or tool, unchanged — your app's sockets are never touched.
+- Works with any language or tool, unchanged - your app's sockets are never touched.
 - Runs on Linux, macOS and Windows.
 - Several clusters at once, side by side.
 - Set up once per cluster, then no sudo or admin for daily use.
@@ -39,16 +39,16 @@ your machine is exactly as it was.
 
 Two pieces: a small agent in the cluster, and the `plug` CLI on each dev machine.
 
-**In the cluster** — add the agent to the stack you want to reach:
+**In the cluster** - add the agent to the stack you want to reach:
 
 ```yaml
 services:
   plug:
     image: docker.io/softwarity/plug:latest
     ports: ["2222:22"]
-    # required — the agent creates your -s name through it (see below)
+    # required - the agent creates your -s name through it (see below)
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+ - /var/run/docker.sock:/var/run/docker.sock
     # Swarm only, for -s: the signpost is a service, so run the agent on a
     # manager (any single-node swarm node IS a manager) as a single replica.
     # Ignored by plain Compose.
@@ -60,13 +60,13 @@ services:
 
 The socket line is **required** on Docker, Compose and Swarm: it is how the
 agent creates your `-s` name. It is root on the host, so mount it only on a
-cluster you trust — the trust plug's no-auth transport already assumes.
+cluster you trust - the trust plug's no-auth transport already assumes.
 Kubernetes needs no socket: the bundled manifest grants a Services-only RBAC
-role instead — see [below](#the-name-in-the-cluster).
+role instead - see [below](#the-name-in-the-cluster).
 
 Standalone agent, or Kubernetes: see the [documentation](https://softwarity.github.io/plug/).
 
-**On your machine** — install straight from the cluster, in one line.
+**On your machine** - install straight from the cluster, in one line.
 
 Linux and macOS:
 
@@ -82,8 +82,8 @@ ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@$
   | bash -s -- $cluster 2222
 ```
 
-The install prepares your machine once — it may ask for your password (or, on
-Windows, to run as Administrator) a single time — so that every later `plug` run
+The install prepares your machine once - it may ask for your password (or, on
+Windows, to run as Administrator) a single time - so that every later `plug` run
 needs no privilege. After that you are ready.
 
 ## Use
@@ -96,7 +96,7 @@ plug -s my-api:8080:8080 ./mvnw spring-boot:run
 `-s name:cluster-port:local-port` is the name your process answers to in the
 cluster; the same session reaches cluster services by name in return. It is
 **required**: in a cluster a running process is a service, and a service has a
-name — so name yours, even when nothing calls it back yet. The first run asks
+name - so name yours, even when nothing calls it back yet. The first run asks
 which cluster to use and remembers it. Reaching another cluster is just naming it:
 
 ```bash
@@ -109,14 +109,14 @@ cached cores no cluster runs any more), `plug uninstall`, `plug about`.
 
 ## Several clusters at once
 
-Run the same process against two clusters in parallel — each stays isolated:
+Run the same process against two clusters in parallel - each stays isolated:
 
 ```bash
-plug -p prod    -s my-app:8080:3000 npm run start
+plug -p prod -s my-app:8080:3000 npm run start
 plug -p staging -s my-app:8080:3000 npm run start
 ```
 
-Supported on all three OSes — proven simultaneously in CI on Linux, macOS and
+Supported on all three OSes - proven simultaneously in CI on Linux, macOS and
 Windows. See the [coverage matrix](https://softwarity.github.io/plug/#/coverage)
 for the details.
 
@@ -124,19 +124,19 @@ for the details.
 
 `-s name:cluster-port:local-port` publishes `name` in the cluster and forwards
 `name:cluster-port` to your machine's `local-port`, for the lifetime of the
-session — **no name pre-declared, no redeploy**. Any workload calling
+session - **no name pre-declared, no redeploy**. Any workload calling
 `http://name:cluster-port` lands on your process. The agent creates the name on
 the fly, which it does per engine:
 
-- **Docker / Compose** — mount the Docker socket on the agent (required). Each
+- **Docker / Compose** - mount the Docker socket on the agent (required). Each
   `-s` spins up a tiny *signpost* container carrying the DNS alias, removed with
   the session.
-- **Swarm** — same socket; the signpost is a Swarm *service*, which joins the
+- **Swarm** - same socket; the signpost is a Swarm *service*, which joins the
   stack's overlay whether or not it is `attachable`, so **no network change**.
   The agent just needs to run on a **manager** node (to create services).
-- **Kubernetes** — no socket: the bundled [manifest](deploy/plug-k8s.yaml) grants
+- **Kubernetes** - no socket: the bundled [manifest](deploy/plug-k8s.yaml) grants
   a Services-only RBAC role, so `-s` creates and deletes the backing Service itself.
-- **No socket, no RBAC** — the agent **refuses to start**, naming what is
+- **No socket, no RBAC** - the agent **refuses to start**, naming what is
   missing. Provisioning is the feature; an agent that cannot do it is a
   deployment mistake, not a degraded mode.
 
@@ -146,16 +146,16 @@ services:
     image: docker.io/softwarity/plug:latest
     ports: ["2222:22"]
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock   # required: the agent creates your -s name
+ - /var/run/docker.sock:/var/run/docker.sock   # required: the agent creates your -s name
 ```
 
-The Docker socket is root on the host — mount it only on a cluster you trust
+The Docker socket is root on the host - mount it only on a cluster you trust
 (the same trust plug's no-auth transport already assumes). plug verifies the
 full path at startup so a missing name fails loud, and the port closes with the
 session.
 
 Developing a service that is **already deployed** in the stack? Its name is
-taken — so plug **takes it over**: the deployed workload is parked for the
+taken - so plug **takes it over**: the deployed workload is parked for the
 session (containers stopped, Swarm service scaled to 0, Kubernetes Service
 repointed) and **restored when the session ends**, replica count included,
 even across an agent restart. Your local process answers the name in its
@@ -164,7 +164,7 @@ live plug session is still refused.
 
 ## Let plug pick the local port
 
-The cluster port is agreed in advance — it is what other workloads dial. The
+The cluster port is agreed in advance - it is what other workloads dial. The
 **local** one is nobody's business but yours, and pinning it is what makes two
 projects fight over `3000`, or the same app refuse to run on two branches at
 once. Name it instead, and plug picks a free one per session:
@@ -173,14 +173,14 @@ once. Name it instead, and plug picks a free one per session:
 plug -s web:8080:PORT  npm run dev -- --port={PORT}
 ```
 
-`PORT` declares (bare — the third field of a `-s` can only ever be a port, so
+`PORT` declares (bare - the third field of a `-s` can only ever be a port, so
 there is nothing to disambiguate), `{PORT}` references it in the command
-(braced — argv is free text, and a bare `PORT` would also rewrite
+(braced - argv is free text, and a bare `PORT` would also rewrite
 `--transport=PORTAL`). Any name works. The mapping is armed on that same
 number, so the cluster reaches `web:8080` whichever port your process landed on
 today.
 
-The command line is the only channel — plug puts nothing in your process's
+The command line is the only channel - plug puts nothing in your process's
 environment. One number, one way to hand it over, and no variable of yours
 quietly overwritten.
 
@@ -191,7 +191,7 @@ Some things this makes easy:
 git worktree add ../hotfix && cd ../hotfix
 plug -s api:8080:PORT ./mvnw spring-boot:run -Dserver.port={PORT}
 
-# One process, two cluster names, one listener — the same name means one port
+# One process, two cluster names, one listener - the same name means one port
 plug -s web:80:PORT -s web-tls:443:PORT node server.js --listen={PORT}
 
 # A shared CI runner, where a pinned port is a race against the other jobs
@@ -199,12 +199,12 @@ plug -s e2e:8080:PORT npm run serve -- --port={PORT}
 ```
 
 The two halves have to match, and plug says so at startup rather than let either
-mistake through — both fail silently otherwise, from opposite ends:
+mistake through - both fail silently otherwise, from opposite ends:
 
 - a `{TOKEN}` nothing declared reaches your command as the literal string
   `{PROT}`, which either crashes it or makes it fall back to a default port the
   cluster is not forwarding to;
-- a name nothing references allocates a port your process is never told about —
+- a name nothing references allocates a port your process is never told about -
   the cluster name gets published, and nothing ever answers it.
 
 Commands that use braces for their own purposes (`awk '{print}'`) are untouched
@@ -226,12 +226,12 @@ switch the channel it follows:
 plug -p neo update tag        # the newest release published
 plug -p neo update latest     # the latest stream
 plug -p neo update feat-09    # a branch's tag, at whatever it points to now
-plug -p neo update 2.3.0      # an exact release — downgrades included
+plug -p neo update 2.3.0      # an exact release - downgrades included
 ```
 
 The tag is checked against the registry before anything is repointed: aiming a
 deployment at a tag nobody published leaves an agent that cannot pull. Release
-and stream are told apart by the tag itself — `x`, `x.y` or `x.y.z` is a
+and stream are told apart by the tag itself - `x`, `x.y` or `x.y.z` is a
 release, anything else moves under you.
 
 ### Being told a version is there
@@ -247,28 +247,28 @@ plug config -p shared update=none   # never look, on one you do not
 ```
 
 `notify` asks, when there is a real terminal to ask in: it says what applying
-costs — rolling the cluster's agent, so every other session on it reconnects —
+costs - rolling the cluster's agent, so every other session on it reconnects -
 the default is no, and it gives up after a few seconds. A script or a CI job
 sees the message and never a question.
 
 The policy belongs to the **profile**, not to the machine, because `auto`
-updates the **agent** — and an agent is shared. You may well govern your own
+updates the **agent** - and an agent is shared. You may well govern your own
 local cluster and have no say over the shared one, so each names its own rule.
 
 `auto` rolls that agent: every session on that cluster drops and reconnects by
 itself, and each one says on the way back that it is now running the older core.
-Nothing local is replaced under a running command — a session keeps the version
+Nothing local is replaced under a running command - a session keeps the version
 it started with, by design, because the core is holding your process. The new one
 is picked up the next time you launch.
 
 A deployment following a moving tag (`latest`, a branch) is checked too, on
-bytes rather than on a number: there is no version to compare — `latest` is
-always called `latest` — so plug asks the registry what that tag points at today
+bytes rather than on a number: there is no version to compare - `latest` is
+always called `latest` - so plug asks the registry what that tag points at today
 and compares it with the digest the agent reports. Different digest, different
 image, and it says so.
 
-When the registry cannot be reached from your machine — a corporate proxy, a VPN
-that splits routes — plug asks the cluster instead, which pulls from that
+When the registry cannot be reached from your machine - a corporate proxy, a VPN
+that splits routes - plug asks the cluster instead, which pulls from that
 registry for a living. An agent too old to know the question stays silent, as
 before.
 
@@ -277,11 +277,11 @@ before.
 Names that are not cluster services are forwarded to the nameservers this machine
 already used, read from the system: `scutil` on macOS, the child's former
 `resolv.conf` on Linux, the adapter table on Windows. Where several are
-configured, they are ranked the way the OS ranks its interfaces — so a corporate
+configured, they are ranked the way the OS ranks its interfaces - so a corporate
 VPN's resolver, the only one that knows your internal names, comes first.
 
 They are not a startup fact. Connect a VPN mid-session, drop it, or move to
-another network, and plug follows — including the case macOS makes invisible,
+another network, and plug follows - including the case macOS makes invisible,
 where changing Wi-Fi network moves the resolvers without moving the network
 service. `plug doctor` reports where lookups are going right now:
 
@@ -296,7 +296,7 @@ your network, so the message is worth reading rather than dismissing.
 ## Limits
 
 It carries TCP reached by name. UDP, QUIC and ping are not tunnelled (most
-clients fall back to TCP), and a hard-coded IPv6 literal is not either — a
+clients fall back to TCP), and a hard-coded IPv6 literal is not either - a
 service reached by name is always fine.
 
 ## Security
@@ -308,24 +308,24 @@ model is in the [documentation](https://softwarity.github.io/plug/#/security).
 
 ## Documentation
 
-Everything else — how it works, deployment on Swarm and Kubernetes, profiles and
+Everything else - how it works, deployment on Swarm and Kubernetes, profiles and
 versions, the security model, and the per-OS coverage matrix:
 
 **https://softwarity.github.io/plug/**
 
 Build from source with `go build -o plug ./cli`. Distribution is from the cluster
-only — the agent image is the single source of the CLI, so there is no separate
+only - the agent image is the single source of the CLI, so there is no separate
 package to install or keep in sync.
 
 ## License
 
-plug is [FSL-1.1-Apache-2.0](LICENSE) — free for any purpose, including
+plug is [FSL-1.1-Apache-2.0](LICENSE) - free for any purpose, including
 building it into your own product, self-hosting it, or using it internally at
 a company. The one thing it doesn't permit is a **competing use**: offering
 plug itself, or a product/service that substitutes for it (e.g. a rival
 hosted-gateway offering), to others. It converts to Apache-2.0 two years after
 each release. Want to do exactly that anyway? A commercial license is
-available — contact **[francois@hhdev.fr](mailto:francois@hhdev.fr)**.
+available - contact **[francois@hhdev.fr](mailto:francois@hhdev.fr)**.
 
 Third-party components are listed in
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).

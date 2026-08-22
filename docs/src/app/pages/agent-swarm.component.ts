@@ -19,11 +19,11 @@ import { FileComponent } from '../file/file.component';
     <h3>In your stack (recommended)</h3>
     <p>
       The simplest deployment is no deployment at all: add the service to the stack you want to
-      plug into. It joins that stack's network automatically — nothing else to declare:
+      plug into. It joins that stack's network automatically - nothing else to declare:
     </p>
     <app-file src="assets/plug-service.yml" download="plug-service.yml" [initial]="'opened'" [preview]="16" />
 
-    <h3>Standalone — one agent for several stacks</h3>
+    <h3>Standalone - one agent for several stacks</h3>
     <p>
       To cover multiple stacks with a single agent, deploy
       <a href="https://github.com/softwarity/plug/blob/main/deploy/plug-stack.yml" target="_blank"
@@ -36,7 +36,7 @@ docker stack deploy -c plug-stack.yml plug</app-code>
 
     <div class="callout">
       <strong>The networks are the contract.</strong> plug can only reach services on networks the
-      agent is attached to — that is also your scoping tool: put the agent in the dev stacks only,
+      agent is attached to - that is also your scoping tool: put the agent in the dev stacks only,
       and production stays out of reach by construction. See
       <a routerLink="/security">Security model</a>.
     </div>
@@ -59,7 +59,7 @@ docker stack deploy -c plug-stack.yml plug</app-code>
       </tbody>
     </table>
     <p>
-      Multi-arch manifest — <code>linux/amd64</code> and <code>linux/arm64</code>, each built on
+      Multi-arch manifest - <code>linux/amd64</code> and <code>linux/arm64</code>, each built on
       native runners (no QEMU). Hosted on
       <a href="https://hub.docker.com/r/softwarity/plug" target="_blank" rel="noopener">Docker Hub</a>.
     </p>
@@ -68,7 +68,7 @@ docker stack deploy -c plug-stack.yml plug</app-code>
     <p>
       The image is multi-stage: it compiles the CLI binaries into <code>/opt/plug/bin/</code> and
       writes <code>/opt/plug/VERSION</code>. The <code>get</code> user serves a fixed, tiny set and
-      nothing else — the agent <code>version</code>, a named binary (<code>&lt;os&gt;-&lt;arch&gt;</code>),
+      nothing else - the agent <code>version</code>, a named binary (<code>&lt;os&gt;-&lt;arch&gt;</code>),
       the <code>wintun</code> driver DLL for Windows, and two installers: <code>install</code> for
       Linux/macOS (binaries <strong>embedded</strong>, picked with <code>uname</code>) and
       <code>install-windows</code> (a Git Bash script):
@@ -89,52 +89,52 @@ ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@$
       in the cluster under a DNS name, for the lifetime of the session. A dev runs
       <code>plug -s service1:8081:4200 npm start</code> and any workload calling
       <code>http://service1:8081</code> lands on their machine's <code>:4200</code>
-      — <strong>no name pre-declared, no redeploy</strong>. When the session ends the name is gone.
+ - <strong>no name pre-declared, no redeploy</strong>. When the session ends the name is gone.
     </p>
     <p>
-      For that the agent needs to create the DNS name on the fly, which means the Docker socket —
+      For that the agent needs to create the DNS name on the fly, which means the Docker socket -
       already in the snippet above, and <strong>required</strong>. With it, plug creates the name
-      when the session starts and removes it when the session ends — nothing to pre-declare.
+      when the session starts and removes it when the session ends - nothing to pre-declare.
       Without it, use a name you declared yourself (a network alias on the plug service). Either
-      way, if the name can't be reached plug stops with the reason — never a silent no-op — and one
+      way, if the name can't be reached plug stops with the reason - never a silent no-op - and one
       name is served by one session at a time.
     </p>
     <p>
-      The name already belongs to a <strong>deployed</strong> service — the very one you are
+      The name already belongs to a <strong>deployed</strong> service - the very one you are
       developing? plug <strong>takes it over</strong>: the deployed workload is parked for the
       session (its containers are stopped; on Swarm the service is scaled to 0) and
-      <strong>restored when the session ends</strong> — replica count included, and even across an
+      <strong>restored when the session ends</strong> - replica count included, and even across an
       agent restart. Your local process answers the name in its place; afterwards the cluster is
-      exactly as it was. A name held by <em>another live plug session</em> is still refused —
-      takeover applies to deployed workloads only. (Callers holding a cached DNS answer — the JVM
-      caches ~30&thinsp;s — may see a few connection errors right at the switch.)
+      exactly as it was. A name held by <em>another live plug session</em> is still refused -
+      takeover applies to deployed workloads only. (Callers holding a cached DNS answer - the JVM
+      caches ~30&thinsp;s - may see a few connection errors right at the switch.)
     </p>
     <p>
       Two switch-time facts worth knowing. <strong>Web apps:</strong> your local build and the
-      deployed one are <em>different builds</em> served under the same URL — their hashed chunks
+      deployed one are <em>different builds</em> served under the same URL - their hashed chunks
       don't overlap, so a browser tab opened on one will fail to lazy-load chunks after a switch.
       <strong>Hard-reload the tab</strong> (Cmd-Shift-R) after switching; keep DevTools'
       “Disable cache” on while developing. <strong>Watch mode:</strong> each rebuild briefly closes
-      your local port, so in-cluster callers see a few connection-refused during recompiles —
+      your local port, so in-cluster callers see a few connection-refused during recompiles -
       normal, it recovers by itself.
     </p>
     <p>
-      On <strong>Swarm</strong>, run the agent on a manager node as a single replica — also already
+      On <strong>Swarm</strong>, run the agent on a manager node as a single replica - also already
       set above. Your existing network needs no change (a non-attachable overlay is fine).
     </p>
     <div class="callout">
       <strong>The socket is root on the host.</strong> It is required: plug is here to plug services
-      into the cluster, and creating a name takes that access — an agent without it refuses to start
+      into the cluster, and creating a name takes that access - an agent without it refuses to start
       rather than fail on your first <code>-s</code>. Mount it only on a cluster you trust (the same
       trust plug's no-auth transport already assumes).
     </div>
     <div class="callout">
       <strong>Cluster on the same machine as plug (Docker Desktop)?</strong> Docker forwards
-      lookups it cannot answer to the VM's upstream resolver — which inherits your machine's DNS,
+      lookups it cannot answer to the VM's upstream resolver - which inherits your machine's DNS,
       pointed at plug while sessions run. Since 2.2 plug handles this honestly: before minting a
       stand-in IP for a bare name it asks the agent whether the name exists in the cluster (echoes
       of plug's own <code>198.18.x.x</code> range are recognized and discarded), and an absent name
-      answers <strong>unknown host</strong> — no more phantom <em>connection refused</em>. Belt and
+      answers <strong>unknown host</strong> - no more phantom <em>connection refused</em>. Belt and
       braces, or on older agents: Docker Desktop → Settings → Docker Engine, add
       <code>"dns": ["1.1.1.1", "8.8.8.8"]</code> so unknown names never leave the VM at all.
     </div>
@@ -142,22 +142,22 @@ ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@$
       <strong>App seems back only after "a long time"?</strong> On Swarm the address behind a
       served name <em>changes</em> when its signpost is recreated (a session relaunch, or
       <code>plug update</code> rolling the agent). A caller that pools
-      <strong>keep-alive connections</strong> and caches DNS — a Java gateway, typically — keeps
+      <strong>keep-alive connections</strong> and caches DNS - a Java gateway, typically - keeps
       hitting the old address until its pool recycles, which can take a while. plug is already
       answering at the new one: bounce the caller
       (<code>docker service update --force your-gateway</code>) and it reconnects instantly.
     </div>
     <p>
       Installed a launcher before <code>-s</code> existed? Put <code>-s</code> after
-      <code>-p</code>/<code>--host</code> — older launchers pass flags they don't know to the core.
+      <code>-p</code>/<code>--host</code> - older launchers pass flags they don't know to the core.
     </p>
 
     <h3>Under the hood</h3>
     <ul>
-      <li>Two SSH users: <code>plug</code> (public-key, runs the tunnel) and <code>get</code> (passwordless, <code>ForceCommand</code>-locked to serving a binary) — see <a routerLink="/security">Security model</a>.</li>
-      <li>Host keys are generated at container start — connections use <code>StrictHostKeyChecking=no</code>, consistent with the <a routerLink="/security">no-auth model</a>.</li>
+      <li>Two SSH users: <code>plug</code> (public-key, runs the tunnel) and <code>get</code> (passwordless, <code>ForceCommand</code>-locked to serving a binary) - see <a routerLink="/security">Security model</a>.</li>
+      <li>Host keys are generated at container start - connections use <code>StrictHostKeyChecking=no</code>, consistent with the <a routerLink="/security">no-auth model</a>.</li>
       <li>The <code>plug</code> user has <code>AllowTcpForwarding</code> on: the CLI splices each flow onto an SSH <code>direct-tcpip</code> channel, so <code>sshd</code> does the real dials from inside the cluster.</li>
-      <li>The container logs its attached networks at startup — <code>docker service logs &lt;stack&gt;_plug</code> is your first debugging stop.</li>
+      <li>The container logs its attached networks at startup - <code>docker service logs &lt;stack&gt;_plug</code> is your first debugging stop.</li>
     </ul>
   `,
 })
