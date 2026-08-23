@@ -81,7 +81,7 @@ interface Hole {
   template: `
     <h2>Coverage matrix</h2>
     <p class="lead">
-      What works where, and where the holes are - features × OS. One process run
+      What works where - features × OS. One process run
       <strong>as if it were inside the cluster</strong>, via a userspace TUN over an SSH tunnel.
     </p>
     <p class="snap">snapshot {{ snapshot }} · CI re-proves install → grid → multicluster → reverse path → takeover → crash-recovery on every push, on 3 OSes × 3 cluster families (compose, Swarm, Kubernetes); rows noted <em>bench</em> are runtime-proven locally, not yet in CI</p>
@@ -91,17 +91,6 @@ interface Hole {
       <span><i class="dot d-warn">!</i> partial - not yet e2e-validated</span>
       <span><i class="dot d-no">✕</i> not yet</span>
       <span><i class="dot d-na">-</i> n/a by design</span>
-    </div>
-
-    <h3>Biggest holes - priority order</h3>
-    <div class="holes">
-      @for (h of holes; track h.t; let i = $index) {
-        <div class="hole" [style.--sev]="h.sev === 'no' ? 'var(--cov-no)' : 'var(--cov-warn)'">
-          <div class="n">0{{ i + 1 }}</div>
-          <div class="t">{{ h.t }}</div>
-          <div class="d">{{ h.d }}</div>
-        </div>
-      }
     </div>
 
     @for (sec of sections; track sec.title) {
@@ -139,6 +128,20 @@ interface Hole {
         </div>
       </section>
     }
+
+    <h3 class="s-title">What is not proven yet</h3>
+    <p class="lead">
+      Two things the grid above cannot claim. Both are marked <i class="dot d-warn">!</i> in it,
+      and neither is a gap in what plug does - they are limits of what has been <em>demonstrated</em>.
+    </p>
+    <div class="holes">
+      @for (h of holes; track h.t) {
+        <div class="hole" [style.--sev]="h.sev === 'no' ? 'var(--cov-no)' : 'var(--cov-warn)'">
+          <div class="t">{{ h.t }}</div>
+          <div class="d">{{ h.d }}</div>
+        </div>
+      }
+    </div>
 
     <div class="callout">
       <strong>How this matrix is proven.</strong> Every CI run installs plug FROM the cluster on
