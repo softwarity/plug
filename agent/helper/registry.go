@@ -1,4 +1,4 @@
-package main
+package agent
 
 // Finding the newest RELEASE on the registry that holds this agent's own image.
 //

@@ -1,4 +1,4 @@
-package main
+package agent
 
 import (
 	"crypto/ed25519"
@@ -36,7 +36,7 @@ func newTestKey(t *testing.T) (ssh.Signer, ssh.PublicKey) {
 // startServer runs the server on a loopback port and returns its address. The
 // forced command is a shell that echoes SSH_ORIGINAL_COMMAND, so a test can
 // prove the request reached the account's command and nothing else.
-func startServer(t *testing.T, keys keySource) string {
+func startServer(t *testing.T, host Host) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("the agent only ever runs in a Linux container")
@@ -46,7 +46,7 @@ func startServer(t *testing.T, keys keySource) string {
 		t.Fatalf("host key: %v", err)
 	}
 	srv := &sshServer{
-		keys:    keys,
+		host:    host,
 		hostKey: hk,
 		execFor: func(user string) []string {
 			// One script per account: whoever answers must be able to say which
@@ -79,7 +79,7 @@ func dial(t *testing.T, addr, user string, auth ...ssh.AuthMethod) (*ssh.Client,
 // without a key, or nobody can install the CLI that holds the key.
 func TestDownloadUserNeedsNoKey(t *testing.T) {
 	_, pub := newTestKey(t)
-	addr := startServer(t, embeddedKeys{authorized: []ssh.PublicKey{pub}})
+	addr := startServer(t, &standaloneHost{authorized: []ssh.PublicKey{pub}})
 
 	cl, err := dial(t, addr, downloadUser)
 	if err != nil {
@@ -105,7 +105,7 @@ func TestDownloadUserNeedsNoKey(t *testing.T) {
 func TestTunnelUserNeedsAnAcceptedKey(t *testing.T) {
 	signer, pub := newTestKey(t)
 	strangerSigner, _ := newTestKey(t)
-	addr := startServer(t, embeddedKeys{authorized: []ssh.PublicKey{pub}})
+	addr := startServer(t, &standaloneHost{authorized: []ssh.PublicKey{pub}})
 
 	if _, err := dial(t, addr, tunnelUser, ssh.PublicKeys(strangerSigner)); err == nil {
 		t.Fatal("an unknown key must not open the tunnel")
@@ -137,7 +137,7 @@ func TestTunnelUserNeedsAnAcceptedKey(t *testing.T) {
 // which is what ForceCommand bought us before.
 func TestNoShellForEitherAccount(t *testing.T) {
 	signer, pub := newTestKey(t)
-	addr := startServer(t, embeddedKeys{authorized: []ssh.PublicKey{pub}})
+	addr := startServer(t, &standaloneHost{authorized: []ssh.PublicKey{pub}})
 
 	for _, c := range []struct {
 		user string
@@ -244,7 +244,7 @@ func echoServer(t *testing.T, prefix string) net.Listener {
 // these, and the name is resolved by the agent, from inside the cluster.
 func TestDirectTCPIPCarriesBytes(t *testing.T) {
 	signer, pub := newTestKey(t)
-	addr := startServer(t, embeddedKeys{authorized: []ssh.PublicKey{pub}})
+	addr := startServer(t, &standaloneHost{authorized: []ssh.PublicKey{pub}})
 	svc := echoServer(t, "svc:")
 
 	cl, err := dial(t, addr, tunnelUser, ssh.PublicKeys(signer))
@@ -276,7 +276,7 @@ func TestDirectTCPIPCarriesBytes(t *testing.T) {
 // act on, which is most of what plug does when a name does not exist.
 func TestDirectTCPIPRefusesWithACause(t *testing.T) {
 	signer, pub := newTestKey(t)
-	addr := startServer(t, embeddedKeys{authorized: []ssh.PublicKey{pub}})
+	addr := startServer(t, &standaloneHost{authorized: []ssh.PublicKey{pub}})
 
 	cl, err := dial(t, addr, tunnelUser, ssh.PublicKeys(signer))
 	if err != nil {
@@ -299,7 +299,7 @@ func TestDirectTCPIPRefusesWithACause(t *testing.T) {
 // way into the cluster.
 func TestDownloadUserCannotForward(t *testing.T) {
 	_, pub := newTestKey(t)
-	addr := startServer(t, embeddedKeys{authorized: []ssh.PublicKey{pub}})
+	addr := startServer(t, &standaloneHost{authorized: []ssh.PublicKey{pub}})
 	svc := echoServer(t, "svc:")
 
 	cl, err := dial(t, addr, downloadUser)
@@ -321,7 +321,7 @@ func TestDownloadUserCannotForward(t *testing.T) {
 // reverse direction depends on.
 func TestRemoteForwardCarriesBytesBack(t *testing.T) {
 	signer, pub := newTestKey(t)
-	addr := startServer(t, embeddedKeys{authorized: []ssh.PublicKey{pub}})
+	addr := startServer(t, &standaloneHost{authorized: []ssh.PublicKey{pub}})
 
 	cl, err := dial(t, addr, tunnelUser, ssh.PublicKeys(signer))
 	if err != nil {
@@ -376,7 +376,7 @@ func TestRemoteForwardCarriesBytesBack(t *testing.T) {
 // traffic.
 func TestRemoteForwardRefusesATakenPort(t *testing.T) {
 	signer, pub := newTestKey(t)
-	addr := startServer(t, embeddedKeys{authorized: []ssh.PublicKey{pub}})
+	addr := startServer(t, &standaloneHost{authorized: []ssh.PublicKey{pub}})
 
 	first, err := dial(t, addr, tunnelUser, ssh.PublicKeys(signer))
 	if err != nil {
@@ -406,7 +406,7 @@ func TestRemoteForwardRefusesATakenPort(t *testing.T) {
 // restarts. This is the failure a crashed session would cause.
 func TestBindsAreReleasedWhenTheConnectionDies(t *testing.T) {
 	signer, pub := newTestKey(t)
-	addr := startServer(t, embeddedKeys{authorized: []ssh.PublicKey{pub}})
+	addr := startServer(t, &standaloneHost{authorized: []ssh.PublicKey{pub}})
 
 	cl, err := dial(t, addr, tunnelUser, ssh.PublicKeys(signer))
 	if err != nil {
@@ -441,7 +441,7 @@ func TestBindsAreReleasedWhenTheConnectionDies(t *testing.T) {
 // session: a mapping can be dropped and re-armed inside one connection.
 func TestCancelReleasesTheBind(t *testing.T) {
 	signer, pub := newTestKey(t)
-	addr := startServer(t, embeddedKeys{authorized: []ssh.PublicKey{pub}})
+	addr := startServer(t, &standaloneHost{authorized: []ssh.PublicKey{pub}})
 
 	cl, err := dial(t, addr, tunnelUser, ssh.PublicKeys(signer))
 	if err != nil {
@@ -520,7 +520,7 @@ func TestTheForcedCommandSeesWhereTheSessionCameFrom(t *testing.T) {
 		t.Fatalf("host key: %v", err)
 	}
 	srv := &sshServer{
-		keys:    embeddedKeys{authorized: []ssh.PublicKey{pub}},
+		host:    &standaloneHost{authorized: []ssh.PublicKey{pub}},
 		hostKey: hk,
 		execFor: func(string) []string {
 			return []string{"/bin/sh", "-c", `printf '%s|%s' "$SSH_CLIENT" "$SSH_CONNECTION"`}

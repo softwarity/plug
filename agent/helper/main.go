@@ -34,7 +34,7 @@
 //
 //	plug-agent signpost <port> <target>   the signpost container's process
 //	plug-agent gc                         boot-time cleanup (entrypoint)
-package main
+package agent
 
 import (
 	"bytes"
@@ -57,7 +57,11 @@ import (
 	"time"
 )
 
-func main() {
+// Main is the standalone binary's whole body, kept here rather than in cmd/ so
+// the argv dispatch and the verbs it reaches stay in one place. Meerkat does not
+// call it: it calls Start (serve.go) for the server, and re-execs ITSELF with a
+// hidden verb for the subprocess side, the way plug's own launcher does.
+func Main() {
 	args := os.Args[1:]
 	if len(args) > 0 {
 		switch args[0] {
@@ -93,11 +97,26 @@ func main() {
 // only reveals that the first time someone runs -s has hidden a missing mount
 // or a missing RBAC behind an otherwise healthy container. Fail here, once, at
 // the moment the stack file is in front of whoever wrote it.
+// preflight is the argv verb: refuses to boot, which is right for a dedicated
+// agent (see Preflight for why an embedder must decide for itself).
 func preflight() {
-	if k8sAvailable() || dockerAvailable() {
-		return
+	if err := Preflight(); err != nil {
+		fatal("%v", err)
 	}
-	fatal("plug-agent: no orchestrator access, so this agent cannot create cluster names.\n" +
+}
+
+// Preflight reports whether this agent can provision cluster names at all.
+//
+// Returned rather than fatal, because the right reaction differs. A dedicated
+// agent should die: a healthy-looking container that fails on someone's first
+// -s hides a missing mount or a missing RBAC behind it. A gateway that embeds
+// the agent must not: one forgotten rule would stop an otherwise working
+// Meerkat from starting, for a feature its users may never touch.
+func Preflight() error {
+	if k8sAvailable() || dockerAvailable() {
+		return nil
+	}
+	return errors.New("plug-agent: no orchestrator access, so this agent cannot create cluster names.\n" +
 		"  Docker / Compose / Swarm: mount /var/run/docker.sock into the agent\n" +
 		"      volumes: [\"/var/run/docker.sock:/var/run/docker.sock\"]\n" +
 		"      (on Swarm, also run it as a service on a MANAGER node)\n" +

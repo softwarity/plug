@@ -31,7 +31,9 @@ RUN mkdir -p /out/bin && \
 # The agent-side helper: ForceCommand of the tunnel user (the -s provisioning
 # verbs + the signpost relay + boot gc). Static, tiny, stdlib-only.
 COPY agent/helper/ /src/helper/
-RUN CGO_ENABLED=0 go build -C /src/helper -trimpath -ldflags "-s -w" -o /out/plug-agent .
+# ./cmd/plug-agent, not "." - the package is importable now (Meerkat links it
+# into its own binary), so the main lives in a cmd of its own.
+RUN CGO_ENABLED=0 go build -C /src/helper -trimpath -ldflags "-s -w" -o /out/plug-agent ./cmd/plug-agent
 
 # WinTUN driver DLL, fetched once at build so the agent serves it to the Windows
 # installer (the installer pulls it from us — no run-time dependency on wintun.net,

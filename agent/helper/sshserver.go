@@ -1,4 +1,4 @@
-package main
+package agent
 
 // The SSH server, in Go, replacing OpenSSH inside the agent image.
 //
@@ -69,35 +69,6 @@ const (
 	downloadUser = "get"
 )
 
-// keySource answers whether a public key may open a tunnel. One interface, two
-// implementations, and that is the whole of the authentication story:
-//
-//   - embeddedKeys, below: the key shipped in every CLI. It authenticates the
-//     SOFTWARE, not a person, which is exactly today's behaviour and is stated
-//     rather than implied.
-//   - a Meerkat-backed one, later: the developers' keys. The common key is not
-//     among them, so it stops being accepted without any flag deciding it.
-//
-// Verify runs on every connection, so it must be cheap or cached.
-type keySource interface {
-	Verify(key ssh.PublicKey) (ok bool, who string)
-}
-
-// embeddedKeys accepts exactly the keys baked into the image, i.e. what
-// /home/plug/.ssh/authorized_keys holds today.
-type embeddedKeys struct{ authorized []ssh.PublicKey }
-
-func (e embeddedKeys) Verify(key ssh.PublicKey) (bool, string) {
-	for _, a := range e.authorized {
-		// Compare marshalled forms: PublicKey is an interface, and two values
-		// describing the same key are not necessarily ==.
-		if a.Type() == key.Type() && string(a.Marshal()) == string(key.Marshal()) {
-			return true, "shared key"
-		}
-	}
-	return false, ""
-}
-
 // parseAuthorizedKeys reads an authorized_keys file, skipping blanks and
 // comments. A malformed line is an error rather than a silent skip: a typo that
 // drops the only key would otherwise lock everyone out quietly.
@@ -124,13 +95,50 @@ func parseAuthorizedKeys(b []byte) ([]ssh.PublicKey, error) {
 // run without the real binaries, and so the two accounts keep the strict
 // separation sshd gave them through ForceCommand.
 type sshServer struct {
-	keys     keySource
+	host     Host
 	hostKey  ssh.Signer
 	execFor  func(user string) []string // argv for this account's ForceCommand
 	logf     func(string, ...any)
 	idleEvry time.Duration // keepalive period; 0 disables (tests)
 
 	wg sync.WaitGroup
+
+	// Live connections, so shutdown can end them. Closing the listener only
+	// stops NEW ones: without this, stopping waits for the last developer to
+	// disconnect, which for a gateway restarting means waiting on someone who
+	// left a session open and went to lunch.
+	mu    sync.Mutex
+	conns map[*ssh.ServerConn]struct{}
+}
+
+// track registers a live connection, returning the function that forgets it.
+func (s *sshServer) track(c *ssh.ServerConn) func() {
+	s.mu.Lock()
+	if s.conns == nil {
+		s.conns = map[*ssh.ServerConn]struct{}{}
+	}
+	s.conns[c] = struct{}{}
+	s.mu.Unlock()
+	return func() {
+		s.mu.Lock()
+		delete(s.conns, c)
+		s.mu.Unlock()
+	}
+}
+
+// CloseConnections ends every live session. Called on shutdown, after the
+// listener is closed, so Serve can return instead of waiting on peers that have
+// no reason to leave.
+func (s *sshServer) CloseConnections() {
+	s.mu.Lock()
+	live := make([]*ssh.ServerConn, 0, len(s.conns))
+	for c := range s.conns {
+		live = append(live, c)
+	}
+	s.mu.Unlock()
+	for _, c := range live {
+		_ = c.Close()
+	}
 }
 
 func (s *sshServer) note(format string, a ...any) {
@@ -194,7 +202,7 @@ func (s *sshServer) serverConfig() *ssh.ServerConfig {
 			if c.User() != tunnelUser {
 				return nil, fmt.Errorf("user %q does not take a key", c.User())
 			}
-			ok, who := s.keys.Verify(key)
+			who, ok := s.host.Verify(key)
 			if !ok {
 				// Fingerprint, never the key: enough to recognise a legitimate
 				// client that was never enrolled, useless to an attacker.
@@ -237,6 +245,7 @@ func (s *sshServer) handle(nc net.Conn) {
 		return
 	}
 	defer conn.Close()
+	defer s.track(conn)()
 
 	user := conn.Permissions.Extensions["user"]
 	if s.idleEvry > 0 {
