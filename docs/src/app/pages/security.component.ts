@@ -30,8 +30,8 @@ import { CodeComponent } from '../code/code.component';
       user named <code>get</code>. It is <em>more</em> locked down than the tunnel user, not less:
     </p>
     <ul>
-      <li>An OpenSSH <code>ForceCommand</code> replaces whatever the client asks with a single script that can only print the version, <code>cat</code> a binary, or emit the install script - no shell, ever.</li>
-      <li>TCP/X11 forwarding is disabled for <code>get</code>: it cannot open the network tunnel, only the <code>plug</code> user (public-key) can.</li>
+      <li>The server replaces whatever the client asks with a single script that can only print the version, <code>cat</code> a binary, or emit the install script - no shell, ever. There is no Unix account behind it and no shell in reach to fall back to.</li>
+      <li>Forwarding is refused outright for <code>get</code>: it cannot open the network tunnel, only the <code>plug</code> account (public-key) can.</li>
       <li>Empty password is intentional and harmless here: there is nothing to protect behind it - the whole surface is "download a public binary".</li>
     </ul>
     <app-code lang="bash">ssh -p 2222 get@&lt;host&gt; install                         # returns the installer

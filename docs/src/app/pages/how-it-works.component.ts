@@ -28,7 +28,7 @@ import { RouterLink } from '@angular/router';
     <p>
       <strong>One mechanism: a userspace TUN, over an SSH tunnel.</strong> plug captures your
       command's cluster traffic at the <strong>IP layer</strong> and splices it, by name, to a tiny
-      agent (Alpine + <code>sshd</code>) running in the cluster. Your app's socket is never touched,
+      agent (Alpine, one static Go binary) running in the cluster. Your app's socket is never touched,
       and nothing but a private, reserved IP range is ever intercepted.
     </p>
 
@@ -57,22 +57,22 @@ import { RouterLink } from '@angular/router';
         <ellipse cx="628" cy="168" rx="30" ry="9" fill="#161b22" stroke="#30363d" />
         <text x="628" y="192" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#e6edf3" font-weight="600">db</text>
         <rect x="690" y="150" width="84" height="40" rx="7" fill="#161b22" stroke="#a371f7" stroke-width="1.3" />
-        <text x="732" y="175" text-anchor="middle" font-size="11" fill="#e6edf3">sshd</text>
+        <text x="732" y="175" text-anchor="middle" font-size="11" fill="#e6edf3">agent</text>
         <rect x="596" y="228" width="150" height="34" rx="7" fill="#161b22" stroke="#30363d" stroke-dasharray="4 3" />
         <text x="671" y="250" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#3fb950">service1</text>
 
         <line x1="244" y1="176" x2="596" y2="176" stroke="#a371f7" stroke-width="2.3" marker-end="url(#hiw-out)" />
         <text x="410" y="169" text-anchor="middle" font-size="10.5" fill="#a371f7" font-weight="600">outbound - reach db by name</text>
-        <text x="360" y="199" text-anchor="middle" font-size="9.5" fill="#6e7681">name → fake IP → SSH channel → sshd dials db</text>
+        <text x="360" y="199" text-anchor="middle" font-size="9.5" fill="#6e7681">name → fake IP → SSH channel → agent dials db</text>
 
         <line x1="596" y1="228" x2="244" y2="228" stroke="#3fb950" stroke-width="2.3" marker-end="url(#hiw-in)" />
         <text x="410" y="245" text-anchor="middle" font-size="10.5" fill="#3fb950" font-weight="600">inbound - -s publishes service1</text>
-        <text x="410" y="286" text-anchor="middle" font-size="9.5" fill="#6e7681">a cluster workload hits service1 → sshd remote-forward → your local :3000</text>
+        <text x="410" y="286" text-anchor="middle" font-size="9.5" fill="#6e7681">a cluster workload hits service1 → SSH remote-forward → your local :3000</text>
 
         <line x1="70" y1="360" x2="100" y2="360" stroke="#a371f7" stroke-width="2.6" />
-        <text x="108" y="364" font-size="11.5" fill="#8b949e">outbound - SSH direct-tcpip (sshd opens the real connection)</text>
+        <text x="108" y="364" font-size="11.5" fill="#8b949e">outbound - SSH direct-tcpip (agent opens the real connection)</text>
         <line x1="500" y1="360" x2="530" y2="360" stroke="#3fb950" stroke-width="2.6" />
-        <text x="538" y="364" font-size="11.5" fill="#8b949e">inbound - sshd remote-forward (-s)</text>
+        <text x="538" y="364" font-size="11.5" fill="#8b949e">inbound - SSH remote-forward (-s)</text>
       </svg>
     </div>
 
@@ -97,9 +97,11 @@ import { RouterLink } from '@angular/router';
         <em>name</em>, not an IP.
       </li>
       <li>
-        <strong>The agent dials from inside.</strong> A stock <code>sshd</code> opens an SSH
+        <strong>The agent dials from inside.</strong> The agent opens an SSH
         <code>direct-tcpip</code> channel: it resolves the name with the cluster's own resolver and
-        connects to <code>service:port</code> from inside the cluster. No server code of ours.
+        connects to <code>service:port</code> from inside the cluster. Standard SSH, so any client
+        speaks it - the server is ours, a few hundred lines over
+        <code>golang.org/x/crypto/ssh</code>, with no shell and no privileged helper behind it.
       </li>
     </ol>
 
@@ -172,8 +174,8 @@ import { RouterLink } from '@angular/router';
     <p>
       The transport carries the other way too: <code>plug -s
       &lt;name&gt;:&lt;cluster-port&gt;:&lt;local-port&gt; &lt;cmd&gt;</code> opens a
-      <strong>dedicated SSH connection for the session</strong> and asks the agent's
-      <code>sshd</code> for a standard <strong>remote forward</strong> - the agent listens on the
+      <strong>dedicated SSH connection for the session</strong> and asks the agent for a standard
+      <strong>remote forward</strong> - the agent listens on the
       cluster port, and every connection a cluster workload makes rides that connection back to your
       local port (dedicated, so the port's lifetime is exactly the session's, even where the forward
       datapath lives in a shared daemon). The cluster <em>name</em> that points at it is
@@ -201,10 +203,10 @@ import { RouterLink } from '@angular/router';
         <tr><th>Dependency</th><th>Role</th><th>License</th></tr>
       </thead>
       <tbody>
-        <tr><td><a href="https://www.openssh.com/" target="_blank" rel="noopener">OpenSSH</a></td><td>The transport: client (<code>golang.org/x/crypto/ssh</code>, in-process) and <code>sshd</code> in the agent doing the <code>direct-tcpip</code> dials</td><td>BSD</td></tr>
+        <tr><td><a href="https://pkg.go.dev/golang.org/x/crypto/ssh" target="_blank" rel="noopener">golang.org/x/crypto/ssh</a></td><td>The transport, on both ends: the CLI's in-process client, and the agent's server doing the <code>direct-tcpip</code> dials and the remote forwards</td><td>BSD</td></tr>
         <tr><td><a href="https://github.com/WireGuard/wireguard-go" target="_blank" rel="noopener">wireguard-go</a> + <a href="https://gvisor.dev/" target="_blank" rel="noopener">gVisor</a></td><td>The userspace TUN device and network stack that answer DNS and terminate flows in-process</td><td>MIT · Apache-2.0</td></tr>
         <tr><td><a href="https://go.dev/" target="_blank" rel="noopener">Go</a></td><td>The CLI - one static binary per platform, no runtime dependencies</td><td>BSD</td></tr>
-        <tr><td><a href="https://www.alpinelinux.org/" target="_blank" rel="noopener">Alpine Linux</a></td><td>Base of the agent image - just <code>sshd</code> + the served binaries</td><td>MIT</td></tr>
+        <tr><td><a href="https://www.alpinelinux.org/" target="_blank" rel="noopener">Alpine Linux</a></td><td>Base of the agent image - one static Go binary + the binaries it serves</td><td>MIT</td></tr>
       </tbody>
     </table>
   `,

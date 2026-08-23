@@ -67,3 +67,25 @@ func TestDocPagesAreRealRoutes(t *testing.T) {
 		}
 	}
 }
+
+// The doc site serves its own copy of deploy/plug-k8s.yaml, so users can
+// download the manifest from the page they are reading. Two copies of one file
+// drift silently: this one had, and the site was handing out a manifest whose
+// comments described an agent that no longer existed. Compare them, and let a
+// build fail rather than a reader be misled.
+func TestTheSiteServesTheRealManifest(t *testing.T) {
+	source := filepath.Join("..", "deploy", "plug-k8s.yaml")
+	served := filepath.Join("..", "docs", "src", "assets", "plug-k8s.yaml")
+
+	a, err := os.ReadFile(source)
+	if err != nil {
+		t.Skipf("manifest not present (%v)", err)
+	}
+	b, err := os.ReadFile(served)
+	if err != nil {
+		t.Skipf("doc site not present (%v)", err)
+	}
+	if string(a) != string(b) {
+		t.Errorf("%s and %s have diverged - copy the first over the second", source, served)
+	}
+}

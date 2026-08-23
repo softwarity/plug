@@ -10,8 +10,9 @@ import { FileComponent } from '../file/file.component';
     <h2>Kubernetes</h2>
 
     <p>
-      The <a routerLink="/swarm">same agent image</a> runs on Kubernetes - a small Alpine +
-      <code>sshd</code> pod that sits inside the cluster and dials services on the CLI's behalf.
+      The <a routerLink="/swarm">same agent image</a> runs on Kubernetes - a small Alpine pod
+      running one static Go binary, sitting inside the cluster and dialing services on the CLI's
+      behalf.
       Nothing Kubernetes-specific is baked in; only the way you deploy and reach it differs.
     </p>
 
@@ -19,7 +20,7 @@ import { FileComponent } from '../file/file.component';
     <p>
       Apply <a href="https://github.com/softwarity/plug/blob/main/deploy/plug-k8s.yaml"
       target="_blank" rel="noopener">deploy/plug-k8s.yaml</a> in the target namespace. No subnet or
-      CIDR is needed - the agent's <code>sshd</code> resolves service names via CoreDNS from inside
+      CIDR is needed - the agent resolves service names via CoreDNS from inside
       the cluster, exactly like on Swarm.
     </p>
     <p>The full manifest - copy it or download <code>plug-k8s.yaml</code>, then apply:</p>

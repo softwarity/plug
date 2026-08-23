@@ -2,17 +2,17 @@
 #
 #   kubectl -n <your-namespace> apply -f plug-k8s.yaml
 #
-# One file, one command — the agent AND the reverse direction's dynamic name
+# One file, one command - the agent AND the reverse direction's dynamic name
 # provisioning (plug -s). Deploy it in the SAME namespace as the services you
 # want to reach: the agent resolves short names (myservice) via the pod's
 # resolver (CoreDNS) from inside that namespace and opens the connection itself,
-# over an SSH direct-tcpip channel. No subnet, no CIDR — resolution happens by
+# over an SSH direct-tcpip channel. No subnet, no CIDR - resolution happens by
 # name, in-cluster. Cross-namespace? Use the FQDN in your code
 # (myservice.othernamespace, or myservice.othernamespace.svc.cluster.local).
 #
 # How the data path works (for context): the `plug` CLI captures the child
 # process's cluster traffic at the IP layer with a userspace TUN (gVisor
-# netstack), then splices each flow — by name — through a single SSH tunnel to
+# netstack), then splices each flow - by name - through a single SSH tunnel to
 # this agent, which does the actual name resolution and dialing from inside the
 # cluster. There is no SOCKS proxy: the agent is a small SSH server (a few
 # hundred lines over golang.org/x/crypto/ssh) whose entire exposed surface is
@@ -22,12 +22,12 @@
 # repo's security model).
 #
 # The reverse direction (plug -s <name>:<cport>:<lport>) has the agent CREATE
-# and DELETE a Service pointing that name at itself, per session — no name
+# and DELETE a Service pointing that name at itself, per session - no name
 # pre-declared, no redeploy. That is what the ServiceAccount + Role + RoleBinding
-# below grant: DELIBERATELY MINIMAL and namespace-scoped — manage Services, and
+# below grant: DELIBERATELY MINIMAL and namespace-scoped - manage Services, and
 # nothing else. The agent can make a name in ITS namespace point at itself; it
 # cannot touch pods, secrets, other namespaces, or the cluster. A name served
-# this way is a port on the agent, reachable by whatever can reach the agent —
+# this way is a port on the agent, reachable by whatever can reach the agent -
 # consistent with plug's trusted-dev-cluster model. Deploy accordingly.
 apiVersion: v1
 kind: ServiceAccount
@@ -49,11 +49,12 @@ spec:
       labels: { app: plug }
     spec:
       serviceAccountName: plug
-      # sshd must start as root: it writes host keys at boot (ssh-keygen -A),
-      # binds the privileged port 22, and privilege-separates by forking to the
-      # unprivileged `plug`/`get` users per session. So we do NOT force
-      # runAsNonRoot or a read-only rootfs here (either breaks sshd); we keep the
-      # one hardening that is safe for sshd — the default seccomp profile.
+      # The agent starts as root for two reasons: it binds the privileged port 22,
+      # and it reaches the service-account token (the docker socket, on Swarm).
+      # It no longer forks to unprivileged users per session - there are no Unix
+      # accounts in the image at all, and no setuid binary - so we do NOT force
+      # runAsNonRoot or a read-only rootfs here; we keep the one hardening that
+      # is safe: the default seccomp profile.
       securityContext:
         seccompProfile:
           type: RuntimeDefault
@@ -64,8 +65,8 @@ spec:
           ports:
             - name: ssh
               containerPort: 22
-          # sshd is up as soon as it accepts TCP on 22; a plain TCP probe avoids
-          # needing credentials.
+          # The agent is up as soon as it accepts TCP on 22; a plain TCP probe
+          # avoids needing credentials.
           readinessProbe:
             tcpSocket: { port: 22 }
             initialDelaySeconds: 3
@@ -100,7 +101,7 @@ metadata:
   name: plug-serve-names
   labels: { app: plug }
 rules:
-  # Exactly what serve-name / unserve-name / boot-gc need — Services only.
+  # Exactly what serve-name / unserve-name / boot-gc need - Services only.
   # update/patch: the takeover repoints an existing Service at the agent for
   # the session (original selector/ports saved in an annotation, restored).
   - apiGroups: [""]
@@ -127,7 +128,7 @@ subjects:
     name: plug
 # Reach the agent two ways:
 #   • NodePort:  plug --host <a-node> --port 32222 <cmd>
-#   • No exposed port — kubectl port-forward (gated by the API-server RBAC),
+#   • No exposed port - kubectl port-forward (gated by the API-server RBAC),
 #     then plug on localhost:
 #       kubectl -n <ns> port-forward svc/plug 2222:2222
 #       plug --host localhost <cmd>

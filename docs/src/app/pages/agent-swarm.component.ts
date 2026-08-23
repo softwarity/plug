@@ -10,9 +10,10 @@ import { FileComponent } from '../file/file.component';
     <h2>Swarm</h2>
 
     <p>
-      The agent is deliberately boring: a small Alpine image running just <code>sshd</code>. No
-      state, no volume, no configuration. Its only job is to <em>be inside</em> the overlay networks
-      and let <code>sshd</code> dial services on the CLI's behalf (<code>direct-tcpip</code>). The
+      The agent is deliberately boring: a small Alpine image running one static Go binary, an SSH
+      server with no shell behind it. No state, no volume, no configuration. Its only job is to
+      <em>be inside</em> the overlay networks and dial services on the CLI's behalf
+      (<code>direct-tcpip</code>). The
       same image runs on <a routerLink="/kubernetes">Kubernetes</a> too.
     </p>
 
@@ -156,7 +157,7 @@ ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@$
     <ul>
       <li>Two SSH users: <code>plug</code> (public-key, runs the tunnel) and <code>get</code> (passwordless, <code>ForceCommand</code>-locked to serving a binary) - see <a routerLink="/security">Security model</a>.</li>
       <li>Host keys are generated at container start - connections use <code>StrictHostKeyChecking=no</code>, consistent with the <a routerLink="/security">no-auth model</a>.</li>
-      <li>The <code>plug</code> user has <code>AllowTcpForwarding</code> on: the CLI splices each flow onto an SSH <code>direct-tcpip</code> channel, so <code>sshd</code> does the real dials from inside the cluster.</li>
+      <li>The <code>plug</code> account may forward: the CLI splices each flow onto an SSH <code>direct-tcpip</code> channel, so the agent does the real dials from inside the cluster.</li>
       <li>The container logs its attached networks at startup - <code>docker service logs &lt;stack&gt;_plug</code> is your first debugging stop.</li>
     </ul>
   `,

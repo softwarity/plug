@@ -14,7 +14,7 @@ The Go-module list is generated from the actual link graph of the `plug` binary
 | Component | Role | License |
 |---|---|---|
 | The Go standard library & toolchain | one static binary per platform | BSD-3-Clause |
-| `golang.org/x/crypto` | SSH client — the in-process `direct-tcpip` transport | BSD-3-Clause |
+| `golang.org/x/crypto` | SSH client - the in-process `direct-tcpip` transport | BSD-3-Clause |
 | `golang.org/x/net` | networking helpers | BSD-3-Clause |
 | `golang.org/x/sys` | OS syscalls (unix / windows) | BSD-3-Clause |
 | `golang.org/x/time` | rate limiting | BSD-3-Clause |
@@ -39,14 +39,13 @@ covers only the `plug-agent` binary plug adds, not the programs below.
 | Component | Role | License |
 |---|---|---|
 | Alpine Linux (base image) | minimal userland | MIT (+ per-package) |
-| OpenSSH (`sshd`) | the SSH transport server doing the `direct-tcpip` / remote-forward | BSD-style (OpenSSH) |
+| `golang.org/x/crypto` | SSH **server** - the agent's own, doing the `direct-tcpip` dials and the remote forwards | BSD-3-Clause |
 | musl libc | C library | MIT |
 | BusyBox | shell / coreutils | GPL-2.0 |
 
 Sources:
 
 - **Alpine Linux** — <https://www.alpinelinux.org>
-- **OpenSSH** — <https://www.openssh.com>
 - **musl** — <https://musl.libc.org>
 - **BusyBox** — <https://busybox.net>
 
