@@ -110,6 +110,10 @@ convergé, ce n'est pas un défaut de Meerkat mais une propriété du problème.
    ligne roadmap existante) - c'est le mécanisme du « plug autorisé ici ou pas ».
 5. Plus tard (V2) : le signpost-proxy L7 et le shadowing du déployé.
 
+_Forme d'intégration tranchée le 22/08 : **un seul binaire**, Meerkat important
+le paquet agent de plug. Voir « Un seul binaire » en fin de fichier, et ce que
+cela implique pour les fichiers de déploiement de Meerkat._
+
 ## Ce que ce modèle préserve
 
 Rien ne dépend du code des clients. La sélection par testeur reste une capacité
@@ -135,17 +139,23 @@ donc rotation courte et renouvellement à construire. Écarté.
 Cas de bord assumé : déboguer la gateway elle-même avec plug pendant qu'elle
 est en panne. Réel, mais pas de quoi porter une architecture.
 
-### Deux conteneurs dans un pod, pas une image unique
+### Deux conteneurs dans un pod : EXAMINE PUIS ECARTE le 22/08
 
-L'agent fait tourner sshd en root, avec un helper setuid et l'accès à la socket
-Docker ou au token du ServiceAccount. Meerkat expose un port console au monde.
-Une image unique offrirait cette surface à la façade publique. Et `plug update`
-provoque un rolling restart de l'agent, qui emporterait la gateway avec lui.
+**Conclusion périmée, conservée pour son raisonnement.** La décision finale est
+le binaire unique (voir « Un seul binaire » plus bas). Ce qui suit dit pourquoi
+le sidecar semblait préférable, et ce qu'il a fallu accepter en y renonçant.
 
-Deux conteneurs dans le même pod donnent ce que l'image unique cherchait : une
-seule unité à déployer, un `localhost` partagé, mais deux images, deux cycles
-de release, deux niveaux de privilège. Sur Swarm il n'y a pas de pod : deux
-services sur un réseau commun, ou l'arbitrage se repose.
+L'argument était le privilège : l'agent tourne en root avec l'accès à la socket
+Docker ou au token du ServiceAccount, tandis que Meerkat expose un port console
+au monde. Une image unique offre cette surface à la façade publique. Et
+`plug update` provoque un rolling restart de l'agent, qui emporte la gateway
+avec lui.
+
+Ce qui l'a écarté : **Swarm et Compose n'ont pas de pod**. Un conteneur compagnon
+partageant localhost n'existe que sur Kubernetes, et plug doit marcher partout de
+la même façon. Le coût du privilège est donc assumé (voir plus bas ce qui le
+borne), et le redémarrage groupé devient une contrainte de publication : mettre à
+jour l'agent implique de mettre à jour Meerkat.
 
 ### Où vivent les clés, selon le mode
 
@@ -388,6 +398,64 @@ pour cela, donc à maintenir les deux.
 Piste notée sans être recommandée : le jour où Meerkat expose déjà un port TLS,
 faire passer le tunnel dessus par ALPN éviterait d'exposer un port SSH séparé.
 Se décide plus tard, n'oblige à rien maintenant.
+
+### Un seul binaire : la décision, qui remplace toutes les variantes ci-dessus
+
+**C'est la conclusion qui vaut.** Meerkat importe le paquet agent de plug et les
+deux ne forment qu'un exécutable. Pas de sidecar, pas de deuxième conteneur, pas
+de processus compagnon : plug devient une partie intégrée de Meerkat.
+
+Ce que cela balaie, et c'est l'essentiel : toutes les questions de frontière
+disparaissent. Plus de `localhost` partagé, plus de volume commun, plus de push
+contre pull, plus de latence de propagation, plus de RBAC à accorder à Meerkat
+pour qu'il écrive là où l'agent lit. Vérifier une clé devient un appel de
+fonction, et le vault de Meerkat est directement accessible au code de l'agent.
+
+Ce que cela demande côté plug : le code de l'agent doit devenir **importable**.
+Aujourd'hui c'est un `package main` dont les `fatal()` appellent `os.Exit`. Il
+faut un paquet qui retourne des erreurs et expose un point d'entrée. Découpage,
+pas réécriture. Le mode autonome reste `plug-agent serve`, qui construit le
+fournisseur par défaut et appelle exactement le code que Meerkat appellera.
+
+Le coût assumé : un processus exposé au monde par le port console détient aussi
+le token du ServiceAccount. Ce qui le borne, et rend le choix défendable, c'est
+que le Role de l'agent est minuscule et namespacé - gérer des Services, patcher
+un Deployment, dans un seul namespace. Ce n'est pas la clé du cluster. Le jour
+où quelqu'un voudra y ajouter des droits « pendant qu'on y est », c'est là qu'il
+faudra rouvrir la question, pas avant.
+
+### Ce que l'intégration change dans les fichiers de déploiement de Meerkat
+
+Conséquence directe et facile à sous-estimer : **le déploiement de Meerkat doit
+réclamer ce que réclamait celui de l'agent**. Concrètement, en reprenant
+`deploy/plug-k8s.yaml` :
+
+- Kubernetes : un `ServiceAccount`, un `Role` (services : get/list/create/
+  delete/update/patch ; deployments : get/list/patch) et le `RoleBinding` qui va
+  avec, plus le port SSH ajouté au Service de Meerkat (un seul Service, trois
+  ports : console, dataplane, ssh).
+- Swarm et Compose : la socket Docker montée dans le conteneur Meerkat, et sur
+  Swarm le placement sur un nœud **manager**.
+
+Ce n'est pas anodin pour un produit de marché : une gateway qui exige des droits
+sur le cluster est une gateway plus difficile à faire accepter, et beaucoup de
+ses utilisateurs n'auront jamais besoin de plug. D'où la règle qui découle :
+
+**La fonctionnalité doit être désactivable, et désactivée par défaut.** Meerkat
+sans plug ne demande aucun droit cluster et n'ouvre aucun port SSH. Le manifeste
+« avec plug » est un supplément documenté, que l'on applique en connaissance de
+cause. Sans cela, on impose une élévation de privilèges à tous les utilisateurs
+de la gateway pour une fonction que certains n'activeront jamais.
+
+**Et un défaut de conception que cela révèle.** `preflight()` refuse aujourd'hui
+de démarrer un agent privé d'accès orchestrateur, et c'est le bon comportement
+pour un agent dédié : un conteneur en bonne santé qui échouerait au premier `-s`
+cacherait un montage manquant. Mais **fatal pour la gateway entière, c'est
+inacceptable** : un droit RBAC oublié ferait refuser de démarrer un Meerkat par
+ailleurs parfaitement fonctionnel. Dans le mode intégré, l'absence d'accès doit
+désactiver la fonction plug et le dire, pas arrêter le processus. C'est une
+modification à prévoir dans l'extraction en paquet : le point d'entrée retourne
+une erreur, et c'est l'appelant qui décide si elle est fatale.
 
 ### Etape 6, après la bascule : image distroless et binaires compressés
 
