@@ -258,7 +258,7 @@ func (s *sshServer) handle(nc net.Conn) {
 	for nch := range chans {
 		switch nch.ChannelType() {
 		case "session":
-			go s.session(nch, user)
+			go s.session(nch, user, conn.RemoteAddr(), conn.LocalAddr())
 		case "direct-tcpip":
 			// The outbound half of the tunnel. `get` never gets it: that account
 			// downloads binaries and nothing else (AllowTcpForwarding no).
@@ -491,7 +491,7 @@ func (s *sshServer) keepalive(conn *ssh.ServerConn) {
 // session serves one session channel. Only `exec` is honoured, and only into
 // this account's fixed argv: that is ForceCommand, and it is the reason neither
 // account has a shell.
-func (s *sshServer) session(nch ssh.NewChannel, user string) {
+func (s *sshServer) session(nch ssh.NewChannel, user string, remote, local net.Addr) {
 	ch, reqs, err := nch.Accept()
 	if err != nil {
 		return
@@ -507,7 +507,7 @@ func (s *sshServer) session(nch ssh.NewChannel, user string) {
 				return
 			}
 			_ = req.Reply(true, nil)
-			s.runForced(ch, user, payload.Command)
+			s.runForced(ch, user, payload.Command, remote, local)
 			return
 		case "shell", "pty-req", "subsystem", "x11-req":
 			// No shell, ever. Same answer sshd gives with ForceCommand set,
@@ -523,7 +523,7 @@ func (s *sshServer) session(nch ssh.NewChannel, user string) {
 
 // runForced executes the account's command with the client's request in
 // SSH_ORIGINAL_COMMAND, exactly as sshd does, and returns its exit status.
-func (s *sshServer) runForced(ch ssh.Channel, user, original string) {
+func (s *sshServer) runForced(ch ssh.Channel, user, original string, remote, local net.Addr) {
 	argv := s.execFor(user)
 	if len(argv) == 0 {
 		fmt.Fprintf(ch.Stderr(), "plug: no command for %q\n", user)
@@ -531,7 +531,20 @@ func (s *sshServer) runForced(ch ssh.Channel, user, original string) {
 		return
 	}
 	cmd := exec.Command(argv[0], argv[1:]...)
-	cmd.Env = append(os.Environ(), "SSH_ORIGINAL_COMMAND="+original)
+	// SSH_CLIENT is not decoration: the name lease records it (sessionOrigin in
+	// main.go), and it is what a collision message shows to tell a colleague's
+	// machine from your own. Dropping it would have emptied that message without
+	// failing anything - the e2e cell only checks the refusal happens, not that
+	// it names an origin.
+	//
+	// Same shape sshd uses, so the reader on the other side needs no change:
+	// SSH_CLIENT is "<client-ip> <client-port> <server-port>", SSH_CONNECTION
+	// adds the server address in the middle.
+	cmd.Env = append(os.Environ(),
+		"SSH_ORIGINAL_COMMAND="+original,
+		"SSH_CLIENT="+sshClientVar(remote, local),
+		"SSH_CONNECTION="+sshConnectionVar(remote, local),
+	)
 	cmd.Stdin = ch
 	cmd.Stdout = ch
 	cmd.Stderr = ch.Stderr()
@@ -547,6 +560,30 @@ func (s *sshServer) runForced(ch ssh.Channel, user, original string) {
 		}
 	}
 	sendExit(ch, code)
+}
+
+// splitAddr yields host and port, tolerating an address that carries neither.
+func splitAddr(a net.Addr) (string, string) {
+	if a == nil {
+		return "", ""
+	}
+	host, port, err := net.SplitHostPort(a.String())
+	if err != nil {
+		return a.String(), ""
+	}
+	return host, port
+}
+
+func sshClientVar(remote, local net.Addr) string {
+	rh, rp := splitAddr(remote)
+	_, lp := splitAddr(local)
+	return fmt.Sprintf("%s %s %s", rh, rp, lp)
+}
+
+func sshConnectionVar(remote, local net.Addr) string {
+	rh, rp := splitAddr(remote)
+	lh, lp := splitAddr(local)
+	return fmt.Sprintf("%s %s %s %s", rh, rp, lh, lp)
 }
 
 // sendExit reports the status and closes the write side, which is what tells

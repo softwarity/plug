@@ -556,6 +556,65 @@ Corollaire : sur Swarm, activer la fonction ne coûte pas un droit de plus, cela
 change la **nature** du processus. La raison de plus pour que l'artefact de prod
 ne la contienne pas du tout.
 
+### Le contrat entre plug et Meerkat
+
+Dans le binaire unique, ce contrat n'est pas une API réseau : c'est une interface
+Go. Rien à exposer, rien à sérialiser, rien à versionner. Trois choses, deux que
+Meerkat fournit et une que plug notifie.
+
+```go
+// Ce que l'hôte fournit à l'agent.
+type Host interface {
+    // L'identité du serveur. Générée si absente ; le vrai Meerkat la range dans
+    // son vault, le mode autonome dans un fichier root-only du conteneur.
+    HostKey() (ssh.Signer, error)
+
+    // La clé cliente est-elle acceptée, et au nom de qui. `who` est vide en
+    // mode autonome (la clé partagée n'identifie personne) et porte le nom de
+    // l'utilisateur en mode Meerkat. C'est lui qui alimente la page d'état.
+    Verify(key ssh.PublicKey) (who string, ok bool)
+
+    // Ce que plug raconte. Best effort, JAMAIS bloquant : une erreur ici ne
+    // doit pas faire échouer une session. C'est de l'information, pas une
+    // autorisation.
+    Served(NameEvent)
+    Unserved(name string)
+}
+
+type NameEvent struct {
+    Name   string    // le nom servi dans le cluster
+    Who    string    // l'identité de la clé, vide si non authentifié
+    Ports  []string  // les ports cluster
+    Parked bool      // un workload déployé a-t-il été mis de côté
+    Since  time.Time
+}
+```
+
+Notes qui évitent des surprises :
+
+- **`Unserved` n'est pas optionnel.** Sans lui, l'écran ment : il montre des
+  services pluggés qui ne le sont plus. Le teardown l'appelle, et le gc de
+  démarrage vaut `Unserved` pour tout ce qu'il balaie.
+- **Après `Served`, pas avant.** Notifier une intention plutôt qu'un fait
+  afficherait des noms dont le provisionnement a échoué.
+- **`Parked` est une information à part** : « ce nom est servi par Alice » et
+  « le déployé est en pause » ne disent pas la même chose à qui teste.
+- **Le mode `-c` ne notifie rien**, il n'y a rien à signaler : ce client
+  consomme le cluster sans y publier de nom.
+- **Pas de resynchronisation à prévoir.** Dans le binaire unique, un redémarrage
+  emporte l'agent et la gateway ensemble, et l'agent balaie ses baux au
+  démarrage (les sessions qu'ils désignaient sont mortes). Les deux repartent
+  d'un état vide et cohérent, sans réconciliation.
+
+L'implémentation par défaut, celle du mode autonome, est le « faux Meerkat » :
+host key sur fichier, une clé publique fixe, notifications ignorées. Elle existe
+déjà à moitié sous le nom `keySource` / `embeddedKeys`.
+
+Ce qui manque ensuite pour la page d'état de Meerkat n'est plus qu'un écran :
+la matière est produite par l'agent à chaque `-s`, et le chantier 2 (l'origine
+qui devient un nom) est ce qui fait passer « pluggé par quelqu'un » à « pluggé
+par Alice ».
+
 ### Etape 6, après la bascule : image distroless et binaires compressés
 
 Rien d'autre que sshd ne retient l'image sur Alpine : le helper est du Go pur,

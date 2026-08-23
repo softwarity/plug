@@ -504,3 +504,66 @@ func TestForwardHonoursTheRequestedBindAddress(t *testing.T) {
 		f.closeAll()
 	}
 }
+
+// SSH_CLIENT is what the name lease records (sessionOrigin, main.go), and what a
+// collision message shows to tell a colleague's machine from your own. sshd set
+// it; a Go server has to do it deliberately, and forgetting it empties that
+// message without failing anything - the e2e cell only asserts that the refusal
+// happens, not that it names an origin. Hence this test.
+func TestTheForcedCommandSeesWhereTheSessionCameFrom(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the agent only ever runs in a Linux container")
+	}
+	signer, pub := newTestKey(t)
+	hk, err := hostKeySigner(filepath.Join(t.TempDir(), "host_key"))
+	if err != nil {
+		t.Fatalf("host key: %v", err)
+	}
+	srv := &sshServer{
+		keys:    embeddedKeys{authorized: []ssh.PublicKey{pub}},
+		hostKey: hk,
+		execFor: func(string) []string {
+			return []string{"/bin/sh", "-c", `printf '%s|%s' "$SSH_CLIENT" "$SSH_CONNECTION"`}
+		},
+		logf: func(string, ...any) {},
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go srv.Serve(ln)
+
+	cl, err := dial(t, ln.Addr().String(), tunnelUser, ssh.PublicKeys(signer))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer cl.Close()
+	sess, err := cl.NewSession()
+	if err != nil {
+		t.Fatalf("session: %v", err)
+	}
+	defer sess.Close()
+	out, err := sess.Output("serve-name x 1:2 takeover")
+	if err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+
+	parts := strings.SplitN(string(out), "|", 2)
+	if len(parts) != 2 {
+		t.Fatalf("expected both variables, got %q", out)
+	}
+	// SSH_CLIENT: "<client-ip> <client-port> <server-port>", and sessionOrigin
+	// takes the first field, so an empty or malformed value costs the message.
+	client := strings.Fields(parts[0])
+	if len(client) != 3 {
+		t.Fatalf("SSH_CLIENT must have three fields, got %q", parts[0])
+	}
+	if client[0] != "127.0.0.1" {
+		t.Errorf("SSH_CLIENT must carry the client address, got %q", client[0])
+	}
+	// SSH_CONNECTION adds the server address: four fields.
+	if conn := strings.Fields(parts[1]); len(conn) != 4 {
+		t.Errorf("SSH_CONNECTION must have four fields, got %q", parts[1])
+	}
+}
