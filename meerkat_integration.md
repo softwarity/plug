@@ -441,11 +441,15 @@ Ce n'est pas anodin pour un produit de marché : une gateway qui exige des droit
 sur le cluster est une gateway plus difficile à faire accepter, et beaucoup de
 ses utilisateurs n'auront jamais besoin de plug. D'où la règle qui découle :
 
-**La fonctionnalité doit être désactivable, et désactivée par défaut.** Meerkat
-sans plug ne demande aucun droit cluster et n'ouvre aucun port SSH. Le manifeste
-« avec plug » est un supplément documenté, que l'on applique en connaissance de
-cause. Sans cela, on impose une élévation de privilèges à tous les utilisateurs
-de la gateway pour une fonction que certains n'activeront jamais.
+**La fonctionnalité doit être désactivable, et désactivée par défaut**, sans quoi
+on impose une élévation de privilèges à tous les utilisateurs de la gateway pour
+une fonction que certains n'activeront jamais. Meerkat sans plug ne demande aucun
+droit cluster et n'ouvre aucun port SSH.
+
+L'interrupteur dans le code ne suffit pas pour autant : le déploiement lui-même
+se décline (voir « La forme du déploiement » plus bas). Les deux jouent à des
+niveaux différents et se complètent - l'artefact de prod ne contient pas les
+droits, et le code refuse d'activer ce qu'il n'a pas.
 
 **Et un défaut de conception que cela révèle.** `preflight()` refuse aujourd'hui
 de démarrer un agent privé d'accès orchestrateur, et c'est le bon comportement
@@ -456,6 +460,101 @@ ailleurs parfaitement fonctionnel. Dans le mode intégré, l'absence d'accès do
 désactiver la fonction plug et le dire, pas arrêter le processus. C'est une
 modification à prévoir dans l'extraction en paquet : le point d'entrée retourne
 une erreur, et c'est l'appelant qui décide si elle est fatale.
+
+### Distribution : ce qui est réellement payant
+
+L'intégration plug, avec son authentification nominative, va en **EE**. La **CE**
+se contente de plug autonome, tel qu'il existe aujourd'hui.
+
+Le cadrage compte plus que le découpage. « L'authentification est en EE » se lit
+comme faire payer la sécurité, un discours aujourd'hui très mal reçu. Or ce que
+l'EE apporte, ce n'est pas d'être sécurisé, c'est de **savoir qui** : attribution
+nominative, audit, révocation d'une personne qui part, page d'état « qui plugue
+quoi depuis quand ». Ce sont des fonctions de gestion d'équipe, et elles se
+facturent sans gêne.
+
+La CE n'est pas « la version sans sécurité » : c'est plug tel qu'il est, avec son
+modèle assumé de cluster de dev de confiance, et plug reste utilisable seul,
+gratuitement, sans rien perdre. Personne ne se voit retirer quoi que ce soit.
+
+Le risque n'est donc pas dans le découpage, il est dans l'usage : quelqu'un qui
+déploie en production ce qui est fait pour du développement.
+
+### La forme du déploiement : des variantes, pas un interrupteur
+
+D'où la décision : **plusieurs artefacts de déploiement, pas un seul avec une
+option**. C'est la même règle que celle posée le 02/08 pour les environnements,
+appliquée au packaging : en prod, l'interdiction doit être une **absence**, rien
+à décocher, rien à contourner, rien à auditer.
+
+- **Kubernetes** : des charts distincts pour l'EE, avec et sans plug. Celui de
+  prod ne contient ni le `Role`, ni le `RoleBinding`, ni le port SSH. Un cluster
+  qui n'a jamais reçu ces objets n'a aucune surface à protéger.
+- **Swarm et Compose** : pas de chart, donc deux **listes de prérequis
+  documentées**, l'une pour le mode intégré, l'autre pour le mode dépourvu. La
+  différence tient en une ligne, et c'est justement pour cela qu'elle doit être
+  écrite : monter ou non la socket Docker (plus, sur Swarm, le placement sur un
+  nœud manager).
+
+### Kubernetes : deux jeux de droits, pas un
+
+Deux besoins distincts, à ne surtout pas empaqueter ensemble :
+
+| besoin | droits | comment le juger |
+|---|---|---|
+| la gateway découvre les services, affiche l'état, suit les changements | `get`, `list`, `watch` | banal : c'est ce que fait tout contrôleur d'Ingress |
+| plug provisionne un nom | `create`, `delete`, `update`, `patch` sur les Services ; `patch` sur son Deployment | c'est celui-ci qui est sensible |
+
+La découverte ne justifie **pas** l'écriture. Deux Roles séparés : celui de la
+gateway, en lecture seule, qu'on accorde volontiers et qui rend service (voir
+plus bas) ; celui de plug, en écriture, qui vient avec la fonction et disparaît
+avec le chart qui ne la contient pas.
+
+Les fusionner « puisqu'on y est » donnerait une gateway exposée au monde avec le
+droit de modifier des Services, y compris là où plug est désactivé.
+
+Ce que la lecture rapporte, au passage : le chantier 3 (« qui plugue quoi »)
+devient partiellement gratuit, les Services au selector `app: plug` étant
+visibles directement ; et Meerkat peut prévenir un dev qu'un Service est
+réconcilié par Argo CD **avant** qu'il n'y perde une heure (voir la page
+CD & GitOps de la doc).
+
+### Docker et Swarm : aucune granularité, d'où le proxy de socket
+
+Le raisonnement rassurant ci-dessus (« un Role minuscule et namespacé, ce n'est
+pas la clé du cluster ») **ne vaut que sur Kubernetes**. Monter
+`/var/run/docker.sock`, c'est donner l'équivalent de root sur le nœud : avec cet
+accès on lance un conteneur privilégié qui monte le système de fichiers de
+l'hôte. Sur Swarm il faut en plus un nœud **manager**, donc c'est le contrôle du
+cluster entier.
+
+Le compromis est inversé, et il vaut mieux l'avoir écrit :
+
+| | granularité | sidecar possible | risque du binaire unique |
+|---|---|---|---|
+| Kubernetes | fine (RBAC namespacé) | oui | faible |
+| Swarm / Compose | aucune (tout ou rien) | non | maximal |
+
+Là où la séparation serait la plus utile, elle est impossible ; là où elle est
+possible, elle sert le moins.
+
+**Ce qu'on fait ici : lister.** Deux listes de prérequis documentées, mode
+intégré et mode dépourvu, et on s'arrête là. Imposer un durcissement à un
+cluster de développement coûterait plus de friction que la menace n'en justifie,
+et plug s'adresse par construction à des clusters de confiance.
+
+**Ce qu'on documente comme issue, sans l'imposer** : un **proxy de socket
+filtrant** placé devant la socket, Meerkat ne parlant jamais au démon
+directement. La liste dont plug a besoin est courte et connue : créer et
+supprimer des conteneurs (les signposts), créer et supprimer des services Swarm,
+lire les réseaux. Tout le reste est refusé, à commencer par ce qui permet de
+monter l'hôte. Ce n'est pas un modèle d'autorisation, c'est un filtre, mais cela
+transforme « root sur le nœud » en « ces quelques appels ». À sortir du tiroir le
+jour où quelqu'un pose la question, pas avant.
+
+Corollaire : sur Swarm, activer la fonction ne coûte pas un droit de plus, cela
+change la **nature** du processus. La raison de plus pour que l'artefact de prod
+ne la contienne pas du tout.
 
 ### Etape 6, après la bascule : image distroless et binaires compressés
 
