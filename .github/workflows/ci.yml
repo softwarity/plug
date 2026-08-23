@@ -137,7 +137,7 @@ jobs:
       # compiled it into the cluster image; nothing caught a vet issue or ran its
       # unit tests).
       - name: Vet & test the agent helper
-        working-directory: agent/helper
+        working-directory: agent
         run: go vet ./... && go build ./... && go test -race ./...
       - name: Cross-compile
         working-directory: cli

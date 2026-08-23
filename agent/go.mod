@@ -2,7 +2,7 @@
 // agent's server, key handling and notifications become function calls there,
 // while the verbs keep running as a subprocess. A local module name (plug-agent)
 // cannot be imported at all.
-module github.com/softwarity/plug/agent/helper
+module github.com/softwarity/plug/agent
 
 go 1.26
 

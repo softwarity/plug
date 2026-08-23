@@ -11,7 +11,7 @@ package main
 // stub straight to the saved upstream, not the tunnel). The agent-side path
 // remains as the fallback for a registry only the cluster can reach.
 //
-// The pure helpers are MIRRORED from agent/helper/registry.go (separate Go
+// The pure helpers are MIRRORED from agent/registry.go (separate Go
 // modules) — keep changes in sync with their twin.
 
 import (

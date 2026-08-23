@@ -6,6 +6,6 @@
 // it alone execute the SAME code, rather than two copies that drift.
 package main
 
-import agent "github.com/softwarity/plug/agent/helper"
+import "github.com/softwarity/plug/agent"
 
 func main() { agent.Main() }

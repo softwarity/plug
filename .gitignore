@@ -16,7 +16,7 @@ e2e/clients/node/package-lock.json
 /echo-local.exe
 /sink
 /sink.exe
-agent/helper/plug-agent
+agent/plug-agent
 cli/cli
 
 # Go services built locally. e2e/services/chaos/chaos — a 9 MB Mach-O arm64
