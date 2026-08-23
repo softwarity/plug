@@ -14,9 +14,9 @@ func TestDocURL(t *testing.T) {
 		want   string
 	}{
 		{"home", docHome, nil, "https://softwarity.github.io/plug/"},
-		{"a page", docKubernetes, nil, "https://softwarity.github.io/plug/kubernetes"},
-		{"the CD page", docContinuousDeployment, nil, "https://softwarity.github.io/plug/continuous-deployment"},
-		{"a section", docKubernetes, []string{"names"}, "https://softwarity.github.io/plug/kubernetes#names"},
+		{"a page", docKubernetes, nil, "https://softwarity.github.io/plug/#/kubernetes"},
+		{"the CD page", docContinuousDeployment, nil, "https://softwarity.github.io/plug/#/continuous-deployment"},
+		{"a section", docKubernetes, []string{"names"}, "https://softwarity.github.io/plug/#/kubernetes#names"},
 	}
 	for _, c := range cases {
 		if got := docURL(c.page, c.anchor...); got != c.want {

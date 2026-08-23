@@ -52,16 +52,18 @@ jobs:
         working-directory: docs
         run: npm run build -- --base-href /plug/
 
-      # Pages serves 404.html for any path it has no file for, and this site is a
-      # single-page app routed BY PATH: /plug/kubernetes is not a file, so every
-      # deep link — a section someone shares, the doc link in a plug error
-      # message — used to land on Pages' own 404. Copying index.html there hands
-      # the URL to the Angular router instead, which resolves it normally.
+      # A safety net, and nothing more. This site is routed on the HASH
+      # (app.config.ts: withHashLocation), so its real addresses are
+      # /plug/#/kubernetes, and those have always worked: Pages serves index.html
+      # at /plug/ and the router reads the fragment. There was never a broken
+      # deep link to fix - that reading was mine, from testing the wrong URL.
       #
-      # The HTTP status stays 404 (only a prerendered build would return 200, and
-      # that means pulling in @angular/ssr). Browsers do not care; search engines
-      # do, which is the trade to revisit if the deep pages ever need indexing.
-      - name: Serve deep links (SPA fallback)
+      # What this does cover is someone arriving at /plug/kubernetes: a
+      # hand-typed address, or a link written by whoever assumed path routing
+      # (which is how this step came to exist). Without it Pages returns its own
+      # 404; with it the app boots and the reader lands on the home page. Better,
+      # though still not the section asked for - only a hash link goes there.
+      - name: Land stray path-style URLs on the site (SPA fallback)
         working-directory: docs
         run: cp dist/doc-site/browser/index.html dist/doc-site/browser/404.html
 

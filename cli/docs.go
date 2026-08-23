@@ -39,6 +39,13 @@ const (
 func docURL(page string, anchor ...string) string {
 	var b strings.Builder
 	b.WriteString(docsBase)
+	if page != "" {
+		// The site routes on the HASH (provideRouter(..., withHashLocation())),
+		// so /plug/kubernetes is not an address it serves: it 404s, and the SPA
+		// fallback lands the reader on the home page instead of the section.
+		// The address that resolves is /plug/#/kubernetes.
+		b.WriteString("#/")
+	}
 	b.WriteString(page)
 	if len(anchor) > 0 && anchor[0] != "" {
 		b.WriteString("#")

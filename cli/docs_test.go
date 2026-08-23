@@ -15,10 +15,10 @@ func TestDocURL(t *testing.T) {
 		want   string
 	}{
 		{"home", docHome, nil, "https://softwarity.github.io/plug/"},
-		{"a page", docKubernetes, nil, "https://softwarity.github.io/plug/kubernetes"},
-		{"the CD page", docContinuousDeployment, nil, "https://softwarity.github.io/plug/continuous-deployment"},
-		{"a section", docKubernetes, []string{"names"}, "https://softwarity.github.io/plug/kubernetes#names"},
-		{"empty anchor is no anchor", docSwarm, []string{""}, "https://softwarity.github.io/plug/swarm"},
+		{"a page", docKubernetes, nil, "https://softwarity.github.io/plug/#/kubernetes"},
+		{"the CD page", docContinuousDeployment, nil, "https://softwarity.github.io/plug/#/continuous-deployment"},
+		{"a section", docKubernetes, []string{"names"}, "https://softwarity.github.io/plug/#/kubernetes#names"},
+		{"empty anchor is no anchor", docSwarm, []string{""}, "https://softwarity.github.io/plug/#/swarm"},
 	}
 	for _, c := range cases {
 		if got := docURL(c.page, c.anchor...); got != c.want {
@@ -54,6 +54,11 @@ func TestNoHardCodedDocLinks(t *testing.T) {
 // A link to a page the site does not route is worse than no link: it lands on
 // the SPA fallback and the reader is left looking. The routes file is the source
 // of truth, so read it rather than restate it.
+//
+// This checks the PAGE exists; TestDocURLMatchesHowTheSiteRoutes checks the
+// URL's SHAPE. Both are needed, and having only the first is how every link
+// shipped pointing at the home page: each name was a real route, spelled in an
+// address the site does not serve.
 func TestDocPagesAreRealRoutes(t *testing.T) {
 	routes := filepath.Join("..", "docs", "src", "app", "app.routes.ts")
 	b, err := os.ReadFile(routes)
@@ -87,5 +92,25 @@ func TestTheSiteServesTheRealManifest(t *testing.T) {
 	}
 	if string(a) != string(b) {
 		t.Errorf("%s and %s have diverged - copy the first over the second", source, served)
+	}
+}
+
+// The site routes on the hash (app.config.ts: withHashLocation), so an address
+// without "#/" is not one it serves - GitHub Pages 404s, the SPA fallback boots,
+// and the router lands on the home page because there is no fragment to read.
+// Silent, and wrong for every link in every message.
+func TestDocURLMatchesHowTheSiteRoutes(t *testing.T) {
+	cfg := filepath.Join("..", "docs", "src", "app", "app.config.ts")
+	b, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Skipf("doc site not present (%v)", err)
+	}
+	hashRouted := strings.Contains(string(b), "withHashLocation")
+	got := docURL(docKubernetes)
+	if hashRouted && !strings.Contains(got, "/#/") {
+		t.Errorf("the site is hash-routed but docURL builds %q, which resolves to the home page", got)
+	}
+	if !hashRouted && strings.Contains(got, "/#/") {
+		t.Errorf("the site is path-routed but docURL builds %q", got)
 	}
 }
