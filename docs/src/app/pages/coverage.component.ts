@@ -129,19 +129,23 @@ interface Hole {
       </section>
     }
 
-    <h3 class="s-title">What is not proven yet</h3>
-    <p class="lead">
-      Two things the grid above cannot claim. Both are marked <i class="dot d-warn">!</i> in it,
-      and neither is a gap in what plug does - they are limits of what has been <em>demonstrated</em>.
-    </p>
-    <div class="holes">
-      @for (h of holes; track h.t) {
-        <div class="hole" [style.--sev]="h.sev === 'no' ? 'var(--cov-no)' : 'var(--cov-warn)'">
-          <div class="t">{{ h.t }}</div>
-          <div class="d">{{ h.d }}</div>
-        </div>
-      }
-    </div>
+    <!-- section.cov, like every block above: it carries the 30px that separates a
+         title from the table before it. A bare h3 sits flush against it. -->
+    <section class="cov">
+      <h3 class="s-title">What is not proven yet</h3>
+      <p class="lead">
+        Two things the grid above cannot claim. Both are marked <i class="dot d-warn">!</i> in it,
+        and neither is a gap in what plug does - they are limits of what has been <em>demonstrated</em>.
+      </p>
+      <div class="holes">
+        @for (h of holes; track h.t) {
+          <div class="hole" [style.--sev]="h.sev === 'no' ? 'var(--cov-no)' : 'var(--cov-warn)'">
+            <div class="t">{{ h.t }}</div>
+            <div class="d">{{ h.d }}</div>
+          </div>
+        }
+      </div>
+    </section>
 
     <div class="callout">
       <strong>How this matrix is proven.</strong> Every CI run installs plug FROM the cluster on
