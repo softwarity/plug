@@ -57,10 +57,15 @@ interface Hole {
       table.cov thead th { background: var(--bg-secondary); font-size: 0.7rem; letter-spacing: 0.06em;
                            text-transform: uppercase; color: var(--text-muted); font-weight: 600; }
       table.cov th.c, table.cov td.c { text-align: center; width: 92px; }
-      td.feat { font-family: 'Courier New', Consolas, monospace; font-size: 0.83rem; color: var(--text-primary); white-space: nowrap; }
+      /* nowrap kept the short labels on one line, but one 71-character entry in
+         Data path then set the width of its whole table and squeezed the notes
+         into a vertical ribbon. Cap the label column and let only the long ones
+         wrap; give the notes a floor so they always have room to read. */
+      td.feat { font-family: 'Courier New', Consolas, monospace; font-size: 0.83rem; color: var(--text-primary);
+                white-space: normal; max-width: 44ch; }
       td.feat.sub { color: var(--text-secondary); padding-left: 22px; position: relative; }
       td.feat.sub::before { content: '↳'; position: absolute; left: 8px; color: var(--text-muted); }
-      td.note { color: var(--text-secondary); font-size: 0.83rem; white-space: normal; }
+      td.note { color: var(--text-secondary); font-size: 0.83rem; white-space: normal; min-width: 22ch; }
       table.cov tbody tr:hover td { background: rgba(163, 113, 247, 0.05); }
 
       .cell { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 7px;
