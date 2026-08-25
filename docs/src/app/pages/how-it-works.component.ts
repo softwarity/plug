@@ -180,8 +180,8 @@ import { RouterLink } from '@angular/router';
       local port (dedicated, so the port's lifetime is exactly the session's, even where the forward
       datapath lives in a shared daemon). The cluster <em>name</em> that points at it is
       <strong>provisioned by the agent on the fly</strong>: a signpost container carrying the DNS
-      alias (Docker, via the socket) or a Service selecting the agent pod (Kubernetes, via a
-      Services-only role) - created on <code>-s</code>, removed when the session ends, and
+      alias (Docker, via the socket) or a Service whose endpoints name the agent pod holding the
+      session (Kubernetes, via a Services-and-their-endpoints role) - created on <code>-s</code>, removed when the session ends, and
       re-provisioned automatically after a reconnect, with no stack redeploy. plug verifies the whole
       loop at startup through the cluster's own DNS. A <strong>deployed</strong> service owning the
       name is <strong>parked</strong> for the session (containers stopped / Swarm scaled to 0 / k8s

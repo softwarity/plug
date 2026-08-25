@@ -24,7 +24,11 @@ services:
     networks:
       - app_net
     deploy:
-      replicas: 1   # a single agent task — the signpost relays to its VIP
+      # One task is all a dev agent needs, and it is not a constraint any more: a
+      # signpost relays to the TASK holding the session (<service>.<slot>.<id>,
+      # which the overlay's DNS answers), not to the service VIP that would spread
+      # a session's requests across every replica. Scale it if you want to.
+      replicas: 1
       placement:
         constraints: [node.role == manager]   # so it can create signpost services (plug -s)
 

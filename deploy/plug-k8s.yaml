@@ -24,11 +24,26 @@
 # The reverse direction (plug -s <name>:<cport>:<lport>) has the agent CREATE
 # and DELETE a Service pointing that name at itself, per session - no name
 # pre-declared, no redeploy. That is what the ServiceAccount + Role + RoleBinding
-# below grant: DELIBERATELY MINIMAL and namespace-scoped - manage Services, and
-# nothing else. The agent can make a name in ITS namespace point at itself; it
-# cannot touch pods, secrets, other namespaces, or the cluster. A name served
-# this way is a port on the agent, reachable by whatever can reach the agent -
-# consistent with plug's trusted-dev-cluster model. Deploy accordingly.
+# below grant: DELIBERATELY MINIMAL and namespace-scoped - manage Services and
+# their Endpoints, and nothing else. The agent can make a name in ITS namespace
+# point at itself; it cannot touch pods, secrets, other namespaces, or the
+# cluster. A name served this way is a port on the agent, reachable by whatever
+# can reach the agent - consistent with plug's trusted-dev-cluster model. Deploy
+# accordingly.
+#
+# Why Endpoints and not just a selector: a served name must reach the ONE pod
+# holding that session, and a selector cannot say that. `app: plug` matches every
+# replica of the agent, so with more than one the name works for one request in N
+# and the rest land on a pod that never heard of the session. So the Service plug
+# creates carries NO selector and the agent writes its Endpoints itself, with the
+# address the downward API gives it below. The alternative - have each agent label
+# its own pod and select that - would need `pods: patch`, i.e. the right to
+# rewrite pods in the namespace, which is a far larger grant than writing the
+# endpoints of the names plug itself created.
+#
+# EndpointSlices are NOT granted and not needed: the mirroring controller built
+# into Kubernetes derives them from custom Endpoints automatically, which is what
+# kube-proxy actually routes on.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -65,6 +80,15 @@ spec:
           ports:
             - name: ssh
               containerPort: 22
+          env:
+            # The address a served name is pointed at: THIS pod, not the agent's
+            # deployment. The agent can work it out on its own (the source address
+            # the kernel would use to reach the API server), and does when it is
+            # linked into a gateway whose manifest is not this one - but a pod
+            # that is told cannot be wrong.
+            - name: PLUG_POD_IP
+              valueFrom:
+                fieldRef: { fieldPath: status.podIP }
           # The agent is up as soon as it accepts TCP on 22; a plain TCP probe
           # avoids needing credentials.
           readinessProbe:
@@ -101,12 +125,20 @@ metadata:
   name: plug-serve-names
   labels: { app: plug }
 rules:
-  # Exactly what serve-name / unserve-name / boot-gc need - Services only.
+  # Exactly what serve-name / unserve-name / boot-gc need - Services and the
+  # Endpoints of those Services, nothing else.
   # update/patch: the takeover repoints an existing Service at the agent for
   # the session (original selector/ports saved in an annotation, restored).
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["get", "list", "create", "delete", "update", "patch"]
+  # The name points at ONE pod, and this is how it says which: the Service plug
+  # creates has no selector, so its Endpoints are the agent's to write (see the
+  # header). `get` is only the boot-time check that this grant is present - an
+  # agent without it still serves names, the old way, and says so in its log.
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    verbs: ["get", "create", "update", "delete"]
   # `plug update`: the agent triggers a rolling restart of its OWN Deployment
   # (a template-annotation patch), so the node re-pulls the tag above. Still
   # namespace-scoped, still minimal.

@@ -120,8 +120,9 @@ ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@$
       normal, it recovers by itself.
     </p>
     <p>
-      On <strong>Swarm</strong>, run the agent on a manager node as a single replica - also already
-      set above. Your existing network needs no change (a non-attachable overlay is fine).
+      On <strong>Swarm</strong>, run the agent on a manager node - also already set above. One
+      replica is the usual shape and what the snippet deploys, but it is not a requirement: a
+      signpost relays to the agent <em>task</em> holding the session, never to the service VIP. Your existing network needs no change (a non-attachable overlay is fine).
     </p>
     <div class="callout">
       <strong>The socket is root on the host.</strong> It is required: plug is here to plug services

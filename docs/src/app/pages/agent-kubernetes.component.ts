@@ -53,9 +53,13 @@ kubectl -n my-namespace port-forward svc/plug 2222:2222</app-code>
       <code>plug -s &lt;name&gt;:&lt;cluster-port&gt;:&lt;local-port&gt; &lt;cmd&gt;</code> publishes the
       process in the cluster under a DNS name, for the lifetime of
       the session - <strong>no name pre-declared, no redeploy</strong>. On Kubernetes the name is a
-      <strong>Service selecting the agent pod</strong>, and the agent creates and deletes it itself
-      per session. The manifest above already grants exactly what that needs - a small,
-      namespace-scoped RBAC role (manage Services, nothing else); it is part of the one deploy, so
+      <strong>Service pointing at the agent pod that holds the session</strong>, and the agent
+      creates and deletes it itself per session. It carries no selector: a selector would match
+      every replica of the agent, while the session lives in exactly one pod, so the agent writes
+      the Service's <strong>endpoints</strong> instead - one address, the right pod. The manifest
+      above already grants exactly what that needs - a small, namespace-scoped RBAC role (manage
+      Services and their endpoints, nothing else, and notably no access to pods); it is part of the
+      one deploy, so
       <code>-s</code> works out of the box. Apply the manifest as a whole: an agent that cannot
       manage Services <strong>refuses to start</strong>, rather than come up looking healthy and
       fail on the first <code>-s</code>.

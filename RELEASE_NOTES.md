@@ -98,6 +98,60 @@ no in-place fix to suggest: the Service goes, or the name does.
 
 ---
 
+### A served name points at the agent holding the session, not at "an agent"
+
+Nothing changes if you run one agent, which is what the manifests deploy and what
+plug is. **Re-apply `deploy/plug-k8s.yaml` if you use Kubernetes**: it grants one
+more thing (the endpoints of the Services plug itself creates) and passes the pod
+its own address. An agent whose deployed RBAC predates that keeps working exactly
+as before, and says so once in its log rather than failing anyone's session.
+
+A name plug creates has to reach the process serving it, and that process lives in
+exactly ONE agent: the session's forward is a socket on one machine. Two of the
+three backends named the agent's *role* instead. On Swarm the signpost relayed to
+the service VIP, which load balances across every task; on Kubernetes the Service
+selected `app: plug`, which matches every replica. With a single agent those are
+the same thing, which is why it worked, and why `-s` simply refused to run at more
+than one replica on Swarm. Past one they become a lottery: a share of the requests
+lands on an agent that never heard of the session.
+
+So the Swarm signpost now relays to the *task* holding the session
+(`<service>.<slot>.<id>`, which the overlay's DNS answers with that one task), and
+the Kubernetes Service carries no selector at all - the agent writes its endpoints
+itself, one address, the pod that is serving. The refusal at more than one replica
+is gone with the reason for it. Note what this does NOT need: no access to pods.
+Labelling its own pod and selecting that would have meant the right to rewrite
+pods in the namespace, which is a much larger grant than writing the endpoints of
+names plug created.
+
+### A parked workload comes back even if the agent that parked it never does
+
+When plug takes a deployed service's name for a session, it writes down what it
+set aside so it can put it back. That receipt named what was parked, never by
+whom, so exactly one agent could act on it: the one that wrote it, when it next
+started. A dedicated agent container always comes back under its own name and
+finds its own leftovers, so this was invisible.
+
+It stops being invisible where the agent is a package inside something that
+scales. The instance that parked a workload may never come back - scaled down,
+rescheduled, replaced - and then nobody restores it: the real service stays at
+zero replicas, or the name stays pointing at a machine that has gone home, with a
+receipt no one feels entitled to act on.
+
+Receipts now name their owner, as the address that proves it: the instance, and
+the port the session answers on. Any agent may restore one whose owner no longer
+answers, and none may touch one whose owner does. Nothing is renewed and nothing
+is coordinated - a forward dies with its process, which is the whole signal. The
+same evidence settles the mirror-image bug it exposed: a booting agent used to
+restore *every* parked workload it found, including ones a colleague was serving
+from another instance at that moment.
+
+Standalone plug gains from it too: an agent redeployed under a different name can
+restore what its predecessor parked, which it could not before.
+
+
+---
+
 
 ## 2.11.1
 

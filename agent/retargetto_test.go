@@ -97,23 +97,46 @@ func TestHasTag(t *testing.T) {
 	}
 }
 
-// signpostAgentPort digs the relay port out of the two signpost shapes the
-// backends create — the collision guard depends on it.
-func TestSignpostAgentPort(t *testing.T) {
+// signpostRelay digs the relay ADDRESS out of the two signpost shapes the
+// backends create, and ownerPort the port half of it - the collision guard
+// depends on both. It reads a signpost an older agent created, which is the only
+// reason the command is still parsed at all now that the address is a label.
+func TestSignpostRelay(t *testing.T) {
 	for _, c := range []struct {
-		cmd  []string
-		want string
+		cmd            []string
+		want, wantPort string
 	}{
-		{[]string{"/usr/local/bin/plug-agent", "signpost", "3000", "neo_plug:41234"}, "41234"},
-		{[]string{"/usr/local/bin/plug-agent", "signpost", "3000", "10.0.1.5:52801"}, "52801"},
+		{[]string{"/usr/local/bin/plug-agent", "signpost", "3000", "neo_plug:41234"}, "neo_plug:41234", "41234"},
+		{[]string{"/usr/local/bin/plug-agent", "signpost", "3000", "10.0.1.5:52801"}, "10.0.1.5:52801", "52801"},
 		// multi-port signpost (HTTP+SMTP+POP3 on one name): first pair decides
-		{[]string{"/usr/local/bin/plug-agent", "signpost", "80", "neo_plug:41001", "25", "neo_plug:41002", "425", "neo_plug:41003"}, "41001"},
-		{[]string{"sleep", "60"}, ""},
-		{nil, ""},
-		{[]string{"signpost"}, ""},
+		{[]string{"/usr/local/bin/plug-agent", "signpost", "80", "neo_plug:41001", "25", "neo_plug:41002", "425", "neo_plug:41003"}, "neo_plug:41001", "41001"},
+		{[]string{"sleep", "60"}, "", ""},
+		{nil, "", ""},
+		{[]string{"signpost"}, "", ""},
 	} {
-		if got := signpostAgentPort(c.cmd); got != c.want {
-			t.Errorf("signpostAgentPort(%v) = %q, want %q", c.cmd, got, c.want)
+		got := signpostRelay(c.cmd)
+		if got != c.want {
+			t.Errorf("signpostRelay(%v) = %q, want %q", c.cmd, got, c.want)
 		}
+		if p := ownerPort(got); p != c.wantPort {
+			t.Errorf("ownerPort(%q) = %q, want %q", got, p, c.wantPort)
+		}
+	}
+}
+
+// A signpost created by THIS version records its owner as a label; one created
+// before it records the same address in its command, and must not read as
+// ownerless just because the label is missing (every running session would look
+// like a leftover the first time an upgraded agent boots).
+func TestSignpostOwnerPrefersTheLabelAndFallsBackToTheCommand(t *testing.T) {
+	cmd := []string{"/usr/local/bin/plug-agent", "signpost", "3000", "neo_plug.1.abc:41234"}
+	if got := signpostOwner(map[string]string{sessionOwnerLabel: "neo_plug.2.def:52801"}, cmd); got != "neo_plug.2.def:52801" {
+		t.Errorf("the label is the owner when it is there, got %q", got)
+	}
+	if got := signpostOwner(nil, cmd); got != "neo_plug.1.abc:41234" {
+		t.Errorf("an older signpost's owner is its relay address, got %q", got)
+	}
+	if got := signpostOwner(nil, []string{"sleep", "60"}); got != "" {
+		t.Errorf("nothing to read is nobody, got %q", got)
 	}
 }

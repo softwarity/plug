@@ -96,37 +96,28 @@ func TestK8sUnroutable(t *testing.T) {
 	}
 }
 
-// The reclaim branch used to write a bare {app: plug}. RFC 7386 MERGES maps, so
-// on a Service whose selector carried anything else, that key was ADDED to the
-// originals rather than replacing them — leaving a selector that demands
-// app=plug AND app.kubernetes.io/name=<workload>, which matches no pod. Zero
-// endpoints, and every connection to the name times out. Both branches now build
-// the patch here, so they cannot drift apart again.
-func TestK8sRepointPatchReplacesTheWholeSelector(t *testing.T) {
+// The repoint used to write a selector, and both of its shapes were wrong in
+// turn. A bare {app: plug} MERGED (RFC 7386) into a Helm Service's selector,
+// leaving one that demands app=plug AND app.kubernetes.io/name=<workload> and
+// matches no pod: zero endpoints, every connection timing out. Nulling the other
+// keys fixed that, and left the deeper one - `app: plug` matches every replica of
+// the agent, while the session lives in exactly one pod.
+//
+// So the patch now DELETES the selector, which is what puts the Service's
+// Endpoints in the agent's hands (k8sEndpointsFor), and neither shape of the bug
+// can be built any more: there is no selector left to half-merge or to spread
+// across replicas.
+func TestK8sRepointPatchDropsTheSelector(t *testing.T) {
 	pairs := []portPair{{cluster: "8081", agent: "41017"}}
-	// A Helm-deployed Service: the labels that produced the real failure.
-	current := map[string]string{
-		"app.kubernetes.io/instance": "flight-folder-frontend",
-		"app.kubernetes.io/name":     "flight-folder-frontend",
-	}
-	patch := k8sRepointPatch(pairs, current, map[string]any{"plug.linger.since": nil})
+	patch := k8sRepointPatch(pairs, map[string]any{"plug.linger.since": nil})
 
 	spec, ok := patch["spec"].(map[string]any)
 	if !ok {
 		t.Fatalf("no spec in %v", patch)
 	}
-	sel, ok := spec["selector"].(map[string]any)
-	if !ok {
-		t.Fatalf("no selector in %v", spec)
-	}
-	if sel["app"] != "plug" {
-		t.Errorf("selector must point at the agent, got %v", sel["app"])
-	}
-	for k := range current {
-		v, present := sel[k]
-		if !present || v != nil {
-			t.Errorf("%s must be explicitly nulled or it survives the merge — got %v (present=%v)", k, v, present)
-		}
+	sel, present := spec["selector"]
+	if !present || sel != nil {
+		t.Errorf("the selector must be explicitly nulled (a merge patch deletes a key by null), got %v (present=%v)", sel, present)
 	}
 	// The ports go with it: the forward listens on an allocated port, never on
 	// the cluster port the original Service targeted.
