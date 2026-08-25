@@ -97,13 +97,13 @@ import { CodeComponent } from '../code/code.component';
     </p>
     <app-code lang="yaml">spec:
   ignoreDifferences:
- - group: ""
+    - group: ""
       kind: Service
       name: my-service
       namespace: my-namespace
       jsonPointers:
- - /spec/selector
- - /spec/ports</app-code>
+        - /spec/selector
+        - /spec/ports</app-code>
     <p>
       This lives in the <code>Application</code> object (a CRD, usually in the <code>argocd</code>
       namespace) - <strong>not in the chart</strong>. On a cluster where plug is used routinely,
@@ -118,8 +118,8 @@ metadata:
 data:
   resource.customizations.ignoreDifferences._Service: |
     jsonPointers:
- - /spec/selector
- - /spec/ports</app-code>
+      - /spec/selector
+      - /spec/ports</app-code>
     <p>
       For a one-off, turning off <strong>Self Heal</strong> (<em>App Details → Sync Policy</em>)
       also works and needs no manifest change - but it suspends drift correction for the whole
@@ -148,14 +148,14 @@ data:
     </p>
     <app-code lang="yaml">diff:
   comparePatches:
- - apiVersion: v1
+    - apiVersion: v1
       kind: Service
       name: my-service
       namespace: my-namespace
       operations:
- - op: remove
+        - op: remove
           path: /spec/selector
- - op: remove
+        - op: remove
           path: /spec/ports</app-code>
 
     <h3>Crossplane and bespoke operators</h3>

@@ -48,6 +48,14 @@ jobs:
         working-directory: docs
         run: npm ci
 
+      # Before building, not after: a snippet that does not parse is one a reader
+      # copies into kubectl and gets an error from, and the Angular build never
+      # reads the string so it cannot notice. Three shipped broken this way.
+      - name: The YAML the site publishes must parse
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 scripts/ci/check-doc-snippets.py
+
       - name: Build doc-site for GitHub Pages
         working-directory: docs
         run: npm run build -- --base-href /plug/
