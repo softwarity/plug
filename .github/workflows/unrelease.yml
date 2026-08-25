@@ -66,16 +66,31 @@ jobs:
             exit 1
           fi
 
-          # The one thing that must not be undone silently.
-          if curl -fsS -o /dev/null "https://hub.docker.com/v2/repositories/softwarity/plug/tags/$ver" 2>/dev/null; then
-            if [ "$FORCE" != "true" ]; then
-              echo "::error::the image softwarity/plug:$ver IS published — this release shipped. Re-run with force if you really mean to withdraw it."
+          # The one thing that must not be undone silently - so read the STATUS,
+          # not curl's exit code. `curl -f` exits non-zero on a 404 and on a DNS
+          # failure, a TLS error, a timeout, a 5xx and a rate limit alike; every
+          # one of those used to land in the else branch below and conclude
+          # "this release never shipped", which then deleted the GitHub release
+          # and the git tag of a perfectly live image. The `2>/dev/null` even
+          # cancelled the -S that would have shown the cause.
+          url="https://hub.docker.com/v2/repositories/softwarity/plug/tags/$ver"
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 --retry 3 --retry-delay 2 "$url" || echo 000)
+          case "$code" in
+            200)
+              if [ "$FORCE" != "true" ]; then
+                echo "::error::the image softwarity/plug:$ver IS published — this release shipped. Re-run with force if you really mean to withdraw it."
+                exit 1
+              fi
+              echo "::warning::softwarity/plug:$ver is published and is being withdrawn anyway (force)"
+              ;;
+            404)
+              echo "no published image for $ver — this release never shipped, as expected"
+              ;;
+            *)
+              echo "::error::could not tell whether softwarity/plug:$ver is published (HTTP $code). Refusing to withdraw on a guess."
               exit 1
-            fi
-            echo "::warning::softwarity/plug:$ver is published and is being withdrawn anyway (force)"
-          else
-            echo "no published image for $ver — this release never shipped, as expected"
-          fi
+              ;;
+          esac
 
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "ver=$ver" >> "$GITHUB_OUTPUT"

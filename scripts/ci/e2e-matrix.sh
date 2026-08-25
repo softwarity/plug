@@ -528,7 +528,22 @@ do_matrix() {
       for p in $protolist; do printf " %s |" "$(glyph "$(lookup "$l" "$p")")"; done; echo
     done
   } >> "${GITHUB_STEP_SUMMARY:-/dev/stderr}"
-  echo "=== matrix: $fails failure(s) ==="
+  # A zero count is not a pass on its own. `grep -c` on empty input prints 0 and
+  # exits 1, the `|| true` swallows that status, and the verdict below succeeds:
+  # this cell - four languages by eight protocols, the heaviest of the suite -
+  # could go green having run nothing at all. A killed subshell, a full /tmp, or
+  # matrix_lang dying before its first iteration all produce exactly that.
+  #
+  # So count what came back and require the full grid. The `missing` guard above
+  # only covers clients that failed to BUILD.
+  local want got
+  want=$(( $(printf '%s\n' $LANGS | wc -l) * $(printf '%s\n' $PROTOS | wc -l) ))
+  got=$(printf '%s\n' "$results" | grep -cE ' (PASS|FAIL)$' || true)
+  echo "=== matrix: $got/$want result(s), $fails failure(s) ==="
+  if [ "$got" -ne "$want" ]; then
+    echo "    only $got of $want cells reported - the grid did not run to completion"
+    return 1
+  fi
   [ "$fails" -eq 0 ]
 }
 

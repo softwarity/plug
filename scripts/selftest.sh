@@ -10,7 +10,13 @@
 #   sudo bash scripts/selftest.sh        # macOS / Linux
 #
 # Env: PLAT_OS overrides the marker's OS label (CI passes the runner name).
-set -u
+# -e and pipefail are not decoration here. Without pipefail the verdict below
+# reads the exit status of `tee`, so a plug that prints SELFTEST-OK and then
+# panics is recorded PASS - and that marker is exactly what the publication
+# barrier reads back (platform-grid.sh, ci.yml). Without -e, a failed `go build`
+# does not stop anything, and the run tests whatever stale binary is lying
+# around from an earlier build.
+set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root/cli"
 
@@ -22,13 +28,21 @@ case "$(uname -s)" in
 esac
 label="${PLAT_OS:-$os}"
 
+# After $ext is known, and before the build: a stale binary from an earlier run
+# (local, or a reused runner) must never be what gets tested, and a stale
+# transcript must never be what the verdict reads.
+rm -f "plug$ext" out.txt
+
 echo "=== build plug ==="
 go build -o "plug$ext" .
 
 # Windows: WinTUN needs its DLL next to the binary (extract via PowerShell — the
 # runner's git-bash has no unzip).
 if [ "$os" = Windows ]; then
-  curl -sL https://www.wintun.net/builds/wintun-0.14.1.zip -o wintun.zip
+  # -f, so a 404 fails here instead of writing an HTML error page into the zip
+  # and being discovered three commands later as a broken archive. The DLL is
+  # loaded by a process running elevated, so what lands here matters.
+  curl -fsSL https://www.wintun.net/builds/wintun-0.14.1.zip -o wintun.zip
   powershell -Command "Expand-Archive -Path wintun.zip -DestinationPath wtun -Force"
   cp wtun/wintun/bin/amd64/wintun.dll .
 fi
