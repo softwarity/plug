@@ -36,6 +36,34 @@ a real VPN.
 ---
 
 
+### The agent is a package, not only a binary
+
+Nothing changes if you deploy the agent as the manifests describe: same image,
+same commands, same behaviour. This one is for a different reader.
+
+The agent's code is now importable, so another Go program can link it in and
+serve plug sessions itself instead of running a second container beside it.
+What that program has to supply is small and named: the server's identity,
+which client keys are accepted and under whose name, and what is being served
+at any moment. Everything else comes with the package.
+
+Standalone plug uses that same interface, with the keys baked into the image
+and an identity kept on disk. It is not a special case kept alive for tests: it
+is the same code path, so the embedded mode cannot quietly drift away from the
+one everybody runs.
+
+One behaviour differs, and only for an embedder. An agent that cannot reach its
+orchestrator refuses to start, which is right for a container whose whole job is
+that: a healthy-looking agent failing on someone's first `-s` would hide a
+missing mount. A program that embeds the agent gets an error instead and decides
+for itself, because a gateway should not fail to boot over a permission its
+users may never need.
+
+The import path is `github.com/softwarity/plug/agent`.
+
+
+---
+
 ### A Kubernetes name plug reclaimed could point at no pod at all
 
 When plug takes back a Service it created itself — one left warm by a linger, or
