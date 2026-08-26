@@ -349,6 +349,17 @@ func dispatch(cmd []string) {
 		}
 		answer("nxdomain")
 	case "self-update":
+		// An embedder can forbid it, and should: this verb rewrites the image of
+		// the deployment the agent runs in. Standalone that deployment IS plug,
+		// which is the point. Inside a gateway it is the gateway, and any
+		// developer reaching the port could roll it onto a plug image. It finds
+		// its target by the label app=plug, so a gateway not carrying that label
+		// is already inert here, but "already inert" is not a decision anyone
+		// made and a label is one line away from being copied.
+		if os.Getenv(noSelfUpdateEnv) == "1" {
+			answer("error: this agent does not update itself — it is embedded in another program, " +
+				"which owns its own deployment and its own release cycle")
+		}
 		// An optional target names WHERE to go — a stream (latest, a branch) or
 		// the word `tag` for the newest release. Without it, follow the tag the
 		// deployment already carries.
@@ -471,11 +482,44 @@ func resolverWitness() string {
 
 // localVersion is this agent's own version, baked into the image.
 func localVersion() string {
-	if b, err := os.ReadFile("/opt/plug/VERSION"); err == nil {
+	// What the embedder declared, when there is one. A gateway linking the agent
+	// in has no /opt/plug/VERSION, and answering "unknown" is not cosmetic: the
+	// CLI turns the answer into a cache path, asks this agent for that build's
+	// digest, and refuses to run anything it cannot verify. An agent that cannot
+	// name its version cannot serve a client at all.
+	if v := strings.TrimSpace(os.Getenv(versionEnv)); v != "" {
+		return v
+	}
+	if b, err := os.ReadFile(versionFile); err == nil {
 		return strings.TrimSpace(string(b))
 	}
 	return "unknown"
 }
+
+// signpostImage is the image the signpost container runs. It must carry the plug
+// binary, since its entrypoint is /usr/local/bin/plug-agent (signpostArgs).
+//
+// Defaulting to the agent's OWN image is right for a standalone agent, which is
+// that image, and wrong for an embedder, which is not: a gateway would create a
+// signpost from its own image and the container would die instantly on a missing
+// binary. Kubernetes never comes through here (it points a Service at the agent
+// and creates no pod), so this is the Compose and Swarm answer.
+func signpostImage(self string) string {
+	if img := strings.TrimSpace(os.Getenv(signpostImageEnv)); img != "" {
+		return img
+	}
+	return self
+}
+
+// The environment the SERVER process passes to a verb subprocess. A verb cannot
+// read the embedder's Config, so anything the embedder decides has to arrive
+// this way. Named here, beside the code that reads them, and set in serve.go.
+const (
+	versionEnv       = "PLUG_VERSION"
+	signpostImageEnv = "PLUG_SIGNPOST_IMAGE"
+	noSelfUpdateEnv  = "PLUG_NO_SELF_UPDATE"
+	versionFile      = "/opt/plug/VERSION"
+)
 
 // portPair is one of a name's exposures: the port workloads dial, and the
 // sshd-allocated agent port the signpost relays it to.
@@ -1582,7 +1626,7 @@ func containerServe(name string, pairs []portPair, self selfInfo) {
 		endpoints[n] = map[string]any{"Aliases": []string{name}}
 	}
 	body := map[string]any{
-		"Image":      self.image,
+		"Image":      signpostImage(self.image),
 		"Entrypoint": signpostArgs(pairs, self.relayTarget()),
 		"Labels": map[string]string{
 			"plug.signpost":       "1",

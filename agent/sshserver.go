@@ -95,11 +95,14 @@ func parseAuthorizedKeys(b []byte) ([]ssh.PublicKey, error) {
 // run without the real binaries, and so the two accounts keep the strict
 // separation sshd gave them through ForceCommand.
 type sshServer struct {
-	host     Host
-	hostKey  ssh.Signer
-	execFor  func(user string) []string // argv for this account's ForceCommand
-	logf     func(string, ...any)
-	idleEvry time.Duration // keepalive period; 0 disables (tests)
+	host    Host
+	hostKey ssh.Signer
+	execFor func(user string) []string // argv for this account's ForceCommand
+	logf    func(string, ...any)
+	verbEnv []string // embedder decisions the verb subprocess cannot ask for
+	// noDownloadAccount closes the anonymous `get` account entirely.
+	noDownloadAccount bool
+	idleEvry          time.Duration // keepalive period; 0 disables (tests)
 
 	wg sync.WaitGroup
 
@@ -197,6 +200,11 @@ func (s *sshServer) serverConfig() *ssh.ServerConfig {
 		// It is bounded by its ForceCommand, not by authentication.
 		NoClientAuth: true,
 		NoClientAuthCallback: func(c ssh.ConnMetadata) (*ssh.Permissions, error) {
+			if s.noDownloadAccount {
+				// The embedder closed it. Same answer as an unknown user, so the
+				// port does not advertise which agents have it and which do not.
+				return nil, fmt.Errorf("user %q must authenticate", c.User())
+			}
 			if c.User() != downloadUser {
 				// Not a refusal of the connection: the client falls through to
 				// publickey, which is what the tunnel user does.
@@ -579,6 +587,7 @@ func (s *sshServer) runForced(ch ssh.Channel, user, who string, fwd *forwardSet,
 		"SSH_CONNECTION="+sshConnectionVar(remote, local),
 		"PLUG_WHO="+who,
 	)
+	cmd.Env = append(cmd.Env, s.verbEnv...)
 	// The verb's answer goes to the client untouched; a copy of the tail stays
 	// here, because "ok" and "ok reassigned" mean different things to the Host
 	// and the exit status tells them apart in neither case (answer() exits 0

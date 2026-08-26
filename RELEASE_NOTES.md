@@ -56,6 +56,28 @@ Delivery is on one goroutine, so the callbacks keep their order and a gateway
 that is slow, broken or panicking costs its own events and never a developer's
 session. That is what the interface promised; it is now what it does.
 
+Four things a gateway had no way to say are now fields on `Config`, each
+defaulting to exactly what a standalone agent does today.
+
+`Version` is what the agent reports. It defaults to `/opt/plug/VERSION`, a file
+that exists in the plug image and nowhere else, and answering "unknown" is not
+cosmetic: the launcher turns that answer into a cache path and refuses to run a
+core whose digest the agent cannot vouch for. `SignpostImage` is the image the
+signpost container runs on Compose and Swarm; it defaulted to the agent's own
+image, which is correct when the agent is the plug image and produces a
+container that dies instantly when it is not. Kubernetes was never affected
+there, since it points a Service at the agent and creates no pod.
+
+`NoSelfUpdate` refuses the verb that rewrites the image of the deployment the
+agent runs in. Standalone that deployment is plug, which is the point; inside a
+gateway it is the gateway. And `NoDownloadAccount` removes the anonymous `get`
+account, which has no authentication by design and is bounded only by its fixed
+command: a reasonable surface on a dedicated agent, a decision worth making
+deliberately on a gateway's own port.
+
+Two of these fail silently when left wrong, so the agent now says so at boot
+rather than letting someone discover it on their first `plug -s`.
+
 
 ---
 

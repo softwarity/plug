@@ -81,6 +81,41 @@ type Config struct {
 	// RequireOrchestrator makes a missing docker socket or RBAC fatal. True for
 	// a standalone agent, false for an embedder that has other work to do.
 	RequireOrchestrator bool
+
+	// Version is what the `info` verb reports: the version `plug doctor` shows
+	// and the one `plug update` resolves a target against. Defaults to
+	// /opt/plug/VERSION, which exists in the plug image and nowhere else.
+	//
+	// It is NOT the whole story, and the other half is easy to miss. The
+	// LAUNCHER asks the download account instead (`version` through
+	// DownloadCommand), turns that answer into a cache path, then asks the same
+	// account for that build's digest and refuses to run a core it cannot
+	// verify. So an embedder must make DownloadCommand answer `version` too, and
+	// answer it with THIS string: two different answers means a client caching
+	// one version and verifying against another.
+	Version string
+
+	// SignpostImage is the image the signpost container runs on Compose and
+	// Swarm. It must carry the plug binary, since the entrypoint is
+	// /usr/local/bin/plug-agent. Defaults to the agent's OWN image, which is
+	// right when the agent is the plug image and wrong for an embedder: a
+	// gateway would build a signpost from its own image and the container would
+	// die on a missing binary. Kubernetes never uses this (it points a Service
+	// at the agent and creates no pod).
+	SignpostImage string
+
+	// NoSelfUpdate refuses the self-update verb. Set it in a gateway: the verb
+	// rewrites the image of the deployment the agent runs in, which is the
+	// gateway's own, and it is reachable by anyone who reaches the port.
+	NoSelfUpdate bool
+
+	// NoDownloadAccount removes the anonymous `get` account. That account has no
+	// authentication by design (requiring a key to fetch the thing that holds
+	// the key is a circle) and is bounded only by its fixed command. It is how a
+	// developer installs and how the launcher fetches the core matching this
+	// cluster, so removing it means the embedder distributes plug some other
+	// way. Said out loud because it is a surface, not a detail.
+	NoDownloadAccount bool
 }
 
 // Start serves until ctx is cancelled or the listener fails.
@@ -97,6 +132,11 @@ func Start(ctx context.Context, cfg Config) error {
 	if len(cfg.DownloadCommand) == 0 {
 		cfg.DownloadCommand = []string{downloadCommand}
 	}
+	if cfg.Version == "" {
+		if b, err := os.ReadFile(versionFile); err == nil {
+			cfg.Version = strings.TrimSpace(string(b))
+		}
+	}
 	if cfg.Logf == nil {
 		cfg.Logf = func(format string, a ...any) {
 			fmt.Fprintf(os.Stderr, "plug-agent: "+format+"\n", a...)
@@ -112,6 +152,24 @@ func Start(ctx context.Context, cfg Config) error {
 		// name provisioning (-s) does not. Said out loud rather than discovered
 		// on someone's first attempt.
 		cfg.Logf("names cannot be provisioned: %v", err)
+	}
+
+	// Two things an embedder gets wrong silently, said at boot rather than
+	// discovered on somebody's first run. Neither stops the agent: an embedder
+	// may be serving binaries some other way, or may not want -s on Swarm.
+	if cfg.Version == "" {
+		cfg.Logf("no version to report: the CLI turns that answer into a cache path and " +
+			"will refuse to run a core it cannot verify. Set Config.Version")
+	}
+	if !cfg.NoDownloadAccount && len(cfg.DownloadCommand) == 1 && cfg.DownloadCommand[0] == downloadCommand {
+		if _, err := os.Stat(downloadCommand); err != nil {
+			cfg.Logf("%s is not here, so the download account can serve nothing. That account is "+
+				"where the LAUNCHER reads this cluster's version and the digest of the core it "+
+				"then runs, so clients cannot install and cannot start at all. Set "+
+				"Config.DownloadCommand (it must answer `version` with %q, `install`, "+
+				"`<os>-<arch>` and `wintun`), or Config.NoDownloadAccount to close it on purpose",
+				downloadCommand, cfg.Version)
+		}
 	}
 
 	// An agent (re)start orphans every session's dynamic name, so sweep before
@@ -137,6 +195,14 @@ func Start(ctx context.Context, cfg Config) error {
 			return nil
 		},
 		logf: cfg.Logf,
+		// What a verb subprocess cannot ask the Host for, because it runs in
+		// another process: everything the embedder decided.
+		verbEnv: []string{
+			versionEnv + "=" + cfg.Version,
+			signpostImageEnv + "=" + cfg.SignpostImage,
+			noSelfUpdateEnv + "=" + boolEnv(cfg.NoSelfUpdate),
+		},
+		noDownloadAccount: cfg.NoDownloadAccount,
 	}
 
 	ln, err := net.Listen("tcp", cfg.Addr)
@@ -152,13 +218,19 @@ func Start(ctx context.Context, cfg Config) error {
 		srv.CloseConnections()
 	}()
 
-	version, _ := os.ReadFile("/opt/plug/VERSION")
-	cfg.Logf("ready (v%s) on %s", strings.TrimSpace(string(version)), cfg.Addr)
+	cfg.Logf("ready (v%s) on %s", cfg.Version, cfg.Addr)
 
 	if err := srv.Serve(ln); err != nil && ctx.Err() == nil {
 		return err
 	}
 	return nil
+}
+
+func boolEnv(b bool) string {
+	if b {
+		return "1"
+	}
+	return "0"
 }
 
 // gcQuietly sweeps orphaned names, best effort. The verbs it reaches call
