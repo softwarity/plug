@@ -109,6 +109,12 @@ type sshServer struct {
 	// left a session open and went to lunch.
 	mu    sync.Mutex
 	conns map[*ssh.ServerConn]struct{}
+
+	// Delivery of Served/Unserved to the Host: one goroutine, started on the
+	// first event, so callbacks keep their order and a slow Host backs up its
+	// own queue instead of a developer's session. See nameevents.go.
+	evOnce sync.Once
+	ev     chan func()
 }
 
 // track registers a live connection, returning the function that forgets it.
@@ -248,6 +254,10 @@ func (s *sshServer) handle(nc net.Conn) {
 	defer s.track(conn)()
 
 	user := conn.Permissions.Extensions["user"]
+	// Who the Host says this key belongs to, empty when the key authenticates
+	// the SOFTWARE rather than a person (see Host.Verify). It rides into the
+	// verbs as PLUG_WHO and into every name event.
+	who := conn.Permissions.Extensions["who"]
 	if s.idleEvry > 0 {
 		// What ClientAliveInterval/CountMax did: notice a dead peer so its
 		// remote-forward binds free up before a reconnecting session tries to
@@ -261,13 +271,17 @@ func (s *sshServer) handle(nc net.Conn) {
 	// is explicit.
 	fwd := &forwardSet{conn: conn, srv: s}
 	defer fwd.closeAll()
+	// Same event, said to the Host: whatever this connection was serving, it is
+	// not serving it any more. Deferred beside closeAll because it is the same
+	// fact about the same failure modes.
+	defer s.withdrawAll(fwd)
 
 	go s.globalRequests(reqs, user, fwd)
 
 	for nch := range chans {
 		switch nch.ChannelType() {
 		case "session":
-			go s.session(nch, user, conn.RemoteAddr(), conn.LocalAddr())
+			go s.session(nch, user, who, fwd, conn.RemoteAddr(), conn.LocalAddr())
 		case "direct-tcpip":
 			// The outbound half of the tunnel. `get` never gets it: that account
 			// downloads binaries and nothing else (AllowTcpForwarding no).
@@ -371,6 +385,11 @@ func (s *sshServer) globalRequests(reqs <-chan *ssh.Request, user string, fwd *f
 type forwardSet struct {
 	conn *ssh.ServerConn
 	srv  *sshServer
+
+	// The names this connection serves, so its teardown withdraws exactly
+	// those. A name outlives the session that served it in every failure mode
+	// worth handling, which is why it is tracked here and not inferred.
+	heldNames
 
 	mu  sync.Mutex
 	lns map[string]net.Listener
@@ -500,7 +519,7 @@ func (s *sshServer) keepalive(conn *ssh.ServerConn) {
 // session serves one session channel. Only `exec` is honoured, and only into
 // this account's fixed argv: that is ForceCommand, and it is the reason neither
 // account has a shell.
-func (s *sshServer) session(nch ssh.NewChannel, user string, remote, local net.Addr) {
+func (s *sshServer) session(nch ssh.NewChannel, user, who string, fwd *forwardSet, remote, local net.Addr) {
 	ch, reqs, err := nch.Accept()
 	if err != nil {
 		return
@@ -516,7 +535,7 @@ func (s *sshServer) session(nch ssh.NewChannel, user string, remote, local net.A
 				return
 			}
 			_ = req.Reply(true, nil)
-			s.runForced(ch, user, payload.Command, remote, local)
+			s.runForced(ch, user, who, fwd, payload.Command, remote, local)
 			return
 		case "shell", "pty-req", "subsystem", "x11-req":
 			// No shell, ever. Same answer sshd gives with ForceCommand set,
@@ -532,7 +551,7 @@ func (s *sshServer) session(nch ssh.NewChannel, user string, remote, local net.A
 
 // runForced executes the account's command with the client's request in
 // SSH_ORIGINAL_COMMAND, exactly as sshd does, and returns its exit status.
-func (s *sshServer) runForced(ch ssh.Channel, user, original string, remote, local net.Addr) {
+func (s *sshServer) runForced(ch ssh.Channel, user, who string, fwd *forwardSet, original string, remote, local net.Addr) {
 	argv := s.execFor(user)
 	if len(argv) == 0 {
 		fmt.Fprintf(ch.Stderr(), "plug: no command for %q\n", user)
@@ -549,13 +568,24 @@ func (s *sshServer) runForced(ch ssh.Channel, user, original string, remote, loc
 	// Same shape sshd uses, so the reader on the other side needs no change:
 	// SSH_CLIENT is "<client-ip> <client-port> <server-port>", SSH_CONNECTION
 	// adds the server address in the middle.
+	//
+	// PLUG_WHO is the identity the Host put on this key, empty when it names no
+	// one. The verbs run in another process and cannot ask the Host anything, so
+	// this is how `info` can answer "the agent knows you as alice" and how a
+	// developer finds out their enrolled key is actually being recognised.
 	cmd.Env = append(os.Environ(),
 		"SSH_ORIGINAL_COMMAND="+original,
 		"SSH_CLIENT="+sshClientVar(remote, local),
 		"SSH_CONNECTION="+sshConnectionVar(remote, local),
+		"PLUG_WHO="+who,
 	)
+	// The verb's answer goes to the client untouched; a copy of the tail stays
+	// here, because "ok" and "ok reassigned" mean different things to the Host
+	// and the exit status tells them apart in neither case (answer() exits 0
+	// even for an error line).
+	tail := &tailWriter{max: 4096}
 	cmd.Stdin = ch
-	cmd.Stdout = ch
+	cmd.Stdout = io.MultiWriter(ch, tail)
 	cmd.Stderr = ch.Stderr()
 
 	code := 0
@@ -567,6 +597,9 @@ func (s *sshServer) runForced(ch ssh.Channel, user, original string, remote, loc
 			fmt.Fprintf(ch.Stderr(), "plug: %v\n", err)
 			code = 1
 		}
+	}
+	if code == 0 && user == tunnelUser {
+		s.announce(fwd, who, original, tail.lastLine())
 	}
 	sendExit(ch, code)
 }

@@ -2,6 +2,65 @@
 
 ## NEXT RELEASE
 
+### A profile can carry your own key
+
+Until now plug authenticated with one key built into the binary. It is in every
+published build, so it proves the caller has plug, not who the caller is. That is
+the honest description of a trusted development cluster and it does not change
+here: nothing you run today needs a key of its own.
+
+What is new is that a profile can have one.
+
+    plug keygen -p dev      generate this profile's pair, kept in ~/.plug/keys
+    plug pubkey -p dev      print the public half, to hand to whoever runs the cluster
+
+One pair per profile, because an identity per cluster is the unit an operator
+enrols and revokes: a single key shared across clusters could not be withdrawn
+from one of them without breaking the others.
+
+**It is safe to run before the cluster asks for it.** plug offers both keys, the
+profile's own first and the built-in one behind it, and SSH lets the agent pick
+whichever it knows. An agent that does not check keys accepts the built-in one
+and never sees the other; an agent that does accepts yours. There is no order to
+get right and no flag day, which is the whole reason the fallback is there.
+
+`plug test` now says which identity the agent recognised, so an enrolment can be
+verified from the outside rather than assumed. The pair follows its profile: it
+moves on `plug rn` and it goes on `plug rm`, so a private key is never left on
+disk with nothing pointing at it.
+
+If you never run `plug keygen`, nothing about your setup changes.
+
+
+---
+
+
+### The agent reports what is being served
+
+For anyone linking the agent into their own gateway. The `Host` interface has
+always declared `Served` and `Unserved`, and nothing ever called them: an
+embedder could implement both, run, and watch an empty state page forever.
+
+They fire now. A name being served reports who is serving it, on which cluster
+ports, and since when. It is withdrawn when the session releases it and, more
+importantly, when the session simply dies: a laptop that sleeps, a process
+killed, a cable pulled. The event also says whether a deployed workload had to be
+parked to make room, so a state page can tell "somebody is serving this name"
+from "somebody is serving this name and your deployment is stopped while they
+do". Three cases the obvious implementation gets wrong are handled and tested: a
+refused serve announces nothing even though it exits zero, a failed release
+withdraws nothing, and a name already granted to a newer session is not withdrawn
+when its former holder finally tears down.
+
+Delivery is on one goroutine, so the callbacks keep their order and a gateway
+that is slow, broken or panicking costs its own events and never a developer's
+session. That is what the interface promised; it is now what it does.
+
+
+---
+
+
+
 ### The agent speaks SSH without carrying OpenSSH
 
 Nothing changes for you. Same commands, same protocol, same CLI; a client from

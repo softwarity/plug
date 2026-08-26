@@ -225,10 +225,20 @@ func dispatch(cmd []string) {
 				img = self.image
 			}
 		}
-		if img != "" {
-			answer("version=%s backend=%s image=%s", ver, backend, img)
+		// Who the Host recognised behind this connection's key, passed in by the
+		// server process (PLUG_WHO) because a verb runs in another process and
+		// cannot ask the Host anything. Empty when the key names no person,
+		// which is what the shared built-in key does and what a standalone
+		// agent always answers. Omitted rather than sent empty: a field that is
+		// there means somebody is identified.
+		who := ""
+		if w := strings.TrimSpace(os.Getenv("PLUG_WHO")); w != "" {
+			who = " who=" + w
 		}
-		answer("version=%s backend=%s", ver, backend)
+		if img != "" {
+			answer("version=%s backend=%s image=%s%s", ver, backend, img, who)
+		}
+		answer("version=%s backend=%s%s", ver, backend, who)
 	case "check-update":
 		// WHERE this deployment would go, without going there.
 		//

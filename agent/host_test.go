@@ -83,7 +83,10 @@ func TestAnEmbedderDrivesTheAgentThroughTheInterface(t *testing.T) {
 			Host: host,
 			Addr: addr,
 			// Meerkat re-execs itself with a hidden verb; a test just echoes.
-			VerbCommand:     []string{"/bin/sh", "-c", `printf 'verb:%s' "$SSH_ORIGINAL_COMMAND"`},
+			// Answers the real one-line protocol ("dynamic", plus "parked" when
+			// a workload was set aside), and echoes back what it was given, so
+			// one exec covers both halves of the contract.
+			VerbCommand:     []string{"/bin/sh", "-c", `printf 'dynamic parked cmd:%s who:%s' "$SSH_ORIGINAL_COMMAND" "$PLUG_WHO"`},
 			DownloadCommand: []string{"/bin/sh", "-c", `printf 'dl:%s' "$SSH_ORIGINAL_COMMAND"`},
 			Logf:            func(string, ...any) {},
 			// A gateway must keep running without orchestrator access: this is
@@ -123,8 +126,56 @@ func TestAnEmbedderDrivesTheAgentThroughTheInterface(t *testing.T) {
 	if err != nil {
 		t.Fatalf("exec: %v", err)
 	}
-	if got := string(out); got != "verb:serve-name x 1:2 takeover" {
-		t.Errorf("the verb command must receive the request, got %q", got)
+	// The request, and the identity the Host put on the key. The verbs run in
+	// another process and cannot ask the Host anything, so PLUG_WHO is the only
+	// way `info` can answer "this agent knows you as alice" and the only way a
+	// developer finds out an enrolled key is actually being recognised.
+	if got := string(out); got != "dynamic parked cmd:serve-name x 1:2 takeover who:alice" {
+		t.Errorf("the verb must receive the request and the identity, got %q", got)
+	}
+
+	// And the Host is told what is now served, by whom. This is the third thing
+	// the interface asks for, and the one an embedder builds a state page from.
+	var ev NameEvent
+	for i := 0; i < 100; i++ {
+		host.mu.Lock()
+		if len(host.served) > 0 {
+			ev = host.served[0]
+		}
+		host.mu.Unlock()
+		if ev.Name != "" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if ev.Name != "x" || ev.Who != "alice" {
+		t.Errorf("Served = %+v, want name x served by alice", ev)
+	}
+	if len(ev.Ports) != 1 || ev.Ports[0] != "1" {
+		t.Errorf("Served ports = %v, want the cluster side [1]", ev.Ports)
+	}
+	// The verb said it parked a workload; the Host has to learn it, or a state
+	// page cannot tell "somebody is serving this name" from "somebody is serving
+	// this name and your deployment is stopped while they do".
+	if !ev.Parked {
+		t.Error("the verb answered \"dynamic parked\" and the event does not say so")
+	}
+
+	// Closing the connection withdraws it, which is what a killed session or a
+	// sleeping laptop looks like from here.
+	cl.Close()
+	var gone bool
+	for i := 0; i < 100; i++ {
+		host.mu.Lock()
+		gone = len(host.unserved) == 1 && host.unserved[0] == "x"
+		host.mu.Unlock()
+		if gone {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !gone {
+		t.Error("a connection that ends must withdraw the names it served")
 	}
 
 	cancel()
