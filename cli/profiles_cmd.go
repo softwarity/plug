@@ -38,6 +38,9 @@ func cmdRemoveProfile(args []string) {
 		}
 		fatal("%v", err)
 	}
+	// The profile is what named the key. Leaving the pair behind would leave a
+	// private key under ~/.plug that nothing points at any more.
+	removeProfileKeys(name)
 	info("removed profile %q", name)
 }
 
@@ -59,6 +62,7 @@ func cmdRenameProfile(args []string) {
 	if err := os.Rename(oldPath, newPath); err != nil {
 		fatal("%v", err)
 	}
+	renameProfileKeys(old, name) // the pair moves with the profile that names it
 	info("renamed profile %q → %q", old, name)
 }
 
@@ -90,6 +94,7 @@ func cmdTestProfile(args []string) {
 		fatal("✗ %s:%s unreachable — %v", cfg.host, cfg.port, err)
 	}
 	info("✓ %s:%s reachable — agent v%s", cfg.host, cfg.port, v)
+	reportIdentity(cfg)
 }
 
 // profileName is what a profile may be called. Deliberately narrow, because the

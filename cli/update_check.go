@@ -142,7 +142,7 @@ func backgroundUpdateCheck(cfg config) {
 func applyUpdate(cfg config, tag string) {
 	saveUpdateState(cfg, updateState{checked: time.Now()})
 
-	tr, err := tunnel.Dial(cfg.host, cfg.port, sshUser, embeddedKey, tun.SharedKnownHosts(), nil)
+	tr, err := tunnel.Dial(cfg.host, cfg.port, sshUser, cfg.authKeys(), tun.SharedKnownHosts(), nil)
 	if err != nil {
 		return
 	}
@@ -177,7 +177,7 @@ func updateNotice(available string) string {
 // ~31s in the background to find out is not worth it.
 func probeUpdate(cfg config) (found, img string, ok bool) {
 	var before string
-	tr, err := tunnel.Dial(cfg.host, cfg.port, sshUser, embeddedKey, tun.SharedKnownHosts(), nil)
+	tr, err := tunnel.Dial(cfg.host, cfg.port, sshUser, cfg.authKeys(), tun.SharedKnownHosts(), nil)
 	if err != nil {
 		return "", "", false
 	}

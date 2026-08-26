@@ -65,6 +65,13 @@ Usage:
                                          plug update latest    the latest stream
                                          plug update feat-09   that branch's tag
                                        The agent checks the tag exists first.
+  plug keygen [-p profile] [--renew]   give this profile its own key pair, kept
+                                       in ~/.plug/keys/. Enrol the public half
+                                       with your cluster operator; plug keeps
+                                       offering the built-in key too, so this is
+                                       safe to run before the cluster asks for it
+  plug pubkey [-p profile]             print that profile's public key, ready to
+                                       paste where the operator enrols it
   plug rn <old> <new>                  rename a profile (alias: mv)
   plug rm <profile>                    remove a profile
   plug version [-p profile]            this launcher's version — or, with a
@@ -133,6 +140,33 @@ type config struct {
 	// to the profile because `auto` updates the AGENT, which is shared: you may
 	// govern your own cluster and have no say over the shared one.
 	updateMode string
+	// key is the path to this profile's PERSONAL private key, written by
+	// `plug keygen`. Empty means the profile has none and the binary's built-in
+	// key is the only identity, which is every profile until someone runs keygen.
+	// It is per profile on purpose: one identity per cluster is what an operator
+	// enrols and revokes, and a single key shared across clusters could not be
+	// withdrawn from one of them.
+	key string
+}
+
+// authKeys is what plug offers the agent, in order: this profile's personal key
+// when it has one, then the key built into the binary.
+//
+// Both, never one or the other. An agent that does not check keys accepts the
+// embedded one and a personal key would be an unexplained refusal; an agent that
+// does accepts the personal one and ignores the rest. Offering the pair is what
+// lets `plug keygen` be run at any time, against any cluster, without a flag day.
+func (c config) authKeys() [][]byte {
+	if c.key == "" {
+		return [][]byte{embeddedKey}
+	}
+	personal, err := os.ReadFile(c.key)
+	if err != nil {
+		fatal("profile key %s: %v\n"+
+			"      that path comes from `key = ...` in the profile. Regenerate it with\n"+
+			"      'plug keygen', or delete the line to fall back to the built-in key", c.key, err)
+	}
+	return [][]byte{personal, embeddedKey}
 }
 
 // parseExpose parses one -s value, <name>:<cluster-port>:<local-port> — the
@@ -287,6 +321,12 @@ func main() {
 		return
 	case "config":
 		cmdConfig(args[1:])
+		return
+	case "keygen":
+		cmdKeygen(args[1:])
+		return
+	case "pubkey":
+		cmdPubkey(args[1:])
 		return
 	case "uninstall":
 		uninstall(args[1:])
@@ -971,17 +1011,17 @@ func listVersions() {
 	ch := make(chan row, len(names))
 	for _, n := range names {
 		go func(n string) {
-			host, port, err := readProfileSoft(n)
+			cfg, err := readProfileSoft(n)
 			if err != nil {
 				ch <- row{n, "broken profile (" + err.Error() + ")"}
 				return
 			}
-			v, err := agentVersionTimeout(config{host: host, port: port}, 5*time.Second)
+			v, err := agentVersionTimeout(cfg, 5*time.Second)
 			if err != nil {
-				ch <- row{n, fmt.Sprintf("unreachable (%s:%s)", host, port)}
+				ch <- row{n, fmt.Sprintf("unreachable (%s:%s)", cfg.host, cfg.port)}
 				return
 			}
-			ch <- row{n, fmt.Sprintf("agent v%s (%s:%s)", shortVersion(v), host, port)}
+			ch <- row{n, fmt.Sprintf("agent v%s (%s:%s)", shortVersion(v), cfg.host, cfg.port)}
 		}(n)
 	}
 	for range names {
@@ -1390,6 +1430,8 @@ func loadProfile(name string) config {
 			cfg.port = val
 		case "update":
 			cfg.updateMode = val
+		case "key":
+			cfg.key = val
 		case "forward":
 			// Removed: it declared a local port-forward for drivers that ignored
 			// the SOCKS proxy, and the userspace TUN made that unnecessary — it

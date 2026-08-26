@@ -40,7 +40,7 @@ func dialTunnel(cfg config) (*tunnel.Transport, error) {
 	if knownHosts != "" {
 		guardUserPath(knownHosts)
 	}
-	tr, err := tunnel.Dial(cfg.host, cfg.port, sshUser, embeddedKey, knownHosts, info)
+	tr, err := tunnel.Dial(cfg.host, cfg.port, sshUser, cfg.authKeys(), knownHosts, info)
 	// The host key is pinned into knownHosts on first connect. Off localhost the
 	// dialer may be the setuid daemon (euid 0), which would leave the pin file
 	// root-owned under the user's ~/.plug — and the "key changed, remove the line"

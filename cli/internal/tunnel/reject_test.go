@@ -85,7 +85,7 @@ func TestDialContextChannelRejectDoesNotReconnect(t *testing.T) {
 	addr, conns := rejectingServer(t)
 	host, port, _ := net.SplitHostPort(addr)
 
-	tr, err := Dial(host, port, "plug", clientKeyPEM(t), "", nil)
+	tr, err := Dial(host, port, "plug", [][]byte{clientKeyPEM(t)}, "", nil)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}

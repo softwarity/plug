@@ -217,14 +217,14 @@ func updateTarget(profile, host, port string) (config, string) {
 			fatal("several profiles (%s) — pick the cluster to update: plug update -p <name>", strings.Join(names, ", "))
 		}
 	}
-	h, p, err := readProfileSoft(name)
+	cfg, err := readProfileSoft(name)
 	if err != nil {
 		fatal("profile %q: %v", name, err)
 	}
 	if port != "" {
-		p = port
+		cfg.port = port
 	}
-	return config{host: h, port: p}, fmt.Sprintf("%s (%s:%s)", name, h, p)
+	return cfg, fmt.Sprintf("%s (%s:%s)", name, cfg.host, cfg.port)
 }
 
 // clientSideUpdate is `plug update`'s fast path: ask the agent WHICH image it
@@ -240,7 +240,7 @@ func updateTarget(profile, host, port string) (config, string) {
 // cluster can reach, a moving tag whose currentness is a digest question only
 // the cluster can answer, or an agent from before `apply` existed.
 func clientSideUpdate(cfg config, before, want string) string {
-	tr, err := tunnel.Dial(cfg.host, cfg.port, sshUser, embeddedKey, tun.SharedKnownHosts(), nil)
+	tr, err := tunnel.Dial(cfg.host, cfg.port, sshUser, cfg.authKeys(), tun.SharedKnownHosts(), nil)
 	if err != nil {
 		fatal("tunnel user: %v — the agent image may be too old; redeploy softwarity/plug", err)
 	}
@@ -286,7 +286,7 @@ func clientSideUpdate(cfg config, before, want string) string {
 // askSelfUpdate runs the agent's self-update verb over the tunnel user and
 // returns its one-line verdict.
 func askSelfUpdate(cfg config, want string) string {
-	tr, err := tunnel.Dial(cfg.host, cfg.port, sshUser, embeddedKey, tun.SharedKnownHosts(), nil)
+	tr, err := tunnel.Dial(cfg.host, cfg.port, sshUser, cfg.authKeys(), tun.SharedKnownHosts(), nil)
 	if err != nil {
 		fatal("tunnel user: %v — the agent image may be too old; redeploy softwarity/plug", err)
 	}

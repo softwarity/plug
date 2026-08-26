@@ -28,14 +28,14 @@ func cmdPrune() {
 	ch := make(chan answer, len(names))
 	for _, n := range names {
 		go func(n string) {
-			host, port, err := readProfileSoft(n)
+			cfg, err := readProfileSoft(n)
 			if err != nil {
 				ch <- answer{n, "", "broken profile (" + err.Error() + ")"}
 				return
 			}
-			v, err := agentVersionTimeout(config{host: host, port: port}, 5*time.Second)
+			v, err := agentVersionTimeout(cfg, 5*time.Second)
 			if err != nil {
-				ch <- answer{n, "", fmt.Sprintf("unreachable (%s:%s)", host, port)}
+				ch <- answer{n, "", fmt.Sprintf("unreachable (%s:%s)", cfg.host, cfg.port)}
 				return
 			}
 			ch <- answer{n, v, ""}

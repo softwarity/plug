@@ -73,7 +73,7 @@ func relay(a, b net.Conn) {
 // mutex-guarded.
 type Transport struct {
 	host, port, user string
-	key              []byte
+	keys             [][]byte
 	knownHosts       string
 	logf             Logf
 
@@ -94,13 +94,18 @@ type Transport struct {
 	agentVer atomic.Value // string
 }
 
-// Dial opens the SSH transport to the agent as the tunnel user, authenticating
-// with the embedded private key. The agent host key is pinned on first use
-// (TOFU) in knownHostsPath and verified on every later connect; pass "" to skip
-// pinning. logf (may be nil) receives reconnect/keepalive notices.
-func Dial(host, port, user string, privateKey []byte, knownHostsPath string, logf Logf) (*Transport, error) {
+// Dial opens the SSH transport to the agent as the tunnel user. keys are the
+// private keys to offer, in order: a profile's personal key first when it has
+// one, then the key built into the binary. SSH tries them in turn and the agent
+// picks the one it knows, so generating a personal key never cuts you off from a
+// cluster that does not do key authentication yet.
+//
+// The agent host key is pinned on first use (TOFU) in knownHostsPath and
+// verified on every later connect; pass "" to skip pinning. logf (may be nil)
+// receives reconnect/keepalive notices.
+func Dial(host, port, user string, keys [][]byte, knownHostsPath string, logf Logf) (*Transport, error) {
 	t := &Transport{
-		host: host, port: port, user: user, key: privateKey,
+		host: host, port: port, user: user, keys: keys,
 		knownHosts: knownHostsPath, logf: logf,
 		done: make(chan struct{}),
 	}
@@ -119,14 +124,25 @@ func (t *Transport) note(format string, a ...any) {
 
 // dial establishes a fresh SSH client to the agent.
 func (t *Transport) dial() (*ssh.Client, error) {
-	signer, err := ssh.ParsePrivateKey(t.key)
-	if err != nil {
-		return nil, fmt.Errorf("parsing embedded key: %w", err)
+	// Every key must parse. A key that was configured on purpose and cannot be
+	// read is a mistake worth naming, not something to skip quietly: dropping it
+	// would authenticate as somebody else (the embedded key) and the human would
+	// never learn their own key is unusable.
+	signers := make([]ssh.Signer, 0, len(t.keys))
+	for i, k := range t.keys {
+		signer, err := ssh.ParsePrivateKey(k)
+		if err != nil {
+			return nil, fmt.Errorf("parsing private key %d of %d: %w", i+1, len(t.keys), err)
+		}
+		signers = append(signers, signer)
+	}
+	if len(signers) == 0 {
+		return nil, fmt.Errorf("no private key to authenticate with")
 	}
 	addr := net.JoinHostPort(t.host, t.port)
 	cfg := &ssh.ClientConfig{
 		User:            t.user,
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signers...)},
 		HostKeyCallback: tofuHostKey(t.knownHosts, addr, t.note),
 		Timeout:         dialTimeout,
 	}

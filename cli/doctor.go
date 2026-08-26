@@ -301,13 +301,14 @@ func resolutionVerdict(err error, took time.Duration) check {
 // -s backend this deployment has) and the `resolve` probe (a pre-2.2 agent has
 // neither, which also means no honest-NXDOMAIN and no -c support).
 func doctorProfile(name string, add func(check)) {
-	host, port, err := readProfileSoft(name)
+	pcfg, err := readProfileSoft(name)
 	if err != nil {
 		add(check{area: name, name: "profile", status: stFail,
 			detail: err.Error(), remedy: "plug rm " + name + " (or fix ~/.plug/" + name + ".conf)"})
 		return
 	}
-	cfg := config{host: host, port: port}
+	host, port := pcfg.host, pcfg.port
+	cfg := pcfg
 	ver, err := agentVersion(cfg)
 	if err != nil {
 		add(check{area: name, name: "agent", status: stFail,
@@ -318,7 +319,7 @@ func doctorProfile(name string, add func(check)) {
 	add(check{area: name, name: "agent", status: stOK,
 		detail: fmt.Sprintf("v%s at %s:%s", shortVersion(ver), host, port)})
 
-	tr, err := tunnel.Dial(host, port, sshUser, embeddedKey, tun.SharedKnownHosts(), nil)
+	tr, err := tunnel.Dial(host, port, sshUser, cfg.authKeys(), tun.SharedKnownHosts(), nil)
 	if err != nil {
 		add(check{area: name, name: "tunnel user", status: stFail,
 			detail: err.Error(), remedy: "the agent image may be too old — redeploy softwarity/plug"})
@@ -351,15 +352,15 @@ func doctorProfile(name string, add func(check)) {
 
 // readProfileSoft reads a profile without loadProfile's fatal — doctor reports
 // a broken profile as a finding, it must not die on it.
-func readProfileSoft(name string) (host, port string, err error) {
+func readProfileSoft(name string) (config, error) {
 	if err := checkProfileName(name); err != nil {
-		return "", "", err
+		return config{}, err
 	}
 	data, err := os.ReadFile(filepath.Join(plugDir(), name+".conf"))
 	if err != nil {
-		return "", "", fmt.Errorf("unreadable: %v", err)
+		return config{}, fmt.Errorf("unreadable: %v", err)
 	}
-	port = defaultPort
+	cfg := config{port: defaultPort}
 	for _, line := range strings.Split(string(data), "\n") {
 		key, val, ok := strings.Cut(strings.TrimSpace(line), "=")
 		if !ok {
@@ -367,15 +368,17 @@ func readProfileSoft(name string) (host, port string, err error) {
 		}
 		switch strings.TrimSpace(key) {
 		case "host":
-			host = strings.TrimSpace(val)
+			cfg.host = strings.TrimSpace(val)
 		case "port":
-			port = strings.TrimSpace(val)
+			cfg.port = strings.TrimSpace(val)
+		case "key":
+			cfg.key = strings.TrimSpace(val)
 		}
 	}
-	if host == "" {
-		return "", "", fmt.Errorf("no host in the profile")
+	if cfg.host == "" {
+		return config{}, fmt.Errorf("no host in the profile")
 	}
-	return host, port, nil
+	return cfg, nil
 }
 
 // ---- the GitHub issue offer ----

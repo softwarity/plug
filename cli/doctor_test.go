@@ -57,7 +57,7 @@ func TestIssueURL(t *testing.T) {
 func TestVersionsFromCorePathParsing(t *testing.T) {
 	// darwin-only helper, but the parsing logic is worth pinning portably via
 	// readProfileSoft below; versionFromCorePath itself is covered on darwin.
-	if _, _, err := readProfileSoft("definitely-absent-profile-xyz"); err == nil {
+	if _, err := readProfileSoft("definitely-absent-profile-xyz"); err == nil {
 		t.Fatal("an absent profile must error, not fatal")
 	}
 }
