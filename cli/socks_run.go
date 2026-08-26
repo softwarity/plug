@@ -48,7 +48,41 @@ func dialTunnel(cfg config) (*tunnel.Transport, error) {
 	if err == nil && knownHosts != "" {
 		chownToUser(knownHosts)
 	}
-	return tr, err
+	return tr, explainRefusal(cfg, err)
+}
+
+// explainRefusal turns "key SHA256:… is not authorized" into something the
+// person can act on.
+//
+// The agent names the fingerprint it refused, and that is all it can do: it has
+// no idea where the key came from. The CLIENT knows, and knowing is the whole
+// difference. Someone who ran `plug keygen`, enrolled what `plug pubkey`
+// printed, and was then refused by an unfamiliar fingerprint has no way to tell
+// that the key they enrolled was never offered at all. Pairing each fingerprint
+// with the file it came from says it in one line.
+func explainRefusal(cfg config, err error) error {
+	var af *tunnel.AuthFailure
+	if !errors.As(err, &af) {
+		return err
+	}
+	names := cfg.authKeyNames()
+	var b strings.Builder
+	fmt.Fprintf(&b, "the agent at %s refused every key plug offered:", af.Addr)
+	for i, fp := range af.Offered {
+		src := "an unnamed key"
+		if i < len(names) {
+			src = names[i]
+		}
+		fmt.Fprintf(&b, "\n        %s  %s", fp, src)
+	}
+	if cfg.key == "" {
+		b.WriteString("\n      this profile has no key of its own, so only the shared one was offered." +
+			"\n      If the cluster enrols developer keys: 'plug keygen', then hand what" +
+			"\n      'plug pubkey' prints to whoever operates it")
+	} else {
+		b.WriteString("\n      what to enrol is exactly what 'plug pubkey' prints for this profile")
+	}
+	return errors.New(b.String())
 }
 
 // How long startExposes insists on a name before calling it unreachable.

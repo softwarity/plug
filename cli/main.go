@@ -160,6 +160,12 @@ func (c config) authKeys() [][]byte {
 	if c.key == "" {
 		return [][]byte{embeddedKey}
 	}
+	// The core and the daemon read this while holding a privilege the caller does
+	// not, and the path arrives through the environment. Same rule as every other
+	// privileged path under the user's home: only where they could have read it
+	// themselves. Without the guard, PLUG_CORE_KEY=/etc/… turns plug into an
+	// oracle for whether a root-only file exists and parses as a key.
+	guardUserPath(c.key)
 	personal, err := os.ReadFile(c.key)
 	if err != nil {
 		fatal("profile key %s: %v\n"+
@@ -167,6 +173,17 @@ func (c config) authKeys() [][]byte {
 			"      'plug keygen', or delete the line to fall back to the built-in key", c.key, err)
 	}
 	return [][]byte{personal, embeddedKey}
+}
+
+// authKeyNames describes, in the same order, what authKeys offers. Only ever
+// used to say WHICH key an agent refused: the refusal names a fingerprint, and a
+// fingerprint the person cannot place is the difference between a ten-second fix
+// and an afternoon.
+func (c config) authKeyNames() []string {
+	if c.key == "" {
+		return []string{"the key built into plug"}
+	}
+	return []string{"this profile's key (" + c.key + ")", "the key built into plug"}
 }
 
 // parseExpose parses one -s value, <name>:<cluster-port>:<local-port> — the
@@ -744,6 +761,13 @@ func coreEnv(cfg config) []string {
 	// the human's — and never find a node/npm that lives in nvm or Homebrew.
 	env := append(withUserPath(os.Environ()), "PLUG_CORE=1",
 		"PLUG_CORE_HOST="+cfg.host, "PLUG_CORE_PORT="+cfg.port,
+		// The profile's private key. The core is the process that opens the
+		// TUNNEL, so a key that stops here is a key never offered: the agent saw
+		// only the built-in one and refused an enrolled developer by a
+		// fingerprint they had never seen. It travels with the host and the port
+		// for the same reason the update policy does - the core is given a
+		// cluster, not a profile name.
+		"PLUG_CORE_KEY="+cfg.key,
 		// The core runs the background check but never knows which profile it
 		// came from — it is given a host and a port, not a name. So the policy
 		// travels with them.
@@ -1536,15 +1560,31 @@ func openTTY(hint string) *os.File {
 
 // ---- core (the real tunnel work; runs when PLUG_CORE=1 or in-process) ----
 
-func coreMain() {
+// coreConfigFromEnv rebuilds the cluster the launcher chose. It is the ONLY
+// channel between the two processes, so a field missing here is a field the core
+// does not have - and the core is the process that opens the tunnel, runs the
+// datapath and talks to the agent.
+//
+// That is not hypothetical: the profile's key was absent from this struct, so
+// `plug keygen` wrote a key, `plug pubkey` printed it, the developer enrolled it,
+// and the tunnel offered the built-in key alone. The agent refused a fingerprint
+// nobody recognised. Extracted into a function so the round-trip with coreEnv can
+// be tested rather than trusted.
+func coreConfigFromEnv() config {
 	cfg := config{
 		host:       coreGetenv("PLUG_CORE_HOST", "PLUG_HOST"),
 		port:       coreGetenv("PLUG_CORE_PORT", "PLUG_PORT"),
 		updateMode: os.Getenv("PLUG_CORE_UPDATE"),
+		key:        os.Getenv("PLUG_CORE_KEY"),
 	}
 	if cfg.port == "" {
 		cfg.port = defaultPort
 	}
+	return cfg
+}
+
+func coreMain() {
+	cfg := coreConfigFromEnv()
 	specs, _, cmdArgs, err := stripLeadingExposes(os.Args[1:]) // -c strips to an empty exposes list — exactly the pure-outbound datapath
 	if err != nil {
 		fatal("%v", err)

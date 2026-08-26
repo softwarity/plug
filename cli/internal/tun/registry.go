@@ -33,7 +33,7 @@ func clientsDir(key string) string { return filepath.Join(graftDir, ClusterHash(
 // RegisterClient marks pid as a live client of the cluster and returns an
 // unregister() that drops the marker (defer it). No-op on failure so a client
 // never fails to launch just because the registry couldn't be written.
-func RegisterClient(key string, pid int) func() {
+func RegisterClient(key string, pid int, keyFile string) func() {
 	dir := clientsDir(key)
 	if os.MkdirAll(dir, 0o755) != nil {
 		return func() {}
@@ -42,10 +42,54 @@ func RegisterClient(key string, pid int) func() {
 	// The marker carries the cluster key, so the multicluster router can go the
 	// OTHER way — PID → cluster — by reading it (clusterForPID). Harmless to the
 	// single-cluster daemon, which only reads the marker's NAME (the pid).
-	if os.WriteFile(marker, []byte(key), 0o644) != nil {
+	//
+	// And, on a second line, the profile's private key. The daemon holds ONE
+	// tunnel per cluster and knows a cluster only as host:port: without this it
+	// dialled with the built-in key alone and an enrolled developer was refused
+	// with an unfamiliar fingerprint. A second line, so a marker written by an
+	// older core still reads back correctly as "this cluster, no personal key".
+	body := key
+	if keyFile != "" {
+		body += "\n" + keyFile
+	}
+	if os.WriteFile(marker, []byte(body), 0o644) != nil {
 		return func() {}
 	}
 	return func() { _ = os.Remove(marker) }
+}
+
+// markerLines splits a client marker into the cluster key and the profile key
+// path, tolerating the one-line form older cores wrote.
+func markerLines(b []byte) (key, keyFile string) {
+	first, rest, _ := strings.Cut(strings.TrimSpace(string(b)), "\n")
+	return strings.TrimSpace(first), strings.TrimSpace(rest)
+}
+
+// ClusterKeyFile is the profile key a live client of this cluster registered,
+// "" when none did. The daemon asks, because it dials on their behalf and the
+// identity is theirs, not its own.
+//
+// First live marker wins. Two profiles pointing at the same host:port with
+// different keys are the same cluster to the daemon, which holds one tunnel for
+// it; picking either is what "one tunnel per cluster" already means, and the
+// agent decides anyway.
+func ClusterKeyFile(key string) string {
+	entries, err := os.ReadDir(clientsDir(key))
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || !processAlive(pid) {
+			continue
+		}
+		if b, err := os.ReadFile(filepath.Join(clientsDir(key), e.Name())); err == nil {
+			if _, kf := markerLines(b); kf != "" {
+				return kf
+			}
+		}
+	}
+	return ""
 }
 
 // clusterForPID reports the cluster a registered launcher PID belongs to
@@ -64,7 +108,8 @@ func clusterForPID(pid int) (string, bool) {
 			continue
 		}
 		if b, err := os.ReadFile(filepath.Join(graftDir, e.Name(), name)); err == nil {
-			return strings.TrimSpace(string(b)), true
+			k, _ := markerLines(b)
+			return k, true
 		}
 	}
 	return "", false
@@ -125,7 +170,7 @@ func ActiveClusters() []string {
 			}
 			if key == "" {
 				if b, err := os.ReadFile(filepath.Join(dir, m.Name())); err == nil {
-					key = strings.TrimSpace(string(b))
+					key, _ = markerLines(b)
 				}
 			}
 		}

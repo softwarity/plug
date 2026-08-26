@@ -148,9 +148,53 @@ func (t *Transport) dial() (*ssh.Client, error) {
 	}
 	client, err := ssh.Dial("tcp", addr, cfg)
 	if err != nil {
+		if isAuthFailure(err) {
+			return nil, &AuthFailure{Addr: addr, Err: err, Offered: fingerprints(signers)}
+		}
 		return nil, fmt.Errorf("ssh to %s: %w", addr, err)
 	}
 	return client, nil
+}
+
+// AuthFailure is the agent refusing every key we hold. It is separated from
+// every other dial error because it is the only one that will not fix itself:
+// a refused key stays refused until somebody enrols it, so retrying is not
+// resilience, it is noise that buries the reason.
+type AuthFailure struct {
+	Addr    string
+	Err     error
+	Offered []string // fingerprints, in the order they were presented
+}
+
+func (e *AuthFailure) Error() string {
+	return fmt.Sprintf("%s refused every key offered (%s)", e.Addr, strings.Join(e.Offered, ", "))
+}
+
+func (e *AuthFailure) Unwrap() error { return e.Err }
+
+// IsAuthFailure reports whether err is an agent refusing our keys.
+func IsAuthFailure(err error) bool {
+	var af *AuthFailure
+	return errors.As(err, &af)
+}
+
+// isAuthFailure recognises what x/crypto/ssh says when no method is left. There
+// is no typed error to match on: the package returns a plain error whose text is
+// "ssh: unable to authenticate, attempted methods […], no supported methods
+// remain". Matched on the stable half of that sentence, and wrapped into a type
+// so nothing else in plug has to know this.
+func isAuthFailure(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "unable to authenticate")
+}
+
+// fingerprints names the keys actually presented, so a refusal can be matched
+// against what `plug pubkey` prints.
+func fingerprints(signers []ssh.Signer) []string {
+	out := make([]string, 0, len(signers))
+	for _, s := range signers {
+		out = append(out, ssh.FingerprintSHA256(s.PublicKey()))
+	}
+	return out
 }
 
 // current returns the live client (nil only before the first successful dial).

@@ -31,7 +31,7 @@ func coreRun(cfg config, cmdArgs []string) int {
 // the service to open our cluster's tunnel, then runs the child. No tunnel of its own.
 func coreRunViaService(cfg config, cmdArgs []string) int {
 	key := cfg.host + ":" + cfg.port
-	unregister := tun.RegisterClient(key, os.Getpid())
+	unregister := tun.RegisterClient(key, os.Getpid(), cfg.key)
 	defer unregister()
 
 	if !tun.DaemonAlive(globalKey) {

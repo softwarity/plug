@@ -24,6 +24,16 @@ const tunnelGrace = 20 * time.Second
 
 var tunnelIdleSince = map[string]time.Time{}
 
+// Clusters whose agent refused every key we have, and when it last said so. The
+// reconcile ticker runs three times a second; a permanent refusal must not
+// become three handshakes a second for the length of a working day.
+var authRefused = map[string]time.Time{}
+
+// How long to take an agent at its word before asking again. Long enough that a
+// refusal is not a load generator, short enough that enrolling a key does not
+// mean hunting down a daemon to restart.
+const authRetryAfter = 60 * time.Second
+
 // reconcileOnce opens a tunnel for each active cluster missing one and closes tunnels
 // whose cluster no longer has a live client. Each open/close flips the cluster's ready
 // marker so `plug -p X <cmd>` can wait for its own tunnel. Shared by macOS and Windows
@@ -40,12 +50,29 @@ func reconcileOnce(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transpo
 		if err != nil {
 			host, port = key, ""
 		}
-		tr, err := dialTunnel(config{host: host, port: port})
+		// The daemon holds the tunnel, but the IDENTITY is the client's: it
+		// registered the profile key it wants offered. Dialling without it meant
+		// the built-in key alone, and an enrolled developer refused.
+		if refusedAt, seen := authRefused[key]; seen {
+			// An agent that refused these keys will refuse them again. Retrying
+			// three times a second turned a stated reason ("key … is not
+			// authorized") into a session that merely felt slow and then failed
+			// somewhere else entirely. Re-check rarely, in case a key was enrolled
+			// while this daemon kept running.
+			if time.Since(refusedAt) < authRetryAfter {
+				continue
+			}
+		}
+		tr, err := dialTunnel(config{host: host, port: port, key: tun.ClusterKeyFile(key)})
 		if err != nil {
+			if tunnel.IsAuthFailure(err) {
+				authRefused[key] = time.Now()
+			}
 			info("daemon: connect %s: %v", key, err)
 			tun.MarkClusterError(key, err.Error()) // surface the reason to a waiting launcher
 			continue
 		}
+		delete(authRefused, key)
 		tunnels[key] = tr
 		ct.Set(key, tr)
 		tun.ClearClusterError(key)

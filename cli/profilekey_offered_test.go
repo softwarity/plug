@@ -1,0 +1,251 @@
+package main
+
+// The one thing a user cannot check for themselves: that the key `plug pubkey`
+// prints is the key `plug` actually presents.
+//
+// This is not a hypothetical invariant. It was broken, in the only way that
+// matters: both halves were right on their own. keygen wrote the pair, pubkey
+// printed it, the developer enrolled it and confirmed the fingerprint in the
+// operator's database, and the tunnel offered the built-in key alone. The agent
+// then refused a fingerprint that appeared nowhere in the story, and the person
+// who had done everything correctly was told their key was not authorized.
+//
+// The cause was a process boundary: the LAUNCHER resolves the profile, the CORE
+// opens the tunnel, and the config that crosses between them carried a host, a
+// port and an update policy but not the key. Both processes were self-consistent.
+// So these tests do not check the struct; they check what goes on the wire, and
+// they check it across that boundary.
+
+import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"net"
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/softwarity/plug/cli/internal/tunnel"
+	"golang.org/x/crypto/ssh"
+)
+
+// recordingAgent is an SSH server that refuses everyone and remembers every key
+// it was offered, in order. Refusing is deliberate: it makes the client present
+// ALL of its keys, which is exactly what has to be observed.
+func recordingAgent(t *testing.T) (addr string, offered func() []string) {
+	t.Helper()
+	hostKey, err := ssh.NewSignerFromKey(mustGenerateKey(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu chan []string = make(chan []string, 1)
+	mu <- nil
+	cfg := &ssh.ServerConfig{
+		PublicKeyCallback: func(_ ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+			seen := <-mu
+			mu <- append(seen, ssh.FingerprintSHA256(key))
+			return nil, errNotAuthorized
+		},
+	}
+	cfg.AddHostKey(hostKey)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				conn, _, _, err := ssh.NewServerConn(c, cfg)
+				if err == nil {
+					conn.Close()
+				}
+				c.Close()
+			}()
+		}
+	}()
+	return ln.Addr().String(), func() []string {
+		seen := <-mu
+		mu <- seen
+		return seen
+	}
+}
+
+var errNotAuthorized = &sshRefusal{}
+
+type sshRefusal struct{}
+
+func (*sshRefusal) Error() string { return "key is not authorized" }
+
+// THE invariant. What pubkey prints for a profile must be the public half of
+// what Dial presents for that same profile, and it must be presented FIRST:
+// offering the shared key ahead of it would authenticate the software instead of
+// the person on any agent that accepts both.
+func TestWhatPubkeyPrintsIsWhatPlugOffers(t *testing.T) {
+	sandboxHome(t)
+	newProfile(t, "neo")
+	priv := profileKeyPath("neo")
+	writeKeyPair("neo", priv, priv+".pub")
+	setProfileKey("neo", "key", priv)
+
+	published, err := os.ReadFile(priv + ".pub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, _, _, _, err := ssh.ParseAuthorizedKey(published)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := ssh.FingerprintSHA256(pub)
+
+	addr, offered := recordingAgent(t)
+	host, port, _ := net.SplitHostPort(addr)
+	cfg := loadProfile("neo")
+	cfg.host, cfg.port = host, port
+
+	if _, err := tunnel.Dial(host, port, sshUser, cfg.authKeys(), "", nil); err == nil {
+		t.Fatal("the test agent refuses everyone; Dial must fail")
+	}
+	got := offered()
+	if len(got) == 0 {
+		t.Fatal("plug presented no key at all")
+	}
+	if got[0] != want {
+		t.Fatalf("plug presented %s first, but 'plug pubkey' prints %s.\n"+
+			"That gap is a developer enrolling one key and being refused for another.", got[0], want)
+	}
+	// And the shared key is still there behind it, or generating a key would cut
+	// you off from every cluster that has not enrolled you.
+	if len(got) != 2 {
+		t.Fatalf("plug presented %d keys, want the profile's then the built-in one", len(got))
+	}
+}
+
+// The same invariant, across the process boundary that actually broke it. The
+// core is a SEPARATE process: whatever the launcher resolved reaches it through
+// coreEnv and nothing else.
+func TestTheProfileKeySurvivesTheLauncherToCoreExec(t *testing.T) {
+	sandboxHome(t)
+	newProfile(t, "neo")
+	priv := profileKeyPath("neo")
+	writeKeyPair("neo", priv, priv+".pub")
+	setProfileKey("neo", "key", priv)
+
+	launcher := loadProfile("neo")
+	launcher.host, launcher.port = "cluster.example", "2222"
+	if launcher.key == "" {
+		t.Fatal("the launcher itself lost the key")
+	}
+
+	// Exactly what the exec does: build the environment, then read it back the
+	// way the core does, with nothing else carried over.
+	for _, kv := range coreEnv(launcher) {
+		if k, v, ok := strings.Cut(kv, "="); ok && strings.HasPrefix(k, "PLUG_CORE") {
+			t.Setenv(k, v)
+		}
+	}
+	core := coreConfigFromEnv()
+
+	if core.key != launcher.key {
+		t.Fatalf("the core got key %q, the launcher had %q.\n"+
+			"The core is the process that opens the tunnel: a key that stops here is never offered.",
+			core.key, launcher.key)
+	}
+	if len(core.authKeys()) != 2 {
+		t.Fatalf("the core offers %d keys, want the profile's and the built-in one", len(core.authKeys()))
+	}
+}
+
+// A profile with no key of its own must still work, and offer exactly one key.
+func TestAProfileWithNoKeyStillCrossesTheExec(t *testing.T) {
+	sandboxHome(t)
+	for _, k := range []string{"PLUG_CORE_HOST", "PLUG_CORE_PORT", "PLUG_CORE_KEY", "PLUG_CORE_UPDATE"} {
+		t.Setenv(k, "")
+	}
+	for _, kv := range coreEnv(config{host: "cluster.example", port: "2222"}) {
+		if k, v, ok := strings.Cut(kv, "="); ok && strings.HasPrefix(k, "PLUG_CORE") {
+			t.Setenv(k, v)
+		}
+	}
+	core := coreConfigFromEnv()
+	if core.key != "" {
+		t.Errorf("a profile with no key produced key %q", core.key)
+	}
+	if len(core.authKeys()) != 1 {
+		t.Errorf("offered %d keys, want just the built-in one", len(core.authKeys()))
+	}
+}
+
+// A refused key stays refused. Telling that apart from a network blip is what
+// stops the daemon turning a stated reason into three handshakes a second.
+func TestAnAgentRefusingEveryKeyIsNotATransientFailure(t *testing.T) {
+	addr, _ := recordingAgent(t)
+	host, port, _ := net.SplitHostPort(addr)
+
+	_, err := tunnel.Dial(host, port, sshUser, config{}.authKeys(), "", nil)
+	if err == nil {
+		t.Fatal("Dial must fail against an agent that refuses everyone")
+	}
+	if !tunnel.IsAuthFailure(err) {
+		t.Fatalf("a refusal must be recognisable as one, got %v", err)
+	}
+	// And a host that is simply not there must NOT look like a refusal, or a
+	// cluster that is merely down would stop being retried.
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	dead := ln.Addr().String()
+	ln.Close()
+	dh, dp, _ := net.SplitHostPort(dead)
+	_, err = tunnel.Dial(dh, dp, sshUser, config{}.authKeys(), "", nil)
+	if err == nil {
+		t.Skip("the port was reused between close and dial")
+	}
+	if tunnel.IsAuthFailure(err) {
+		t.Errorf("an unreachable agent was read as a refusal: %v", err)
+	}
+}
+
+// The refusal has to name the file, not just the fingerprint. The agent can only
+// say "SHA256:… is not authorized"; it has no idea where that key came from, and
+// a fingerprint the person cannot place is the whole reason this took an
+// afternoon instead of ten seconds.
+func TestTheRefusalNamesTheKeyFileAndNotJustAFingerprint(t *testing.T) {
+	sandboxHome(t)
+	newProfile(t, "neo")
+	priv := profileKeyPath("neo")
+	writeKeyPair("neo", priv, priv+".pub")
+	setProfileKey("neo", "key", priv)
+
+	addr, _ := recordingAgent(t)
+	host, port, _ := net.SplitHostPort(addr)
+	cfg := loadProfile("neo")
+	cfg.host, cfg.port = host, port
+
+	_, err := dialTunnel(cfg)
+	if err == nil {
+		t.Fatal("dialTunnel must fail against an agent that refuses everyone")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, priv) {
+		t.Errorf("the refusal does not name the key file %s:\n%s", priv, msg)
+	}
+	if !strings.Contains(msg, "plug pubkey") {
+		t.Errorf("the refusal does not say what to enrol:\n%s", msg)
+	}
+	// Every key that was actually presented is accounted for by name.
+	if strings.Count(msg, "SHA256:") != 2 {
+		t.Errorf("want both offered fingerprints listed, got:\n%s", msg)
+	}
+}
+
+func mustGenerateKey(t *testing.T) ed25519.PrivateKey {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return priv
+}

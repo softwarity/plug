@@ -30,7 +30,7 @@ func localSocket(t *testing.T) (uint16, func()) {
 // process as a launcher of hostZ, and check the flow routes to hostZ's transport.
 func TestMultiDialSelf(t *testing.T) {
 	graftDir = t.TempDir()
-	unreg := RegisterClient("hostZ:2222", os.Getpid())
+	unreg := RegisterClient("hostZ:2222", os.Getpid(), "")
 	defer unreg()
 
 	ct := NewClusterTransports()

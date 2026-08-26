@@ -2,6 +2,49 @@
 
 ## NEXT RELEASE
 
+### Fixed: a profile's key was never actually offered
+
+If you generated a key with `plug keygen`, enrolled the public half exactly as
+`plug pubkey` printed it, and were still refused: the key was never presented.
+plug offered the shared key built into the binary instead, so the agent refused
+a fingerprint that appeared nowhere in what you had just done.
+
+Both halves were right on their own, which is what made it so hard to see. The
+LAUNCHER resolves your profile and knows the key. The CORE is a separate process
+and is what opens the tunnel. Everything crossing between them travels in a
+handful of environment variables, and the key was not one of them. On macOS
+there is a third process, the datapath daemon, which holds one tunnel per
+cluster and knows a cluster only as a host and a port; it dialled with no
+personal key at all. Both boundaries now carry it, and a test presents the
+profile's key to a real SSH server and compares what arrives with what `pubkey`
+prints, on both sides of the exec.
+
+The failure told you nothing useful either, and that is fixed too.
+
+**The refusal now names the file, not just a fingerprint.** The agent can only
+say `SHA256:… is not authorized`, because it has no idea where that key came
+from. plug does. Every key it offered is now listed with the file it was read
+from, and a line saying that what to enrol is what `plug pubkey` prints.
+
+**A refused key is no longer retried three times a second.** The macOS and
+Windows daemons reconcile every 300 ms, and an authentication failure was
+treated like a network blip, so a stated reason became a stream of handshakes.
+What you saw instead was a session that merely felt slow and then failed
+somewhere else entirely, usually on the first thing your command tried to reach.
+A refusal is now recognised for what it is, reported, and left alone for a
+minute before being tried again. A cluster that is simply unreachable is still
+retried immediately, since that one does fix itself.
+
+One hardening rode along: the key path arrives through the environment and is
+read by a process holding privilege, so it now goes through the same guard as
+every other privileged path under your home. It reads only where you could have
+read it yourself.
+
+
+---
+
+
+
 ### A profile can carry your own key
 
 Until now plug authenticated with one key built into the binary. It is in every

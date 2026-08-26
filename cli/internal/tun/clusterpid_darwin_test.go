@@ -8,9 +8,9 @@ func TestClusterForPID(t *testing.T) {
 	graftDir = t.TempDir()
 
 	// Two clusters, each with a registered launcher PID that carries its key.
-	unregA := RegisterClient("hostA:2222", 4242)
+	unregA := RegisterClient("hostA:2222", 4242, "")
 	defer unregA()
-	unregB := RegisterClient("hostB:2222", 5353)
+	unregB := RegisterClient("hostB:2222", 5353, "")
 	defer unregB()
 
 	if key, ok := clusterForPID(4242); !ok || key != "hostA:2222" {

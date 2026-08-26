@@ -21,7 +21,7 @@ func coreRun(cfg config, cmdArgs []string) int {
 	key := cfg.host + ":" + cfg.port
 	// Register FIRST (the marker carries our cluster key) so the daemon's reconcile
 	// always sees us — and opens our cluster's tunnel — before we run.
-	unregister := tun.RegisterClient(key, os.Getpid())
+	unregister := tun.RegisterClient(key, os.Getpid(), cfg.key)
 	defer unregister()
 
 	if !tun.DaemonAlive(globalKey) {
