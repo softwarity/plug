@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -266,9 +267,21 @@ func main() {
 		fmt.Fprint(w, "restarting") // answer FIRST — the path back dies with the agent
 		go func() {
 			time.Sleep(500 * time.Millisecond) // let the reply drain through the tunnel
-			if resp, err := docker("POST", "/containers/"+id+"/restart?t=0"); err == nil {
-				resp.Body.Close()
+			resp, err := docker("POST", "/containers/"+id+"/restart?t=0")
+			if err != nil {
+				// Said out loud, in the only place that can still speak: the
+				// caller was answered before the restart fired, so a dropped
+				// error here is a cell that fails three minutes later
+				// complaining about a parked workload, with nothing anywhere
+				// naming the restart that never happened.
+				log.Printf("restart-agent %s: %v", svc, err)
+				return
 			}
+			if resp.StatusCode >= 300 {
+				body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+				log.Printf("restart-agent %s: docker answered %d: %s", svc, resp.StatusCode, bytes.TrimSpace(body))
+			}
+			resp.Body.Close()
 		}()
 	})
 	// /kill-sessions?svc=<agent> drops every SSH SESSION on an agent while

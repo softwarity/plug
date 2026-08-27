@@ -95,6 +95,12 @@ services:
   # reboots. Same image, sock mounted (the signpost/park needs it).
   res-agent-linux:
     image: softwarity/plug:e2e
+    # The resilience cell KILLS this agent on purpose and asserts the recovery.
+    # Without a policy the default is `no`: a boot that exits non-zero once (a
+    # docker socket busy for a moment, and Preflight is fatal for a standalone
+    # agent by design) leaves the container down for good, and the cell then
+    # fails three minutes later complaining about a parked workload.
+    restart: unless-stopped
     ports:
       - "2223:22"
     volumes:
@@ -102,6 +108,12 @@ services:
     networks: [internal]
   res-agent-mac:
     image: softwarity/plug:e2e
+    # The resilience cell KILLS this agent on purpose and asserts the recovery.
+    # Without a policy the default is `no`: a boot that exits non-zero once (a
+    # docker socket busy for a moment, and Preflight is fatal for a standalone
+    # agent by design) leaves the container down for good, and the cell then
+    # fails three minutes later complaining about a parked workload.
+    restart: unless-stopped
     ports:
       - "2224:22"
     volumes:
@@ -109,6 +121,12 @@ services:
     networks: [internal]
   res-agent-win:
     image: softwarity/plug:e2e
+    # The resilience cell KILLS this agent on purpose and asserts the recovery.
+    # Without a policy the default is `no`: a boot that exits non-zero once (a
+    # docker socket busy for a moment, and Preflight is fatal for a standalone
+    # agent by design) leaves the container down for good, and the cell then
+    # fails three minutes later complaining about a parked workload.
+    restart: unless-stopped
     ports:
       - "2225:22"
     volumes:
