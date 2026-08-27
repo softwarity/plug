@@ -38,7 +38,10 @@ func storeIsSystem() bool { return true }
 // assumed: a parent someone else can write is a parent someone else can replace
 // with a symlink, and the store would be back in reach without a single
 // permission on the store itself looking wrong.
-func guardStorePath(path string) {
+// A var, and only so a test can stand in for it: the check itself is fatal, so
+// nothing can assert what ensureVersion does around it without a seam. Never
+// reassigned outside tests.
+var guardStorePath = func(path string) {
 	for p := path; ; p = filepath.Dir(p) {
 		fi, err := os.Stat(p)
 		if err == nil {

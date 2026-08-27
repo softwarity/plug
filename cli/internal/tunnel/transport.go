@@ -500,6 +500,15 @@ func (t *Transport) Close() error {
 // sight (trust on first use) in path and verifies it on every later connect —
 // a cheap MITM tripwire on top of plug's no-secret transport. With path == ""
 // it accepts any key (the previous behaviour).
+// HostKeyCallback is tofuHostKey for callers outside the transport: the DOWNLOAD
+// channel, which carries the version, the digest and the binary that is then run
+// with privilege, and which pinned nothing at all. Same policy as the tunnel, on
+// the same file, so one agent is recorded once and a change is noticed wherever
+// it shows up first.
+func HostKeyCallback(path, addr string, note Logf) ssh.HostKeyCallback {
+	return tofuHostKey(path, addr, note)
+}
+
 func tofuHostKey(path, addr string, note func(string, ...any)) ssh.HostKeyCallback {
 	if path == "" {
 		return ssh.InsecureIgnoreHostKey()

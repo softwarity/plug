@@ -11,6 +11,13 @@ on:
 # serve jobs queued past the legs' 10-min cluster wait. Only the newest commit
 # needs blessing — cancel the older run; its clusters die on their TTL
 # backstop (that is what the backstop is for).
+# Read-only by default. Thirteen jobs inherit this token, on three operating
+# systems, and every checkout persists it in the runner's git config before the
+# job goes on to run code pulled from Docker Hub. The jobs that need to write
+# (the image publication) ask for it themselves, where the reason is visible.
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -1035,7 +1042,11 @@ jobs:
         run: bash scripts/ci/e2e-matrix.sh updatejump "$A" "$B" 2222
   kill-compose:
     name: kill compose clusters
-    needs: [start-cluster, e2e-compose]
+    # e2e-arm64 runs on the SAME compose clusters and starts later, because the
+    # ARM pool is scarce. Killing them on e2e-compose alone pulled the cluster
+    # out from under it, and "it is still running when the clusters die" is the
+    # normal case rather than the unlucky one.
+    needs: [start-cluster, e2e-compose, e2e-arm64]
     if: always() && needs.start-cluster.result == 'success'
     runs-on: ubuntu-latest
     permissions:

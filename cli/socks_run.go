@@ -18,23 +18,34 @@ import (
 // (Linux/Windows) and the macOS datapath daemon. coreRun itself is per-OS
 // (socks_run_darwin.go / socks_run_other.go): macOS routes through a persistent
 // daemon, elsewhere each launch is autonomous.
-func dialTunnel(cfg config) (*tunnel.Transport, error) {
-	knownHosts := ""
-	// TOFU host-key pinning is pointless for a loopback agent (there is no network
-	// to intercept) and just causes false "host key changed" errors when a local
-	// dev agent is recreated with a fresh key — so skip it for localhost. For real
-	// hosts, pin the key next to the profiles.
-	if !isLoopback(cfg.host) {
-		if shared := tun.SharedKnownHosts(); shared != "" {
-			// Windows: a machine-wide, user-writable path (%ProgramData%\plug) shared by
-			// the SYSTEM service and the launcher. The service can't pin under the user's
-			// home, and its own profile dir isn't user-accessible — so a "host key changed"
-			// there could not be reset without admin. Here the user can remove the line.
-			knownHosts = shared
-		} else if home, err := os.UserHomeDir(); err == nil {
-			knownHosts = filepath.Join(home, ".plug", "known_hosts")
-		}
+// knownHostsFor is where this agent's host key is recorded, "" when it should not
+// be recorded at all.
+//
+// TOFU pinning is pointless for a loopback agent (there is no network to
+// intercept) and just causes false "host key changed" errors when a local dev
+// agent is recreated with a fresh key, so it is skipped for localhost. For real
+// hosts, the key is pinned next to the profiles.
+//
+// Shared by the tunnel and the download channel, so one agent is recorded once.
+func knownHostsFor(host string) string {
+	if isLoopback(host) {
+		return ""
 	}
+	if shared := tun.SharedKnownHosts(); shared != "" {
+		// Windows: a machine-wide, user-writable path (%ProgramData%\plug) shared by
+		// the SYSTEM service and the launcher. The service can't pin under the user's
+		// home, and its own profile dir isn't user-accessible, so a "host key changed"
+		// there could not be reset without admin. Here the user can remove the line.
+		return shared
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, ".plug", "known_hosts")
+	}
+	return ""
+}
+
+func dialTunnel(cfg config) (*tunnel.Transport, error) {
+	knownHosts := knownHostsFor(cfg.host)
 	// The pin file is written by the tunnel package, possibly with euid 0 — same
 	// rule as every other write under the user's home (see guardUserPath).
 	if knownHosts != "" {

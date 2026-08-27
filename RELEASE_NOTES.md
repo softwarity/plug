@@ -2,6 +2,50 @@
 
 ## NEXT RELEASE
 
+### Security: the channel that delivers the binary now records who answered
+
+Four findings from the audit, none of them exotic, all of them the same shape:
+an invariant the code states somewhere and does not apply everywhere.
+
+**The download channel ignored the agent's host key.** It carries the version,
+the digest that version must hash to, and the binary itself, which then runs as
+root on macOS and with ambient CAP_SYS_ADMIN on Linux. It now records the key on
+first use and says so when it changes, exactly like the data tunnel, on the same
+file. Detection rather than prevention, because an agent legitimately gets a new
+key when its container is recreated and blocking would fail every session after
+a routine redeploy. A comment nearby had been claiming this was already the case.
+
+**`plug update` fetched the digest and never compared it.** It used it to decide
+whether replacing was necessary, then wrote the downloaded bytes over a setuid
+root binary having checked their size and that they looked like an executable.
+The core has always been verified this way; the launcher is the more privileged
+of the two.
+
+**The store guard covered the write but not the read.** On macOS it is what
+stands in for the TOCTOU defence Linux gets from /proc/self/fd, and a cache hit,
+which is the common case and the one that ends in running that file, went
+through unchecked.
+
+**On Linux, a session could hand your command plug's capabilities.** The ambient
+set is cleared by the mount-namespace shim, and any launch that does not need a
+private resolv.conf skips that shim: an unwritable TMPDIR was enough to run your
+`npm run dev` with CAP_SYS_ADMIN. It is now cleared on that path too.
+
+Two CI changes ride along: the workflow token is read-only by default, and the
+job that kills the compose clusters now waits for the arm64 leg, which uses them.
+
+### Dependencies
+
+`golang.org/x/crypto` moves from v0.53.0 to v0.55.0 in both modules. It is the
+SSH implementation on both sides, the client's tunnel and the agent's server,
+so it is the one dependency here worth keeping current on its own account.
+`golang.org/x/sys` follows to v0.47.0.
+
+
+---
+
+
+
 ### Two images, two clients: the commands follow the cluster that served them
 
 plug is distributed BY the cluster it serves: `ssh get@<agent> install | sh`

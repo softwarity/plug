@@ -27,4 +27,6 @@ func storeIsSystem() bool { return false }
 
 // guardStorePath: the store is inside the user's own tree, so the guard is the
 // existing one — refuse to write there AS ROOT if the path resolves outside it.
-func guardStorePath(path string) { guardUserPath(path) }
+// A var for the same reason as the darwin one: a seam for the tests, never
+// reassigned in the product.
+var guardStorePath = func(path string) { guardUserPath(path) }

@@ -29,6 +29,12 @@ func TestEnsureVersionCacheHit(t *testing.T) {
 	savedStore := versionsDir
 	versionsDir = func() string { return store }
 	defer func() { versionsDir = savedStore }()
+	// The store guard now covers the cache HIT as well as the write, and on macOS
+	// it demands a root-owned path that a test cannot create. Stand in for it
+	// here, and assert that ensureVersion actually calls it in the test below.
+	savedGuard := guardStorePath
+	guardStorePath = func(string) {}
+	defer func() { guardStorePath = savedGuard }()
 
 	dir := filepath.Join(store, "9.9.9")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -145,3 +151,51 @@ func TestAnUnavailableDigestStillReplaces(t *testing.T) {
 }
 
 var errUnavailableTest = errors.New("digest unavailable")
+
+// The store guard has to cover the path that RUNS the cached binary, not only
+// the path that writes it.
+//
+// It guarded the download alone, so a cache hit - the common case, and the one
+// that ends in exec'ing that file with root privilege on macOS - reached the
+// binary without the check the whole arrangement rests on. On macOS that check
+// is what stands in for the TOCTOU defence Linux gets from /proc/self/fd: a
+// parent somebody else can write is a parent somebody else can replace with a
+// symlink, and no permission on the store itself would look wrong.
+func TestTheStoreGuardCoversTheCacheHitAndNotOnlyTheWrite(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+
+	store := filepath.Join(tmp, "store")
+	savedStore := versionsDir
+	versionsDir = func() string { return store }
+	defer func() { versionsDir = savedStore }()
+
+	var guarded []string
+	savedGuard := guardStorePath
+	guardStorePath = func(p string) { guarded = append(guarded, p) }
+	defer func() { guardStorePath = savedGuard }()
+
+	name := "plug"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	dir := filepath.Join(store, "9.9.9")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("whatever"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// The digest will not match, so this returns an error - which is fine. What
+	// is asserted is that the guard ran BEFORE any of that, on the store path.
+	_, _ = ensureVersion("9.9.9", config{host: "127.0.0.1", port: "1"})
+
+	if len(guarded) == 0 {
+		t.Fatal("ensureVersion touched the store without checking it: a cache hit runs that binary with privilege")
+	}
+	if guarded[0] != dir {
+		t.Errorf("guarded %q, want the version directory %q", guarded[0], dir)
+	}
+}

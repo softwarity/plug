@@ -14,6 +14,7 @@ package main
 // reconnects and re-arms its -s forwards (the self-heal path) on the new agent.
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"os/exec"
@@ -357,7 +358,11 @@ func updateLauncher(cfg config, remote string) {
 	// what is on disk. A digest we cannot get is not a reason to skip the update:
 	// fall through and replace, as before.
 	osArch := runtime.GOOS + "-" + runtime.GOARCH
-	if want, derr := fetchDigest(cfg, osArch); derr == nil && want != "" {
+	want, derr := fetchDigest(cfg, osArch)
+	if derr != nil {
+		want = "" // an agent too old to answer; see the check after the download
+	}
+	if want != "" {
 		if got, herr := fileSHA256(self); herr == nil && got == want {
 			info("launcher is already this exact build (same bytes) — nothing to replace")
 			return
@@ -376,6 +381,22 @@ func updateLauncher(cfg config, remote string) {
 	}
 	if len(data) < 1<<20 || !looksLikeBinary(data) {
 		fatal("downloaded launcher looks invalid (%d bytes)", len(data))
+	}
+	// The digest was already fetched above, used to decide whether replacing was
+	// even necessary, and then never compared against what arrived. So the file
+	// about to overwrite a setuid root binary was checked for its SIZE and for
+	// looking like an executable, and nothing else. ensureVersion has always done
+	// this for the core; the launcher is the more privileged of the two.
+	//
+	// An agent too old to answer leaves want empty, and that stays a fall-through
+	// rather than a refusal: it is the pre-digest behaviour, and refusing would
+	// strand anyone whose cluster predates the verb.
+	if want != "" {
+		if got := fmt.Sprintf("%x", sha256.Sum256(data)); got != want {
+			fatal("the downloaded launcher does not hash to what the agent announced.\n"+
+				"      announced %s\n      received  %s\n"+
+				"      refusing to replace %s with it", want, got, self)
+		}
 	}
 	if err := replaceBinary(self, data); err != nil {
 		fatal("replacing %s: %v", self, err)

@@ -35,11 +35,18 @@ func NsShimMain(args []string) error {
 	// they survive exec'ing a downloaded core (raiseAmbientCaps). The mounts above
 	// are done — drop the ambient set NOW so the USER's command below inherits no
 	// privilege from plug.
-	_ = unix.Prctl(unix.PR_CAP_AMBIENT, unix.PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0)
+	clearAmbientCaps()
 
 	bin, err := exec.LookPath(cmd[0])
 	if err != nil {
 		bin = cmd[0]
 	}
 	return syscall.Exec(bin, cmd, os.Environ()) // replaces this process on success
+}
+
+// clearAmbientCaps drops the ambient set, so nothing exec'd afterwards inherits
+// the privilege plug carries. Best effort by design: a failure here means the
+// caps were never raised (the unprivileged path), which is the safe direction.
+func clearAmbientCaps() {
+	_ = unix.Prctl(unix.PR_CAP_AMBIENT, unix.PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0)
 }

@@ -850,6 +850,14 @@ func ensureVersion(v string, cfg config) (*os.File, error) {
 		name += ".exe" // Windows won't exec a versioned binary without the extension
 	}
 	bin := filepath.Join(dir, name)
+	// Before anything reads or writes here, and not only before the write. This
+	// guard is what stands in, on macOS, for the TOCTOU defence Linux gets from
+	// /proc/self/fd: it refuses a store whose existing components are not
+	// root-owned. It was called on the download path alone, so a cache HIT - the
+	// common case, and the one that ends in exec'ing that file with privilege -
+	// went through unguarded. The check the store rests on has to cover the path
+	// that runs the binary, not just the path that writes it.
+	guardStorePath(dir)
 	// Hand the cache back to the user: the setuid helper writes it as euid 0, so
 	// without this it lands root-owned (can't be listed/cleaned without sudo). Also
 	// self-heals a cache an earlier privileged run already left root-owned.
@@ -905,7 +913,6 @@ func ensureVersion(v string, cfg config) (*os.File, error) {
 	if got := fmt.Sprintf("%x", sha256.Sum256(data)); got != want {
 		return nil, fmt.Errorf("the downloaded v%s does not hash to what the agent announced — refusing to install it", v)
 	}
-	guardStorePath(dir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
@@ -1100,13 +1107,28 @@ func listVersions() {
 // platform.
 //
 // The get user authenticates with "none" (AuthenticationMethods none on the
-// agent) and its host key is not pinned — matching the previous
-// StrictHostKeyChecking=no behaviour. Key pinning lives on the data tunnel
-// (tunnel.Dial), which carries the actual traffic.
+// agent): there is no client secret to protect here, and requiring a key to
+// fetch the thing that holds the key is a circle.
+//
+// The HOST key is another matter, and this used to ignore it outright, on the
+// grounds that pinning lived on the data tunnel. That reasoning had the channels
+// backwards. This one carries the version, the DIGEST that version must hash to,
+// and the BINARY itself, which is then executed as root on macOS and with
+// ambient CAP_SYS_ADMIN on Linux. Someone able to answer here supplies a
+// coherent digest and binary, openVerified agrees they match, and the result
+// runs with privilege. "Whoever reaches the agent is trusted" was never meant to
+// mean "whoever is on the path can hand this machine root".
+//
+// Same policy and the same file as the tunnel: first use records the key, a
+// change re-pins it and says so, because the agent legitimately regenerates its
+// key when its container is recreated. That is detection rather than prevention,
+// and it is what an agent whose identity does not survive a redeploy can carry.
+// Blocking would fail every session after a routine redeploy.
 func dialGetUser(cfg config) (*ssh.Client, error) {
-	return ssh.Dial("tcp", net.JoinHostPort(cfg.host, cfg.port), &ssh.ClientConfig{
+	addr := net.JoinHostPort(cfg.host, cfg.port)
+	return ssh.Dial("tcp", addr, &ssh.ClientConfig{
 		User:            getUser,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: tunnel.HostKeyCallback(knownHostsFor(cfg.host), addr, info),
 		Timeout:         15 * time.Second,
 	})
 }
@@ -1205,10 +1227,13 @@ var fetchDigest = getDigest
 
 // getDigest asks the agent what the binary for osArch must hash to.
 //
-// The answer travels the same authenticated channel the binary itself came from
-// (host key pinned in ~/.plug/known_hosts), which is what makes it worth
-// anything: it proves the copy on disk is still the one that arrived, not that
-// the source was honest. A forged AGENT would announce a matching hash for a
+// The answer travels the same channel the binary itself came from, and that
+// channel now records the agent's host key (TOFU, ~/.plug/known_hosts, see
+// dialGetUser) where it used to ignore it. Be exact about what that buys: the
+// key is recorded on first use and a change is re-pinned WITH A NOTICE, so a
+// substitution is noticed rather than prevented. What the digest proves is that
+// the copy on disk is still the one that arrived, not that the source was
+// honest. A forged AGENT would announce a matching hash for a
 // forged binary — that is the threat a signature answers, and it is a separate
 // layer this one is shaped to accept later.
 //

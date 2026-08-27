@@ -21,6 +21,7 @@ import (
 	"crypto/rand"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -348,5 +349,46 @@ func TestAKeyedProfileNeverRunsACoreThatWouldDropItsKey(t *testing.T) {
 			t.Errorf("coreDropsProfileKey(%q, key=%q) = %v, want %v (%s)",
 				c.core, c.key, got, c.want, c.why)
 		}
+	}
+}
+
+// The download channel carries the version, the digest and the BINARY that is
+// then run with privilege. It used to ignore the agent's host key outright,
+// while a comment two functions away claimed the answer arrived over an
+// authenticated channel. Whatever the policy is, both channels must share it:
+// one agent, recorded once, and a change noticed wherever it shows up first.
+func TestTheDownloadChannelPinsLikeTheTunnel(t *testing.T) {
+	b, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dial := string(b)
+	dial = dial[strings.Index(dial, "func dialGetUser("):]
+	dial = dial[:strings.Index(dial, "\n}")]
+	if strings.Contains(dial, "InsecureIgnoreHostKey") {
+		t.Error("dialGetUser ignores the agent's host key, on the channel that delivers the binary plug runs as root")
+	}
+	if !strings.Contains(dial, "knownHostsFor(") {
+		t.Error("dialGetUser does not use the same known_hosts choice as the tunnel")
+	}
+}
+
+// The pin file is chosen the same way for both channels, and a loopback agent is
+// deliberately exempt: there is no network to intercept, and a local dev agent
+// recreated with a fresh key would otherwise raise a change on every restart.
+func TestWhereTheHostKeyIsRecorded(t *testing.T) {
+	sandboxHome(t)
+	if got := knownHostsFor("127.0.0.1"); got != "" {
+		t.Errorf("loopback should pin nothing, got %q", got)
+	}
+	if got := knownHostsFor("localhost"); got != "" {
+		t.Errorf("loopback should pin nothing, got %q", got)
+	}
+	got := knownHostsFor("cluster.example")
+	if got == "" {
+		t.Fatal("a real host must have somewhere to record its key")
+	}
+	if filepath.Base(got) != "known_hosts" {
+		t.Errorf("recorded in %q, want a known_hosts file", got)
 	}
 }
