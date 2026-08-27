@@ -186,6 +186,44 @@ is_addr() { case "${1:-}" in ""|*[!0-9.]*) return 1 ;; *) return 0 ;; esac; }
 glyph() { case "$1" in PASS) printf "✅" ;; FAIL) printf "❌" ;; SKIP) printf "·" ;; *) printf "?" ;; esac; }
 sum()   { echo "$*" >> "${GITHUB_STEP_SUMMARY:-/dev/stderr}"; }
 
+# How this phase left, printed whatever happens. A cell that prints its OK and
+# then dies takes its cause with it: `exposevar` did exactly that, twice, ending
+# on 143 (SIGTERM) with nothing after its success line and no idea what signalled
+# the shell. A status above 128 is a signal, and naming it is the difference
+# between a mystery and a lead.
+trap 'rc=$?
+  if [ "$rc" -gt 128 ]; then
+    echo "e2e-matrix: phase $phase left on signal $((rc - 128)) (exit $rc): the SHELL was signalled, not just a child" >&2
+  elif [ "$rc" -ne 0 ]; then
+    echo "e2e-matrix: phase $phase left with exit $rc" >&2
+  fi' EXIT
+
+# stop_bg ends a backgrounded session and SAYS what it found, because the two
+# expose cells were killing a raw PID and discarding everything about it.
+#
+# On Windows this matters more than it looks: PIDs are recycled aggressively, so
+# a `kill $pid` on a process that already exited can reach something else
+# entirely. If that ever happens the numbers printed here are what tells us -
+# the shell's own pid is printed beside the target for exactly that comparison.
+stop_bg() {
+  sb_pid="$1" sb_what="$2"
+  if kill -0 "$sb_pid" 2>/dev/null; then
+    sb_alive=yes
+  else
+    sb_alive=no
+  fi
+  kill "$sb_pid" 2>/dev/null
+  # `|| sb_rc=$?` and not a bare `wait`: a child killed by SIGTERM makes wait
+  # return 143, and under `set -e` (which the runner's shell sets) a bare wait
+  # then ENDS THE CELL, with its exit status - 143 - reported as the step's.
+  # Reproduced locally the moment this helper was written. Both expose cells had
+  # that exact shape, so tearing down a session that was still alive could kill
+  # the cell that tore it down, and the failure would name a signal nobody sent.
+  sb_rc=0
+  wait "$sb_pid" 2>/dev/null || sb_rc=$?
+  echo "stop_bg: $sb_what pid=$sb_pid alive-before-kill=$sb_alive wait-rc=$sb_rc (this shell is $$)"
+}
+
 # ================================ phases ================================
 
 # setup: the real user flow — install plug FROM the cluster (the installer grants
@@ -643,7 +681,7 @@ do_expose() {
     [ "$eo" = "expose-ok-$exname" ] && break
     sleep 3
   done
-  kill $expose_pid 2>/dev/null; wait $expose_pid 2>/dev/null
+  stop_bg "$expose_pid" "the -s session"
   if [ "$eo" != "expose-ok-$exname" ]; then
     echo "--- expose FAIL — prober said '${eo:-nothing}' (want expose-ok-$exname)"
     echo "    --- expose session output ---"; tail -12 /tmp/expose.out 2>/dev/null | sed 's/^/    /'
@@ -696,8 +734,8 @@ do_expose() {
   local wout
   wout="$(perl -e 'alarm 60; exec @ARGV or exit 127' "$PLUG" --host "$ip" --port "$port" -c bash -c \
     "p1=\$(curl -s --max-time 8 http://$pname:9096/ || true); echo \"P1=\$p1\"; sleep 22; curl -s --max-time 8 -o /dev/null http://$pname:9096/; echo \"P2-RC=\$?\"" 2>/dev/null | tr -d '\r')"
-  wait $poison_pid 2>/dev/null
-  wait $presolve_pid 2>/dev/null
+  wait $poison_pid 2>/dev/null || true
+  wait $presolve_pid 2>/dev/null || true
   paddr_before="$(tr -d '\r' </tmp/poison-addr-before 2>/dev/null | tail -1)"
   local p1 p2rc nstate
   p1="$(printf '%s' "$wout" | sed -n 's/^P1=//p' | head -1)"
@@ -773,7 +811,7 @@ do_expose() {
   sleep 7
   local paddr_after
   paddr_after="$(presolve)"
-  wait $poison2_pid 2>/dev/null
+  wait $poison2_pid 2>/dev/null || true
   if ! is_addr "${paddr_before:-}" || ! is_addr "${paddr_after:-}"; then
     echo "address across the relaunch: NOT MEASURABLE — '${paddr_before:-nothing}' → '${paddr_after:-nothing}'"
     sum "**name keeps its address across a relaunch** · not measurable on this family"
@@ -828,7 +866,7 @@ do_expose_var() {
     [ "$eo" = "exposevar-ok-$exname" ] && break
     sleep 3
   done
-  kill $expose_pid 2>/dev/null; wait $expose_pid 2>/dev/null
+  stop_bg "$expose_pid" "the -s session"
   if [ "$eo" = "exposevar-ok-$exname" ]; then
     echo "exposevar OK — allocated port, substituted in argv, and the mapping agreed with it"
     sum "**expose, named port (-s …:PORT)** ✅"; return 0
@@ -901,7 +939,7 @@ do_gateway() {
   if [ "$r" = PASS ]; then gwpath=PASS; echo "gateway path OK — the full path /$gwpath_seg reached our sink intact"
   else echo "--- gateway path FAIL — got '${r#FAIL|}' (want '/$gwpath_seg $gwpnonce')"; fi
   [ "$gw" = PASS ] && [ "$gwpath" = PASS ] || { echo "    --- sink session ---"; tail -12 /tmp/gw.out 2>/dev/null | sed 's/^/    /'; tail -6 /tmp/gw-post.err 2>/dev/null | sed 's/^/    /'; }
-  kill $gw_pid 2>/dev/null; wait $gw_pid 2>/dev/null
+  stop_bg "$gw_pid" "the gateway -s session"
   sum "**gateway callback** $(glyph "$gw") · **gateway path** $(glyph "$gwpath")"
   [ "$gw" = PASS ] && [ "$gwpath" = PASS ]
 }
@@ -945,7 +983,7 @@ do_takeover() {
   local tko_pid=$! during=""
   sleep 8 # arm + park + end-to-end verify
   for _ in 1 2 3; do during="$(probe)"; [ "$during" = "local-$tname" ] && break; sleep 3; done
-  wait $tko_pid 2>/dev/null # the -ttl fires and the session tears down cleanly
+  wait $tko_pid 2>/dev/null || true # the -ttl fires and the session tears down cleanly
 
   # Session over: the deployed service must be back (its container restarts).
   local after=""
@@ -998,7 +1036,7 @@ do_multiport() {
     [ "$ra" = "mp-a-$name" ] && [ "$rb" = "mp-b-$name" ] && [ "$rc" = "mp-c-$name" ] && break
     sleep 3
   done
-  kill $mp_pid 2>/dev/null; wait $mp_pid 2>/dev/null
+  stop_bg "$mp_pid" "the multi-port -s session"
   if [ "$ra" = "mp-a-$name" ] && [ "$rb" = "mp-b-$name" ] && [ "$rc" = "mp-c-$name" ]; then
     echo "multi-port OK — $name answers on 18131/18132/18133, each port its own backend"
     sum "**one name, three ports (no cross-talk)** ✅"; return 0
@@ -1077,7 +1115,7 @@ do_collision() {
   # that once — a prompt on a Windows runner with no console to answer it.
   co="$(perl -e 'alarm 60; exec @ARGV or exit 127' \
         "$PLUG" --host "$ip" --port "$port" -s "$cname:$cport:9" curl --version 2>&1 || true)"
-  wait $a_pid 2>/dev/null
+  wait $a_pid 2>/dev/null || true
   if printf '%s' "$co" | grep -qiE "another session|denied by peer|already"; then
     # The refusal must NAME the holder's agent port. That port is what lets a
     # session tell ITS OWN forgotten holder from a stranger's, and so what
@@ -1146,7 +1184,7 @@ do_lease() {
   if [ "$base" != "lease-a" ]; then
     echo "--- lease FAIL — baseline: prober said '${base:-nothing}' (want lease-a)"
     tail -8 /tmp/lease-a.out 2>/dev/null | sed 's/^/    /'
-    wait $a_pid 2>/dev/null; sum "**name survives a swept signpost** ❌ — baseline"; return 1
+    wait $a_pid 2>/dev/null || true; sum "**name survives a swept signpost** ❌ baseline"; return 1
   fi
 
   # Sweep A's signpost behind its back — exactly what a boot-gc does.
@@ -1154,13 +1192,13 @@ do_lease() {
   swept="$(plug curl -s --max-time 15 "http://chaos:8095/rm-signpost?name=$lname" 2>/dev/null | tr -d '\r' | tail -1)"
   if [ "$swept" != "removed" ]; then
     echo "--- lease FAIL — chaos could not sweep $lname's signpost (said '${swept:-nothing}')"
-    wait $a_pid 2>/dev/null; sum "**name survives a swept signpost** ❌ — sweep"; return 1
+    wait $a_pid 2>/dev/null || true; sum "**name survives a swept signpost** ❌ sweep"; return 1
   fi
 
   # B, same name, while A is still very much alive: must bounce.
   local co
   co="$("$PLUG" --host "$ip" --port "$port" -s "$lname:$lport:9" curl --version 2>&1 || true)"
-  wait $a_pid 2>/dev/null
+  wait $a_pid 2>/dev/null || true
   if printf '%s' "$co" | grep -qiE "another live session|another session|already"; then
     echo "lease OK — $lname stayed its session's with no signpost to prove it"
     sum "**name survives a swept signpost** ✅"; return 0
@@ -1324,7 +1362,7 @@ do_resilience() {
     esac
   fi
 
-  wait $res_pid 2>/dev/null # the -ttl fires; teardown restores the deployed service
+  wait $res_pid 2>/dev/null || true # the -ttl fires; teardown restores the deployed service
 
   # The deployed workload is coming back from a stop, on a runner that has just
   # restarted an agent under it — a "connection reset by peer" here is that
