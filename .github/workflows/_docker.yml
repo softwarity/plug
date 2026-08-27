@@ -38,7 +38,7 @@ env:
 
 jobs:
   build:
-    name: Build ${{ matrix.platform }}
+    name: Build the ${{ inputs.flavour || 'standalone' }} image, ${{ matrix.platform }}
     runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
@@ -159,7 +159,7 @@ jobs:
           retention-days: 1
 
   merge:
-    name: Merge manifest list
+    name: Merge the ${{ inputs.flavour || 'standalone' }} manifest list
     runs-on: ubuntu-latest
     needs: build
     outputs:

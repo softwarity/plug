@@ -136,7 +136,7 @@ jobs:
         run: bash scripts/platform-grid.sh plat
 
   build:
-    name: Build CLI
+    name: Build the CLI for all five platforms
     needs: test
     runs-on: ubuntu-latest
     steps:
@@ -247,7 +247,7 @@ jobs:
   # keep their own `needs: test`, so a red test still skips them — the whole cost
   # of a failing run is one runner building an image nobody will publish.
   image-build:
-    name: Build image (immutable tag only)
+    name: Build the standalone image (immutable tag only)
     if: github.event_name != 'pull_request'
     uses: ./.github/workflows/_docker.yml
     with:
@@ -272,7 +272,7 @@ jobs:
     secrets: inherit
 
   image:
-    name: Publish the tested image
+    name: Publish the tested images (standalone + hosted)
     # Publish ONLY once EVERY test has passed — unit tests, the TUN selftests on
     # all three OSes, and the full mesh e2e on BOTH cluster families (compose
     # and kubernetes: protocol matrix + multicluster + takeover, ×3 OS each). An
@@ -325,7 +325,7 @@ jobs:
       # The one case it drops: a tag pushed onto a commit built EARLIER publishes
       # nothing, since this job has already run for it. Re-run the CI on that
       # commit and it lands.
-      - name: Put the names this ref earns on the tested digest
+      - name: Put the names this ref earns on both tested digests
         env:
           IMAGE: docker.io/softwarity/plug
           SRC: ${{ needs.image-build.outputs.image }}
