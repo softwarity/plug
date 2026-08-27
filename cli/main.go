@@ -506,6 +506,26 @@ func launcherRun(args []string) {
 			}
 		}
 	}
+	// A core older than the personal key would drop it: the key travels to the
+	// core in PLUG_CORE_KEY and a core that does not read that variable opens the
+	// tunnel with the built-in key alone. The agent then refuses a fingerprint
+	// the developer has never seen, while `plug test` - which never leaves this
+	// process - authenticates perfectly. Two answers from one machine, and the
+	// working one is the one that proves nothing.
+	//
+	// The version that runs is the CLUSTER's, so an agent published before the
+	// feature disables it for every client of that cluster, however new. Run our
+	// own core instead: it is the same fallback taken when the download fails,
+	// and losing the version match costs less than losing the identity.
+	if coreDropsProfileKey(remote, cfg.key) {
+		info("this cluster runs v%s, whose core predates per-profile keys and would offer only the\n"+
+			"      shared key built into plug. Running this launcher's core (v%s) instead, so the\n"+
+			"      identity in your profile is the one presented. Upgrade the agent to line them up.",
+			shortVersion(remote), shortVersion(version))
+		attachExposes(&cfg, opts.exposes)
+		runCore(cfg, cmdArgs)
+		return
+	}
 	announceUpdate(cfg) // what a previous session found, said before the core takes over
 	core, err := ensureVersion(remote, cfg)
 	if err != nil {
@@ -700,6 +720,22 @@ func lookPathIn(file, path string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("%s not found in PATH", file)
+}
+
+// The first version whose CORE reads PLUG_CORE_KEY. Below it the launcher must
+// not hand off, or the profile's key stops at the exec. Bump this at release
+// time if the feature ships under a different number.
+const profileKeyCoreMajor, profileKeyCoreMinor = 2, 12
+
+// coreDropsProfileKey reports whether running a core of version coreVer would
+// silently discard this profile's key. Pure, so the table of versions is a test
+// rather than a claim: an unparseable version (dev, a branch build) is assumed
+// new, exactly as every other guard here assumes.
+func coreDropsProfileKey(coreVer, profileKey string) bool {
+	if profileKey == "" {
+		return false // nothing to drop
+	}
+	return versionBefore(coreVer, profileKeyCoreMajor, profileKeyCoreMinor)
 }
 
 func versionBefore(v string, maj, min int) bool {

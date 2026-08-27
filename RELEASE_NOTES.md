@@ -40,6 +40,24 @@ read by a process holding privilege, so it now goes through the same guard as
 every other privileged path under your home. It reads only where you could have
 read it yourself.
 
+There was a second half to this, and it is the one that would have kept biting
+after the first fix. **The core that opens your tunnel is the CLUSTER's version,
+not your launcher's.** So a cluster whose agent predates per-profile keys forces
+a core that predates them too, and that core ignores the key however new your
+launcher is. The symptom was the same refusal, plus a detail that made it look
+impossible: `plug test` authenticated and the host named the developer, because
+`plug test` never leaves the launcher, while every tunnel was refused with the
+shared key's fingerprint. One machine, one profile, two identities.
+
+plug now declines that handoff. When a profile has a key and the cluster's core
+would drop it, plug runs its own core instead and says so, because losing the
+version match costs less than losing the identity. Upgrading the agent lines
+them back up.
+
+The invariant is pinned three ways: what the `test` path presents, what the
+tunnel presents, and what a core rebuilt from the environment presents must be
+the same list of keys, in the same order, for one profile.
+
 
 ---
 

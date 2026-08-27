@@ -249,3 +249,104 @@ func mustGenerateKey(t *testing.T) ed25519.PrivateKey {
 	}
 	return priv
 }
+
+// offeredBy runs one dial against a recording agent and returns the fingerprints
+// that reached the wire, which is the only definition of "the identity plug
+// presents" that cannot be argued with.
+func offeredBy(t *testing.T, dial func(host, port string) error) []string {
+	t.Helper()
+	addr, offered := recordingAgent(t)
+	host, port, _ := net.SplitHostPort(addr)
+	if err := dial(host, port); err == nil {
+		t.Fatal("the recording agent refuses everyone; the dial must fail")
+	}
+	return offered()
+}
+
+// THE invariant, stated the way the failure stated itself: `plug test -p neo`
+// authenticated and the host named the developer, while the tunnel was refused
+// in a loop with the shared key's fingerprint. One machine, one profile, two
+// identities. Every path that composes from a profile must present the same
+// list, in the same order.
+func TestEveryPathOffersTheSameIdentityForOneProfile(t *testing.T) {
+	sandboxHome(t)
+	newProfile(t, "neo")
+	priv := profileKeyPath("neo")
+	writeKeyPair("neo", priv, priv+".pub")
+	setProfileKey("neo", "key", priv)
+
+	// 1. What `plug test` presents: the launcher's own config, straight from the
+	//    profile. This is the path that worked and hid the bug.
+	fromTest := offeredBy(t, func(host, port string) error {
+		cfg := loadProfile("neo")
+		cfg.host, cfg.port = host, port
+		_, err := tunnel.Dial(host, port, sshUser, cfg.authKeys(), "", nil)
+		return err
+	})
+
+	// 2. What the TUNNEL presents, through the function every dial site uses.
+	fromTunnel := offeredBy(t, func(host, port string) error {
+		cfg := loadProfile("neo")
+		cfg.host, cfg.port = host, port
+		_, err := dialTunnel(cfg)
+		return err
+	})
+
+	// 3. What the CORE presents: a separate process, rebuilt from the environment
+	//    and nothing else. This is where the identity was being lost.
+	fromCore := offeredBy(t, func(host, port string) error {
+		launcher := loadProfile("neo")
+		launcher.host, launcher.port = host, port
+		for _, kv := range coreEnv(launcher) {
+			if k, v, ok := strings.Cut(kv, "="); ok && strings.HasPrefix(k, "PLUG_CORE") {
+				t.Setenv(k, v)
+			}
+		}
+		_, err := dialTunnel(coreConfigFromEnv())
+		return err
+	})
+
+	for _, c := range []struct {
+		name string
+		got  []string
+	}{{"the tunnel", fromTunnel}, {"the core", fromCore}} {
+		if len(c.got) != len(fromTest) {
+			t.Errorf("%s offered %d keys, `plug test` offered %d", c.name, len(c.got), len(fromTest))
+			continue
+		}
+		for i := range c.got {
+			if c.got[i] != fromTest[i] {
+				t.Errorf("%s offered %s at position %d, `plug test` offered %s.\n"+
+					"One profile cannot have two identities: whichever is wrong, the developer\n"+
+					"is refused for a key they never chose.", c.name, c.got[i], i, fromTest[i])
+			}
+		}
+	}
+}
+
+// The version that runs the tunnel is the CLUSTER's, not the launcher's. A core
+// published before per-profile keys ignores PLUG_CORE_KEY, so handing off to it
+// silently reverts to the shared key: `plug test` keeps working (it never leaves
+// the launcher) while every tunnel is refused. The launcher must not hand off.
+func TestAKeyedProfileNeverRunsACoreThatWouldDropItsKey(t *testing.T) {
+	const key = "/home/dev/.plug/keys/neo"
+	for _, c := range []struct {
+		core, key string
+		want      bool
+		why       string
+	}{
+		{"2.11.0", key, true, "a published core from before the feature"},
+		{"2.11.1", key, true, "the newest release at the time"},
+		{"2.12.0", key, false, "the first core that reads the key"},
+		{"3.0.0", key, false, "anything later"},
+		{"2.11.0", "", false, "no profile key, nothing to drop"},
+		{"dev", key, false, "a dev build is assumed to have it, like every other guard here"},
+		{"dev+9f2a1c", key, false, "a branch build, same"},
+		{"", key, false, "an agent that names no version at all"},
+	} {
+		if got := coreDropsProfileKey(c.core, c.key); got != c.want {
+			t.Errorf("coreDropsProfileKey(%q, key=%q) = %v, want %v (%s)",
+				c.core, c.key, got, c.want, c.why)
+		}
+	}
+}
