@@ -42,28 +42,32 @@ func RegisterClient(key string, pid int, keyFile string) func() {
 	// The marker carries the cluster key, so the multicluster router can go the
 	// OTHER way — PID → cluster — by reading it (clusterForPID). Harmless to the
 	// single-cluster daemon, which only reads the marker's NAME (the pid).
-	//
-	// And, on a second line, the profile's private key. The daemon holds ONE
-	// tunnel per cluster and knows a cluster only as host:port: without this it
-	// dialled with the built-in key alone and an enrolled developer was refused
-	// with an unfamiliar fingerprint. A second line, so a marker written by an
-	// older core still reads back correctly as "this cluster, no personal key".
-	body := key
-	if keyFile != "" {
-		body += "\n" + keyFile
-	}
-	if os.WriteFile(marker, []byte(body), 0o644) != nil {
+	if os.WriteFile(marker, []byte(key), 0o644) != nil {
 		return func() {}
 	}
-	return func() { _ = os.Remove(marker) }
+	// The profile's private key goes BESIDE the marker, never inside it. The
+	// daemon holds one tunnel per cluster and knows a cluster only as host:port,
+	// so it needs the key to dial with the client's identity rather than the
+	// built-in one. But this file is read by whatever daemon is ALREADY RUNNING,
+	// which may predate this code by any amount of time: a long-lived root daemon
+	// survives launches. An older reader does TrimSpace over the whole marker, so
+	// a second line inside it becomes part of the cluster key - it then dials a
+	// host that does not exist, opens no tunnel, and every name resolves to a
+	// fake IP with nothing behind it. A sidecar leaves the marker byte-identical
+	// to what every released version writes, and is simply absent for readers
+	// that do not know to look.
+	if keyFile != "" {
+		_ = os.WriteFile(marker+keyFileSuffix, []byte(keyFile), 0o644)
+	}
+	return func() {
+		_ = os.Remove(marker)
+		_ = os.Remove(marker + keyFileSuffix)
+	}
 }
 
-// markerLines splits a client marker into the cluster key and the profile key
-// path, tolerating the one-line form older cores wrote.
-func markerLines(b []byte) (key, keyFile string) {
-	first, rest, _ := strings.Cut(strings.TrimSpace(string(b)), "\n")
-	return strings.TrimSpace(first), strings.TrimSpace(rest)
-}
+// keyFileSuffix names the sidecar. Not a valid PID, so every existing scan that
+// parses an entry name as a number skips it without being taught to.
+const keyFileSuffix = ".key"
 
 // ClusterKeyFile is the profile key a live client of this cluster registered,
 // "" when none did. The daemon asks, because it dials on their behalf and the
@@ -83,8 +87,8 @@ func ClusterKeyFile(key string) string {
 		if err != nil || !processAlive(pid) {
 			continue
 		}
-		if b, err := os.ReadFile(filepath.Join(clientsDir(key), e.Name())); err == nil {
-			if _, kf := markerLines(b); kf != "" {
+		if b, err := os.ReadFile(filepath.Join(clientsDir(key), e.Name()+keyFileSuffix)); err == nil {
+			if kf := strings.TrimSpace(string(b)); kf != "" {
 				return kf
 			}
 		}
@@ -108,8 +112,7 @@ func clusterForPID(pid int) (string, bool) {
 			continue
 		}
 		if b, err := os.ReadFile(filepath.Join(graftDir, e.Name(), name)); err == nil {
-			k, _ := markerLines(b)
-			return k, true
+			return strings.TrimSpace(string(b)), true
 		}
 	}
 	return "", false
@@ -132,6 +135,7 @@ func LiveClients(key string) int {
 			n++
 		} else {
 			_ = os.Remove(filepath.Join(clientsDir(key), e.Name()))
+			_ = os.Remove(filepath.Join(clientsDir(key), e.Name()+keyFileSuffix))
 		}
 	}
 	return n
@@ -165,12 +169,15 @@ func ActiveClusters() []string {
 				continue
 			}
 			if !processAlive(pid) {
-				_ = os.Remove(filepath.Join(dir, m.Name())) // reap stale
+				// Reap the marker AND its sidecar, or a dead client's key path
+				// outlives it and the daemon dials with a stale identity.
+				_ = os.Remove(filepath.Join(dir, m.Name()))
+				_ = os.Remove(filepath.Join(dir, m.Name()+keyFileSuffix))
 				continue
 			}
 			if key == "" {
 				if b, err := os.ReadFile(filepath.Join(dir, m.Name())); err == nil {
-					key, _ = markerLines(b)
+					key = strings.TrimSpace(string(b))
 				}
 			}
 		}

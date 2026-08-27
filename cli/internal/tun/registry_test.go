@@ -3,11 +3,13 @@
 package tun
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -98,9 +100,85 @@ func TestTheClientMarkerCarriesTheProfileKeyForTheDaemon(t *testing.T) {
 	}
 }
 
-// A marker written by an older core is one line. It has to read back as "this
-// cluster, no personal key" rather than as a cluster whose name includes a path.
-func TestAOneLineMarkerStillNamesItsCluster(t *testing.T) {
+// The compatibility direction that actually broke a running machine: what THIS
+// code writes has to read back correctly under the rule EVERY RELEASED version
+// applies, which is TrimSpace over the whole marker.
+//
+// The daemon is long-lived and runs as root; it survives launches and outlives
+// upgrades. So a new core registering a client is read by whatever daemon is
+// already in memory. Putting the key on a second line inside the marker made
+// that daemon parse "host:2222\n/Users/dev/.plug/keys/neo" as one cluster key,
+// dial a host that does not exist, open no tunnel at all, and leave every name
+// resolving to a fake IP with nothing behind it. The session looked like a
+// broken DNS, not like a registry change.
+func TestTheMarkerStaysReadableByEveryOlderDaemon(t *testing.T) {
+	old := graftDir
+	graftDir = t.TempDir()
+	defer func() { graftDir = old }()
+	key := "cluster.example:2222"
+
+	un := RegisterClient(key, os.Getpid(), "/home/dev/.plug/keys/neo")
+	defer un()
+
+	raw, err := os.ReadFile(filepath.Join(clientsDir(key), strconv.Itoa(os.Getpid())))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Verbatim the parse every published version does.
+	if got := strings.TrimSpace(string(raw)); got != key {
+		t.Fatalf("an older daemon reads the marker as %q, want %q.\n"+
+			"Anything but the bare cluster key here makes that daemon dial a host that does not exist.", got, key)
+	}
+	if bytes.ContainsRune(raw, '\n') {
+		t.Errorf("the marker gained a line: %q", raw)
+	}
+}
+
+// The key rides beside the marker, and goes with it.
+func TestTheKeySidecarLivesAndDiesWithItsMarker(t *testing.T) {
+	old := graftDir
+	graftDir = t.TempDir()
+	defer func() { graftDir = old }()
+	key := "cluster.example:2222"
+
+	un := RegisterClient(key, os.Getpid(), "/home/dev/.plug/keys/neo")
+	if got := ClusterKeyFile(key); got != "/home/dev/.plug/keys/neo" {
+		t.Fatalf("ClusterKeyFile = %q, want the path the client registered", got)
+	}
+	un()
+	if got := ClusterKeyFile(key); got != "" {
+		t.Errorf("the sidecar outlived its client: %q", got)
+	}
+	entries, err := os.ReadDir(clientsDir(key))
+	if err == nil && len(entries) != 0 {
+		t.Errorf("unregistering left %d file(s) behind", len(entries))
+	}
+}
+
+// The sidecar must not be mistaken for a client. It is not a number, which is
+// what every scan here parses, but that has to stay true rather than be assumed.
+func TestTheSidecarIsNotCountedAsAClient(t *testing.T) {
+	old := graftDir
+	graftDir = t.TempDir()
+	defer func() { graftDir = old }()
+	key := "cluster.example:2222"
+
+	un := RegisterClient(key, os.Getpid(), "/home/dev/.plug/keys/neo")
+	defer un()
+
+	if n := LiveClients(key); n != 1 {
+		t.Errorf("LiveClients = %d, want 1: the sidecar is being counted", n)
+	}
+	if got := ActiveClusters(); len(got) != 1 || got[0] != key {
+		t.Errorf("ActiveClusters = %v, want [%s]", got, key)
+	}
+	if got, ok := clusterForPID(os.Getpid()); !ok || got != key {
+		t.Errorf("clusterForPID = %q,%v, want %q,true", got, ok, key)
+	}
+}
+
+// A marker written by an older core has no sidecar at all.
+func TestAMarkerWithNoSidecarNamesItsClusterAndNoKey(t *testing.T) {
 	old := graftDir
 	graftDir = t.TempDir()
 	defer func() { graftDir = old }()
@@ -116,11 +194,11 @@ func TestAOneLineMarkerStillNamesItsCluster(t *testing.T) {
 		t.Errorf("ActiveClusters = %v, want [%s]", got, key)
 	}
 	if got := ClusterKeyFile(key); got != "" {
-		t.Errorf("ClusterKeyFile = %q, want empty for a marker that predates it", got)
+		t.Errorf("ClusterKeyFile = %q, want empty for a client that registered none", got)
 	}
 }
 
-// A profile with no key registers a one-line marker, so nothing changes for the
+// A profile with no key writes no sidecar, so nothing at all changes for the
 // clusters that have always worked.
 func TestAClientWithNoKeyWritesTheOldShape(t *testing.T) {
 	old := graftDir
@@ -129,10 +207,14 @@ func TestAClientWithNoKeyWritesTheOldShape(t *testing.T) {
 	key := "cluster.example:2222"
 	un := RegisterClient(key, os.Getpid(), "")
 	defer un()
+	entries, err := os.ReadDir(clientsDir(key))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("wrote %d files, want just the marker", len(entries))
+	}
 	if got := ClusterKeyFile(key); got != "" {
 		t.Errorf("ClusterKeyFile = %q, want empty", got)
-	}
-	if got := ActiveClusters(); len(got) != 1 || got[0] != key {
-		t.Errorf("ActiveClusters = %v, want [%s]", got, key)
 	}
 }
