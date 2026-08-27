@@ -30,7 +30,15 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: stable
-          cache: false
+          # On, and keyed on what actually decides the module set. It was off
+          # since the org-convention alignment, with no reason recorded, so
+          # every leg pulled gvisor cold from proxy.golang.org - three OSes,
+          # every run. One bad answer from that proxy failed a green commit.
+          cache: true
+          cache-dependency-path: cli/go.sum
+      - name: Warm the module cache (a flaky proxy must not fail a leg)
+        shell: bash
+        run: bash scripts/ci/go-mod-download.sh cli
       - name: Vet
         working-directory: cli
         run: go vet ./...
@@ -79,7 +87,11 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: stable
-          cache: false
+          cache: true
+          cache-dependency-path: cli/go.sum
+      - name: Warm the module cache (a flaky proxy must not fail a leg)
+        shell: bash
+        run: bash scripts/ci/go-mod-download.sh cli
       - name: selftest
         shell: bash
         # No tolerance any more. It was granted while the WinTUN route config was
@@ -132,7 +144,14 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: stable
-          cache: false
+          cache: true
+          # Two modules build here, so both go.sums decide the key.
+          cache-dependency-path: |
+            cli/go.sum
+            agent/go.sum
+      - name: Warm the module cache (a flaky proxy must not fail a leg)
+        shell: bash
+        run: bash scripts/ci/go-mod-download.sh cli agent
       # The agent helper is its own module — vet/build/test it here (the e2e only
       # compiled it into the cluster image; nothing caught a vet issue or ran its
       # unit tests).
