@@ -235,6 +235,23 @@ jobs:
       immutable_only: true
     secrets: inherit
 
+  # The client for a gateway that embeds the agent: same code, a different verb
+  # surface (keygen/pubkey, no update), stamped `-hosted` in the version string.
+  #
+  # NOT exercised by the e2e, deliberately. The legs test the datapath, the
+  # tunnel and the name provisioning, none of which differ between the two
+  # flavours - what differs is which verbs exist, and that is a unit test
+  # (cli/flavour_test.go). It is published only when the standalone earns
+  # publication, so the same green run blesses both.
+  image-build-hosted:
+    name: Build the hosted image (immutable tag only)
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/_docker.yml
+    with:
+      immutable_only: true
+      flavour: hosted
+    secrets: inherit
+
   image:
     name: Publish the tested image
     # Publish ONLY once EVERY test has passed — unit tests, the TUN selftests on
@@ -255,7 +272,7 @@ jobs:
     # markers those jobs wrote, which is the only record that cannot lie: without
     # it the image of 33f8c40 shipped with a red Windows selftest, past a comment
     # promising the opposite.
-    needs: [image-build, build, selftest, platforms, ci-shape, e2e-compose, e2e-k8s, e2e-swarm, e2e-arm64]
+    needs: [image-build, image-build-hosted, build, selftest, platforms, ci-shape, e2e-compose, e2e-k8s, e2e-swarm, e2e-arm64]
     if: success() && needs.platforms.outputs.verdict == 'pass' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
@@ -293,6 +310,7 @@ jobs:
         env:
           IMAGE: docker.io/softwarity/plug
           SRC: ${{ needs.image-build.outputs.image }}
+          HSRC: ${{ needs.image-build-hosted.outputs.image }}
         run: |
           branch="${GITHUB_REF_NAME//\//-}"   # a docker tag cannot carry a slash
           tags="-t $IMAGE:$branch"
@@ -311,6 +329,21 @@ jobs:
           echo "promoting $SRC → $tags"
           docker buildx imagetools create $tags "$SRC"
           docker buildx imagetools inspect "$IMAGE:$branch" | head -5
+
+          # The hosted client, promoted from the SAME green run. Every name it
+          # earns carries the flavour, and the moving one on the default branch
+          # is `hosted` rather than `latest-hosted`: it is the other product's
+          # latest, not a variant of this one's.
+          htags="-t $IMAGE:$branch-hosted"
+          if [ "$GITHUB_REF_NAME" = "${{ github.event.repository.default_branch }}" ]; then
+            htags="$htags -t $IMAGE:hosted"
+          fi
+          if [ -n "$v" ]; then
+            htags="$htags -t $IMAGE:$ver-hosted -t $IMAGE:$maj.$min-hosted -t $IMAGE:$maj-hosted"
+          fi
+          echo "promoting $HSRC → $htags"
+          docker buildx imagetools create $htags "$HSRC"
+          docker buildx imagetools inspect "$IMAGE:$branch-hosted" | head -5
 
   # The e2e that native-Linux Docker can't give us: run plug NATIVELY on each OS
   # against a REAL cluster, reaching services BY NAME over a Tailscale mesh (the

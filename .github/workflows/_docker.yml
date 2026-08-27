@@ -7,6 +7,17 @@ name: Reusable Docker build & publish
 on:
   workflow_call:
     inputs:
+      flavour:
+        description: >-
+          Which client this image serves. Empty is the standalone product.
+          `hosted` builds the client for a gateway that embeds the agent: it
+          carries keygen/pubkey and no update. It reaches the binaries through
+          the FLAVOUR build-arg, which appends it to the version string - the
+          one place a flavour lives, since that string is already the cache key
+          for the core a launcher fetches.
+        type: string
+        required: false
+        default: ''
       immutable_only:
         description: >-
           Only put the immutable `sha-<short>` tag on the manifest, leaving
@@ -101,11 +112,15 @@ jobs:
           build-args: |
             VERSION=${{ steps.ver.outputs.value }}
             GIT_REV=${{ steps.ver.outputs.rev }}
+            FLAVOUR=${{ inputs.flavour }}
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=${{ env.PLATFORM_PAIR }}
-          cache-to: type=gha,mode=max,scope=${{ env.PLATFORM_PAIR }}
+          # Scoped by flavour as well as platform: the two calls of this
+          # workflow run in the same CI run, and a shared scope would have one
+          # flavour's layers answer for the other's.
+          cache-from: type=gha,scope=${{ env.PLATFORM_PAIR }}-${{ inputs.flavour || 'std' }}
+          cache-to: type=gha,mode=max,scope=${{ env.PLATFORM_PAIR }}-${{ inputs.flavour || 'std' }}
       # The clusters never needed the manifest list: they all run on amd64
       # runners. Waiting for it has now cost two whole runs — the merge job is
       # last, and it competes for a runner with the sixteen jobs waiting on its
@@ -118,8 +133,11 @@ jobs:
       # `sha-<short>` — the multi-arch one — is untouched and remains what gets
       # promoted, so "published == tested" still holds: the amd64 digest the legs
       # exercised is the one inside that manifest.
+      # Only the standalone flavour gets it: this tag exists for the e2e
+      # clusters to pull, and the e2e exercises the standalone. The hosted image
+      # is the same code with a different verb surface, covered by unit tests.
       - name: Name this digest for the clusters
-        if: matrix.platform == 'linux/amd64'
+        if: matrix.platform == 'linux/amd64' && inputs.flavour == ''
         run: |
           docker buildx imagetools create \
             --tag "$IMAGE:sha-${GITHUB_SHA::7}-amd64" \
@@ -132,7 +150,10 @@ jobs:
       - name: Upload digest
         uses: actions/upload-artifact@v7
         with:
-          name: digests-${{ env.PLATFORM_PAIR }}
+          # Same reason as the cache scope: two flavours, one run, one artefact
+          # namespace. Without the suffix the merge job would assemble a manifest
+          # from whichever digests landed first.
+          name: digests-${{ env.PLATFORM_PAIR }}-${{ inputs.flavour || 'std' }}
           path: ${{ runner.temp }}/digests/*
           if-no-files-found: error
           retention-days: 1
@@ -148,7 +169,10 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           path: ${{ runner.temp }}/digests
-          pattern: digests-*
+          # An explicit token in every name, never an absence: matching "the one
+          # without a suffix" by glob is the kind of clever that assembles a
+          # manifest from the other flavour's digests and says nothing.
+          pattern: digests-*-${{ inputs.flavour || 'std' }}
           merge-multiple: true
       - uses: docker/setup-buildx-action@v4
       - name: Docker tags
@@ -156,6 +180,11 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE }}
+          # Every tag this build earns carries the flavour, or the two would
+          # collide on sha-<short> and the second push would silently take the
+          # first one's name.
+          flavor: |
+            suffix=${{ inputs.flavour && format('-{0}', inputs.flavour) || '' }},onlatest=true
           tags: |
             type=ref,event=branch,enable=${{ !inputs.immutable_only }}
             type=raw,value=latest,enable=${{ !inputs.immutable_only && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
@@ -193,4 +222,6 @@ jobs:
       # manifests and compose files take an image reference, and `sha-<short>`
       # names this build and only this build.
       - id: ref
-        run: echo "image=${{ env.IMAGE }}:sha-$(echo ${{ github.sha }} | cut -c1-7)" >> "$GITHUB_OUTPUT"
+        run: |
+          sfx="${{ inputs.flavour && format('-{0}', inputs.flavour) || '' }}"
+          echo "image=${{ env.IMAGE }}:sha-$(echo ${{ github.sha }} | cut -c1-7)$sfx" >> "$GITHUB_OUTPUT"
