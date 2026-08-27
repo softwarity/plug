@@ -8,10 +8,19 @@
 # A release passes none: v2.4.0 already designates exactly one commit.
 ARG VERSION=dev
 ARG GIT_REV=
+# FLAVOUR names which client this image serves, and it rides in the VERSION
+# STRING rather than in a separate stamp. That string is already the cache key
+# for the core a launcher fetches and the value the agent announces, so two
+# flavours can never collide on one cached binary, and nothing can disagree with
+# anything. Empty is the standalone product; `hosted` is the client for a gateway
+# that embeds the agent (Meerkat), which carries keygen/pubkey and no update.
+#   docker build --build-arg FLAVOUR=hosted -t softwarity/plug:hosted .
+ARG FLAVOUR=
 
 FROM golang:1.26-alpine AS build
 ARG VERSION
 ARG GIT_REV
+ARG FLAVOUR
 # plug is a single self-contained Go binary — its data path is the userspace TUN
 # (gVisor netstack + wireguard-go device), no C hook or seccomp supervisor to
 # cross-build anymore.
@@ -20,6 +29,7 @@ COPY cli/ ./cli/
 WORKDIR /src/cli
 RUN mkdir -p /out/bin && \
     if [ -n "${GIT_REV}" ]; then V="${VERSION}+${GIT_REV}"; else V="${VERSION}"; fi && \
+    if [ -n "${FLAVOUR}" ]; then V="${V}-${FLAVOUR}"; fi && \
     for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do \
       os=${t%/*}; arch=${t#*/}; ext=""; [ "$os" = windows ] && ext=".exe"; \
       CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
@@ -72,13 +82,28 @@ FROM alpine:3.24
 # accounts, publickey for the tunnel and none for downloads, no shell for
 # either, direct-tcpip and remote forwards binding the address the client names.
 
-# The keys allowed to open a tunnel. Same file the `plug` account's
-# authorized_keys held, at a path that no longer pretends a Unix user exists.
-COPY --chmod=644 agent/authorized_keys /opt/plug/authorized_keys
+# /opt/plug holds ONLY what this agent hands out: the client binaries, the
+# version they answer to, the installer and the WinTUN DLL. Nothing that is this
+# agent's own running state, because an embedder copies this directory wholesale
+# into its image, and admission keys or a host key travelling there are read as
+# meaningful when they are not: a gateway takes its identity from its vault and
+# its admissions from its database.
+#
+# Created and moded explicitly rather than by whichever COPY happens to be first:
+# a `COPY --chmod` that CREATES the directory applies its mode to the directory
+# too, and serve-binary has to traverse it.
+RUN mkdir -p /opt/plug && chmod 755 /opt/plug
+
+# The standalone agent's own state, outside what is handed out. The keys it
+# admits, and what must outlive a process restart (the host key today). Not a
+# volume: a pod that is recreated legitimately starts fresh.
+#
+# Created FIRST, for the same reason /opt/plug is: a `COPY --chmod` that creates
+# the directory applies its mode to the DIRECTORY too, and 0644 on a directory
+# has no traverse bit. Caught by building the image and looking, not by reading.
+RUN mkdir -p /var/lib/plug/state && chmod 755 /var/lib/plug && chmod 700 /var/lib/plug/state
+COPY --chmod=644 agent/authorized_keys /var/lib/plug/authorized_keys
 COPY --chmod=755 agent/serve-binary /usr/local/bin/serve-binary
-# State that must outlive a process restart: the host key today, the enrolled
-# keys later. Not a volume: a pod that is recreated legitimately starts fresh.
-RUN mkdir -p /opt/plug/state && chmod 700 /opt/plug/state
 COPY --from=build /out/bin/ /opt/plug/bin/
 COPY --from=build /out/VERSION /opt/plug/VERSION
 # 0755, not 4755. The setuid bit existed only to bridge the gap sshd created by

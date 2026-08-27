@@ -2,6 +2,51 @@
 
 ## NEXT RELEASE
 
+### Two images, two clients: the commands follow the cluster that served them
+
+plug is distributed BY the cluster it serves: `ssh get@<agent> install | sh`
+hands out the binaries baked into that agent's image. So a gateway that embeds
+the agent ships its own client, and some commands make no sense against it.
+
+There are now two images. `softwarity/plug` is the standalone product, unchanged.
+`softwarity/plug:hosted` carries the client for a gateway that embeds the agent:
+it has `keygen` and `pubkey`, and it has no `update` and no `versions`, because
+the gateway serves the client and the list that counts is the gateway's.
+
+A command that does not apply is **absent**: missing from `plug --help` and
+refused if typed, in both spellings (`plug update -p X` and `plug -p X update`).
+Not hidden behind a flag, since a flag has to be known in advance and is
+discovered by the person who did not know it existed.
+
+The flavour rides in the version string (`2.12.0-hosted`) and nowhere else.
+That string is already the cache key for the core a launcher fetches and the
+value the agent announces, so two flavours cannot collide on one cached binary
+and nothing can drift out of sync with anything.
+
+**The trade, stated plainly:** the command set follows where the binary came
+from, not which cluster it is talking to. There is one plug in a PATH. Someone
+who installed from a gateway and later reaches a standalone cluster still has no
+`update`. Deciding per call instead would keep every command everywhere; this is
+the deliberate other choice.
+
+### /opt/plug now holds only what the agent hands out
+
+`authorized_keys` and `state/` moved to `/var/lib/plug/`. They are the standalone
+agent's own admission list and its host key, and `/opt/plug` is what the agent
+DISTRIBUTES: the client binaries, the version, the installer, the WinTUN DLL.
+An embedder copies that directory wholesale, and keys travelling there read as
+meaningful when they are not, since a gateway takes its identity from its vault
+and its admissions from its database.
+
+Nothing in the published manifests mounts either path, so this changes nothing
+for a normal deployment. If you mounted a volume over `/opt/plug/state` to keep
+a host key across restarts, point it at `/var/lib/plug/state`.
+
+
+---
+
+
+
 ### Fixed: a profile's key was never actually offered
 
 If you generated a key with `plug keygen`, enrolled the public half exactly as

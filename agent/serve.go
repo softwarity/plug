@@ -36,12 +36,16 @@ import (
 const (
 	// Where a standalone agent keeps what must outlive a process restart. Under
 	// Meerkat the Host answers instead, from its vault.
-	stateDir = "/opt/plug/state"
+	//
+	// Outside /opt/plug on purpose: that directory is what the agent HANDS OUT,
+	// and an embedder copies it wholesale into its own image. A host key and an
+	// admission list travelling there are read as meaningful when they are not.
+	stateDir = "/var/lib/plug/state"
 
 	// The keys a standalone agent accepts. Baked into the image, exactly as
 	// /home/plug/.ssh/authorized_keys was: it authenticates the SOFTWARE, not a
-	// person.
-	authorizedKeysPath = "/opt/plug/authorized_keys"
+	// person. Beside the state, for the same reason.
+	authorizedKeysPath = "/var/lib/plug/authorized_keys"
 
 	// The download account's command. Still a separate program, still no shell.
 	downloadCommand = "/usr/local/bin/serve-binary"

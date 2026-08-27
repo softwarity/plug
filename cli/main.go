@@ -57,28 +57,11 @@ Usage:
                                        (binaries, resolver, service, clusters),
                                        apply the safe repairs with --fix, and
                                        offer to report problems as an issue
-  plug update [-p profile] [<tag>]     update that cluster's agent (it refreshes
-                                       its own deployment from the registry),
-                                       then this launcher from the agent.
-                                       A tag SWITCHES the channel it follows:
-                                         plug update tag       newest release
-                                         plug update latest    the latest stream
-                                         plug update feat-09   that branch's tag
-                                       The agent checks the tag exists first.
-  plug keygen [-p profile] [--renew]   give this profile its own key pair, kept
-                                       in ~/.plug/keys/. Enrol the public half
-                                       with your cluster operator; plug keeps
-                                       offering the built-in key too, so this is
-                                       safe to run before the cluster asks for it
-  plug pubkey [-p profile]             print that profile's public key, ready to
-                                       paste where the operator enrols it
-  plug rn <old> <new>                  rename a profile (alias: mv)
+` + usageFor("update") + usageFor("keys") + `  plug rn <old> <new>                  rename a profile (alias: mv)
   plug rm <profile>                    remove a profile
   plug version [-p profile]            this launcher's version — or, with a
                                        profile, that cluster agent's version
-  plug versions                        launcher, cached cores, and the agent
-                                       version of every profile
-  plug prune                           delete the cached cores no cluster runs
+` + usageFor("versions") + `  plug prune                           delete the cached cores no cluster runs
                                        any more (asks each profile's agent)
   plug uninstall                       remove plug from this machine
   plug about                           what plug is, in a few lines
@@ -299,6 +282,12 @@ func main() {
 		fmt.Print(usage())
 		os.Exit(2)
 	}
+	// A verb this build does not carry is refused here, before the switch. It
+	// must not reach launcherRun either: that would take `update` for the name of
+	// a program to run inside the cluster and fail on something unrelated.
+	if why, ok := verbAvailable(args[0]); !ok {
+		refuseVerb(args[0], why)
+	}
 	switch args[0] {
 	case "-h", "--help":
 		fmt.Print(usage())
@@ -400,6 +389,12 @@ func launcherRun(args []string) {
 	// (same for doctor and version). Re-route the pre-parsed flags to the
 	// subcommand.
 	if len(cmdArgs) > 0 && (cmdArgs[0] == "update" || cmdArgs[0] == "doctor" || cmdArgs[0] == "version") {
+		// The same refusal as the top-level dispatch. `plug -p X update` gets here
+		// with "-p" as args[0], so the guard up there never saw the verb: without
+		// this, the one spelling refuses and the other runs.
+		if why, ok := verbAvailable(cmdArgs[0]); !ok {
+			refuseVerb(cmdArgs[0], why)
+		}
 		if len(opts.exposes) > 0 || opts.client {
 			fatal("-s/-c don't apply to %q", cmdArgs[0])
 		}
