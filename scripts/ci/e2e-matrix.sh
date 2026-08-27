@@ -699,7 +699,7 @@ do_expose() {
   wait $poison_pid 2>/dev/null
   wait $presolve_pid 2>/dev/null
   paddr_before="$(tr -d '\r' </tmp/poison-addr-before 2>/dev/null | tail -1)"
-  local p1 p2rc
+  local p1 p2rc nstate
   p1="$(printf '%s' "$wout" | sed -n 's/^P1=//p' | head -1)"
   p2rc="$(printf '%s' "$wout" | sed -n 's/^P2-RC=//p' | head -1)"
   if [ "$p1" != "alive-$pname" ]; then
@@ -720,6 +720,43 @@ do_expose() {
     0)
       echo "--- poison test FAIL — $pname still answers after its session's ttl: the teardown never freed the name"
       sum "**dns honesty (killed name)** ❌ — name still served"; return 1 ;;
+    28)
+      # A HANG. On its own this is the poisoning signature: an address minted for
+      # a name that is gone, with nothing behind it. But on Kubernetes it is also
+      # what an HONEST linger looks like - the Service is deliberately kept so a
+      # relaunch reuses its ClusterIP, and a Service with no endpoints DROPS the
+      # SYN instead of refusing it (socks_run.go:92, transport.go:345). Same exit
+      # code, opposite meanings, and the code alone cannot separate them.
+      #
+      # So ask the cluster the question the exit code cannot answer: does this
+      # name still EXIST here? A Service still standing means plug told the truth
+      # when it resolved the name. NXDOMAIN from inside means it minted an
+      # address for something gone, which is the bug this cell exists to catch.
+      #
+      # Asked through chaos's own resolver, with the FQDN: chaos runs in its
+      # per-leg namespace (k8s.res-agents.yaml) while these names are created by
+      # the main agent in `default`, and a BARE name does not cross namespaces -
+      # the same trick the resilience cell already uses for its VIP. A Service
+      # keeps its ClusterIP whether or not it has endpoints, so resolving is
+      # exactly the "does it still exist" question and nothing more.
+      #
+      # NOT by widening the accepted codes: 28 stays a failure everywhere it
+      # cannot be explained, or the detector is off.
+      pstate=""
+      if [ "$family" = k8s ]; then
+        pstate="$(plug curl -s --max-time 10 \
+          "http://chaos:8095/resolve?name=$pname.default.svc.cluster.local" 2>/dev/null | tr -d '\r' | tail -1)"
+      fi
+      case "${pstate:-none}" in
+        none|unresolved:*)
+          echo "--- poison test FAIL - curl exit 28 on $pname, and the cluster does not resolve it either"
+          echo "    (${pstate:-no answer}) - an address was minted for a name that is gone: the gateway-poisoning bug"
+          sum "**dns honesty (killed name)** ❌ - hung on a name the cluster no longer knows"; return 1 ;;
+        *)
+          echo "poison test OK - $pname hung because its Service is still standing (resolves to $pstate);"
+          echo "                 plug resolved a name that really does still exist, which is the k8s linger"
+          sum "**dns honesty (killed name → k8s linger, name still real)** ✅" ;;
+      esac ;;
     *)
       echo "--- poison test FAIL — curl exit $p2rc: hang or fake on a dead name (the gateway-poisoning bug)"
       sum "**dns honesty (killed name)** ❌ — rc \`${p2rc:-none}\` on a dead name"; return 1 ;;
