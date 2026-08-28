@@ -103,6 +103,9 @@ type sshServer struct {
 	// noDownloadAccount closes the anonymous `get` account entirely.
 	noDownloadAccount bool
 	idleEvry          time.Duration // keepalive period; 0 disables (tests)
+	// grace bounds the HANDSHAKE only. 0 means handshakeGrace; the tests shorten
+	// it, since waiting a minute to prove a silent peer is dropped is not a test.
+	grace time.Duration
 
 	wg sync.WaitGroup
 
@@ -234,23 +237,82 @@ func (s *sshServer) serverConfig() *ssh.ServerConfig {
 }
 
 // Serve accepts until ln is closed, then waits for live connections to finish.
+// What sshd gave this port for free, and what had to be written back.
+//
+// handshakeGrace is LoginGraceTime: a peer that opens a connection and never
+// finishes the key exchange held a goroutine, a socket and a slot forever. It
+// covers the HANDSHAKE only and is cleared the moment that succeeds, or a slow
+// `install` download over a bad link would die halfway through.
+//
+// maxHandshakes is MaxStartups, counted the way sshd counts it: connections that
+// have not authenticated yet. An established session does not hold a slot, so a
+// busy team is never turned away; what is bounded is how many strangers can be
+// mid-handshake at once. Generous for a dev cluster, finite against a port
+// somebody points a scanner at.
+const (
+	handshakeGrace = 60 * time.Second
+	maxHandshakes  = 64
+)
+
 func (s *sshServer) Serve(ln net.Listener) error {
+	gate := make(chan struct{}, maxHandshakes)
 	for {
 		nc, err := ln.Accept()
 		if err != nil {
 			s.wg.Wait()
 			return err
 		}
+		select {
+		case gate <- struct{}{}:
+		default:
+			// Refused rather than queued: queueing turns a flood into a backlog
+			// that outlives it, and the client's own dial timeout would have
+			// given up long before its turn came.
+			s.note("ssh: %d handshakes already in flight, refusing %s", maxHandshakes, nc.RemoteAddr())
+			nc.Close()
+			continue
+		}
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
-			s.handle(nc)
+			s.handle(nc, func() { <-gate })
 		}()
 	}
 }
 
-func (s *sshServer) handle(nc net.Conn) {
+// absorb returns a deferred recover for one unit of work.
+//
+// A recover only catches panics in ITS OWN goroutine, and handle spawns four:
+// the keepalive, the global requests, every session and every direct-tcpip.
+// Guarding handle alone left all of them uncovered, which is where the work
+// actually happens - a test that panicked inside a session took the whole test
+// binary down and said so.
+func (s *sshServer) absorb(what string, onPanic func()) func() {
+	return func() {
+		if r := recover(); r != nil {
+			s.note("ssh: %s panicked: %v", what, r)
+			if onPanic != nil {
+				onPanic()
+			}
+		}
+	}
+}
+
+func (s *sshServer) handle(nc net.Conn, releaseSlot func()) {
+	// One connection's panic must not take the agent with it. Everything below
+	// parses what a stranger sent; sshd answered for that with a process per
+	// connection, and this is one goroutine among many inside a gateway that has
+	// other work to do.
+	defer s.absorb("connection from "+nc.RemoteAddr().String(), func() { nc.Close() })()
+	grace := s.grace
+	if grace == 0 {
+		grace = handshakeGrace
+	}
+	_ = nc.SetDeadline(time.Now().Add(grace))
 	conn, chans, reqs, err := ssh.NewServerConn(nc, s.serverConfig())
+	// The slot is held for the HANDSHAKE, not the session: what is bounded is
+	// how many unauthenticated peers can be in flight at once.
+	releaseSlot()
 	if err != nil {
 		// Includes every rejected key and every scanner. Worth a line, not an
 		// alarm: this port is reachable by design.
@@ -258,6 +320,9 @@ func (s *sshServer) handle(nc net.Conn) {
 		nc.Close()
 		return
 	}
+	// The grace is over: from here the deadline would kill a legitimate idle
+	// session, and a long download is exactly that.
+	_ = nc.SetDeadline(time.Time{})
 	defer conn.Close()
 	defer s.track(conn)()
 
@@ -270,7 +335,7 @@ func (s *sshServer) handle(nc net.Conn) {
 		// What ClientAliveInterval/CountMax did: notice a dead peer so its
 		// remote-forward binds free up before a reconnecting session tries to
 		// re-arm them. Three misses, same as the config it replaces.
-		go s.keepalive(conn)
+		go func() { defer s.absorb("keepalive", nil)(); s.keepalive(conn) }()
 	}
 
 	// Remote forwards belong to THIS connection: whatever it opened must be
@@ -284,12 +349,15 @@ func (s *sshServer) handle(nc net.Conn) {
 	// fact about the same failure modes.
 	defer s.withdrawAll(fwd)
 
-	go s.globalRequests(reqs, user, fwd)
+	go func() { defer s.absorb("global requests", nil)(); s.globalRequests(reqs, user, fwd) }()
 
 	for nch := range chans {
 		switch nch.ChannelType() {
 		case "session":
-			go s.session(nch, user, who, fwd, conn.RemoteAddr(), conn.LocalAddr())
+			go func(nch ssh.NewChannel) {
+				defer s.absorb("session", nil)()
+				s.session(nch, user, who, fwd, conn.RemoteAddr(), conn.LocalAddr())
+			}(nch)
 		case "direct-tcpip":
 			// The outbound half of the tunnel. `get` never gets it: that account
 			// downloads binaries and nothing else (AllowTcpForwarding no).
@@ -297,7 +365,7 @@ func (s *sshServer) handle(nc net.Conn) {
 				_ = nch.Reject(ssh.Prohibited, "this account may not forward")
 				continue
 			}
-			go s.directTCPIP(nch)
+			go func(nch ssh.NewChannel) { defer s.absorb("direct-tcpip", nil)(); s.directTCPIP(nch) }(nch)
 		default:
 			_ = nch.Reject(ssh.UnknownChannelType, "unsupported channel type")
 		}
@@ -511,7 +579,22 @@ func (s *sshServer) keepalive(conn *ssh.ServerConn) {
 	defer t.Stop()
 	misses := 0
 	for range t.C {
-		_, _, err := conn.SendRequest("keepalive@openssh.com", true, nil)
+		// SendRequest waits for the reply with no deadline of its own, so a peer
+		// whose TCP is still up but which answers nothing blocked here forever:
+		// the miss counter never moved, and the connection kept its remote
+		// forwards until the agent restarted. The client side already had this
+		// timeout; the server side is where a stuck peer costs a NAME.
+		errc := make(chan error, 1)
+		go func() {
+			_, _, err := conn.SendRequest("keepalive@openssh.com", true, nil)
+			errc <- err
+		}()
+		var err error
+		select {
+		case err = <-errc:
+		case <-time.After(s.idleEvry):
+			err = fmt.Errorf("no answer within %s", s.idleEvry)
+		}
 		if err == nil {
 			misses = 0
 			continue

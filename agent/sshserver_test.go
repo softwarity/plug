@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -565,5 +566,137 @@ func TestTheForcedCommandSeesWhereTheSessionCameFrom(t *testing.T) {
 	// SSH_CONNECTION adds the server address: four fields.
 	if conn := strings.Fields(parts[1]); len(conn) != 4 {
 		t.Errorf("SSH_CONNECTION must have four fields, got %q", parts[1])
+	}
+}
+
+// What sshd gave this port for free, and what had to be written back when it was
+// replaced. Each of these was a way one stranger could cost the agent something
+// no legitimate client ever asks for.
+
+// hardeningServer starts a server configured BEFORE it serves: everything below
+// tunes a field the accept loop reads, and setting it afterwards would be a data
+// race the detector is right to flag.
+func hardeningServer(t *testing.T, tune func(*sshServer)) string {
+	t.Helper()
+	hostSigner, err := hostKeySigner(filepath.Join(t.TempDir(), "host_key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &sshServer{
+		host: &fakeHost{signer: hostSigner, allowed: map[string]string{}}, hostKey: hostSigner,
+		logf:    func(string, ...any) {},
+		execFor: func(string) []string { return []string{"/bin/sh", "-c", "printf served"} },
+	}
+	if tune != nil {
+		tune(srv)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go srv.Serve(ln)
+	return ln.Addr().String()
+}
+
+// A peer that connects and never speaks held a goroutine, a socket and a slot
+// for as long as the agent lived. sshd called this LoginGraceTime.
+func TestAHandshakeThatNeverFinishesIsDropped(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the agent only ever runs in a Linux container")
+	}
+	addr := hardeningServer(t, func(s *sshServer) { s.grace = 300 * time.Millisecond })
+
+	c, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	// Say nothing at all: no version banner, no key exchange.
+	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, 256)
+	for {
+		if _, err := c.Read(buf); err != nil {
+			return // the server hung up on us, which is the point
+		}
+	}
+}
+
+// The grace must not outlive the handshake: `install` streams a binary over a
+// link that can be slow, and a deadline left in place would cut it mid-download.
+func TestTheGraceDoesNotSurviveIntoTheSession(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the agent only ever runs in a Linux container")
+	}
+	addr := hardeningServer(t, func(s *sshServer) { s.grace = 1 * time.Second })
+
+	cl, err := ssh.Dial("tcp", addr, &ssh.ClientConfig{
+		User: downloadUser, HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: 3 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer cl.Close()
+
+	// Idle past the grace, then use the connection. A deadline still in force
+	// would have killed it while it sat there.
+	time.Sleep(2 * time.Second)
+	sess, err := cl.NewSession()
+	if err != nil {
+		t.Fatalf("the session died with the handshake grace still on it: %v", err)
+	}
+	defer sess.Close()
+	if _, err := sess.Output("version"); err != nil {
+		t.Fatalf("exec after idling past the grace: %v", err)
+	}
+}
+
+// A panic while serving one stranger must cost that connection and nothing else.
+// sshd answered for this with a process per connection; here it is one goroutine
+// inside a gateway that has other work to do.
+func TestAPanickingConnectionDoesNotTakeTheAgentDown(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the agent only ever runs in a Linux container")
+	}
+	var boom atomic.Bool
+	boom.Store(true)
+	addr := hardeningServer(t, func(s *sshServer) {
+		s.execFor = func(string) []string {
+			if boom.Load() {
+				panic("the verb lookup blew up")
+			}
+			return []string{"/bin/sh", "-c", "printf served"}
+		}
+	})
+
+	cl, err := ssh.Dial("tcp", addr, &ssh.ClientConfig{
+		User: downloadUser, HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: 3 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	if sess, serr := cl.NewSession(); serr == nil {
+		_, _ = sess.Output("version") // panics inside the server
+		sess.Close()
+	}
+	cl.Close()
+
+	// The agent is still there for the next caller.
+	boom.Store(false)
+	cl2, err := ssh.Dial("tcp", addr, &ssh.ClientConfig{
+		User: downloadUser, HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: 3 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("one connection's panic took the whole agent down: %v", err)
+	}
+	defer cl2.Close()
+	sess2, err := cl2.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess2.Close()
+	out, err := sess2.Output("version")
+	if err != nil || string(out) != "served" {
+		t.Fatalf("after the panic the agent answered %q, %v", out, err)
 	}
 }
