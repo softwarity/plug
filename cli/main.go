@@ -1126,9 +1126,23 @@ func listVersions() {
 // Blocking would fail every session after a routine redeploy.
 func dialGetUser(cfg config) (*ssh.Client, error) {
 	addr := net.JoinHostPort(cfg.host, cfg.port)
+	pin := knownHostsFor(cfg.host)
+	if pin != "" {
+		// Same two steps dialTunnel takes around the same file, and skipping
+		// either broke every macOS session: this dial runs FIRST (it is how the
+		// version is asked), so it is the one that CREATES the pin file - as euid
+		// 0, since the launcher is setuid. dialTunnel then found it owned by root
+		// and refused it, correctly, with "a file outside your own tree".
+		//
+		// Guard before, hand back after. Deferred rather than conditional on
+		// success: the callback writes during the handshake, so a dial that fails
+		// afterwards still leaves a root-owned file behind.
+		guardUserPath(pin)
+		defer chownToUser(pin)
+	}
 	return ssh.Dial("tcp", addr, &ssh.ClientConfig{
 		User:            getUser,
-		HostKeyCallback: tunnel.HostKeyCallback(knownHostsFor(cfg.host), addr, info),
+		HostKeyCallback: tunnel.HostKeyCallback(pin, addr, info),
 		Timeout:         15 * time.Second,
 	})
 }

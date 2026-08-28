@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/softwarity/plug/cli/internal/tunnel"
 	"golang.org/x/crypto/ssh"
@@ -390,5 +391,72 @@ func TestWhereTheHostKeyIsRecorded(t *testing.T) {
 	}
 	if filepath.Base(got) != "known_hosts" {
 		t.Errorf("recorded in %q, want a known_hosts file", got)
+	}
+}
+
+// The pin file is created by whichever channel dials FIRST, and on macOS that
+// happens while plug is setuid root. So every writer of it must do the same two
+// things: guard the path before (a symlinked ~/.plug must not aim the write
+// somewhere else), and hand the file back to the user after.
+//
+// Pinning the download channel without the second step broke every macOS
+// session in CI: this dial runs first, created ~/.plug/known_hosts owned by
+// root, and the tunnel's own guard then refused it - correctly - as "a file
+// outside your own tree". The feature was right and the ownership was not.
+func TestBothChannelsGuardAndHandBackThePinFile(t *testing.T) {
+	b, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fn := string(b)
+	fn = fn[strings.Index(fn, "func dialGetUser("):]
+	fn = fn[:strings.Index(fn, "\n}")]
+	for _, want := range []string{"guardUserPath(", "chownToUser("} {
+		if !strings.Contains(fn, want) {
+			t.Errorf("dialGetUser writes the pin file without %s: it runs first, as root, and creates it", want)
+		}
+	}
+
+	s, err := os.ReadFile("socks_run.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dt := string(s)
+	dt = dt[strings.Index(dt, "func dialTunnel("):]
+	dt = dt[:strings.Index(dt, "\n}")]
+	for _, want := range []string{"guardUserPath(", "chownToUser("} {
+		if !strings.Contains(dt, want) {
+			t.Errorf("dialTunnel lost %s around the pin file", want)
+		}
+	}
+}
+
+// And the pinning actually happens: the callback the download channel now uses
+// records the agent's key where that channel used to record nothing at all.
+// Exercised through the exported callback rather than dialGetUser, because the
+// test server listens on loopback and plug exempts loopback from pinning on
+// purpose - there is no network to intercept, and a local dev agent recreated
+// with a fresh key would raise a change on every restart.
+func TestTheDownloadChannelsCallbackRecordsTheAgentsKey(t *testing.T) {
+	dir := t.TempDir()
+	pin := filepath.Join(dir, "known_hosts")
+	addr, _ := recordingAgent(t)
+	host, port, _ := net.SplitHostPort(addr)
+
+	_, err := ssh.Dial("tcp", addr, &ssh.ClientConfig{
+		User:            getUser,
+		HostKeyCallback: tunnel.HostKeyCallback(pin, net.JoinHostPort(host, port), nil),
+		Timeout:         2 * time.Second,
+	})
+	// The server refuses the account; what matters is that the host key callback
+	// ran first and wrote what it saw.
+	_ = err
+
+	b, rerr := os.ReadFile(pin)
+	if rerr != nil {
+		t.Fatalf("nothing was recorded in %s: %v", pin, rerr)
+	}
+	if !strings.Contains(string(b), "ssh-ed25519") {
+		t.Errorf("the pin file does not hold the agent's key: %q", b)
 	}
 }

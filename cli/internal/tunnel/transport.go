@@ -513,6 +513,15 @@ func tofuHostKey(path, addr string, note func(string, ...any)) ssh.HostKeyCallba
 	if path == "" {
 		return ssh.InsecureIgnoreHostKey()
 	}
+	if note == nil {
+		// Logf is documented as optional everywhere else in this package, and this
+		// callback calls it on both of its interesting paths - first sight, and a
+		// key that changed. A nil one panicked INSIDE the handshake, where the
+		// failure reads as a broken connection rather than a missing argument.
+		// Found by exporting the callback and passing nil from the first caller
+		// that could.
+		note = func(string, ...any) {}
+	}
 	return func(_ string, _ net.Addr, key ssh.PublicKey) error {
 		enc := key.Type() + " " + base64.StdEncoding.EncodeToString(key.Marshal())
 		data, _ := os.ReadFile(path)
