@@ -16,7 +16,7 @@ import (
 // born in the same second compare equal (<=), never a false "younger parent".
 // LANG/LC pinned to C so we parse the fixed English date form regardless of locale.
 func procStart(pid int) (int64, bool) {
-	cmd := exec.Command("ps", "-o", "lstart=", "-p", strconv.Itoa(pid))
+	cmd := exec.Command(HelperPath("ps"), "-o", "lstart=", "-p", strconv.Itoa(pid))
 	cmd.Env = append(os.Environ(), "LANG=C", "LC_ALL=C")
 	out, err := cmd.Output()
 	if err != nil {
@@ -33,7 +33,7 @@ func procStart(pid int) (int64, bool) {
 // datapath builds with CGO_ENABLED=0, so we avoid libproc. The parent walk is a
 // few hops and its result is cached per connection, so the exec cost amortizes.
 func ppidOf(pid int) (int, bool) {
-	out, err := exec.Command("ps", "-o", "ppid=", "-p", strconv.Itoa(pid)).Output()
+	out, err := exec.Command(HelperPath("ps"), "-o", "ppid=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {
 		return 0, false
 	}
@@ -51,7 +51,7 @@ func ppidOf(pid int) (int, bool) {
 // LOCAL endpoint ends in :srcPort and return the PID that owns it. The daemon runs
 // as root, so it sees every process's sockets.
 func pidForLocalPort(srcPort uint16) (int, bool) {
-	out, err := exec.Command("lsof", "-nP", "-iTCP", "-Fpn").Output()
+	out, err := exec.Command(HelperPath("lsof"), "-nP", "-iTCP", "-Fpn").Output()
 	if err != nil {
 		return 0, false
 	}

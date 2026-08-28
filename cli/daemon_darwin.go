@@ -159,7 +159,7 @@ func repairOrphanResolver() {
 	if tun.DaemonAlive(globalKey) {
 		return // a live daemon owns the override legitimately
 	}
-	out, _ := exec.Command("scutil", "--dns").Output()
+	out, _ := exec.Command(tun.HelperPath("scutil"), "--dns").Output()
 	if !strings.Contains(string(out), "198.18.") {
 		return // not pointed at us: nothing to undo
 	}

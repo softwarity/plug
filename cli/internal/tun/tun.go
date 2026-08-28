@@ -276,7 +276,15 @@ func (b *bridge) fromStack(ctx context.Context) {
 // withPrivCaps (Linux) passes plug's capabilities down to the helper, which
 // otherwise runs with none — file capabilities don't cross an exec.
 func run(bin string, args ...string) error {
-	cmd := exec.Command(bin, args...)
+	// Resolved against root-owned system directories, never the caller's $PATH:
+	// withPrivCaps below hands this process plug's capabilities, so a bare name
+	// is a fake `ip` away from CAP_SYS_ADMIN. See helperPath.
+	path, ok := helperPath(bin)
+	if !ok {
+		return fmt.Errorf("%s: not found in %s. plug looks for its privileged helpers "+
+			"there and not on $PATH, because it hands them its own privilege", bin, helperDirsList())
+	}
+	cmd := exec.Command(path, args...)
 	withPrivCaps(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

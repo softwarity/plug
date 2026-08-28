@@ -2,6 +2,45 @@
 
 ## NEXT RELEASE
 
+### Privileged helpers are found where root keeps them, not on your $PATH
+
+plug drives system tools by name to set up its network device: `ip`, `sysctl`,
+`ifconfig`, `route`, `scutil`. It hands them its own privilege, because file
+capabilities do not survive an exec and the helper would otherwise run with
+none. A name resolved through your `$PATH` therefore meant a `PATH=/tmp/evil:…`
+holding a fake `ip` was a fake `ip` running with `CAP_SYS_ADMIN`, or as root on
+macOS.
+
+The launcher already narrowed `$PATH` for exactly this reason, and that guard
+never fired on Linux: it returns early when the effective and real user match,
+which is precisely what file capabilities give you. The one platform its own
+comment named was the one it did not cover.
+
+The lookup now happens where the command is run, against root-owned system
+directories, and `$PATH` is never consulted. The directory list is the same one
+the launcher narrows to, so NixOS and the mainstream layouts are both covered,
+and a tool nobody can find fails saying where plug looked. An absolute path is
+taken as given, for anyone who moved a tool on purpose.
+
+Nothing changes for your own command: `$PATH` reaches it untouched, exactly as
+before. This is only about the tools plug runs for you, with its own privilege.
+
+### Fixed: a released image with a flavour was read as a development build
+
+`2.12.0-hosted` is a published release, and one predicate did not think so. A
+digest that did not match on such an image was re-fetched in silence instead of
+saying that a published build naming one commit cannot legitimately change
+bytes. The flavour was also dropped from version strings plug prints.
+
+The neighbouring check stays deliberately flavour-blind: it picks the newest
+release a cluster should move to, and a hosted tag is not a newer version of a
+standalone one.
+
+
+---
+
+
+
 ---
 
 ## 2.12.0

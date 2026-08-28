@@ -45,7 +45,7 @@ func doctorOS(add func(check)) {
 	// healthy teardown window into a "stale resolver" verdict). Each line shows
 	// WHICH core binary the daemon actually runs — the version gap made visible.
 	daemons := 0
-	if out, err := exec.Command("ps", "-axo", "pid=,command=").Output(); err == nil {
+	if out, err := exec.Command(tun.HelperPath("ps"), "-axo", "pid=,command=").Output(); err == nil {
 		for _, line := range strings.Split(string(out), "\n") {
 			if !strings.Contains(line, "__plug-daemon") {
 				continue
@@ -93,7 +93,7 @@ func doctorOS(add func(check)) {
 	// System resolver: pointed at plug? Legitimate while sessions live; STALE
 	// (the daemon crashed / teardown missed) when nothing runs — the state that
 	// broke machine-wide DNS once.
-	out, _ := exec.Command("scutil", "--dns").Output()
+	out, _ := exec.Command(tun.HelperPath("scutil"), "--dns").Output()
 	plugged := strings.Contains(string(out), "198.18.")
 	sessions := 0
 	for _, k := range tun.ActiveClusters() {

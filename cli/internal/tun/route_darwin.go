@@ -387,7 +387,7 @@ func readDNSDict(key string) (restore string, servers, search []string) {
 // scutil pipes a batch script into scutil (root; the plug core runs under sudo),
 // used for dynamic-store reads and edits.
 func scutil(script string) (string, error) {
-	cmd := exec.Command("scutil")
+	cmd := exec.Command(HelperPath("scutil"))
 	cmd.Stdin = strings.NewReader(script)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
