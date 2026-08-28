@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.12.0
+
 ### The SSH server gets back what sshd gave the port for free
 
 Replacing OpenSSH with a Go server removed a setuid binary, two Unix accounts
