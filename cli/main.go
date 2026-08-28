@@ -620,7 +620,18 @@ func hasServeFlag(args []string) bool {
 // releaseVersionRe matches the versions whose build metadata is redundant: a
 // released x.y(.z). "dev" is not one — without its revision it names every build
 // of every branch, which is the whole reason the suffix exists.
-var releaseVersionRe = regexp.MustCompile(`^\d+\.\d+(\.\d+)?$`)
+// A published release, flavour included: 2.12.0 and 2.12.0-hosted are both
+// releases, and the second is not a branch build. Reading it as one turned a
+// digest mismatch on a published image from "corruption or tampering, say so"
+// into a silent re-download, and dropped the flavour from every version this
+// prints.
+//
+// Deliberately NOT the same as exactReleaseRe, which stays flavour-free: that
+// one picks the newest release to retarget a cluster to, and a hosted tag is not
+// a newer version of a standalone one - it is a different product built from the
+// same commit. Letting it win there would point a cluster at an image whose
+// client has no `update`.
+var releaseVersionRe = regexp.MustCompile(`^\d+\.\d+(\.\d+)?(-[a-z][a-z0-9]*)?$`)
 
 // shortVersion renders a version for a HUMAN. A release tag already designates
 // one commit, so "2.4.0+983761c" only makes the version harder to read wherever
