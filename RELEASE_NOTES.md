@@ -2,6 +2,39 @@
 
 ## NEXT RELEASE
 
+### The SSH server gets back what sshd gave the port for free
+
+Replacing OpenSSH with a Go server removed a setuid binary, two Unix accounts
+and nineteen untested lines of configuration. It also quietly dropped four
+things sshd did without being asked, each one a way a single stranger could cost
+the agent something no legitimate client ever asks for.
+
+**A handshake that never finishes is dropped** after a minute, which is what
+LoginGraceTime did. A peer that connected and said nothing held a goroutine, a
+socket and a slot for as long as the agent lived. The deadline covers the
+handshake only and is cleared the moment it succeeds, or a slow `install`
+download would be cut halfway through.
+
+**Handshakes in flight are capped**, the way MaxStartups counts them: only peers
+that have not authenticated yet hold a slot, so an established session never
+takes one and a busy team is never turned away. Past the cap a connection is
+refused rather than queued, because a queue outlives the flood that created it.
+
+**A panic costs its own connection and nothing else.** sshd answered for that
+with a process per connection; here it is goroutines inside a gateway with other
+work to do.
+
+**And the server's keepalive can no longer wait forever.** It asked the peer a
+question with no deadline of its own, so a client whose TCP was still up but
+which answered nothing blocked there indefinitely: the miss counter never moved
+and the connection kept its remote forwards, which means it kept its NAME, until
+the agent restarted. The client side already had this timeout.
+
+
+---
+
+
+
 ### Security: the channel that delivers the binary now records who answered
 
 Four findings from the audit, none of them exotic, all of them the same shape:
