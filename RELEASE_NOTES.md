@@ -2,6 +2,29 @@
 
 ## NEXT RELEASE
 
+### The end-to-end suite now checks the privilege it never checked
+
+plug runs your command with a privilege you do not have: root on macOS, file
+capabilities on Linux. It drops that privilege for your command and keeps it for
+its own work, and that drop is the single most important property of the whole
+arrangement.
+
+It was asserted nowhere. The harness that exercises nineteen cells across three
+orchestrators and three operating systems contained no `id -u` and no `whoami`.
+The property was a comment.
+
+Every leg now checks two things about the process plug starts for you: that it
+runs under YOUR user id, which is what a setuid launcher leaks, and that on Linux
+it carries no capabilities, which is what the ambient set leaks past an exec.
+That second one was a real leak until this release, on any launch that did not
+need a private resolver. A leg that happens to run as root reports the check as
+not measurable rather than passing it, since a root child proves nothing there.
+
+
+---
+
+
+
 ### Privileged helpers are found where root keeps them, not on your $PATH
 
 plug drives system tools by name to set up its network device: `ip`, `sysctl`,
