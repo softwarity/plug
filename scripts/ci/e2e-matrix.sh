@@ -205,6 +205,33 @@ trap 'rc=$?
 # a `kill $pid` on a process that already exited can reach something else
 # entirely. If that ever happens the numbers printed here are what tells us -
 # the shell's own pid is printed beside the target for exactly that comparison.
+# wait_bg waits for a backgrounded session to end, and NEVER forever.
+#
+# Every wait on a plug session in this harness was unbounded, and that is how two
+# Windows legs burned 27 and 28 minutes to their timeout in a row, on two
+# different cells, with no output at all: the session did not exit, `wait` sat on
+# it, and the runner killed the job. The cells before it had passed and the ones
+# after never ran, so the log named nothing.
+#
+# Bounded, it becomes a failure with a sentence instead of a job that vanishes.
+# The hard kill is deliberate: a session that ignored a TERM is not going to
+# answer a second one, and the leg still has fifteen cells to run.
+wait_bg() {
+  wb_pid="$1" wb_what="$2" wb_max="${3:-60}" wb_n=0
+  while kill -0 "$wb_pid" 2>/dev/null && [ "$wb_n" -lt "$wb_max" ]; do
+    sleep 1
+    wb_n=$((wb_n + 1))
+  done
+  if kill -0 "$wb_pid" 2>/dev/null; then
+    echo "--- $wb_what (pid $wb_pid) did not exit after ${wb_max}s: killing it hard and going on"
+    kill -9 "$wb_pid" 2>/dev/null
+    wb_stuck=1
+  else
+    wb_stuck=0
+  fi
+  wait "$wb_pid" 2>/dev/null || true
+}
+
 stop_bg() {
   sb_pid="$1" sb_what="$2"
   if kill -0 "$sb_pid" 2>/dev/null; then
@@ -220,8 +247,8 @@ stop_bg() {
   # that exact shape, so tearing down a session that was still alive could kill
   # the cell that tore it down, and the failure would name a signal nobody sent.
   sb_rc=0
-  wait "$sb_pid" 2>/dev/null || sb_rc=$?
-  echo "stop_bg: $sb_what pid=$sb_pid alive-before-kill=$sb_alive wait-rc=$sb_rc (this shell is $$)"
+  wait_bg "$sb_pid" "$sb_what" 60
+  echo "stop_bg: $sb_what pid=$sb_pid alive-before-kill=$sb_alive stuck=$wb_stuck (this shell is $$)"
 }
 
 # ================================ phases ================================
@@ -652,7 +679,7 @@ do_multicluster() {
     sleep 5
     b_out="$(plug_to "$ip_b" curl -sS http://ident:5678 2>>/tmp/mc-b.err || true)"
   fi
-  wait "$mc_pid" 2>/dev/null || true
+  wait_bg "$mc_pid" "the multicluster session" 90
   a_out="$(cat /tmp/mc-a.out 2>/dev/null || true)"
   case "$a_out" in *"$expect_a"*) : ;; *) mc=FAIL ;; esac
   case "$b_out" in *"$expect_b"*) : ;; *) mc=FAIL ;; esac
@@ -775,8 +802,8 @@ do_expose() {
   local wout
   wout="$(perl -e 'alarm 60; exec @ARGV or exit 127' "$PLUG" --host "$ip" --port "$port" -c bash -c \
     "p1=\$(curl -s --max-time 8 http://$pname:9096/ || true); echo \"P1=\$p1\"; sleep 22; curl -s --max-time 8 -o /dev/null http://$pname:9096/; echo \"P2-RC=\$?\"" 2>/dev/null | tr -d '\r')"
-  wait $poison_pid 2>/dev/null || true
-  wait $presolve_pid 2>/dev/null || true
+  wait_bg "$poison_pid" "the poison serving session" 90
+  wait_bg "$presolve_pid" "the resolve probe" 60
   paddr_before="$(tr -d '\r' </tmp/poison-addr-before 2>/dev/null | tail -1)"
   local p1 p2rc nstate
   p1="$(printf '%s' "$wout" | sed -n 's/^P1=//p' | head -1)"
@@ -852,7 +879,7 @@ do_expose() {
   sleep 7
   local paddr_after
   paddr_after="$(presolve)"
-  wait $poison2_pid 2>/dev/null || true
+  wait_bg "$poison2_pid" "the relaunched poison session" 90
   if ! is_addr "${paddr_before:-}" || ! is_addr "${paddr_after:-}"; then
     echo "address across the relaunch: NOT MEASURABLE — '${paddr_before:-nothing}' → '${paddr_after:-nothing}'"
     sum "**name keeps its address across a relaunch** · not measurable on this family"
@@ -1024,7 +1051,7 @@ do_takeover() {
   local tko_pid=$! during=""
   sleep 8 # arm + park + end-to-end verify
   for _ in 1 2 3; do during="$(probe)"; [ "$during" = "local-$tname" ] && break; sleep 3; done
-  wait $tko_pid 2>/dev/null || true # the -ttl fires and the session tears down cleanly
+  wait_bg "$tko_pid" "the takeover session (ends on its own -ttl)" 90
 
   # Session over: the deployed service must be back (its container restarts).
   local after=""
@@ -1120,7 +1147,8 @@ do_sameport() {
     [ "$ra" = "same-$na" ] && [ "$rb" = "same-$nb" ] && break
     sleep 3
   done
-  kill $a_pid $b_pid 2>/dev/null; wait $a_pid $b_pid 2>/dev/null
+  stop_bg "$a_pid" "the first same-port session"
+  stop_bg "$b_pid" "the second same-port session"
   if [ "$ra" = "same-$na" ] && [ "$rb" = "same-$nb" ]; then
     echo "same-port OK — $na and $nb share :18120, each answered its own backend"
     sum "**same cluster port ×2 (no collision, no cross-talk)** ✅"; return 0
