@@ -187,7 +187,54 @@ func installService() {
 	if out, err := exec.Command("sc.exe", "sdset", tun.ServiceName, sddl).CombinedOutput(); err != nil {
 		info("warning: could not set the service ACL (%v: %s) — non-admin start may fail", err, out)
 	}
+	protectServiceBinary(exe)
 	info("service %q installed (on-demand). Day-to-day `plug <cmd>` now needs no admin.", tun.ServiceName)
+}
+
+// protectServiceBinary takes write access away from the user on the directory
+// holding the binary this SYSTEM service runs.
+//
+// The installer puts plug under %LOCALAPPDATA%\Programs\plug, which the user can
+// write, and the service above executes exactly that file as SYSTEM. So anything
+// running as the user could replace plug.exe and be SYSTEM on the next start.
+// That is a local escalation, not a remote one - it needs code already running as
+// you - but "already running as you" is what a hostile npm dependency is, and
+// running your dev server is what plug is for.
+//
+// Done HERE because this is the one command that is already elevated. Nothing
+// moves, the install path is unchanged, and the only cost lands on `plug update`,
+// which now needs an elevated shell to replace this binary. That is the right
+// trade for a file a SYSTEM service executes, and update.go says so when it hits
+// the refusal.
+//
+// SIDs, not names: a French or German Windows has no group called
+// "Administrators", and icacls would fail on the name.
+//
+//	S-1-5-32-544  Administrators   full
+//	S-1-5-18      SYSTEM           full (it is what runs the service)
+//	S-1-5-11      Authenticated Users  read + execute, no write
+//
+// Best effort with a loud report rather than fatal: failing the install over an
+// ACL would leave the machine with no service at all, which is worse than a
+// service whose binary is writable. `plug doctor` is where this should be
+// re-checked later.
+func protectServiceBinary(exe string) {
+	dir := filepath.Dir(exe)
+	out, err := exec.Command("icacls.exe", dir,
+		"/inheritance:r",
+		"/grant:r", "*S-1-5-32-544:(OI)(CI)F",
+		"/grant:r", "*S-1-5-18:(OI)(CI)F",
+		"/grant:r", "*S-1-5-11:(OI)(CI)RX",
+	).CombinedOutput()
+	if err != nil {
+		info("warning: could not protect %s (%v: %s).\n"+
+			"      A SYSTEM service runs the binary in there, so anything able to write that\n"+
+			"      directory can replace it and become SYSTEM. Fix the permissions by hand,\n"+
+			"      or accept it knowingly.", dir, err, out)
+		return
+	}
+	info("%s is now writable by administrators only: a SYSTEM service runs the binary in it.", dir)
+	info("`plug update` will need an elevated shell from now on.")
 }
 
 // removeService deletes the SCM service (`plug remove-service`, elevated).

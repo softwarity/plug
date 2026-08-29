@@ -1,6 +1,9 @@
 package tun
 
-import "math"
+import (
+	"math"
+	"sync"
+)
 
 // --- Multicluster: attributing an intercepted connection to a cluster ---------
 //
@@ -50,6 +53,64 @@ type pidRouter struct {
 	// unlike unix — does not re-parent orphans, so a dead parent's PID lingers in
 	// the child and may already name a younger, unrelated process.
 	startOf func(pid int) (int64, bool)
+
+	// seen remembers what the walk found, per process. Nil disables it entirely,
+	// which is what the pure unit tests of walkToCluster want.
+	seen *pidCache
+}
+
+// pidCache remembers the CLUSTER a process belongs to, so the ancestry is climbed
+// once per process instead of once per connection.
+//
+// Why it is worth having, measured rather than assumed: each hop costs two forks
+// (`ps -o lstart=` and `ps -o ppid=`), about 16ms each on a real Mac, and a
+// shell → plug → app chain is three hops. A database pool opening ten connections
+// paid that five-fork walk ten times for an answer that had not changed.
+//
+// What it must NOT remember is the recycled-PID check. A PID reused by an
+// unrelated process is the exact thing walkToCluster refuses on, and caching a
+// route past it would send someone's traffic into another cluster - the one
+// failure this design will not accept. So the START STAMP is re-read on every
+// flow (one fork, not five) and the entry is only trusted when it matches.
+//
+// Refusals are not cached either: the launcher registry is written by a client
+// that may not have registered yet when its first flow lands, and remembering
+// "no" would make that a permanent no.
+type pidCache struct {
+	mu sync.Mutex
+	m  map[int]cachedRoute
+}
+
+type cachedRoute struct {
+	start int64  // what startOf said when the walk ran
+	key   string // the cluster it led to
+}
+
+// pidCacheMax bounds the map. Processes come and go, and a daemon that runs for
+// weeks must not accumulate one entry per PID ever seen. Cleared wholesale rather
+// than evicted one by one: a re-walk costs five forks and happens once per live
+// process, which is cheaper than tracking recency.
+const pidCacheMax = 1024
+
+func newPidCache() *pidCache { return &pidCache{m: map[int]cachedRoute{}} }
+
+func (c *pidCache) get(pid int, start int64) (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.m[pid]
+	if !ok || e.start != start {
+		return "", false
+	}
+	return e.key, true
+}
+
+func (c *pidCache) put(pid int, start int64, key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.m) >= pidCacheMax {
+		c.m = map[int]cachedRoute{}
+	}
+	c.m[pid] = cachedRoute{start: start, key: key}
 }
 
 // maxAncestry bounds the parent-chain walk — a guard against a cycle or a runaway
@@ -61,7 +122,24 @@ func (r pidRouter) route(srcPort uint16) (string, bool) {
 	if !ok {
 		return "", false // socket vanished or unattributable — refuse
 	}
-	return walkToCluster(pid, r.ppidOf, r.startOf, r.clusterForPID)
+	if r.seen == nil {
+		return walkToCluster(pid, r.ppidOf, r.startOf, r.clusterForPID)
+	}
+	// The stamp is read on EVERY flow, and it is the only thing that is. It is
+	// what tells a remembered answer from a PID that now names a stranger, and it
+	// costs one fork where the walk costs five.
+	start, ok := r.startOf(pid)
+	if !ok {
+		return "", false // no stamp, no route: in doubt, refuse
+	}
+	if key, hit := r.seen.get(pid, start); hit {
+		return key, true
+	}
+	key, ok := walkToCluster(pid, r.ppidOf, r.startOf, r.clusterForPID)
+	if ok {
+		r.seen.put(pid, start, key)
+	}
+	return key, ok
 }
 
 // walkToCluster climbs pid's ancestry until an ancestor is a registered launcher

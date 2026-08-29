@@ -2,6 +2,51 @@
 
 ## NEXT RELEASE
 
+### Windows: the binary a SYSTEM service runs is no longer yours to rewrite
+
+plug installs under `%LOCALAPPDATA%\Programs\plug`, and the datapath service
+runs that binary as SYSTEM. The directory was writable by you, so anything
+running under your account could replace `plug.exe` and be SYSTEM the next time
+the service started. It takes code already running as you, which is exactly what
+a hostile dependency in the project you are developing is.
+
+`plug install-service`, the one command that already runs elevated, now leaves
+that directory writable by administrators and SYSTEM only. Nothing moves and the
+install path is unchanged.
+
+**What this costs you:** `plug update` on Windows now needs an elevated shell to
+replace the binary, and says so when it hits the refusal instead of reporting a
+bare access error.
+
+### macOS: attributing a flow no longer re-climbs the process tree every time
+
+This only ever mattered when two or more different cluster agents are live at
+once on the same Mac. With one, the datapath routes straight through and none of
+this runs.
+
+With several, every new TCP connection was attributed by walking the connecting
+process's ancestry, and each hop costs two forks. Measured on a real machine:
+about 16 ms each, three hops deep, so roughly 80 ms per connection on top of the
+80 ms it takes to find the process in the first place. A database pool opening
+ten connections paid that walk ten times over for an answer that had not changed.
+
+The walk is now remembered per process. What is deliberately NOT remembered is
+the check that the process is still the same one: a recycled process id is
+precisely what the walk refuses on, and a cached answer past it would send your
+traffic into somebody else's cluster. So that stamp is re-read on every single
+flow, one fork instead of five. Refusals are not cached either, since a launcher
+may simply not have registered yet when its first flow lands.
+
+Finding the process still costs its own fork per connection, and that one is not
+a cache away: it changes with every socket. Removing it means reading the socket
+table without forking, which needs cgo, and the datapath builds without it on
+purpose.
+
+
+---
+
+
+
 ### The end-to-end suite now checks the privilege it never checked
 
 plug runs your command with a privilege you do not have: root on macOS, file

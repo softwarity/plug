@@ -399,6 +399,16 @@ func updateLauncher(cfg config, remote string) {
 		}
 	}
 	if err := replaceBinary(self, data); err != nil {
+		// On Windows the directory holding this binary is deliberately writable by
+		// administrators only, because a SYSTEM service executes it (see
+		// protectServiceBinary). A permission error here is that decision showing
+		// up, not a bug, and saying so beats "access denied" on a path.
+		if runtime.GOOS == "windows" && os.IsPermission(err) {
+			fatal("replacing %s: %v\n"+
+				"      That directory is writable by administrators only, on purpose: the plug\n"+
+				"      SYSTEM service runs this binary, so a file anyone could rewrite would be\n"+
+				"      a way to become SYSTEM. Re-run `plug update` from an elevated shell.", self, err)
+		}
 		fatal("replacing %s: %v", self, err)
 	}
 	if runtime.GOOS == "windows" {
