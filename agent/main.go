@@ -1001,6 +1001,11 @@ func signpost(pairs []string) {
 	select {} // the listeners are the process
 }
 
+// One of three copies; the others are cli/internal/tun/netstack.go and cli/internal/tunnel/transport.go.
+// The agent is a separate module, so sharing one would mean publishing a package
+// for fifteen lines. Duplicated deliberately, and identical - the netstack copy
+// had quietly lost its else branch below, which is the whole hazard of keeping
+// three.
 func relay(a, b net.Conn) {
 	var wg sync.WaitGroup
 	wg.Add(2)

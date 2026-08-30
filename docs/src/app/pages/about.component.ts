@@ -57,7 +57,7 @@ import { MatIconModule } from '@angular/material/icon';
         background: rgba(163, 113, 247, 0.14);
       }
       .dir-tag.in {
-        color: #3fb950;
+        color: var(--accent-green);
         background: rgba(63, 185, 80, 0.14);
       }
 

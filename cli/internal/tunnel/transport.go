@@ -48,6 +48,11 @@ var errClosed = errors.New("tunnel: transport closed")
 // write side (CloseWrite) so the peer can still drain the other direction,
 // then closes both once both directions finish — preserving protocols that
 // shut down one half and keep reading.
+// One of three copies; the others are cli/internal/tun/netstack.go and agent/main.go.
+// The agent is a separate module, so sharing one would mean publishing a package
+// for fifteen lines. Duplicated deliberately, and identical - the netstack copy
+// had quietly lost its else branch below, which is the whole hazard of keeping
+// three.
 func relay(a, b net.Conn) {
 	var wg sync.WaitGroup
 	wg.Add(2)

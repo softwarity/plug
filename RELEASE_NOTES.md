@@ -2,6 +2,23 @@
 
 ## NEXT RELEASE
 
+### A copy of the relay loop had quietly lost a branch
+
+The function that splices two connections together exists three times: twice in
+the CLI and once in the agent, which is a separate Go module. The duplication is
+deliberate, since sharing it would mean publishing a package for fifteen lines.
+
+They were supposed to be identical and one of them was not. The copy in the
+datapath had lost the branch that closes a destination unable to half-close, so
+a direction that finished copying signalled nothing and the other could wait on
+an end-of-stream nobody was going to send. It does not happen today, because
+both ends there can half-close, which is precisely why it survived three copies
+and every reading of them.
+
+Aligned, and now compared by a test, the way the three end-to-end blocks are.
+Drift is silent; nothing else fails when it happens.
+
+
 ### One unreachable cluster no longer freezes the others
 
 Only relevant if you run several cluster agents at once, which is the only

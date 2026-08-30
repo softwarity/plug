@@ -220,12 +220,25 @@ type closeWriter interface{ CloseWrite() error }
 
 // relay splices two connections, half-closing each side on EOF and tearing both
 // down once both directions finish.
+// One of THREE copies of this function, and the only one that differed. The
+// others are cli/internal/tunnel/transport.go and agent/main.go; the agent is a
+// separate module, so a shared one would mean publishing a package for fifteen
+// lines. Kept duplicated on purpose, and now kept IDENTICAL, which is the part
+// that was not true.
+//
+// The difference was the else branch below. Without it, a direction that
+// finished copying into a conn with no CloseWrite signalled nothing, so the
+// other direction could wait on an EOF that never came and this function never
+// returned. It does not bite today - both ends here (gonet.TCPConn, ssh.Channel)
+// implement CloseWrite - which is exactly why it survived three copies.
 func relay(a, b net.Conn) {
 	done := make(chan struct{}, 2)
 	cp := func(dst, src net.Conn) {
 		io.Copy(dst, src)
 		if cw, ok := dst.(closeWriter); ok {
 			cw.CloseWrite()
+		} else {
+			dst.Close()
 		}
 		done <- struct{}{}
 	}

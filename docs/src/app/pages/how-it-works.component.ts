@@ -65,6 +65,13 @@ import { RouterLink } from '@angular/router';
         <text x="410" y="169" text-anchor="middle" font-size="10.5" fill="#a371f7" font-weight="600">outbound - reach db by name</text>
         <text x="360" y="199" text-anchor="middle" font-size="9.5" fill="#6e7681">name → fake IP → SSH channel → agent dials db</text>
 
+        <!--
+          The five #3fb950 below are SVG PRESENTATION ATTRIBUTES, left as
+          literals on purpose. var() in an attribute is resolved inconsistently
+          across browsers, unlike in a stylesheet, and a diagram that loses its
+          colour on one of them is worse than a colour written twice. The token
+          in styles.scss carries the same value; if it moves, these move with it.
+        -->
         <line x1="596" y1="228" x2="244" y2="228" stroke="#3fb950" stroke-width="2.3" marker-end="url(#hiw-in)" />
         <text x="410" y="245" text-anchor="middle" font-size="10.5" fill="#3fb950" font-weight="600">inbound - -s publishes service1</text>
         <text x="410" y="286" text-anchor="middle" font-size="9.5" fill="#6e7681">a cluster workload hits service1 → SSH remote-forward → your local :3000</text>

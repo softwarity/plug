@@ -19,7 +19,12 @@ html {
   --text-secondary: #c9d1d9;
   --text-muted: #8b949e;
   --accent-blue: #58a6ff;
-  --accent-green: #238636;
+  // The green the site actually draws with. It used to be #238636, which no rule
+  // ever referenced: every green was written as the literal #3fb950 instead, a
+  // dozen times across six files, so the token was dead and the colour had no
+  // name. Pointing it at the used value and replacing the literals changes
+  // nothing on screen and leaves one place to change it.
+  --accent-green: #3fb950;
   --accent-purple: #a371f7;
   --accent-red: #f85149;
   --accent-yellow: #d29922;

@@ -16,7 +16,7 @@ import { MatIconModule } from '@angular/material/icon';
         margin-right: 3px;
       }
       .status-icon.ok {
-        color: #3fb950;
+        color: var(--accent-green);
       }
       .status-icon.soon {
         color: var(--accent-yellow);

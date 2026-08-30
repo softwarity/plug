@@ -74,8 +74,8 @@ import 'prismjs/components/prism-yaml';
       }
       .copy.done {
         opacity: 1;
-        color: #3fb950;
-        border-color: #3fb950;
+        color: var(--accent-green);
+        border-color: var(--accent-green);
       }
       .copy mat-icon {
         font-size: 18px;

@@ -75,7 +75,7 @@ interface Hole {
       .st-no .cell { background: rgba(248, 81, 73, 0.15); color: var(--cov-no); }
       .st-na .cell { background: rgba(139, 148, 158, 0.12); color: var(--cov-na); }
 
-      :host { --cov-ok: #3fb950; --cov-warn: var(--accent-yellow); --cov-no: var(--accent-red); --cov-na: var(--text-muted); }
+      :host { --cov-ok: var(--accent-green); --cov-warn: var(--accent-yellow); --cov-no: var(--accent-red); --cov-na: var(--text-muted); }
     `,
   ],
   template: `

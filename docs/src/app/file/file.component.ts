@@ -175,8 +175,8 @@ export type FileState = 'collapsed' | 'opened' | 'expanded';
       }
       .act.done {
         opacity: 1;
-        color: #3fb950;
-        border-color: #3fb950;
+        color: var(--accent-green);
+        border-color: var(--accent-green);
       }
       .act mat-icon {
         font-size: 17px;
