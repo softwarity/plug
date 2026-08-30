@@ -25,7 +25,12 @@ jobs:
           token: ${{ secrets.PAT_TOKEN }}
 
       - name: Release
-        uses: softwarity/release-flow@v1
+        # Pinned to a commit, not a tag, because this step runs with the PAT in
+        # scope: the checkout above persists it on purpose (a push made with the
+        # default token triggers no workflow, and the CI of the release commit is
+        # what builds and publishes the image). A moving tag means whoever can
+        # move it can read that PAT. v1 at the time of pinning.
+        uses: softwarity/release-flow@58d6aa0216d97976a623edca2fe484eababf5b57
         with:
           bump: ${{ inputs.bump }}
           # language auto-detected: no manifest → tag (version lives in the git tags)

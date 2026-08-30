@@ -34,14 +34,27 @@ done
 docker build -q -t plug-e2e/wsserver:e2e -f services/websocket/Dockerfile . >/dev/null
 
 echo "=== deploy the stack ==="
-PLUG_CLUSTER_IDENT="${PLUG_CLUSTER_IDENT:-solo}" \
 # The update cells start from the PREVIOUS published release, resolved here
-  # rather than pinned: a pinned tag re-tests bugs fixed several releases ago and
-  # takes the family down the day it leaves the registry.
-  PREV_RELEASE="$(bash "$root/scripts/ci/previous-release.sh")" || exit 1
-  echo "previous release (update-cell agents) = $PREV_RELEASE"
-  export PREV_RELEASE
-  PREV_RELEASE="$PREV_RELEASE" docker stack deploy --resolve-image never -c swarm.cluster.yml plug-e2e
+# rather than pinned: a pinned tag re-tests bugs fixed several releases ago and
+# takes the family down the day it leaves the registry.
+PREV_RELEASE="$(bash "$root/scripts/ci/previous-release.sh")" || exit 1
+echo "previous release (update-cell agents) = $PREV_RELEASE"
+export PREV_RELEASE
+
+# EXPORTED, not prefixed. This used to read
+#
+#   PLUG_CLUSTER_IDENT="..." \
+#   # a comment
+#     PREV_RELEASE=... docker stack deploy ...
+#
+# and the backslash continued the logical line INTO the comment, which swallowed
+# the rest of it. What was meant as a command prefix became a bare shell
+# assignment: the variable was set, never exported, and `docker stack deploy`
+# substitutes from the ENVIRONMENT. So the swarm family deployed with an empty
+# cluster identity while the kubernetes one, which prefixes envsubst properly,
+# did not - and nothing failed, the ident service simply answered for nobody.
+export PLUG_CLUSTER_IDENT="${PLUG_CLUSTER_IDENT:-solo}"
+docker stack deploy --resolve-image never -c swarm.cluster.yml plug-e2e
 
 echo "=== wait for convergence (every service at its full replica count) ==="
 # 0/1 or 1/2 → not there yet; 1/1 and 2/2 are converged. awk, not a grep

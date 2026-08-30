@@ -62,7 +62,13 @@ fi
 
 # 4. PATH (user scope) — append via the registry + setx, only if missing. setx
 #    writes HKCU\Environment; reading the current user Path first avoids clobbering.
-cur=$(reg query 'HKCU\Environment' //v Path 2>/dev/null | sed -n 's/.*REG_\(EXPAND_\)\?SZ[[:space:]]*//p' | tr -d '\r')
+# `|| true` is not decoration. This script runs under `set -euo pipefail`, and a
+# fresh Windows user has NO Path value under HKCU: `reg query` then exits
+# non-zero, pipefail promotes that over sed's success, and the installer aborts
+# HALFWAY THROUGH - binary already in place, PATH never set, and no message
+# saying why. The empty answer is the correct one for that machine; it is not an
+# error, and the case below already handles it.
+cur=$(reg query 'HKCU\Environment' //v Path 2>/dev/null | sed -n 's/.*REG_\(EXPAND_\)\?SZ[[:space:]]*//p' | tr -d '\r' || true)
 case ";${cur};" in
   *";${WIN_DIR};"*) info "already on PATH" ;;
   *) setx Path "${cur:+$cur;}$WIN_DIR" >/dev/null 2>&1 && info "added to PATH (open a new terminal for it to take effect)" || info "add $WIN_DIR to your PATH manually" ;;

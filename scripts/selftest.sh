@@ -42,7 +42,13 @@ if [ "$os" = Windows ]; then
   # -f, so a 404 fails here instead of writing an HTML error page into the zip
   # and being discovered three commands later as a broken archive. The DLL is
   # loaded by a process running elevated, so what lands here matters.
+  # Same digest, same reason as agent/Dockerfile: this DLL is loaded by a process
+  # running elevated, and the selftest opens a real device with it. Kept in step
+  # with the Dockerfile by hand, which is why both name the version beside it.
+  wintun_sha=07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51
   curl -fsSL https://www.wintun.net/builds/wintun-0.14.1.zip -o wintun.zip
+  echo "$wintun_sha  wintun.zip" | sha256sum -c - \
+    || { echo "selftest: wintun.zip is not the archive this build expects"; exit 1; }
   powershell -Command "Expand-Archive -Path wintun.zip -DestinationPath wtun -Force"
   cp wtun/wintun/bin/amd64/wintun.dll .
 fi

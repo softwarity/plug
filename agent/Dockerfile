@@ -53,10 +53,26 @@ RUN CGO_ENABLED=0 go build -C /src/agent -trimpath -ldflags "-s -w" -o /out/plug
 # installer (the installer pulls it from us — no run-time dependency on wintun.net,
 # and no more intermittent fetch).
 ARG WINTUN_VERSION=0.14.1
+# The archive's SHA-256, checked before anything is unpacked from it.
+#
+# This DLL is loaded by a process running elevated on Windows: the datapath. It
+# was fetched over TLS and unpacked on faith, so whoever could answer for
+# wintun.net during a build - a compromise there, a poisoned mirror, a proxy in
+# the way - put code into that process. TLS says who answered, never what they
+# said.
+#
+# Be exact about what the pin proves and what it does not. It was taken from the
+# archive this build fetched, so it does not certify that upstream published
+# these bytes; it certifies that the bytes never CHANGE without someone editing
+# this line. That is the property that matters here: 0.14.1 names one release,
+# so a different digest for it is a substitution, and the build stops instead of
+# shipping it. Bumping WINTUN_VERSION means bumping this too, deliberately.
+ARG WINTUN_SHA256=07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51
 RUN for i in 1 2 3; do apk add --no-cache curl unzip && break; \
       echo "apk failed (attempt $i/3) — retrying"; sleep $((i * 5)); \
     done; [ -x /usr/bin/curl ] && \
     curl -fsSL --retry 3 --retry-connrefused "https://www.wintun.net/builds/wintun-${WINTUN_VERSION}.zip" -o /tmp/wintun.zip && \
+    echo "${WINTUN_SHA256}  /tmp/wintun.zip" | sha256sum -c - && \
     unzip -j /tmp/wintun.zip 'wintun/bin/amd64/wintun.dll' -d /out
 
 FROM alpine:3.24

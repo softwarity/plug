@@ -2,6 +2,28 @@
 
 ## NEXT RELEASE
 
+### The WinTUN driver is checked before it is unpacked
+
+The Windows datapath loads a DLL fetched from wintun.net at image build time,
+into a process running elevated. It was taken on faith: TLS says who answered,
+never what they said, so anyone able to answer for that host during a build put
+code into that process.
+
+Its SHA-256 is now checked before anything is unpacked, in the image build and
+in the TUN selftest both. To be exact about what that proves: the digest was
+taken from the archive a build fetched, so it does not certify what upstream
+published. It certifies that those bytes cannot change without someone editing
+that line, which is the property that matters when a version number names one
+release.
+
+The two third-party actions in the pipeline are pinned to commits rather than
+moving tags. One of them runs with the release token in scope.
+
+
+---
+
+
+
 ---
 
 ## 2.12.1

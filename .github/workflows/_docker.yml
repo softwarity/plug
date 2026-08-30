@@ -33,6 +33,13 @@ on:
         description: The immutable reference this build published (softwarity/plug:sha-<short>)
         value: ${{ jobs.merge.outputs.image }}
 
+# Declared rather than inherited. A reusable workflow takes its caller's scopes,
+# so this one's were whatever ci.yml happened to have - and it pushes to Docker
+# Hub with its own secrets, so it needs nothing from the GitHub token at all.
+# Saying so here means a caller that grants more does not silently widen it.
+permissions:
+  contents: read
+
 env:
   IMAGE: docker.io/softwarity/plug
 

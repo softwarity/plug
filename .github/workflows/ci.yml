@@ -429,32 +429,36 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           CLUSTER_IMAGE: docker.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}-amd64
-        run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-a)" >> "$GITHUB_OUTPUT"
+        # run_id AND run_attempt. A re-run keeps the run_id, so attempt 2 asked for
+        # clusters under the same names as attempt 1 and collided with its own
+        # leftovers - which is exactly what a re-run is for when something went
+        # wrong, and exactly when the collision is least welcome.
+        run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-${{ github.run_attempt }}-a)" >> "$GITHUB_OUTPUT"
       - id: dispatch_b
         env:
           GH_TOKEN: ${{ github.token }}
           CLUSTER_IMAGE: docker.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}-amd64
-        run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-b)" >> "$GITHUB_OUTPUT"
+        run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-${{ github.run_attempt }}-b)" >> "$GITHUB_OUTPUT"
       - id: dispatch_ka
         env:
           GH_TOKEN: ${{ github.token }}
           CLUSTER_IMAGE: docker.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}-amd64
-        run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-ka k8s-for.yml)" >> "$GITHUB_OUTPUT"
+        run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-${{ github.run_attempt }}-ka k8s-for.yml)" >> "$GITHUB_OUTPUT"
       - id: dispatch_kb
         env:
           GH_TOKEN: ${{ github.token }}
           CLUSTER_IMAGE: docker.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}-amd64
-        run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-kb k8s-for.yml)" >> "$GITHUB_OUTPUT"
+        run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-${{ github.run_attempt }}-kb k8s-for.yml)" >> "$GITHUB_OUTPUT"
       - id: dispatch_sa
         env:
           GH_TOKEN: ${{ github.token }}
           CLUSTER_IMAGE: docker.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}-amd64
-        run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-sa swarm-for.yml)" >> "$GITHUB_OUTPUT"
+        run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-${{ github.run_attempt }}-sa swarm-for.yml)" >> "$GITHUB_OUTPUT"
       - id: dispatch_sb
         env:
           GH_TOKEN: ${{ github.token }}
           CLUSTER_IMAGE: docker.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}-amd64
-        run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-sb swarm-for.yml)" >> "$GITHUB_OUTPUT"
+        run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-${{ github.run_attempt }}-sb swarm-for.yml)" >> "$GITHUB_OUTPUT"
       # The compat cell needs the LAST PUBLISHED launcher for every OS, but only
       # this Linux job has Docker — extract all of them from the published image
       # here and ship them to the mac/win legs as an artifact.
@@ -479,8 +483,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25 # a hung cell must not run the job (and the cluster) for hours
     env:
-      A: plug-cluster-${{ github.run_id }}-a
-      B: plug-cluster-${{ github.run_id }}-b
+      A: plug-cluster-${{ github.run_id }}-${{ github.run_attempt }}-a
+      B: plug-cluster-${{ github.run_id }}-${{ github.run_attempt }}-b
       AGENT_IMAGE: docker.io/softwarity/plug:sha-${{ needs.start-cluster.outputs.short_sha }}-amd64
       # Where the shared client bundle lands (relative to the workspace, so Git
       # Bash on Windows reads it the same way every other shell does).
@@ -539,12 +543,12 @@ jobs:
           key: pip-${{ runner.os }}-${{ hashFiles('e2e/clients/python/requirements.txt') }}
           restore-keys: pip-${{ runner.os }}-
       - name: Join the tailnet
-        uses: tailscale/github-action@v3
+        uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3
         with:
           oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
           oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
           tags: tag:ci
-          hostname: plug-${{ matrix.alias }}-${{ github.run_id }}
+          hostname: plug-${{ matrix.alias }}-${{ github.run_id }}-${{ github.run_attempt }}
           args: --accept-dns=false # reach the cluster by tailnet IP; don't let Tailscale drive DNS
       - uses: actions/download-artifact@v7 # the last published launchers, for the compat cell
         with:
@@ -668,8 +672,8 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 25
     env:
-      A: plug-cluster-${{ github.run_id }}-a
-      B: plug-cluster-${{ github.run_id }}-b
+      A: plug-cluster-${{ github.run_id }}-${{ github.run_attempt }}-a
+      B: plug-cluster-${{ github.run_id }}-${{ github.run_attempt }}-b
       AGENT_IMAGE: docker.io/softwarity/plug:sha-${{ needs.start-cluster.outputs.short_sha }}-amd64
       PREBUILT_CLIENTS: e2e-clients
     steps:
@@ -689,12 +693,12 @@ jobs:
           key: pip-${{ runner.os }}-arm64-${{ hashFiles('e2e/clients/python/requirements.txt') }}
           restore-keys: pip-${{ runner.os }}-arm64-
       - name: Join the tailnet
-        uses: tailscale/github-action@v3
+        uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3
         with:
           oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
           oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
           tags: tag:ci
-          hostname: plug-ubuntu-arm-${{ github.run_id }}
+          hostname: plug-ubuntu-arm-${{ github.run_id }}-${{ github.run_attempt }}
           args: --accept-dns=false # reach the cluster by tailnet IP; don't let Tailscale drive DNS
       - name: Setup — install plug from the cluster + build clients
         shell: bash
@@ -746,8 +750,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30 # compose's 25 + the extra wait for the kind rollout — a hung cell must still not run the cluster for hours
     env:
-      A: plug-k8s-${{ github.run_id }}-ka
-      B: plug-k8s-${{ github.run_id }}-kb
+      A: plug-k8s-${{ github.run_id }}-${{ github.run_attempt }}-ka
+      B: plug-k8s-${{ github.run_id }}-${{ github.run_attempt }}-kb
       AGENT_IMAGE: docker.io/softwarity/plug:sha-${{ needs.start-cluster.outputs.short_sha }}-amd64
       # Where the shared client bundle lands (relative to the workspace, so Git
       # Bash on Windows reads it the same way every other shell does).
@@ -793,12 +797,12 @@ jobs:
           name: latest-launchers
           path: latest-launchers
       - name: Join the tailnet
-        uses: tailscale/github-action@v3
+        uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3
         with:
           oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
           oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
           tags: tag:ci
-          hostname: plug-k8s-${{ matrix.os }}-${{ github.run_id }}
+          hostname: plug-k8s-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
           args: --accept-dns=false # reach the cluster by tailnet IP; don't let Tailscale drive DNS
       # ── THE COMMON BLOCK ─────────────────────────────────────────────────
       # Identical, to the character, in e2e-compose, e2e-swarm and e2e-k8s: the
@@ -896,8 +900,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
-      A: plug-swarm-${{ github.run_id }}-sa
-      B: plug-swarm-${{ github.run_id }}-sb
+      A: plug-swarm-${{ github.run_id }}-${{ github.run_attempt }}-sa
+      B: plug-swarm-${{ github.run_id }}-${{ github.run_attempt }}-sb
       AGENT_IMAGE: docker.io/softwarity/plug:sha-${{ needs.start-cluster.outputs.short_sha }}-amd64
       # Where the shared client bundle lands (relative to the workspace, so Git
       # Bash on Windows reads it the same way every other shell does).
@@ -943,12 +947,12 @@ jobs:
           name: latest-launchers
           path: latest-launchers
       - name: Join the tailnet
-        uses: tailscale/github-action@v3
+        uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3
         with:
           oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
           oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
           tags: tag:ci
-          hostname: plug-swarm-${{ matrix.os }}-${{ github.run_id }}
+          hostname: plug-swarm-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
           args: --accept-dns=false # reach the cluster by tailnet IP; don't let Tailscale drive DNS
       # ── THE COMMON BLOCK ─────────────────────────────────────────────────
       # Identical, to the character, in e2e-compose, e2e-swarm and e2e-k8s: the
