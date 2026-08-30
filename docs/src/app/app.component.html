@@ -86,7 +86,13 @@
         </nav>
       </aside>
 
-      <section class="content">
+      <!--
+        tabindex="-1" so the component below can put focus HERE after a
+        navigation. Without it, clicking a link in the sidebar left focus on that
+        link: a keyboard or screen-reader user then tabbed through the whole
+        sidebar again to reach the page they had just asked for.
+      -->
+      <section class="content" #content tabindex="-1">
         <router-outlet />
       </section>
     </div>

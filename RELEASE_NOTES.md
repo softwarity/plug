@@ -2,6 +2,51 @@
 
 ## NEXT RELEASE
 
+### One unreachable cluster no longer freezes the others
+
+Only relevant if you run several cluster agents at once, which is the only
+situation the macOS and Windows datapath daemon exists for.
+
+The daemon reconciles every 300 ms and opened each missing tunnel inline, with a
+15-second timeout on the connection. So one agent being down or slow parked the
+whole loop for those fifteen seconds: no other cluster got its tunnel opened, no
+finished tunnel got closed, and the next pass simply waited its turn behind the
+one that was never going to answer.
+
+Connections are now started and left to run. A cluster already being dialled is
+not dialled again, which matters at three passes a second: a connection that
+takes fifteen seconds to fail would otherwise have forty-five copies of itself
+in flight before the first one gave up.
+
+### The documentation site: what a keyboard and a screen reader get
+
+Three things it did not do, all of them things a mouse user never notices.
+
+**The page title never changed.** On a single-page site the browser tab, the
+history entry and what a screen reader announces on arrival all come from it,
+and it read "plug" from the first page to the last. Every page now has its own.
+
+**Focus stayed on the link you clicked.** Navigating put the new page on screen
+and left the keyboard where it was, in the sidebar, so reaching the content you
+had just asked for meant tabbing through the whole menu again. Focus now moves
+into the page, and the page scrolls back to the top.
+
+**A file block's header was one control containing two others.** The whole row
+announced itself as a button, with Copy and Download nested inside it, which is
+invalid: a control cannot contain controls, and `aria-expanded` on the row
+claimed the download button was part of expanding the file. The row is now a
+plain container with a real button around the part that expands, which also
+means the keyboard handling is the browser's rather than ours.
+
+**And the site no longer waits on a fetch nobody reads.** A version resource was
+loaded before the first render, blocking it for up to two seconds, to fill a
+value no page displays. It loads in the background now.
+
+
+---
+
+
+
 ### The WinTUN driver is checked before it is unpacked
 
 The Windows datapath loads a DLL fetched from wintun.net at image build time,

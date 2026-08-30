@@ -1,5 +1,6 @@
-import { Component, CUSTOM_ELEMENTS_SCHEMA } from '@angular/core';
-import { RouterOutlet, RouterLink, RouterLinkActive } from '@angular/router';
+import { Component, CUSTOM_ELEMENTS_SCHEMA, ElementRef, viewChild } from '@angular/core';
+import { NavigationEnd, Router, RouterOutlet, RouterLink, RouterLinkActive } from '@angular/router';
+import { filter } from 'rxjs/operators';
 import { MatIconModule, MatIconRegistry } from '@angular/material/icon';
 
 interface DocLink {
@@ -16,9 +17,26 @@ interface DocLink {
   styleUrl: './app.component.scss',
 })
 export class AppComponent {
-  constructor(iconRegistry: MatIconRegistry) {
+  private readonly content = viewChild<ElementRef<HTMLElement>>('content');
+
+  constructor(iconRegistry: MatIconRegistry, router: Router) {
     // Use Material Symbols (loaded in index.html) as the default glyph set for every <mat-icon>.
     iconRegistry.setDefaultFontSetClass('material-symbols-outlined');
+
+    // Move focus into the page after every navigation, and scroll it to the top.
+    //
+    // A single-page router swaps the content and leaves focus exactly where it
+    // was: on the sidebar link that was just clicked. A keyboard user then tabs
+    // through the entire sidebar again to reach the page they asked for, and a
+    // screen reader says nothing about having arrived anywhere. The route titles
+    // handle the announcement; this handles where you are.
+    router.events.pipe(filter((e) => e instanceof NavigationEnd)).subscribe(() => {
+      const el = this.content()?.nativeElement;
+      if (!el) return;
+      el.focus({ preventScroll: true });
+      el.scrollTo?.({ top: 0 });
+      window.scrollTo({ top: 0 });
+    });
   }
 
   protected readonly links: DocLink[] = [

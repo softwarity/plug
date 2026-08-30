@@ -12,9 +12,16 @@ const TIMEOUT_MS = 2000;
 export class VersionService {
   readonly tag = signal<string>(FALLBACK);
 
-  // Awaited at bootstrap (see app.config) so the code blocks are highlighted with
-  // the resolved value, not the fallback. Same-origin + tiny → typically instant;
-  // the timeout is only a safety net.
+  constructor() {
+    // Started, never awaited. It used to block bootstrap so the first render
+    // carried the resolved tag; the signal it fills is read by no template, so
+    // that was every visitor waiting on a fetch for nothing. Fire and forget:
+    // the fallback renders immediately and the real value lands when it lands.
+    void this.load();
+  }
+
+  // Same-origin and tiny, so typically instant; the timeout is only a safety net
+  // for a missing file (dev), an offline visitor, or a slow host.
   async load(): Promise<void> {
     try {
       const ctl = new AbortController();

@@ -190,6 +190,14 @@
   }
 }
 
+// Focused by script after every navigation, never by Tab, so the ring would
+// appear on each page change around the whole column. Suppressed for THAT case
+// only: :focus-visible still draws it if a keyboard ever lands here, and the
+// announcement a screen reader makes comes from the route title, not the ring.
+.content:focus {
+  outline: none;
+}
+
 .content {
   min-width: 0;
 }

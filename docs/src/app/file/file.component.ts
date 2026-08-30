@@ -43,30 +43,40 @@ export type FileState = 'collapsed' | 'opened' | 'expanded';
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="file">
-      <div
-        class="hdr"
-        role="button"
-        tabindex="0"
-        [attr.aria-expanded]="current() !== 'collapsed'"
-        (click)="cycle()"
-        (keydown.enter)="cycle()"
-        (keydown.space)="$event.preventDefault(); cycle()"
-      >
-        <mat-icon class="chev">{{ icon() }}</mat-icon>
-        <span class="name">{{ name() }}</span>
-        <span class="grow"></span>
+      <!--
+        The row is a plain container, and the disclosure is a real <button> that
+        wraps only what expands the file. It used to be the other way round: the
+        whole row carried role="button", with Copy and Download nested INSIDE it.
+        A control cannot contain controls - a screen reader announces one button
+        and the two inside it are unreachable or nonsense - and aria-expanded on
+        the row claimed the download button was part of the disclosure.
+
+        A native button also brings its own keyboard handling, so the Enter and
+        Space handlers that stood in for it are gone, along with the
+        stopPropagation the nesting made necessary.
+      -->
+      <div class="hdr">
+        <button
+          type="button"
+          class="toggle"
+          [attr.aria-expanded]="current() !== 'collapsed'"
+          (click)="cycle()"
+        >
+          <mat-icon class="chev">{{ icon() }}</mat-icon>
+          <span class="name">{{ name() }}</span>
+        </button>
         <button
           type="button"
           class="act"
           [class.done]="copied()"
-          (click)="copy(); $event.stopPropagation()"
+          (click)="copy()"
           [attr.aria-label]="copied() ? 'Copied' : 'Copy'"
           title="Copy"
         ><mat-icon>{{ copied() ? 'check' : 'content_copy' }}</mat-icon></button>
         <button
           type="button"
           class="act"
-          (click)="save(); $event.stopPropagation()"
+          (click)="save()"
           aria-label="Download"
           title="Download"
         ><mat-icon>download</mat-icon></button>
@@ -101,13 +111,28 @@ export type FileState = 'collapsed' | 'opened' | 'expanded';
         gap: 8px;
         padding: 8px 10px;
         background: var(--bg-secondary);
-        cursor: pointer;
         user-select: none;
+      }
+      /* The disclosure control itself: a real button, dressed as the row it used
+         to be. It takes the row's width so the whole name stays clickable. */
+      .toggle {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex: 1 1 auto;
+        min-width: 0;
+        padding: 0;
+        border: 0;
+        background: none;
+        color: inherit;
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
       }
       .hdr:hover {
         background: rgba(163, 113, 247, 0.08);
       }
-      .hdr:focus-visible {
+      .toggle:focus-visible {
         outline: 2px solid var(--accent-purple);
         outline-offset: -2px;
       }
@@ -126,9 +151,6 @@ export type FileState = 'collapsed' | 'opened' | 'expanded';
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
-      }
-      .grow {
-        flex: 1;
       }
       .act {
         flex: none;
