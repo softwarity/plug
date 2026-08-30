@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.12.1
+
 ### Windows: the binary a SYSTEM service runs is no longer yours to rewrite
 
 plug installs under `%LOCALAPPDATA%\Programs\plug`, and the datapath service
