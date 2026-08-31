@@ -125,7 +125,11 @@ func Preflight() error {
 		"  Full stack files: " + docURL(docHome))
 }
 
-func fatal(format string, a ...any) {
+// A var, not a func, so a test can watch dispatch REFUSE something. Both exits
+// leave the process, which made the validator that guards every command arriving
+// from the network the one part of the agent no test could reach: nameRe could be
+// widened to ^.*$ and the whole suite stayed green.
+var fatal = func(format string, a ...any) {
 	fmt.Fprintf(os.Stderr, format+"\n", a...)
 	os.Exit(1)
 }
@@ -133,7 +137,7 @@ func fatal(format string, a ...any) {
 // answer prints the one-line protocol reply the CLI parses, and exits 0 — the
 // reply itself carries success or failure ("error: …"), so the SSH exit status
 // stays out of the contract (old CLIs never call us; old shells said 127).
-func answer(format string, a ...any) {
+var answer = func(format string, a ...any) {
 	fmt.Printf(format+"\n", a...)
 	os.Exit(0)
 }

@@ -178,7 +178,7 @@ func Start(ctx context.Context, cfg Config) error {
 
 	// An agent (re)start orphans every session's dynamic name, so sweep before
 	// serving.
-	gcQuietly()
+	gcQuietly(cfg.Logf)
 
 	hostKey, err := cfg.Host.HostKey()
 	if err != nil {
@@ -240,9 +240,29 @@ func boolEnv(b bool) string {
 // gcQuietly sweeps orphaned names, best effort. The verbs it reaches call
 // os.Exit on their own failures, which a caller embedding this package must not
 // inherit.
-func gcQuietly() {
-	defer func() { _ = recover() }()
-	gc()
+//
+// Best effort, and SAID. This sweep is what brings back what a previous session
+// parked: containers restarted, a Swarm service scaled back, a Kubernetes
+// Service repointed. Swallowing its panic left an agent announcing "ready" one
+// line later while somebody's deployment stayed at zero replicas, with nothing
+// anywhere naming the sweep that never finished. That is the failure the parking
+// receipt exists to prevent, arriving through the door meant to protect the
+// embedder.
+func gcQuietly(logf func(string, ...any)) {
+	runQuietly("the boot sweep", logf, gc)
+}
+
+// runQuietly absorbs a panic and names it. Extracted so the absorbing can be
+// tested: the thing it wraps calls the orchestrator and cannot be exercised from
+// a unit test, but the wrapper's contract - never propagate, always report - can.
+func runQuietly(what string, logf func(string, ...any), f func()) {
+	defer func() {
+		if r := recover(); r != nil && logf != nil {
+			logf("%s did not finish (%v). A workload parked by an earlier session may still be stopped; "+
+				"re-run that session to restore it, or restart this agent", what, r)
+		}
+	}()
+	f()
 }
 
 // Standalone returns the Host plug uses without a gateway: the keys baked into

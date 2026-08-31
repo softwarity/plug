@@ -106,6 +106,9 @@ type sshServer struct {
 	// grace bounds the HANDSHAKE only. 0 means handshakeGrace; the tests shorten
 	// it, since waiting a minute to prove a silent peer is dropped is not a test.
 	grace time.Duration
+	// maxInFlight bounds handshakes in flight; 0 means maxHandshakes. A test
+	// lowers it rather than opening sixty-five connections to prove a leak.
+	maxInFlight int
 
 	wg sync.WaitGroup
 
@@ -255,7 +258,11 @@ const (
 )
 
 func (s *sshServer) Serve(ln net.Listener) error {
-	gate := make(chan struct{}, maxHandshakes)
+	cap := s.maxInFlight
+	if cap == 0 {
+		cap = maxHandshakes
+	}
+	gate := make(chan struct{}, cap)
 	for {
 		nc, err := ln.Accept()
 		if err != nil {
@@ -268,7 +275,7 @@ func (s *sshServer) Serve(ln net.Listener) error {
 			// Refused rather than queued: queueing turns a flood into a backlog
 			// that outlives it, and the client's own dial timeout would have
 			// given up long before its turn came.
-			s.note("ssh: %d handshakes already in flight, refusing %s", maxHandshakes, nc.RemoteAddr())
+			s.note("ssh: %d handshakes already in flight, refusing %s", cap, nc.RemoteAddr())
 			nc.Close()
 			continue
 		}
@@ -304,15 +311,24 @@ func (s *sshServer) handle(nc net.Conn, releaseSlot func()) {
 	// connection, and this is one goroutine among many inside a gateway that has
 	// other work to do.
 	defer s.absorb("connection from "+nc.RemoteAddr().String(), func() { nc.Close() })()
+	// Deferred, and once. The slot is meant to be held for the HANDSHAKE only, so
+	// it is released the moment NewServerConn returns - but that call is exactly
+	// the one that parses what a stranger sent, which is why the recover above
+	// exists. A panic there used to close the connection and keep the slot for
+	// good: enough of them and the server refused every new peer while still
+	// logging that it was ready.
+	var released sync.Once
+	release := func() { released.Do(releaseSlot) }
+	defer release()
 	grace := s.grace
 	if grace == 0 {
 		grace = handshakeGrace
 	}
 	_ = nc.SetDeadline(time.Now().Add(grace))
 	conn, chans, reqs, err := ssh.NewServerConn(nc, s.serverConfig())
-	// The slot is held for the HANDSHAKE, not the session: what is bounded is
-	// how many unauthenticated peers can be in flight at once.
-	releaseSlot()
+	// Here on the nominal path, so a live session does not occupy a slot; the
+	// defer above covers the panic and returns it at most once either way.
+	release()
 	if err != nil {
 		// Includes every rejected key and every scanner. Worth a line, not an
 		// alarm: this port is reachable by design.

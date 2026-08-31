@@ -700,3 +700,89 @@ func TestAPanickingConnectionDoesNotTakeTheAgentDown(t *testing.T) {
 		t.Fatalf("after the panic the agent answered %q, %v", out, err)
 	}
 }
+
+// A handshake that panics must give its slot back.
+//
+// The slot exists to bound how many unauthenticated peers can be mid-handshake
+// at once (MaxStartups). It was taken before ssh.NewServerConn and returned by a
+// plain call after it - and NewServerConn is exactly the function that parses
+// what a stranger sent, which is why the recover around it exists at all. A
+// panic there was absorbed, the connection closed, and the slot never came back.
+// Enough of them and the server refuses every new connection for good, while
+// still logging that it is ready.
+func TestAPanickingHandshakeGivesItsSlotBack(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the agent only ever runs in a Linux container")
+	}
+	var boom atomic.Bool
+	boom.Store(true)
+
+	hostSigner, err := hostKeySigner(filepath.Join(t.TempDir(), "host_key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	clientPub, _ := ssh.NewPublicKey(pub)
+	clientSigner, _ := ssh.NewSignerFromKey(priv)
+
+	srv := &sshServer{
+		hostKey: hostSigner, logf: func(string, ...any) {},
+		execFor: func(string) []string { return []string{"/bin/sh", "-c", "printf served"} },
+		// Two slots, so two panics are enough to prove the leak. Sixty-five
+		// connections would prove the same thing and say it less clearly.
+		maxInFlight: 2,
+		host: &panicHost{
+			signer:  hostSigner,
+			allowed: map[string]string{ssh.FingerprintSHA256(clientPub): "alice"},
+			boom:    &boom,
+		},
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go srv.Serve(ln)
+	addr := ln.Addr().String()
+
+	// Burn every slot with a handshake that blows up inside NewServerConn.
+	for i := 0; i < 4; i++ {
+		_, _ = ssh.Dial("tcp", addr, &ssh.ClientConfig{
+			User:            tunnelUser,
+			Auth:            []ssh.AuthMethod{ssh.PublicKeys(clientSigner)},
+			HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+			Timeout:         2 * time.Second,
+		})
+	}
+
+	// The agent must still take a connection. If the slots leaked, this is
+	// refused before the handshake even starts.
+	boom.Store(false)
+	cl, err := ssh.Dial("tcp", addr, &ssh.ClientConfig{
+		User:            downloadUser,
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         3 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("after 4 panicking handshakes with 2 slots, the agent takes nothing: %v", err)
+	}
+	cl.Close()
+}
+
+// panicHost blows up inside Verify, which runs inside ssh.NewServerConn.
+type panicHost struct {
+	signer  ssh.Signer
+	allowed map[string]string
+	boom    *atomic.Bool
+}
+
+func (h *panicHost) HostKey() (ssh.Signer, error) { return h.signer, nil }
+func (h *panicHost) Verify(key ssh.PublicKey) (string, bool) {
+	if h.boom.Load() {
+		panic("the key store blew up mid-handshake")
+	}
+	who, ok := h.allowed[ssh.FingerprintSHA256(key)]
+	return who, ok
+}
+func (h *panicHost) Served(NameEvent) {}
+func (h *panicHost) Unserved(string)  {}
