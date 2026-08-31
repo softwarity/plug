@@ -38,6 +38,25 @@ RUN mkdir -p /out/bin && \
     done && \
     printf '%s' "$V" > /out/VERSION
 
+# Sign what this image will serve. The launcher runs the core with the privilege
+# it holds (root on macOS, CAP_SYS_ADMIN on Linux) and the agent it fetches from
+# is chosen by whoever runs plug, so a digest announced by that same agent proves
+# nothing. Only a signature made with a key the caller cannot reach does, and
+# that key lives here for the length of this one RUN: a BuildKit secret mount is
+# a tmpfs, it lands in no layer and no image history.
+#
+# No key mounted is the normal case for a local `docker build` or a fork, and it
+# must not fail the build: the image simply serves no sig=, and a launcher
+# tolerates that until the cutover date compiled into it. What the release
+# pipeline must never do is silently take that path, so the message says which
+# one was taken and CI greps for it.
+RUN --mount=type=secret,id=release_key \
+    if [ -s /run/secrets/release_key ]; then \
+      go run ./cmd/plug-sign /run/secrets/release_key /out/bin "$(cat /out/VERSION)"; \
+    else \
+      echo "plug-sign: NO RELEASE KEY MOUNTED, this image serves UNSIGNED binaries"; \
+    fi
+
 # The agent: its SSH server, the -s provisioning verbs, the signpost relay and
 # the boot gc. Copied file by file rather than as a directory, because the Go
 # sources now sit beside the image files (Dockerfile, install.sh, serve-binary)

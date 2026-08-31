@@ -358,7 +358,8 @@ func updateLauncher(cfg config, remote string) {
 	// what is on disk. A digest we cannot get is not a reason to skip the update:
 	// fall through and replace, as before.
 	osArch := runtime.GOOS + "-" + runtime.GOARCH
-	want, derr := fetchDigest(cfg, osArch)
+	att, derr := fetchDigest(cfg, osArch)
+	want := att.sha256
 	if derr != nil {
 		want = "" // an agent too old to answer; see the check after the download
 	}
@@ -392,10 +393,25 @@ func updateLauncher(cfg config, remote string) {
 	// rather than a refusal: it is the pre-digest behaviour, and refusing would
 	// strand anyone whose cluster predates the verb.
 	if want != "" {
-		if got := fmt.Sprintf("%x", sha256.Sum256(data)); got != want {
+		got := fmt.Sprintf("%x", sha256.Sum256(data))
+		if got != want {
 			fatal("the downloaded launcher does not hash to what the agent announced.\n"+
 				"      announced %s\n      received  %s\n"+
 				"      refusing to replace %s with it", want, got, self)
+		}
+		// And the signature, because of what happens twenty lines below: these
+		// bytes overwrite the plug binary itself, and regrantPrivilege then hands
+		// the result setuid root (macOS) or CAP_SYS_ADMIN (Linux). A digest only
+		// says the download matches what this agent announced, and the agent is
+		// whoever the caller pointed at. This is the difference between updating
+		// plug and installing somebody else's binary as root, permanently.
+		// remote verbatim, not shortVersion: what the release workflow signed is
+		// the exact string in the agent's VERSION file, which is what agentVersion
+		// returned here. Trimming the build metadata off one side of a signed
+		// statement and not the other is how a signature scheme quietly stops
+		// verifying anything.
+		if serr := verifyCore(att, osArch, remote, got); serr != nil {
+			fatal("%v", serr)
 		}
 	}
 	if err := replaceBinary(self, data); err != nil {

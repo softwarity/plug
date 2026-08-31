@@ -27,4 +27,9 @@ jobs:
   image:
     if: github.ref == 'refs/heads/main'
     uses: ./.github/workflows/_docker.yml
-    secrets: inherit
+    # The two _docker.yml declares, not the vault. This dispatch already skips
+    # the gate; it has no business also carrying PAT_TOKEN to a Docker Hub login.
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_RW: ${{ secrets.DOCKERHUB_RW }}
+      PLUG_RELEASE_KEY: ${{ secrets.PLUG_RELEASE_KEY }}

@@ -88,6 +88,87 @@ moving tags. One of them runs with the release token in scope.
 
 ---
 
+
+### The core is now signed, and the launcher checks the signature before running it as root
+
+plug runs the core with the privilege it holds: root on macOS, CAP_SYS_ADMIN on
+Linux. Which core it runs came from the agent, and which agent it asks is chosen
+by whoever launches plug, with `-H` on the command line or a `host =` line in a
+profile file the user owns. The only thing vouching for those bytes was a SHA-256
+announced by that same agent, which proves the download was not corrupted in
+flight and nothing else. Code running under your account, with no privileges of
+its own, could stand up an SSH listener on 127.0.0.1, answer three questions, and
+have its binary executed as root.
+
+The release workflow now signs every published binary with an ed25519 key whose
+public half is compiled into plug and whose private half never leaves the build.
+The launcher verifies that signature against the digest it measured itself, on
+every launch, on the cached core as well as on a fresh download, and on the bytes
+`plug update` is about to write over plug itself. A digest binds bytes to a claim;
+a signature binds them to an author, and an author is what was missing.
+
+The statement covers the platform and the version as well as the hash, so a
+signature genuinely issued for one target cannot be presented for another.
+
+plug trusts exactly one release key. If it ever has to be replaced, whether it
+was lost or stolen, the replacement revokes the old one by the same act, and
+every CLI already installed says so and asks to be reinstalled from the cluster.
+Installing carries no signature check on purpose: it is aimed at a host you
+typed, while you are watching, which is what fetching the core is not.
+
+An agent too old to answer `sig=` is still accepted, with a warning, until
+1 December 2026. After that date plug refuses to run an unsigned core with
+privilege. The deadline is a date rather than a version on purpose: a fake agent
+announces its own version, so any rule reading the version would be told whatever
+made it pass. Redeploy the softwarity/plug image on your clusters before then;
+CLIs and agents can be updated in either order until the cutover.
+
+### The agent stopped announcing that it was ready over work it had not finished
+
+Two failures inside the agent were being absorbed and never mentioned. A panic
+during an SSH handshake released nothing, so the slot that connection held was
+gone for good: sixty-four of them and the agent refused every new peer while
+still logging that it was ready. And the boot sweep, which restores whatever a
+previous session had parked, discarded its own panic one line before that same
+ready message, so a deployment could sit at zero replicas with nothing anywhere
+saying the sweep had not finished. Both now say what happened, and both still
+refuse to take the process down with them.
+
+### The command validator on the agent had no test at all
+
+Everything arriving from the network reaches one function, which checks that a
+name is a DNS label a cluster will accept and that a port is a port. Nothing
+exercised it, because it answers by exiting. Widening the name rule to accept
+anything at all left the whole suite green. It no longer does.
+
+
+### The anonymous download account could be made to pick its own verb
+
+The agent's `get` account takes its command from the caller and split it without
+disabling globbing, so a command of `*` expanded against whatever files sat in
+the working directory and the verb actually run depended on that. It is the only
+unauthenticated entry point the agent has. It now splits without globbing.
+
+### The e2e suite had three checks that could go green without measuring anything
+
+The guard against the three e2e families drifting apart compared only a cell's
+name, condition and script, so a family could mark a cell `continue-on-error`,
+or run it under a different shell, and the guard still reported that all three
+ran the same cells. The Kubernetes leg rewrote the published manifest to point
+at the branch image with a `sed` whose result nobody checked, and `sed` succeeds
+when it substitutes nothing: the day that manifest changes, the leg would have
+tested a published image and gone green. And the lookup for the previous release
+read only the first page of tags, which after enough pushes would have returned
+the CURRENT release as the previous one, failing the update cells while blaming
+the code.
+
+Separately, the reaper that frees an orphaned cluster when its caller run ends
+had stopped firing at all: the identifier it parses gained a field and the split
+was never updated, so every cluster ran to its full timeout, holding runners for
+about three hours per pipeline. Every service image the suite uses is now pinned,
+as the rest of the fleet already was, and the Docker actions in the publishing
+workflow are pinned to commits like the others.
+
 ## 2.12.1
 
 ### Windows: the binary a SYSTEM service runs is no longer yours to rewrite

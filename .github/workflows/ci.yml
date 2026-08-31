@@ -259,7 +259,13 @@ jobs:
     uses: ./.github/workflows/_docker.yml
     with:
       immutable_only: true
-    secrets: inherit
+    # The two _docker.yml declares, not the vault. `inherit` handed this build
+    # every secret the repo has, PAT_TOKEN and its contents:write on main
+    # included, to run a job whose only credentialed act is a Docker Hub login.
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_RW: ${{ secrets.DOCKERHUB_RW }}
+      PLUG_RELEASE_KEY: ${{ secrets.PLUG_RELEASE_KEY }}
 
   # The client for a gateway that embeds the agent: same code, a different verb
   # surface (keygen/pubkey, no update), stamped `-hosted` in the version string.
@@ -276,7 +282,10 @@ jobs:
     with:
       immutable_only: true
       flavour: hosted
-    secrets: inherit
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_RW: ${{ secrets.DOCKERHUB_RW }}
+      PLUG_RELEASE_KEY: ${{ secrets.PLUG_RELEASE_KEY }}
 
   image:
     name: Publish the tested images (standalone + hosted)
@@ -1059,11 +1068,32 @@ jobs:
     steps:
       # No checkout here, so pass --repo explicitly, otherwise the cancel silently
       # fails and the cluster runs sleep out their full TTL.
+      #
+      # `|| true` used to hide exactly the failure the --repo fix was about. A
+      # 403 from a narrowed token, a 502, an id the dispatch never recorded: all
+      # four outcomes looked the same from outside, a green step, while the
+      # cluster kept a runner out of a 20-runner pool for the rest of its TTL.
+      # Only "it had already finished" is normal here; the rest gets annotated,
+      # and the job still passes so a stuck cancel never reds a good pipeline.
       - env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh run cancel ${{ needs.start-cluster.outputs.cluster_id_a }} --repo ${{ github.repository }} || true
-          gh run cancel ${{ needs.start-cluster.outputs.cluster_id_b }} --repo ${{ github.repository }} || true
+          for pair in "${{ needs.start-cluster.outputs.cluster_id_a }}:compose-a" \
+                      "${{ needs.start-cluster.outputs.cluster_id_b }}:compose-b"; do
+            id="${pair%%:*}"; who="${pair##*:}"
+            if [ -z "$id" ]; then
+              echo "::warning::no run id was recorded for the $who cluster: if it was dispatched, nothing cancels it and it holds a runner until its TTL expires"
+            elif out="$(gh run cancel "$id" --repo "${{ github.repository }}" 2>&1)"; then
+              echo "cancelled the $who cluster, run $id"
+            else
+              case "$out" in
+                *"Cannot cancel a workflow run that is completed"*)
+                  echo "the $who cluster (run $id) had already finished" ;;
+                *)
+                  echo "::warning::could not cancel the $who cluster, run $id: $out. It holds a runner until its TTL expires." ;;
+              esac
+            fi
+          done
 
   kill-k8s:
     name: kill k8s clusters
@@ -1074,11 +1104,27 @@ jobs:
       actions: write
       contents: read
     steps:
+      # Same shape as kill-compose, and for the same reason: a cancel that fails
+      # must not look like a cancel that worked. These two idle for 2100s.
       - env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh run cancel ${{ needs.start-cluster.outputs.k8s_id_a }} --repo ${{ github.repository }} || true
-          gh run cancel ${{ needs.start-cluster.outputs.k8s_id_b }} --repo ${{ github.repository }} || true
+          for pair in "${{ needs.start-cluster.outputs.k8s_id_a }}:k8s-a" \
+                      "${{ needs.start-cluster.outputs.k8s_id_b }}:k8s-b"; do
+            id="${pair%%:*}"; who="${pair##*:}"
+            if [ -z "$id" ]; then
+              echo "::warning::no run id was recorded for the $who cluster: if it was dispatched, nothing cancels it and it holds a runner until its TTL expires"
+            elif out="$(gh run cancel "$id" --repo "${{ github.repository }}" 2>&1)"; then
+              echo "cancelled the $who cluster, run $id"
+            else
+              case "$out" in
+                *"Cannot cancel a workflow run that is completed"*)
+                  echo "the $who cluster (run $id) had already finished" ;;
+                *)
+                  echo "::warning::could not cancel the $who cluster, run $id: $out. It holds a runner until its TTL expires." ;;
+              esac
+            fi
+          done
 
   kill-swarm:
     name: kill swarm clusters
@@ -1089,8 +1135,24 @@ jobs:
       actions: write
       contents: read
     steps:
+      # Same shape as kill-compose, and for the same reason: a cancel that fails
+      # must not look like a cancel that worked. These two idle for 2100s.
       - env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh run cancel ${{ needs.start-cluster.outputs.swarm_id_a }} --repo ${{ github.repository }} || true
-          gh run cancel ${{ needs.start-cluster.outputs.swarm_id_b }} --repo ${{ github.repository }} || true
+          for pair in "${{ needs.start-cluster.outputs.swarm_id_a }}:swarm-a" \
+                      "${{ needs.start-cluster.outputs.swarm_id_b }}:swarm-b"; do
+            id="${pair%%:*}"; who="${pair##*:}"
+            if [ -z "$id" ]; then
+              echo "::warning::no run id was recorded for the $who cluster: if it was dispatched, nothing cancels it and it holds a runner until its TTL expires"
+            elif out="$(gh run cancel "$id" --repo "${{ github.repository }}" 2>&1)"; then
+              echo "cancelled the $who cluster, run $id"
+            else
+              case "$out" in
+                *"Cannot cancel a workflow run that is completed"*)
+                  echo "the $who cluster (run $id) had already finished" ;;
+                *)
+                  echo "::warning::could not cancel the $who cluster, run $id: $out. It holds a runner until its TTL expires." ;;
+              esac
+            fi
+          done

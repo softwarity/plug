@@ -889,11 +889,20 @@ func ensureVersion(v string, cfg config) (*os.File, error) {
 	// core is executed with the privilege plug holds (root on macOS, ambient
 	// caps on Linux), so anything able to rewrite it — a postinstall in the very
 	// project plug is launching — would be running with it. ~30ms for 9MB.
-	want, derr := fetchDigest(cfg, osArch)
+	att, derr := fetchDigest(cfg, osArch)
+	want := att.sha256
 	if fi, err := os.Stat(bin); err == nil && fi.Size() > 1<<20 && derr == nil {
 		f, herr := openVerified(bin, want)
 		switch {
 		case herr == nil:
+			// openVerified proved the bytes on disk hash to want, so want IS the
+			// measurement here, not a claim. The signature is checked against it
+			// on every launch, not only on the download: the cache is what gets
+			// executed with privilege, and it outlives the download by weeks.
+			if serr := verifyCore(att, osArch, v, want); serr != nil {
+				f.Close()
+				return nil, serr
+			}
 			own()
 			ensureWintunBeside(bin)
 			return f, nil
@@ -921,8 +930,15 @@ func ensureVersion(v string, cfg config) (*os.File, error) {
 	if len(data) < 1<<20 || !looksLikeBinary(data) {
 		return nil, fmt.Errorf("downloaded binary looks invalid (%d bytes)", len(data))
 	}
-	if got := fmt.Sprintf("%x", sha256.Sum256(data)); got != want {
-		return nil, fmt.Errorf("the downloaded v%s does not hash to what the agent announced — refusing to install it", v)
+	got := fmt.Sprintf("%x", sha256.Sum256(data))
+	if got != want {
+		return nil, fmt.Errorf("the downloaded v%s does not hash to what the agent announced, refusing to install it", v)
+	}
+	// Before the bytes ever reach the disk. What follows writes them into a store
+	// only root can touch and then executes them with privilege, so this is the
+	// last point where refusing costs nothing.
+	if serr := verifyCore(att, osArch, v, got); serr != nil {
+		return nil, serr
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
@@ -1263,20 +1279,39 @@ var fetchDigest = getDigest
 // layer this one is shaped to accept later.
 //
 // key=value lines, so a later `sig=` costs nothing here.
-func getDigest(cfg config, osArch string) (string, error) {
+func getDigest(cfg config, osArch string) (coreAttestation, error) {
 	out, err := getExec(cfg, "digest "+osArch)
 	if err != nil {
-		return "", err
+		return coreAttestation{}, err
 	}
+	return parseAttestation(out, osArch)
+}
+
+// parseAttestation reads the digest verb's key=value reply. Split out from the
+// fetch so a test can run a REAL agent's answer through it: what the image
+// serves and what the launcher expects are two halves of one protocol, and the
+// only way to know they still meet is to feed one to the other.
+func parseAttestation(out, osArch string) (coreAttestation, error) {
+	var att coreAttestation
 	for _, line := range strings.Split(out, "\n") {
-		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "sha256="); ok {
+		line = strings.TrimSpace(line)
+		if v, ok := strings.CutPrefix(line, "sha256="); ok {
 			if len(v) != 64 {
-				return "", fmt.Errorf("agent answered a malformed sha256 (%d chars)", len(v))
+				return coreAttestation{}, fmt.Errorf("agent answered a malformed sha256 (%d chars)", len(v))
 			}
-			return v, nil
+			att.sha256 = v
+		}
+		// An agent older than release signing answers no sig line at all. That is
+		// not an error here: verifyCore is what decides whether a missing
+		// signature is still acceptable, and it is the only place that decides.
+		if v, ok := strings.CutPrefix(line, "sig="); ok {
+			att.sig = v
 		}
 	}
-	return "", fmt.Errorf("agent answered no sha256 for %s", osArch)
+	if att.sha256 == "" {
+		return coreAttestation{}, fmt.Errorf("agent answered no sha256 for %s", osArch)
+	}
+	return att, nil
 }
 
 func getDownload(cfg config, osArch, label string) ([]byte, error) {

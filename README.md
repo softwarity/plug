@@ -306,6 +306,11 @@ gets network access to the cluster it is attached to. Deploy the agent only on
 clusters you trust, and never expose its port on an untrusted network. The full
 model is in the [documentation](https://softwarity.github.io/plug/#/security).
 
+The CLI binaries a release publishes are signed, and plug verifies that signature
+before running the core with privilege: the agent tells plug which bytes to run,
+and a digest announced by that same agent proves only that the download was not
+corrupted. Maintainers: the key and its rotation are in [RELEASING.md](RELEASING.md).
+
 ## Documentation
 
 Everything else - how it works, deployment on Swarm and Kubernetes, profiles and

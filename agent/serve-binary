@@ -5,6 +5,12 @@
 #                              the script picks yours with uname)
 #   <os>-<arch> (uname)        stream that raw CLI binary on stdout
 # Nothing else — no shell, ever.
+# set -f: SSH_ORIGINAL_COMMAND comes from the anonymous "get" account, so its
+# content is attacker-controlled. The unquoted `set -- $cmd` below is there for
+# the word splitting (verb + argument), but it also globs: a command of "*"
+# would expand against the current directory, making the verb we run depend on
+# whatever files happen to sit there. Keep the splitting, drop the globbing.
+set -f
 cmd=$(printf '%s' "$SSH_ORIGINAL_COMMAND" | tr 'A-Z' 'a-z')
 set -- $cmd
 verb=$1
@@ -179,6 +185,15 @@ if [ "$verb" = "digest" ]; then
   else
     echo "plug: no sha256 tool in this agent image" >&2
     exit 1
+  fi
+  # The release signature over that binary, written beside it at image build time
+  # by cli/cmd/plug-sign. This is what lets the launcher refuse to execute, with
+  # root privilege, bytes that did not come from the plug release workflow: the
+  # digest above is announced by this agent, and an agent is whoever the caller
+  # pointed plug at. Absent on an image built without the release key, which the
+  # launcher tolerates until its compiled-in cutover date.
+  if [ -f "$df.sig" ]; then
+    echo "sig=$(cat "$df.sig")"
   fi
   exit 0
 fi

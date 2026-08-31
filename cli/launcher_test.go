@@ -54,7 +54,7 @@ func TestEnsureVersionCacheHit(t *testing.T) {
 		t.Fatal(err)
 	}
 	saved := fetchDigest
-	fetchDigest = func(config, string) (string, error) { return sum, nil }
+	fetchDigest = func(config, string) (coreAttestation, error) { return coreAttestation{sha256: sum}, nil }
 	defer func() { fetchDigest = saved }()
 
 	got, err := ensureVersion("9.9.9", config{})
@@ -71,7 +71,9 @@ func TestEnsureVersionCacheHit(t *testing.T) {
 	// Same file, a digest that no longer matches: the cache must be discarded
 	// rather than executed. The download that follows fails fast here (no
 	// cluster), which is exactly how we know it did not reuse the file.
-	fetchDigest = func(config, string) (string, error) { return strings.Repeat("a", 64), nil }
+	fetchDigest = func(config, string) (coreAttestation, error) {
+		return coreAttestation{sha256: strings.Repeat("a", 64)}, nil
+	}
 	if _, err := ensureVersion("9.9.9", config{}); err == nil {
 		t.Fatal("a cached core whose hash does not match was accepted")
 	}
@@ -124,7 +126,7 @@ func TestTheLauncherIsNotReplacedByAnIdenticalBuild(t *testing.T) {
 		t.Skip("cannot hash the test binary")
 	}
 	saved := fetchDigest
-	fetchDigest = func(config, string) (string, error) { return sum, nil }
+	fetchDigest = func(config, string) (coreAttestation, error) { return coreAttestation{sha256: sum}, nil }
 	defer func() { fetchDigest = saved }()
 
 	// A version that differs, so launcherFollow says "replace" and we reach the
@@ -137,7 +139,7 @@ func TestTheLauncherIsNotReplacedByAnIdenticalBuild(t *testing.T) {
 // "identical", so it falls through and replaces as before.
 func TestAnUnavailableDigestStillReplaces(t *testing.T) {
 	saved := fetchDigest
-	fetchDigest = func(config, string) (string, error) { return "", errUnavailableTest }
+	fetchDigest = func(config, string) (coreAttestation, error) { return coreAttestation{}, errUnavailableTest }
 	defer func() { fetchDigest = saved }()
 
 	if replace, _ := launcherFollow("2.9.3", "2.9.4"); !replace {
@@ -145,7 +147,7 @@ func TestAnUnavailableDigestStillReplaces(t *testing.T) {
 	}
 	// The decision to fall through lives in updateLauncher's guard: with no
 	// digest, it cannot conclude "same bytes" and must go on to download.
-	if want, err := fetchDigest(config{}, "x"); err == nil || want != "" {
+	if want, err := fetchDigest(config{}, "x"); err == nil || want.sha256 != "" {
 		t.Errorf("the stub must report no digest, got %q / %v", want, err)
 	}
 }

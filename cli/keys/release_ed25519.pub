@@ -1,0 +1,20 @@
+# The plug release signing key.
+#
+# ONE key at a time, on purpose. One key makes replacing it and revoking it the
+# same act: ship a plug carrying the new key and the old one stops being accepted
+# by everybody, with no second step anyone can forget. A list of trusted keys
+# would make recovery from a LOST key easier, and would make recovery from a
+# STOLEN one worse, because the stolen key stays trusted until somebody
+# remembers to delete its line.
+#
+# Replacing it forces a reinstall of every CLI in the field, immediately, not on
+# the cutover date: a signature that does not verify is refused whatever the
+# date says. That is the accepted cost. Reinstalling is one command and the
+# install path carries no signature check, by design: it is a deliberate act
+# aimed at a host the user typed, which is exactly what the fetch path is not.
+#
+# The private half lives in the PLUG_RELEASE_KEY secret and in a vault, and
+# nowhere in this repository. See RELEASING.md.
+#
+# issued 2026-08-31
+XGAZ8rNXnw05RcsYJn+OPMvQWfMzu6cs7FzHay1jLD4=
