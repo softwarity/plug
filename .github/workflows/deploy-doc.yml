@@ -84,7 +84,7 @@ jobs:
         working-directory: docs
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg >/dev/null
-          npm i --no-save playwright
+          npm i --no-save playwright@1.61.1
           npx playwright install --with-deps chromium
           node scripts/render-diagram.mjs
           mkdir -p dist/doc-site/browser/media

@@ -6,7 +6,7 @@ RUN go mod download
 COPY services/grpc/*.go ./
 RUN CGO_ENABLED=0 go build -o /grpcsrv .
 
-FROM alpine:3.21
+FROM alpine:3.24
 COPY --from=build /grpcsrv /usr/local/bin/grpcsrv
 EXPOSE 50051
 ENTRYPOINT ["/usr/local/bin/grpcsrv"]

@@ -127,7 +127,7 @@ spec:
     spec:
       containers:
         - name: echo
-          image: docker.io/hashicorp/http-echo
+          image: docker.io/hashicorp/http-echo:1.0.0
           args: ["-listen=:8115", "-text=deployed-res-linux"]
           ports:
             - containerPort: 8115
@@ -335,7 +335,7 @@ spec:
     spec:
       containers:
         - name: echo
-          image: docker.io/hashicorp/http-echo
+          image: docker.io/hashicorp/http-echo:1.0.0
           args: ["-listen=:8116", "-text=deployed-res-mac"]
           ports:
             - containerPort: 8116
@@ -543,7 +543,7 @@ spec:
     spec:
       containers:
         - name: echo
-          image: docker.io/hashicorp/http-echo
+          image: docker.io/hashicorp/http-echo:1.0.0
           args: ["-listen=:8117", "-text=deployed-res-win"]
           ports:
             - containerPort: 8117

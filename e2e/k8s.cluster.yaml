@@ -261,7 +261,7 @@ spec:
     spec:
       containers:
         - name: echo
-          image: hashicorp/http-echo
+          image: hashicorp/http-echo:1.0.0
           args: ["-listen=:5678", "-text=${PLUG_CLUSTER_IDENT}"]
           ports: [{ containerPort: 5678 }]
 ---
@@ -431,7 +431,7 @@ spec:
     spec:
       containers:
         - name: echo
-          image: hashicorp/http-echo
+          image: hashicorp/http-echo:1.0.0
           args: ["-listen=:8085", "-text=deployed-tko-linux"]
           ports: [{ containerPort: 8085 }]
 ---
@@ -455,7 +455,7 @@ spec:
     spec:
       containers:
         - name: echo
-          image: hashicorp/http-echo
+          image: hashicorp/http-echo:1.0.0
           args: ["-listen=:8086", "-text=deployed-tko-mac"]
           ports: [{ containerPort: 8086 }]
 ---
@@ -479,7 +479,7 @@ spec:
     spec:
       containers:
         - name: echo
-          image: hashicorp/http-echo
+          image: hashicorp/http-echo:1.0.0
           args: ["-listen=:8087", "-text=deployed-tko-win"]
           ports: [{ containerPort: 8087 }]
 ---

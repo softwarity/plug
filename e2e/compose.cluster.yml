@@ -21,7 +21,7 @@ services:
   # The multicluster e2e reaches http://ident:5678 through TWO plugs at once and
   # asserts each one lands on its OWN cluster — same name, right backend.
   ident:
-    image: hashicorp/http-echo
+    image: hashicorp/http-echo:1.0.0
     command: ["-listen=:5678", "-text=${PLUG_CLUSTER_IDENT:-solo}"]
     networks: [internal]
 
@@ -65,15 +65,15 @@ services:
   # that port on the AGENT, globally — two legs on the same port would collide
   # (the agent denies the second tcpip-forward) since the legs run concurrently.
   tko-linux:
-    image: hashicorp/http-echo
+    image: hashicorp/http-echo:1.0.0
     command: ["-listen=:8085", "-text=deployed-tko-linux"]
     networks: [internal]
   tko-mac:
-    image: hashicorp/http-echo
+    image: hashicorp/http-echo:1.0.0
     command: ["-listen=:8086", "-text=deployed-tko-mac"]
     networks: [internal]
   tko-win:
-    image: hashicorp/http-echo
+    image: hashicorp/http-echo:1.0.0
     command: ["-listen=:8087", "-text=deployed-tko-win"]
     networks: [internal]
 
@@ -166,14 +166,14 @@ services:
   # mid-session, and asserts the park comes back (boot-gc restores, the
   # reconnect re-parks) before the final restore.
   res-tko-linux:
-    image: hashicorp/http-echo
+    image: hashicorp/http-echo:1.0.0
     command: ["-listen=:8115", "-text=deployed-res-linux"]
     networks: [internal]
   res-tko-mac:
-    image: hashicorp/http-echo
+    image: hashicorp/http-echo:1.0.0
     command: ["-listen=:8116", "-text=deployed-res-mac"]
     networks: [internal]
   res-tko-win:
-    image: hashicorp/http-echo
+    image: hashicorp/http-echo:1.0.0
     command: ["-listen=:8117", "-text=deployed-res-win"]
     networks: [internal]

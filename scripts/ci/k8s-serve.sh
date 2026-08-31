@@ -41,9 +41,37 @@ kind load docker-image softwarity/plug:e2e \
   plug-e2e/flaky:e2e plug-e2e/gateway:e2e plug-e2e/chaos:e2e
 
 echo "=== deploy the agent (the PUBLISHED manifest, branch image) ==="
-sed -e 's|image: docker.io/softwarity/plug:latest|image: softwarity/plug:e2e|' \
-    -e 's|imagePullPolicy: Always|imagePullPolicy: Never|' \
-    "$root/deploy/plug-k8s.yaml" | kubectl apply -f -
+# This rewrite is the only thing standing between the three k8s legs and a run
+# that proves nothing about the branch. Piping sed straight into kubectl could
+# not say whether it had done anything: sed exits 0 when it substitutes nothing,
+# and the manifest's own comment says both of these lines are meant to change one
+# day (a pinned tag instead of a moving `latest`, IfNotPresent instead of
+# Always). The day they did, the anchors would stop matching, kind would deploy
+# the PUBLISHED image, and the nine k8s legs would report green on code that was
+# never loaded into the cluster. So: substitute into a variable, then assert what
+# came out, before anything reaches the API server.
+manifest="$(sed -e 's|image: docker.io/softwarity/plug:latest|image: softwarity/plug:e2e|' \
+                -e 's|imagePullPolicy: Always|imagePullPolicy: Never|' \
+                "$root/deploy/plug-k8s.yaml")"
+
+rewrite_failed=""
+grep -qE '^[[:space:]]*image: softwarity/plug:e2e([[:space:]]|$)' <<<"$manifest" \
+  || rewrite_failed="the branch image line 'image: softwarity/plug:e2e' is absent"
+grep -qE '^[[:space:]]*imagePullPolicy: Never([[:space:]]|$)' <<<"$manifest" \
+  || rewrite_failed="$rewrite_failed${rewrite_failed:+; }'imagePullPolicy: Never' is absent"
+# Nothing may still point at a registry image: a second container, a renamed tag,
+# a digest pin. Any surviving reference is an image kind would PULL.
+leftover="$(grep -nE '^[[:space:]]*image:' <<<"$manifest" \
+            | grep -vE '^[0-9]+:[[:space:]]*image: softwarity/plug:e2e([[:space:]]|$)' || true)"
+[ -z "$leftover" ] \
+  || rewrite_failed="$rewrite_failed${rewrite_failed:+; }unrewritten image reference(s): $(tr '\n' ' ' <<<"$leftover")"
+
+if [ -n "$rewrite_failed" ]; then
+  echo "::error::deploy/plug-k8s.yaml no longer matches what k8s-serve.sh rewrites ($rewrite_failed). Unfixed, the kind cluster would have deployed the PUBLISHED agent image instead of this commit, and the nine e2e-k8s legs would have gone green without ever running the branch. Realign the sed anchors in scripts/ci/k8s-serve.sh with the manifest." >&2
+  exit 1
+fi
+
+printf '%s\n' "$manifest" | kubectl apply -f -
 
 # The update cells start from a PUBLISHED release, so this one is NOT rewritten
 # to the branch image: it is pulled from the registry as 2.4.1, which is the

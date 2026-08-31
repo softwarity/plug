@@ -132,15 +132,15 @@ services:
   # The DEPLOYED services the resilience cell takes over, one per leg — it parks
   # them, the agent is crashed under it, and they must come back.
   res-tko-linux:
-    image: hashicorp/http-echo
+    image: hashicorp/http-echo:1.0.0
     command: ["-listen=:8115", "-text=deployed-res-linux"]
     networks: [internal]
   res-tko-mac:
-    image: hashicorp/http-echo
+    image: hashicorp/http-echo:1.0.0
     command: ["-listen=:8116", "-text=deployed-res-mac"]
     networks: [internal]
   res-tko-win:
-    image: hashicorp/http-echo
+    image: hashicorp/http-echo:1.0.0
     command: ["-listen=:8117", "-text=deployed-res-win"]
     networks: [internal]
 
@@ -208,7 +208,7 @@ services:
 
   # ---- mesh-cluster extras (same set as compose.cluster.yml) ----
   ident:
-    image: hashicorp/http-echo
+    image: hashicorp/http-echo:1.0.0
     command: ["-listen=:5678", "-text=${PLUG_CLUSTER_IDENT:-solo}"]
     networks: [internal]
 
@@ -235,17 +235,17 @@ services:
   # Takeover targets — 2 replicas each: the restore must come back to the
   # ORIGINAL count, and 2 proves restore-to-N (the bench only proved it live).
   tko-linux:
-    image: hashicorp/http-echo
+    image: hashicorp/http-echo:1.0.0
     command: ["-listen=:8085", "-text=deployed-tko-linux"]
     networks: [internal]
     deploy: { replicas: 2 }
   tko-mac:
-    image: hashicorp/http-echo
+    image: hashicorp/http-echo:1.0.0
     command: ["-listen=:8086", "-text=deployed-tko-mac"]
     networks: [internal]
     deploy: { replicas: 2 }
   tko-win:
-    image: hashicorp/http-echo
+    image: hashicorp/http-echo:1.0.0
     command: ["-listen=:8087", "-text=deployed-tko-win"]
     networks: [internal]
     deploy: { replicas: 2 }
