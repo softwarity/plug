@@ -1,4 +1,13 @@
-<main class="main-content">
+<!--
+  Landmarks. <header> and <footer> only become `banner` and `contentinfo` when
+  they are NOT inside main/article/section/aside/nav - wrapped in <main>, as the
+  whole card used to be, they announced as nothing at all and the entire page
+  was one enormous main. So: the outer wrapper is a plain div, <main> is the
+  content column (the part that actually changes between routes), and the
+  description rides in the header, which is where it reads from - one paragraph
+  about the project, repeated on every page, next to the title.
+-->
+<div class="main-content">
   <div class="card-container">
     <!-- Header -->
     <header class="card-header">
@@ -11,7 +20,7 @@
             <h1>plug</h1>
           </div>
         </div>
-        <nav class="nav-links">
+        <nav class="nav-links" aria-label="Project links">
         <a href="https://github.com/softwarity/plug#readme" target="_blank" rel="noopener" class="nav-button">
           <mat-icon>menu_book</mat-icon>
           README
@@ -58,20 +67,20 @@
           </a>
         </div>
       </div>
-    </header>
 
-    <!-- Description -->
-    <p class="description">
-      Run a local process <strong>as if it were inside your cluster</strong>: prefix any command
-      with <code>plug</code> and it resolves the cluster DNS and reaches the cluster services like
-      any workload of the stack - <em>no code change, no proxy configuration in your app</em>. One
-      tiny agent container on the cluster side, one static CLI on yours. Docker Swarm and Kubernetes.
-    </p>
+      <!-- Description -->
+      <p class="description">
+        Run a local process <strong>as if it were inside your cluster</strong>: prefix any command
+        with <code>plug</code> and it resolves the cluster DNS and reaches the cluster services like
+        any workload of the stack - <em>no code change, no proxy configuration in your app</em>. One
+        tiny agent container on the cluster side, one static CLI on yours. Docker Swarm and Kubernetes.
+      </p>
+    </header>
 
     <!-- Layout: sidebar nav + content -->
     <div class="doc-layout">
       <aside class="sidebar">
-        <nav class="side-nav">
+        <nav class="side-nav" aria-label="Documentation">
           @for (link of links; track link.path) {
             <a
               [routerLink]="link.path"
@@ -92,9 +101,9 @@
         link: a keyboard or screen-reader user then tabbed through the whole
         sidebar again to reach the page they had just asked for.
       -->
-      <section class="content" #content tabindex="-1">
+      <main class="content" #content tabindex="-1">
         <router-outlet />
-      </section>
+      </main>
     </div>
 
     <!-- Footer -->
@@ -104,4 +113,4 @@
       <a href="https://www.softwarity.io/" target="_blank" rel="noopener">Softwarity</a>
     </footer>
   </div>
-</main>
+</div>

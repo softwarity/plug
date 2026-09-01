@@ -27,11 +27,14 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
 
     <h3>Commands</h3>
     <table>
+      <thead>
       <tr>
-        <th>command</th>
-        <th>what it does</th>
-        <th>details</th>
+        <th scope="col">command</th>
+        <th scope="col">what it does</th>
+        <th scope="col">details</th>
       </tr>
+      </thead>
+      <tbody>
       <tr>
         <td><code>plug ls</code></td>
         <td>list profiles (name, host:port)</td>
@@ -94,15 +97,19 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
         <td>remove plug from this machine (binary, cache, profiles - it lists, you confirm)</td>
         <td></td>
       </tr>
+      </tbody>
     </table>
 
     <h3>Options</h3>
     <table>
+      <thead>
       <tr>
-        <th>option</th>
-        <th>what it does</th>
-        <th>details</th>
+        <th scope="col">option</th>
+        <th scope="col">what it does</th>
+        <th scope="col">details</th>
       </tr>
+      </thead>
+      <tbody>
       <tr>
         <td><code>-p, --profile &lt;name&gt;</code></td>
         <td>use profile <code>~/.plug/&lt;name&gt;.conf</code> (created on first use)</td>
@@ -133,6 +140,7 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
         <td>show the built-in help (this page, condensed)</td>
         <td></td>
       </tr>
+      </tbody>
     </table>
 
     <h3>Rarely needed</h3>

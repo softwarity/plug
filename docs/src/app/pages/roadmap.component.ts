@@ -106,7 +106,7 @@ import { MatIconModule } from '@angular/material/icon';
     <h3>Status</h3>
     <table>
       <thead>
-        <tr><th>Item</th><th>State</th></tr>
+        <tr><th scope="col">Item</th><th scope="col">State</th></tr>
       </thead>
       <tbody>
         <tr><td>Userspace-TUN data path (covers every runtime incl. Go &amp; gRPC)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>

@@ -53,7 +53,7 @@ interface Hole {
       .scroll { overflow-x: auto; border: 1px solid var(--border-color); border-radius: 10px; }
       table.cov { border-collapse: collapse; width: 100%; min-width: 640px; margin: 0; font-size: 0.88rem; }
       table.cov th, table.cov td { padding: 9px 13px; border-bottom: 1px solid var(--border-color); text-align: left; vertical-align: middle; }
-      table.cov tbody tr:last-child td { border-bottom: none; }
+      table.cov tbody tr:last-child td, table.cov tbody tr:last-child th { border-bottom: none; }
       table.cov thead th { background: var(--bg-secondary); font-size: 0.7rem; letter-spacing: 0.06em;
                            text-transform: uppercase; color: var(--text-muted); font-weight: 600; }
       table.cov th.c, table.cov td.c { text-align: center; width: 92px; }
@@ -61,15 +61,25 @@ interface Hole {
          Data path then set the width of its whole table and squeezed the notes
          into a vertical ribbon. Cap the label column and let only the long ones
          wrap; give the notes a floor so they always have room to read. */
-      td.feat { font-family: 'Courier New', Consolas, monospace; font-size: 0.83rem; color: var(--text-primary);
-                white-space: normal; max-width: 44ch; }
-      td.feat.sub { color: var(--text-secondary); padding-left: 22px; position: relative; }
-      td.feat.sub::before { content: '↳'; position: absolute; left: 8px; color: var(--text-muted); }
+      /* The feature cell is the row's HEADER (th scope="row"), so a screen reader
+         names every status cell with it. It must still look like the plain cell
+         it always was: the global 'table th' rule bolds it and paints it, undo
+         both here. */
+      th.feat { font-family: 'Courier New', Consolas, monospace; font-size: 0.83rem; color: var(--text-primary);
+                white-space: normal; max-width: 44ch; font-weight: 400; background: none; }
+      th.feat.sub { color: var(--text-secondary); padding-left: 22px; position: relative; }
+      th.feat.sub::before { content: '↳'; position: absolute; left: 8px; color: var(--text-muted); }
       td.note { color: var(--text-secondary); font-size: 0.83rem; white-space: normal; min-width: 22ch; }
-      table.cov tbody tr:hover td { background: rgba(163, 113, 247, 0.05); }
+      table.cov tbody tr:hover td, table.cov tbody tr:hover th { background: rgba(163, 113, 247, 0.05); }
 
       .cell { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 7px;
               font-family: 'Courier New', Consolas, monospace; font-weight: 700; font-size: 0.95rem; }
+
+      /* The glyph in a status cell is a picture of the state, not the state: a
+         screen reader used to read this grid as "!", "-", "✕". The real word
+         rides along in here, out of sight and out of the layout. */
+      .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+                 overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
       .st-ok .cell { background: rgba(63, 185, 80, 0.14); color: var(--cov-ok); }
       .st-warn .cell { background: rgba(210, 153, 34, 0.16); color: var(--cov-warn); }
       .st-no .cell { background: rgba(248, 81, 73, 0.15); color: var(--cov-no); }
@@ -87,10 +97,10 @@ interface Hole {
     <p class="snap">snapshot {{ snapshot }} · CI re-proves install → grid → multicluster → reverse path → takeover → crash-recovery on every push, on 3 OSes × 3 cluster families (compose, Swarm, Kubernetes); rows noted <em>bench</em> are runtime-proven locally, not yet in CI</p>
 
     <div class="legend">
-      <span><i class="dot d-ok">✓</i> works (proven at runtime)</span>
-      <span><i class="dot d-warn">!</i> partial - not yet e2e-validated</span>
-      <span><i class="dot d-no">✕</i> not yet</span>
-      <span><i class="dot d-na">-</i> n/a by design</span>
+      <span><i class="dot d-ok" aria-hidden="true">✓</i> works (proven at runtime)</span>
+      <span><i class="dot d-warn" aria-hidden="true">!</i> partial - not yet e2e-validated</span>
+      <span><i class="dot d-no" aria-hidden="true">✕</i> not yet</span>
+      <span><i class="dot d-na" aria-hidden="true">-</i> n/a by design</span>
     </div>
 
     @for (sec of sections; track sec.title) {
@@ -100,24 +110,24 @@ interface Hole {
           <table class="cov">
             <thead>
               @if (sec.flat) {
-                <tr><th>Item</th><th class="c">Support</th><th>Notes</th></tr>
+                <tr><th scope="col">Item</th><th scope="col" class="c">Support</th><th scope="col">Notes</th></tr>
               } @else {
                 <tr>
-                  <th>Feature</th>
-                  @for (o of os; track o) { <th class="c">{{ o }}</th> }
-                  <th>Notes</th>
+                  <th scope="col">Feature</th>
+                  @for (o of os; track o) { <th scope="col" class="c">{{ o }}</th> }
+                  <th scope="col">Notes</th>
                 </tr>
               }
             </thead>
             <tbody>
               @for (r of sec.rows; track r.feat) {
                 <tr>
-                  <td class="feat" [class.sub]="r.sub" [innerHTML]="r.feat"></td>
+                  <th scope="row" class="feat" [class.sub]="r.sub" [innerHTML]="r.feat"></th>
                   @if (sec.flat) {
-                    <td class="c st-{{ r.st }}"><span class="cell">{{ glyph(r.st!) }}</span></td>
+                    <td class="c st-{{ r.st }}"><span class="cell" aria-hidden="true">{{ glyph(r.st!) }}</span><span class="sr-only">{{ label(r.st!) }}</span></td>
                   } @else {
                     @for (s of r.os!; track $index) {
-                      <td class="c st-{{ s }}"><span class="cell">{{ glyph(s) }}</span></td>
+                      <td class="c st-{{ s }}"><span class="cell" aria-hidden="true">{{ glyph(s) }}</span><span class="sr-only">{{ label(s) }}</span></td>
                     }
                   }
                   <td class="note" [innerHTML]="r.note || ''"></td>
@@ -134,7 +144,8 @@ interface Hole {
     <section class="cov">
       <h3 class="s-title">What is not proven yet</h3>
       <p class="lead">
-        Two things the grid above cannot claim. Both are marked <i class="dot d-warn">!</i> in it,
+        Two things the grid above cannot claim. Both are marked
+        <i class="dot d-warn" role="img" aria-label="partial">!</i> in it,
         and neither is a gap in what plug does - they are limits of what has been <em>demonstrated</em>.
       </p>
       <div class="holes">
@@ -165,6 +176,15 @@ export class CoverageComponent {
 
   protected glyph(s: St): string {
     return { ok: '✓', warn: '!', no: '✕', na: '-' }[s];
+  }
+
+  // The same four states in words. The glyph is aria-hidden and this rides
+  // beside it in a visually hidden span, so each of the ~150 status cells has a
+  // name; scope="col"/"row" supply the OS and the feature around it. The
+  // wording matches the legend, which is fifty lines above and, being a
+  // separate block, tells a screen-reader user nothing about a given cell.
+  protected label(s: St): string {
+    return { ok: 'works', warn: 'partial', no: 'not yet', na: 'not applicable' }[s];
   }
 
   protected readonly holes: Hole[] = [

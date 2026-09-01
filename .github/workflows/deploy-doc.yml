@@ -8,9 +8,12 @@ on:
     paths:
       - 'docs/**'
       - '.github/workflows/deploy-doc.yml'
-  # A release changes no docs/** file, so redeploy on it too — that regenerates
-  # assets/version.json (the pinned image tag shown in the deploy snippets) from
-  # the new tag.
+  # A release changes no docs/** file, so redeploy on it too: that is what repins
+  # the image tag inside the manifests the site serves, so the snippet a reader
+  # copies names the version that was just published rather than the one before
+  # it. It used to be described as regenerating assets/version.json, a file that
+  # was fetched by nothing and has been removed; the repinning happens at build
+  # time, in gen-version.mjs, and always did.
   release:
     types: [published]
   workflow_dispatch:

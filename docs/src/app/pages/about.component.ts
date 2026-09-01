@@ -12,6 +12,9 @@ import { MatIconModule } from '@angular/material/icon';
         margin: 22px 0 6px;
         overflow-x: auto;
       }
+      .diagram picture {
+        display: block;
+      }
       .diagram img {
         display: block;
         width: 100%;
@@ -190,7 +193,23 @@ import { MatIconModule } from '@angular/material/icon';
     <app-code lang="text">plug -s my-app:8080:3000 npm run start:dev</app-code>
 
     <div class="diagram">
-      <img src="assets/about-diagram.svg" alt="plug in two animated rounds: the browser's GET data is served by the deployed service1, then plug parks it and the same request is served by your machine - which also queries postgres by name." />
+      <!--
+        The SVG animates 18 SMIL tracks on a 16s loop, forever. It is an <img>,
+        so neither this component's CSS nor a <style> inside the file reaches
+        it, and SMIL has no CSS off switch anyway: prefers-reduced-motion had
+        no way to be honoured here.
+
+        <picture> is the way in. The deploy pipeline already renders a still
+        frame of the same diagram (deploy-doc.yml: .frames/f180.png ->
+        media/about-diagram-hero.png, served at /plug/media/), so a reader who
+        asked for less motion gets that one image and never downloads the
+        animated file. width/height are the SVG's own 900x511, so the caption
+        and everything below stop jumping while it loads.
+      -->
+      <picture>
+        <source media="(prefers-reduced-motion: reduce)" srcset="media/about-diagram-hero.png" />
+        <img src="assets/about-diagram.svg" width="900" height="511" (error)="stillMissing($event)" alt="plug in two animated rounds: the browser's GET data is served by the deployed service1, then plug parks it and the same request is served by your machine - which also queries postgres by name." />
+      </picture>
     </div>
     <p class="cap">
       One SSH tunnel carries both directions: your process reaches the cluster by name, and the
@@ -268,7 +287,7 @@ import { MatIconModule } from '@angular/material/icon';
     <div class="cmp">
       <table>
         <thead>
-          <tr><th></th><th>plug</th><th>mirrord</th><th>Telepresence</th></tr>
+          <tr><th></th><th scope="col">plug</th><th scope="col">mirrord</th><th scope="col">Telepresence</th></tr>
         </thead>
         <tbody>
           <tr><td>Targets</td><td>Docker · Compose · Swarm · Kubernetes</td><td>Kubernetes</td><td>Kubernetes / OpenShift</td></tr>
@@ -297,4 +316,19 @@ import { MatIconModule } from '@angular/material/icon';
     </p>
   `,
 })
-export class AboutComponent {}
+export class AboutComponent {
+  // The still frame is a DEPLOY artifact: deploy-doc.yml renders it after the
+  // Angular build, so it exists on Pages and nowhere else - not in `ng serve`,
+  // not in a local `npm run build`. A <picture> that picked a missing <source>
+  // shows a broken image and does NOT fall back on its own. Drop the source and
+  // reload the <img>, which then resolves to the animated SVG. It runs at most
+  // once (no source left to remove afterwards), and it also covers the day the
+  // render step fails in CI.
+  protected stillMissing(e: Event): void {
+    const img = e.target as HTMLImageElement;
+    const source = img.parentElement?.querySelector('source');
+    if (!source) return;
+    source.remove();
+    img.src = 'assets/about-diagram.svg';
+  }
+}

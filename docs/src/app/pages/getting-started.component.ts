@@ -2,57 +2,10 @@ import { Component } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { CodeComponent } from '../code/code.component';
 import { FileComponent } from '../file/file.component';
-import { MatIconModule } from '@angular/material/icon';
 
 @Component({
   selector: 'app-getting-started',
-  imports: [CodeComponent, FileComponent, RouterLink, MatIconModule],
-  styles: [
-    `
-      .features {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-        gap: 12px;
-        margin: 0 0 28px 0;
-      }
-      .feature-card {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-        padding: 14px 16px;
-        background-color: var(--bg-secondary);
-        border: 1px solid var(--border-color);
-        border-radius: 8px;
-        text-decoration: none;
-        transition: all 0.15s;
-      }
-      .feature-card:hover {
-        border-color: var(--accent-purple);
-        background-color: rgba(163, 113, 247, 0.1);
-        text-decoration: none;
-        transform: translateY(-1px);
-      }
-      .feature-icon {
-        font-size: 26px;
-        width: 26px;
-        height: 26px;
-        color: var(--accent-purple);
-      }
-      .feature-title {
-        font-weight: 600;
-        color: var(--text-primary);
-        font-size: 0.95rem;
-      }
-      .feature-desc {
-        color: var(--text-secondary);
-        font-size: 0.85rem;
-        line-height: 1.45;
-      }
-      .feature-desc code {
-        font-size: 0.85em;
-      }
-    `,
-  ],
+  imports: [CodeComponent, FileComponent, RouterLink],
   template: `
     <h2>Getting started</h2>
 
@@ -188,7 +141,6 @@ plug -s e2e:8080:PORT npm run serve -- --port=&#123;PORT&#125;</app-code>
       Deployment's container image, and a plain container - which cannot recreate itself - pulls
       the new image and hands you the one command that does.
     </p>
-    <p>
     <p>
       <code>plug update</code> follows the tag the deployment already carries. To move a cluster to a
       <strong>different</strong> one, name it: <code>plug -p neo update tag</code> takes the newest

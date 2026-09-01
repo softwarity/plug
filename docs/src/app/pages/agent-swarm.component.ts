@@ -52,7 +52,7 @@ docker stack deploy -c plug-stack.yml plug</app-code>
     <h3>Image &amp; tags</h3>
     <table>
       <thead>
-        <tr><th>Tag</th><th>Meaning</th></tr>
+        <tr><th scope="col">Tag</th><th scope="col">Meaning</th></tr>
       </thead>
       <tbody>
         <tr><td><code>latest</code></td><td>Last build of <code>main</code></td></tr>

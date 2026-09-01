@@ -207,7 +207,7 @@ import { RouterLink } from '@angular/router';
     <p>plug stands on the shoulders of these projects - thank you:</p>
     <table>
       <thead>
-        <tr><th>Dependency</th><th>Role</th><th>License</th></tr>
+        <tr><th scope="col">Dependency</th><th scope="col">Role</th><th scope="col">License</th></tr>
       </thead>
       <tbody>
         <tr><td><a href="https://pkg.go.dev/golang.org/x/crypto/ssh" target="_blank" rel="noopener">golang.org/x/crypto/ssh</a></td><td>The transport, on both ends: the CLI's in-process client, and the agent's server doing the <code>direct-tcpip</code> dials and the remote forwards</td><td>BSD</td></tr>

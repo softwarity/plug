@@ -129,9 +129,15 @@
   }
 }
 
+// The description now lives INSIDE .card-header, so that no part of the page
+// sits outside a landmark (see app.component.html). The header is a 12px-gap
+// flex column with a 24px bottom margin, and both used to be 24px of plain
+// margin around this paragraph: give back the 12 the gap does not cover, and
+// drop the bottom margin the header's own already provides. Same pixels as
+// before, one landmark more.
 .description {
   color: var(--text-secondary);
-  margin: 0 0 24px 0;
+  margin: 12px 0 0 0;
   padding-bottom: 24px;
   border-bottom: 1px solid var(--border-color);
   line-height: 1.6;

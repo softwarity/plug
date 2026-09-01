@@ -2,13 +2,16 @@ import { ApplicationConfig } from '@angular/core';
 import { provideRouter, withHashLocation } from '@angular/router';
 import { routes } from './app.routes';
 
-// VersionService is NOT an app initializer any more.
+// VersionService is gone, and with it assets/version.json.
 //
-// It was awaited before first render so the deploy snippets could show the
-// resolved release tag - except no template ever read the signal it fills, so
-// every visitor waited on a fetch (up to its 2s timeout) for a value nothing
-// displayed. The service now loads itself in the background: whoever wires
-// `versions.tag()` into a snippet gets it, and nobody waits for it meanwhile.
+// It fetched the release tag at runtime so the deploy snippets could show a
+// pinned image instead of `:latest`. That job was already done, at build time
+// and better: scripts/gen-version.mjs rewrites the tag INTO the manifests it
+// copies to src/assets, and <app-file> serves those - so the snippet a reader
+// copies is pinned, and the file they download is the same one. The service
+// filled a signal no template ever read; injected nowhere, `providedIn: 'root'`
+// meant it was never even constructed. Whoever needs the tag in a template
+// again should read it from the pinned manifests, not fetch it twice.
 export const appConfig: ApplicationConfig = {
   providers: [provideRouter(routes, withHashLocation())],
 };

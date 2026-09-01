@@ -42,7 +42,7 @@ import { CodeComponent } from '../code/code.component';
     </p>
     <table>
       <thead>
-        <tr><th>Warning</th><th>What happened</th></tr>
+        <tr><th scope="col">Warning</th><th scope="col">What happened</th></tr>
       </thead>
       <tbody>
         <tr>
@@ -70,7 +70,7 @@ import { CodeComponent } from '../code/code.component';
     </p>
     <table>
       <thead>
-        <tr><th>Controller</th><th>What to look for</th></tr>
+        <tr><th scope="col">Controller</th><th scope="col">What to look for</th></tr>
       </thead>
       <tbody>
         <tr><td>Argo CD</td><td><code>argocd.argoproj.io/tracking-id</code> (annotation) or
