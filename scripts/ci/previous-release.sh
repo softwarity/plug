@@ -29,8 +29,16 @@ api="${PLUG_HUB_API:-https://hub.docker.com/v2/repositories}"
 releases=""
 page=1
 while [ "$page" -le 25 ]; do
-  body="$(curl -fsS --max-time 20 "${api}/${repo}/tags?page_size=100&page=${page}" 2>/dev/null)" || {
-    echo "cannot list the tags of $repo (page $page): is the registry reachable?" >&2
+  # Retried, because this is anonymous Docker Hub from a GitHub runner and six
+  # clusters ask at the same moment. A single throttled answer here used to take
+  # a whole cluster down, and with it the three legs waiting on that cluster,
+  # under a message about the registry that nobody could act on.
+  body="$(curl -fsS --max-time 20 --retry 4 --retry-all-errors --retry-delay 3 \
+            "${api}/${repo}/tags?page_size=100&page=${page}" 2>/dev/null)" || {
+    echo "cannot list the tags of $repo (page $page) after 4 attempts." >&2
+    echo "This cluster cannot start without it, and the three legs waiting on the cluster" >&2
+    echo "will report that the cluster never became reachable. The cause is here, not there:" >&2
+    echo "anonymous Docker Hub throttling, or the registry being down." >&2
     exit 1
   }
   # x.y.z only: x.y and x are moving aliases, and a stream tag (latest, main, a
@@ -40,6 +48,18 @@ while [ "$page" -le 25 ]; do
     | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$')"
   [ -n "$found" ] && releases="$releases$found
 "
+  # Stop on the API's own end-of-list marker. Asking for one page too many is a
+  # 404, which curl -f turns into the "registry unreachable" exit above: a paging
+  # detail would read as an outage and take the six clusters down with it.
+  # Matched with sed, not `grep -q`, whose early exit makes `tr` die of SIGPIPE
+  # and the pipeline return 141 under `pipefail` even on a match.
+  # Two releases is the whole question, so stop at two. Draining the list read
+  # every page whether or not the answer was already in hand: page 1 carries both
+  # releases today, so that was one extra anonymous request per cluster, six
+  # clusters at once, for nothing. Paging further is the fallback for the day the
+  # sha-* tags push the releases off the first page, not the normal path.
+  enough="$(printf '%s' "$releases" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -u | grep -c . || true)"
+  [ "$enough" -ge 2 ] && break
   # Stop on the API's own end-of-list marker. Asking for one page too many is a
   # 404, which curl -f turns into the "registry unreachable" exit above: a paging
   # detail would read as an outage and take the six clusters down with it.
