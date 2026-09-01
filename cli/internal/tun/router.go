@@ -21,6 +21,9 @@ func multiDial(ct *ClusterTransports) dialFunc {
 	}
 	return func(srcPort uint16) (Dialer, string, bool) {
 		if d, key, ok := ct.sole(); ok {
+			if !soleAllows(srcPort, r.pidForConn, uidOf, clientUIDs(key)) {
+				return nil, "", false
+			}
 			return d, key, true // one cluster → transparent, like constDial
 		}
 		key, ok := r.route(srcPort)
@@ -118,4 +121,43 @@ func (c *ClusterTransports) sole() (Dialer, string, bool) {
 // single-cluster StartDatapath is unchanged.
 func StartGlobalDatapath(ct *ClusterTransports, logf func(string, ...any)) (*Datapath, error) {
 	return startDatapathDF(multiDial(ct), ct.All, logf)
+}
+
+// soleAllows decides whether a flow may take the single-cluster shortcut.
+//
+// The shortcut exists because with one cluster there is nothing to disambiguate,
+// and it deliberately skips the ancestry walk so a detached child (setsid, a
+// daemonised process) is not refused. But the datapath is MACHINE-WIDE: on macOS
+// the daemon repoints the primary network service's resolver, so every process on
+// the box, under any account, resolves a cluster name and gets a fake IP that
+// connects. With two clusters up the walk already refuses what it cannot
+// attribute. With one, "no ambiguity" had quietly become "no question asked", and
+// a second local account reached another user's databases by typing their name.
+//
+// So one question, and only one: does this flow belong to an account that has a
+// live client on this cluster. It REFUSES only when it has positively established
+// that the answer is no. An unreadable socket table, a process that vanished
+// between accept and lookup, a client too old to record its owner: all behave
+// exactly as they did before this existed. A single-cluster session is plug's
+// main path, and a datapath that starts refusing on a bad second would be worse
+// than the leak it closes.
+//
+// It does not pretend to stop code running AS the user. That code can run plug
+// itself, and no check here changes that.
+func soleAllows(srcPort uint16, pidForConn func(uint16) (int, bool), uidOf func(int) (int, bool), owners map[int]bool) bool {
+	if len(owners) == 0 {
+		return true // nobody recorded an owner: unknown, which is not the same as nobody
+	}
+	pid, ok := pidForConn(srcPort)
+	if !ok {
+		return true
+	}
+	uid, ok := uidOf(pid)
+	if !ok {
+		return true
+	}
+	if uid == 0 {
+		return true // root already owns the machine; refusing it buys nothing and can break the daemon's own probes
+	}
+	return owners[uid]
 }

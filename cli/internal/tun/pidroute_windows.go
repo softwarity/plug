@@ -105,3 +105,11 @@ func pidForLocalPort(srcPort uint16) (int, bool) {
 	}
 	return 0, false
 }
+
+// uidOf has no Windows answer yet: accounts are SIDs, not integers, and the
+// token of another session's process is not readable the way `ps -o uid=` is.
+// Reporting "unknown" keeps the single-cluster shortcut behaving exactly as it
+// did, which is the correct default here: this file's job is to not regress
+// Windows while the macOS leak is closed. The Windows equivalent is its own
+// piece of work, tracked with the ProgramData finding.
+func uidOf(int) (int, bool) { return 0, false }

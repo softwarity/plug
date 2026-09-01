@@ -152,6 +152,26 @@ func guardUserPath(path string) {
 	if !ok {
 		return
 	}
+	guardPathOwnedBy(path, uid)
+}
+
+// guardFatal is how the write guards give up. A var, and only so a test can
+// stand in for it: the real fatal exits the process, so the refusals below
+// could not otherwise be observed from inside a test at all, and for a long
+// time none of them was. Never reassigned outside tests.
+var guardFatal = fatal
+
+// guardPathOwnedBy is guardUserPath's decision, with the uid it must belong to
+// passed in rather than read from the process.
+//
+// Split out for one reason: a test process is unprivileged, so guardUserPath
+// returns at resolveDropTarget before deciding anything, and every refusal
+// below it was dead as far as the suite was concerned. Turning the whole guard
+// into an immediate return left the cli suite green. With the uid as an
+// argument, a normal user can stand in a uid that is not theirs and watch the
+// guard refuse their own files, which is the same comparison the setuid
+// launcher makes for real.
+func guardPathOwnedBy(path string, uid int) {
 	// Walk up to the deepest component that exists: writing creates the rest,
 	// and the ancestor's ownership is what decides whether we may.
 	p := path
@@ -160,7 +180,7 @@ func guardUserPath(path string) {
 		if err == nil {
 			st, okStat := fi.Sys().(*syscall.Stat_t)
 			if okStat && int(st.Uid) != uid {
-				fatal("refusing to write %s as root: it resolves to %s, owned by uid %d, not by you (uid %d).\n"+
+				guardFatal("refusing to write %s as root: it resolves to %s, owned by uid %d, not by you (uid %d).\n"+
 					"      plug runs setuid so it never has to ask for a password again — it will not use that\n"+
 					"      privilege to touch a file outside your own tree. Check $HOME and any symlink under it.",
 					path, p, st.Uid, uid)

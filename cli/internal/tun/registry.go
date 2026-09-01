@@ -59,10 +59,59 @@ func RegisterClient(key string, pid int, keyFile string) func() {
 	if keyFile != "" {
 		_ = os.WriteFile(marker+keyFileSuffix, []byte(keyFile), 0o644)
 	}
+	// And WHO this client is, in its own sidecar for the same reason. The daemon
+	// is machine-wide: on macOS it repoints the primary network service's
+	// resolver, so any process on the box, under any account, can resolve a
+	// cluster name and connect to the fake IP that comes back. With two clusters
+	// up, the ancestry walk already refuses a flow it cannot attribute. With ONE,
+	// the router takes a shortcut and hands the tunnel to whoever asked, which is
+	// how a second local account reached another user's cluster services by
+	// typing a name.
+	//
+	// os.Getuid, not Geteuid: the launcher is setuid root on macOS, so the
+	// effective uid is 0 and the real one is the person whose cluster this is,
+	// which is also the uid the dropped child's flows will carry.
+	_ = os.WriteFile(marker+uidFileSuffix, []byte(strconv.Itoa(os.Getuid())), 0o644)
 	return func() {
 		_ = os.Remove(marker)
 		_ = os.Remove(marker + keyFileSuffix)
+		_ = os.Remove(marker + uidFileSuffix)
 	}
+}
+
+// uidFileSuffix names the owner sidecar, like keyFileSuffix and for the same
+// reason: not a valid PID, so every existing scan that parses an entry name as a
+// number skips it without being taught to, and a daemon that predates this code
+// never sees it.
+const uidFileSuffix = ".uid"
+
+// clientUIDs is the set of accounts with a live client on this cluster. Empty
+// when nothing registered one, which is what a client older than this code
+// produces: callers must read that as "unknown", never as "nobody".
+func clientUIDs(key string) map[int]bool {
+	out := map[int]bool{}
+	entries, err := os.ReadDir(clientsDir(key))
+	if err != nil {
+		return out
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasSuffix(name, uidFileSuffix) {
+			continue
+		}
+		pid, err := strconv.Atoi(strings.TrimSuffix(name, uidFileSuffix))
+		if err != nil || !processAlive(pid) {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(clientsDir(key), name))
+		if err != nil {
+			continue
+		}
+		if uid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil {
+			out[uid] = true
+		}
+	}
+	return out
 }
 
 // keyFileSuffix names the sidecar. Not a valid PID, so every existing scan that
@@ -136,6 +185,7 @@ func LiveClients(key string) int {
 		} else {
 			_ = os.Remove(filepath.Join(clientsDir(key), e.Name()))
 			_ = os.Remove(filepath.Join(clientsDir(key), e.Name()+keyFileSuffix))
+			_ = os.Remove(filepath.Join(clientsDir(key), e.Name()+uidFileSuffix))
 		}
 	}
 	return n

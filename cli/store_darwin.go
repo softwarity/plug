@@ -41,7 +41,26 @@ func storeIsSystem() bool { return true }
 // A var, and only so a test can stand in for it: the check itself is fatal, so
 // nothing can assert what ensureVersion does around it without a seam. Never
 // reassigned outside tests.
-var guardStorePath = func(path string) {
+var guardStorePath = func(path string) { guardStoreOwnedBy(path, 0, "") }
+
+// guardStoreOwnedBy is the check itself, with the owner it demands passed in
+// instead of root being written into the comparison.
+//
+// Split out for one reason: no test running as a normal user can create a
+// root-owned directory, so with 0 baked in the two refusals could only ever be
+// pointed at the host machine's own /var/db, which is to say never exercised at
+// all. That is how they stayed at zero hits while the test file claimed they
+// were asserted. With the owner as an argument the whole walk runs on a
+// t.TempDir(), where a test can hand it a directory that is group-writable,
+// world-writable or owned by a stranger and watch it refuse each one. The
+// refusal still says "not root", because root is the only owner the one
+// production caller ever asks for.
+// stopAt bounds the walk, and exists for one reason: the walk goes to the
+// filesystem root, so no fixture under a temp directory can ever have a coherent
+// chain of ancestors, and a guard that decides what root executes must be
+// testable on something other than the machine it happens to run on. Production
+// passes "" and walks the whole way.
+func guardStoreOwnedBy(path string, owner uint32, stopAt string) {
 	for p := path; ; p = filepath.Dir(p) {
 		fi, err := os.Stat(p)
 		if err == nil {
@@ -49,15 +68,23 @@ var guardStorePath = func(path string) {
 			if !ok {
 				return
 			}
-			if st.Uid != 0 {
-				fatal(storeOwnershipMsg(p, fmt.Sprintf("it is owned by uid %d, not root", st.Uid)))
+			if st.Uid != owner {
+				guardFatal("%s", storeOwnershipMsg(p, fmt.Sprintf("it is owned by uid %d, not root", st.Uid)))
 			}
 			if fi.Mode().Perm()&0o022 != 0 {
-				fatal(storeOwnershipMsg(p, fmt.Sprintf("it is writable by group or others (%v)", fi.Mode().Perm())))
+				guardFatal("%s", storeOwnershipMsg(p, fmt.Sprintf("it is writable by group or others (%v)", fi.Mode().Perm())))
 			}
-			return // the deepest existing component is sound; what we create below it is ours
+			// EVERY existing component, all the way up, not just the deepest one.
+			// Stopping there rested on "this component is sound, so what we put
+			// under it is ours", and that only holds if its ANCESTORS are sound
+			// too. With /var/db/plug world-writable and /var/db/plug/versions
+			// underneath it root-owned and tidy, the old walk looked at versions,
+			// approved, and never looked up. Anyone able to write the parent could
+			// then move that directory aside and put their own in its place, and
+			// what root executes on the next launch comes out of it. The extra
+			// cost is four stat calls on a path five components deep.
 		}
-		if filepath.Dir(p) == p {
+		if p == stopAt || filepath.Dir(p) == p {
 			return
 		}
 	}

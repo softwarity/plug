@@ -211,8 +211,25 @@ func TestAClientWithNoKeyWritesTheOldShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 {
-		t.Errorf("wrote %d files, want just the marker", len(entries))
+	// Not a file count. What protects an ALREADY RUNNING daemon, one that may
+	// predate any of these sidecars, is that everything beside the marker carries
+	// a name it does not read as a pid: its scans do Atoi on the entry name and
+	// skip what fails. Counting files said "one" and meant that, badly, and broke
+	// the day a second sidecar was legitimately added. This says the thing
+	// itself, so a new sidecar passes and a sidecar named like a pid does not.
+	me := strconv.Itoa(os.Getpid())
+	sawMarker := false
+	for _, e := range entries {
+		if e.Name() == me {
+			sawMarker = true
+			continue
+		}
+		if _, err := strconv.Atoi(e.Name()); err == nil {
+			t.Errorf("%q parses as a pid, so an older daemon would take it for another client's marker", e.Name())
+		}
+	}
+	if !sawMarker {
+		t.Errorf("no marker named %q among %d entries", me, len(entries))
 	}
 	if got := ClusterKeyFile(key); got != "" {
 		t.Errorf("ClusterKeyFile = %q, want empty", got)

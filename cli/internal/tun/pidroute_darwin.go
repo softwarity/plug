@@ -76,3 +76,18 @@ func pidForLocalPort(srcPort uint16) (int, bool) {
 	}
 	return 0, false
 }
+
+// uidOf returns the account a process runs under, via `ps -o uid=`. Same
+// cgo-free shape as ppidOf, and asked only on the single-cluster shortcut, where
+// the ancestry walk does not run at all.
+func uidOf(pid int) (int, bool) {
+	out, err := exec.Command(HelperPath("ps"), "-o", "uid=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return 0, false
+	}
+	uid, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return 0, false
+	}
+	return uid, true
+}
