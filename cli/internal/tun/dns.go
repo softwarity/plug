@@ -310,8 +310,16 @@ func answerDNS(q []byte, tab *faketab, upstream *upstreamDNS, check nameChecker)
 		if !relayable(name, tab) {
 			break
 		}
-		if reply := upstream.relay(q); reply != nil {
-			return capReply(reply, q, qend)
+		// Guarded, because this function answers the whole machine's resolver on
+		// macOS and the parameter is a pointer nothing declares as mandatory. A
+		// caller wired without an upstream would have taken the datapath down on
+		// the first query for a name it does not own, which is to say on the
+		// first query at all. SERVFAIL is the honest answer: there is no upstream
+		// to ask.
+		if upstream != nil {
+			if reply := upstream.relay(q); reply != nil {
+				return capReply(reply, q, qend)
+			}
 		}
 		rcode = 2 // SERVFAIL: the upstream said nothing — say that, don't invent an empty answer
 	case strings.EqualFold(name, "localhost") || strings.HasSuffix(strings.ToLower(name), ".localhost"):
@@ -340,6 +348,13 @@ func answerDNS(q []byte, tab *faketab, upstream *upstreamDNS, check nameChecker)
 			rcode = 3 // NXDOMAIN — this instance's /24 is exhausted
 		}
 	default: // dotted → resolve for real via the saved upstream
+		if upstream == nil {
+			// The second of the two places this pointer is followed. Guarded for
+			// the same reason: nothing declares it mandatory, and this function
+			// answers every query the machine's resolver forwards on macOS.
+			rcode = 2 // SERVFAIL: no upstream to resolve it with
+			break
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 		defer cancel()
 		if ips, e := upstream.resolver.LookupIP(ctx, "ip4", name); e == nil && len(ips) > 0 {
