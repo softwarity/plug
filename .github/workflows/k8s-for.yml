@@ -122,6 +122,30 @@ jobs:
           oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
           tags: tag:ci
           hostname: plug-k8s-${{ inputs.corr }}
+      # Authenticated, because anonymous Docker Hub pulls from a GitHub runner
+      # share one heavily rate-limited quota with every other project on that IP.
+      # A compose cluster died on `rabbitmq Error unauthorized: authentication
+      # required` while pulling a service image, and the four legs waiting on that
+      # cluster then spent thirty minutes reaching their own timeout to report
+      # that the cluster never came up: a message pointing at this repository for
+      # something that happened at the registry. The credentials already exist and
+      # were simply not being used here.
+      #
+      # Skipped when the secret is absent, which is a fork: the pull is then
+      # anonymous exactly as before, and no worse.
+      - name: Sign in to Docker Hub for the service images
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_RW: ${{ secrets.DOCKERHUB_RW }}
+        run: |
+          # Guarded here and not in an `if:`, because a step condition cannot see
+          # that step's own env block. Absent credentials mean a fork: the pull
+          # stays anonymous, exactly as before, and no worse.
+          if [ -z "${DOCKERHUB_USERNAME:-}" ]; then
+            echo "no Docker Hub credentials on this runner: service image pulls stay anonymous"
+            exit 0
+          fi
+          printf '%s' "$DOCKERHUB_RW" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
       - name: Serve the cluster (idle until cancelled)
         env:
           # idle-until-caller-done.sh watches the CALLER run with gh; without a

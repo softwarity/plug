@@ -340,6 +340,19 @@ job timeout, twenty-five minutes later, with nothing in the log naming what was
 being waited for. The bounded wait the rest of the file already used now covers
 them too.
 
+
+### The e2e clusters pulled their service images anonymously
+
+A compose cluster died on `rabbitmq Error unauthorized: authentication required`
+while pulling one of the ordinary service images the mesh is built from. That is
+Docker Hub's anonymous rate limit, shared by every project running on the same
+runner address. The four legs waiting on that cluster then spent thirty minutes
+reaching their own timeout to report that the cluster never came up: a message
+pointing at this repository for something that happened at the registry.
+
+The credentials already existed and were simply not used there. Absent, on a
+fork, the pull stays anonymous exactly as before.
+
 ## 2.13.0
 
 ### A copy of the relay loop had quietly lost a branch
