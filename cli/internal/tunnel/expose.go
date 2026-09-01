@@ -50,13 +50,26 @@ func (s ExposeSpec) String() string {
 
 // exposeRearmEvery paces re-bind attempts after a reconnect: the agent's sshd
 // may hold the dead connection's bind until its keepalive gives up on it
-// (ClientAliveInterval×CountMax server-side, ~90s worst case).
-const exposeRearmEvery = 5 * time.Second
+// (ClientAliveInterval×CountMax server-side, ~90s worst case). A var, not a
+// const, so a test can drive hundreds of re-arm rounds without spending five
+// seconds apiece (same trick as exposeVerifyBudget in the caller).
+var exposeRearmEvery = 5 * time.Second
+
+// exposeTransport is the slice of *Transport an armed mapping uses: an
+// interface, not the concrete type, so the accept / re-arm / verify loops can
+// be driven without a live sshd (same reason as pinger in transport.go). The
+// whole reverse data path was untestable, and therefore untested, while this
+// was a *Transport.
+type exposeTransport interface {
+	reconnectFrom(stale *ssh.Client) (*ssh.Client, error)
+	DialClusterTimeout(addr string, d time.Duration) (net.Conn, error)
+	note(format string, a ...any)
+}
 
 // Exposed is one armed mapping. Verify checks the full path once; the
 // background goroutine keeps the mapping armed across transport reconnects.
 type Exposed struct {
-	t    *Transport
+	t    exposeTransport
 	spec ExposeSpec
 
 	// Self-test state: while `nonce` is non-nil, each accepted connection is
@@ -90,6 +103,12 @@ type Exposed struct {
 // swept. Safe to call at any time: a reconnect racing this write sees either
 // no hook (nothing to re-provision yet — the name is not even created) or the
 // complete one.
+//
+// The hook MUST NOT BLOCK. It is called from the accept loop, which has to stay
+// live to catch the nonce that Verify sends back through the cluster: a hook that
+// waits on anything stalls that loop and times out the very verification it
+// triggered. The only hook there has ever been is a non-blocking channel send.
+// Anything heavier belongs in a goroutine the hook starts itself.
 func (e *Exposed) OnRearm(hook func()) {
 	e.mu.Lock()
 	e.rearmHook = hook
@@ -130,7 +149,17 @@ func (e *Exposed) AgentPort() string {
 	return e.agentPort
 }
 
-func listenRemote(cl *ssh.Client, spec ExposeSpec) (net.Listener, string, error) {
+// remoteBinder is the slice of *ssh.Client listenRemote needs: an interface so
+// the "sshd allocated no usable port" degradation can be checked without an
+// sshd too old to have one.
+type remoteBinder interface {
+	Listen(n, addr string) (net.Listener, error)
+}
+
+// listenRemote asks sshd for an allocated port and hands back the listener
+// riding it. A var, like guardStorePath in the parent package, so a test can
+// put a listener it controls under serve/rearm.
+var listenRemote = func(cl remoteBinder, spec ExposeSpec) (net.Listener, string, error) {
 	ln, err := cl.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
 		return nil, "", fmt.Errorf("agent refused to open a forward for %s:%s: %w",
@@ -139,8 +168,16 @@ func listenRemote(cl *ssh.Client, spec ExposeSpec) (net.Listener, string, error)
 	_, port, err := net.SplitHostPort(ln.Addr().String())
 	if err != nil || port == "0" {
 		ln.Close()
-		return nil, "", fmt.Errorf("agent allocated no usable port for %s:%s (sshd too old for port 0?): %v",
-			spec.Name, spec.ClusterPort, err)
+		// Two different failures, and they used to share one message with a %v of
+		// an error that is nil in the second case: the reader was told the address
+		// was unparsable and then shown "<nil>" as the reason.
+		if err != nil {
+			return nil, "", fmt.Errorf("agent opened a forward for %s:%s but its address is unreadable: %w",
+				spec.Name, spec.ClusterPort, err)
+		}
+		return nil, "", fmt.Errorf("agent allocated no usable port for %s:%s: it answered port 0, "+
+			"which means its sshd does not implement dynamic allocation",
+			spec.Name, spec.ClusterPort)
 	}
 	return ln, port, nil
 }
@@ -164,9 +201,15 @@ func (e *Exposed) serve(ln net.Listener, cl *ssh.Client) {
 		}
 		// The sshd forward is re-bound ON A NEW ALLOCATED PORT; and if the agent
 		// restarted it GC'd the dynamic signpost too. Either way the signpost
-		// must be re-provisioned to relay to the new port, and re-verified. Run
-		// it in the background: the Accept loop above must be live to catch
-		// Verify's nonce.
+		// must be re-provisioned to relay to the new port, and re-verified.
+		//
+		// Called INLINE, and this comment used to claim the opposite: that it ran
+		// in the background so the Accept loop stayed live for Verify's nonce. The
+		// requirement is real, the background was not. It works because the only
+		// hook there has ever been is a non-blocking send, so the accept loop is
+		// never held. That requirement now lives on OnRearm, where whoever writes
+		// the next hook will read it, rather than in a comment here describing a
+		// goroutine that does not exist.
 		e.mu.Lock()
 		hook := e.rearmHook
 		e.mu.Unlock()

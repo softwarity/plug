@@ -4,6 +4,97 @@
 
 ---
 
+
+### A single cluster is no longer open to everyone on the machine
+
+plug's daemon is machine-wide. On macOS it repoints the primary network service's
+resolver, so every process on the box, under any account, resolves a cluster name
+and gets back a fake IP that connects. With two clusters up, the router already
+walks the connecting process's ancestry and refuses a flow it cannot attribute.
+With one, it took a shortcut: no ambiguity, so no question asked. A second local
+account could reach another user's databases by typing their name.
+
+The shortcut now asks one question, which account this flow belongs to, and
+refuses only when it has positively established that the answer is an account
+with no client on this cluster. An unreadable socket table, a process that
+vanished, a client too old to say who it belongs to: all behave exactly as they
+did before. A single-cluster session is the main path, and a datapath that starts
+refusing on a bad second would be worse than the leak it closes.
+
+It does not pretend to stop code running as you. That code can run plug itself.
+
+### Windows: the SYSTEM service will not open just any file as a key
+
+The service reads its cluster address, and the path of the key it dials with, out
+of a directory the installer deliberately makes writable by users. The guard that
+vets such a path on macOS and Linux was an empty function here, on the reasoning
+that Windows never inherits a root identity. True of the launcher, false of the
+service.
+
+A key must now be a regular file, which rules out a pipe or a device where
+opening is not reading, and it must not live under a system directory, which is
+the only case where the service's privilege buys an attacker something they could
+not do themselves. A user can still name a file inside another user's profile:
+closing that needs the service to open the key as the registering account, which
+is impersonation and a token it does not hold today. Narrowed, not closed, and
+said out loud in the code.
+
+### Two licences were missing from THIRD_PARTY_LICENSES.md
+
+The file says of itself that it is generated from the actual link graph. It was
+not: `golang.org/x/term` is linked into all three builds and
+`golang.zx2c4.com/wireguard/windows` into the Windows one, and neither was named.
+Both licences require their notice to travel with the binary form, and plug ships
+those binaries from the agent image and the install script. A test now asks the
+toolchain instead of trusting a reading.
+
+---
+
+
+### The core store was judged one directory too shallow
+
+macOS runs the cached core as root, so the directory holding it is checked before
+anything is executed out of it. That check stopped at the deepest component that
+already existed, reasoning that if this one is sound then what we create below it
+is ours. It only holds if the ancestors are sound too. A tidy root-owned
+`versions` sitting inside a world-writable parent passed, and whoever could write
+that parent could move the directory aside, put their own in its place, and have
+root execute what they left there.
+
+It now looks at every existing component up to the filesystem root. Four extra
+stat calls on a path five deep.
+
+Found while writing the tests for that guard, not by reading it: its refusal
+branches had never been taken by anything, so neutralising it entirely left the
+suite green. They are taken now, by twelve deliberate breakages that each turn a
+test red.
+
+
+### The reconnection nobody asks for was the one that said nothing
+
+A laptop wakes, a VPN blinks, the keepalive notices the connection is dead and
+replaces it. When the re-dial failed the user was told; when it worked, nothing
+was printed, so the last thing they had read was still that the agent was
+unreachable.
+
+The line hung off holding a stale connection to close, and the keepalive path
+never holds one: it closes and clears the dead client first, precisely so a
+failed re-dial does not leave the next tick pinging a zombie. So it announced
+every reconnection except the automatic ones. An exposing session was covered by
+a different message from elsewhere, which is probably why this lasted.
+
+### Two things the tests found that reading had not
+
+The forward that an agent opens is checked for a usable port, and when the check
+tripped on a port of zero the message ended in `<nil>`: it printed the error from
+a step that had succeeded. Two separate failures now say what they are.
+
+And a comment claimed the re-provisioning hook ran in the background so the
+accept loop stayed live for the verification nonce. The requirement is real, the
+background was not: it is called inline, and it works only because the one hook
+that exists is a non-blocking send. The requirement now sits on the function that
+registers a hook, where whoever writes the next one will read it.
+
 ## 2.13.0
 
 ### A copy of the relay loop had quietly lost a branch

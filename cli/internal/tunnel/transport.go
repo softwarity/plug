@@ -85,7 +85,11 @@ type Transport struct {
 	mu     sync.Mutex
 	client *ssh.Client
 	closed bool
-	done   chan struct{}
+	// connected remembers that a client was once live, which is what tells a
+	// RE-connection from the first one. The client field cannot answer it: the
+	// keepalive path clears it before re-dialling.
+	connected bool
+	done      chan struct{}
 
 	// resolveUnsupported remembers an agent that predates the `resolve` verb
 	// (it answered "unknown command") — asked once, then every later name
@@ -227,8 +231,19 @@ func (t *Transport) reconnectFrom(stale *ssh.Client) (*ssh.Client, error) {
 	}
 	if stale != nil {
 		stale.Close()
+	}
+	// Announced on the strength of having been connected BEFORE, not on holding a
+	// stale client to close. The keepalive path always arrives here with nil: it
+	// calls dropDead first, which closes the dead client and clears the field. So
+	// the one reconnect the user never asked for, the one after a laptop wakes or
+	// a VPN blinks, was the one that said nothing. They saw "agent unreachable"
+	// when the re-dial failed and silence when it worked, which reads like the
+	// outage never ended. A -s session was covered by a substitute line from
+	// socks_run.go, which is probably why this went unnoticed.
+	if t.connected {
 		t.note("agent connection re-established")
 	}
+	t.connected = true
 	t.client = nc
 	go t.checkAgentVersion()
 	return nc, nil
@@ -379,18 +394,28 @@ func (t *Transport) keepalive() {
 	}
 	tk := time.NewTicker(every)
 	defer tk.Stop()
+	t.keepaliveOn(tk.C, func(cl *ssh.Client) bool { return pingOK(cl, keepaliveTimeout) })
+}
+
+// keepaliveOn is the loop itself, with both of its clocks injected: where the
+// ticks come from, and what one ping costs. A test driving the real ones would
+// pay 15s per tick and 8s per hung reply, so the miss counting - the rule that
+// decides when a live session drops its connection and re-dials - could only be
+// exercised by waiting, which is how a flaky suite is born. Seam only: keepalive
+// passes the real ticker and the real pingOK, and nothing else calls this.
+func (t *Transport) keepaliveOn(tick <-chan time.Time, ping func(*ssh.Client) bool) {
 	misses := 0
 	for {
 		select {
 		case <-t.done:
 			return
-		case <-tk.C:
+		case <-tick:
 			cl := t.current()
 			if cl == nil {
 				misses = 0
 				continue
 			}
-			if pingOK(cl, keepaliveTimeout) {
+			if ping(cl) {
 				misses = 0
 				continue
 			}
