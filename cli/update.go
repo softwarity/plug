@@ -15,6 +15,7 @@ package main
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -406,6 +407,17 @@ func updateLauncher(cfg config, remote string) {
 		// whoever the caller pointed at. This is the difference between updating
 		// plug and installing somebody else's binary as root, permanently.
 		if serr := verifyCore(att, osArch, got); serr != nil {
+			// Too old to sign is not a reason to die here: the agent roll above
+			// SUCCEEDED, and the only thing left undone is following it locally.
+			// Killing the process would have thrown that away and reported failure
+			// for an update that landed. Say what cannot be done and why, and stop.
+			if errors.Is(serr, errUnsignedCore) {
+				info("the agent is now v%s, but this plug will not replace itself with what that\n"+
+					"      version serves: those binaries are unsigned, and replacing this binary means\n"+
+					"      granting the result setuid root. The cluster is updated; redeploy a signed\n"+
+					"      softwarity/plug image and run plug update again to follow it locally.", shortVersion(remote))
+				return
+			}
 			fatal("%v", serr)
 		}
 	}

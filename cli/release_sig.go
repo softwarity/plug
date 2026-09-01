@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	_ "embed"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -35,6 +36,16 @@ import (
 // The plural stays in the parser because it costs nothing and keeps a staged
 // rotation possible if it is ever wanted. Comments and blank lines are allowed.
 //
+// errUnsignedCore says the agent is simply too old to sign, which is a different
+// thing from a signature that does not check out, and the two deserve different
+// answers. An absent signature is age: refuse to INSTALL those bytes, but do not
+// take the process down over it, because whatever else the caller was doing may
+// well have succeeded. A signature that fails to verify is tampering, and there
+// is nothing to carry on with.
+var errUnsignedCore = errors.New("this agent is too old to sign what it serves, and plug will not run an\n" +
+	"      unsigned core with root privilege. Redeploy the softwarity/plug image on this\n" +
+	"      cluster; its agent must be recent enough to answer 'sig=' to the digest verb")
+
 //go:embed keys/release_ed25519.pub
 var releasePubKeysRaw string
 
@@ -106,9 +117,7 @@ func verifyCore(att coreAttestation, osArch, measured string) error {
 	// half has already been updated, and there the answer is to update the other
 	// half: plug is a developer tool, and redeploying its agent is one command.
 	if att.sig == "" {
-		return fmt.Errorf("this agent is too old to sign what it serves, and plug will not run an\n" +
-			"      unsigned core with root privilege. Redeploy the softwarity/plug image on this\n" +
-			"      cluster; its agent must be recent enough to answer 'sig=' to the digest verb")
+		return errUnsignedCore
 	}
 	keys, err := releasePubKeys()
 	if err != nil {

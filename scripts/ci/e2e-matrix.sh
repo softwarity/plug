@@ -1536,12 +1536,20 @@ fi
 # update-notify: the BACKGROUND check, end to end — the one thing the update
 # cells never covered.
 #
-# It runs inside the CORE, and the core is whatever the AGENT serves. Against
-# prev-agent-* that is the N-1 core, never this branch's — which is why this cell
-# was written twice and pulled twice: N-1 either had no check (2.7.3) or had a
-# broken one (2.9.0 asked `version` on the tunnel channel, where the verb does
-# not exist). Both are now behind us: the fix shipped in 2.9.2, so any N-1 from
-# 2.9.3 on carries it. The condition is checked here rather than assumed.
+# It runs inside the CORE. For most of this cell's life the core here was the N-1
+# one, since the core is whatever the AGENT serves, and that is why the cell was
+# written twice and pulled twice: N-1 either had no check (2.7.3) or had a broken
+# one (2.9.0 asked `version` on the tunnel channel, where the verb does not
+# exist).
+#
+# That is no longer what runs. plug refuses to execute a core carrying no release
+# signature, and every release before signing carries none, so against those the
+# launcher falls back to its own build and THIS branch's core is what performs the
+# check. The cell still measures the thing it is named for, end to end against a
+# real cluster whose agent is genuinely one release behind. It stops measuring N-1
+# specifically, which is a loss worth naming here rather than leaving the comment
+# above to claim something that stopped being true. It comes back on its own once
+# N-1 is itself a signed release.
 #
 # Shape imposed by the design: the check settles for 10s, then dials, asks the
 # agent `info` and queries the registry — so the session has to LAST. And its

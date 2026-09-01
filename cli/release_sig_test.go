@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -166,5 +167,30 @@ func TestABuildWithNoReleaseKeyRefusesEverything(t *testing.T) {
 	att := coreAttestation{sha256: aSum, sig: signed(priv, "darwin-arm64", aSum)}
 	if err := verifyCore(att, "darwin-arm64", aSum); err == nil {
 		t.Fatal("a plug built with no release key accepted a signature: it verifies nothing and says nothing")
+	}
+}
+
+// The two refusals must not be confused, because callers act on them
+// differently: an agent too old to sign lets plug carry on with what it can
+// still do, while a signature that does not verify stops everything. Collapsing
+// the second into the first would turn tampering into a warning somebody scrolls
+// past.
+func TestAgeAndTamperingAreDifferentRefusals(t *testing.T) {
+	_, restore := testKey(t)
+	defer restore()
+
+	if err := verifyCore(coreAttestation{sha256: aSum}, "darwin-arm64", aSum); !errors.Is(err, errUnsignedCore) {
+		t.Errorf("an agent that sent no signature is old, not hostile: %v", err)
+	}
+
+	_, attacker, _ := ed25519.GenerateKey(rand.Reader)
+	bad := coreAttestation{sha256: aSum, sig: signed(attacker, "darwin-arm64", aSum)}
+	if err := verifyCore(bad, "darwin-arm64", aSum); errors.Is(err, errUnsignedCore) {
+		t.Error("a signature from an unknown key was reported as a missing one: the caller would carry on")
+	}
+
+	junk := coreAttestation{sha256: aSum, sig: "not base64 !!"}
+	if err := verifyCore(junk, "darwin-arm64", aSum); errors.Is(err, errUnsignedCore) {
+		t.Error("a malformed signature was reported as a missing one")
 	}
 }
