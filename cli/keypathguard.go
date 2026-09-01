@@ -2,11 +2,37 @@ package main
 
 import (
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 )
 
-// keyPathRefusal is the decision behind the Windows key-path guard, kept here
-// without a build tag ON PURPOSE.
+// guardKeyPath vets the path of a PRIVATE KEY before it is opened, and only that.
+//
+// On Windows the daemon runs as SYSTEM and takes this path out of
+// %ProgramData%\plug, a directory the installer deliberately makes writable by
+// users, so a plain user could name any path and have the most privileged account
+// on the machine open it. On unix there is nothing to add: guardUserPath already
+// compares the real owner, because the daemon keeps the user's real uid.
+func guardKeyPath(path string) {
+	if runtime.GOOS != "windows" || path == "" {
+		return
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		fatal("plug: %s is not a usable path (%v)", path, err)
+	}
+	fi, err := os.Lstat(abs)
+	if err != nil {
+		return // absent is the caller's problem to report, not a privilege question
+	}
+	if why := keyPathRefusal(abs, fi.Mode(), systemRootsForKeyGuard()); why != "" {
+		fatal("plug: refusing to read %s as a key: %s", abs, why)
+	}
+}
+
+// keyPathRefusal is the decision behind that guard, kept here without a build tag
+// ON PURPOSE.
 //
 // The rule it encodes only matters on Windows, where a machine-wide SYSTEM
 // service reads a key path out of a directory plain users can write. But a rule

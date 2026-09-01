@@ -149,6 +149,7 @@ func (c config) authKeys() [][]byte {
 	// themselves. Without the guard, PLUG_CORE_KEY=/etc/… turns plug into an
 	// oracle for whether a root-only file exists and parses as a key.
 	guardUserPath(c.key)
+	guardKeyPath(c.key)
 	personal, err := os.ReadFile(c.key)
 	if err != nil {
 		fatal("profile key %s: %v\n"+

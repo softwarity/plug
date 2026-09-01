@@ -83,7 +83,7 @@ func TestReplaceBinary(t *testing.T) {
 	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := replaceBinary(target, []byte("new-binary-content")); err != nil {
+	if err := replaceBinary(target, []byte("new-binary-content"), nil); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(target)

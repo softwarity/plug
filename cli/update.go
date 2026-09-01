@@ -421,7 +421,7 @@ func updateLauncher(cfg config, remote string) {
 			fatal("%v", serr)
 		}
 	}
-	if err := replaceBinary(self, data); err != nil {
+	if err := replaceBinary(self, data, regrantPrivilege); err != nil {
 		// On Windows the directory holding this binary is deliberately writable by
 		// administrators only, because a SYSTEM service executes it (see
 		// protectServiceBinary). A permission error here is that decision showing
@@ -440,7 +440,9 @@ func updateLauncher(cfg config, remote string) {
 			_ = os.WriteFile(filepath.Join(filepath.Dir(self), "wintun.dll"), dll, 0o644)
 		}
 	}
-	regrantPrivilege(self)
+	// Granted inside replaceBinary, on the new file before it is moved into place.
+	// Doing it here, on the target path after the rename, was the window this
+	// closed.
 	if out, err := exec.Command(self, "version").Output(); err == nil {
 		if v := strings.TrimSpace(string(out)); v != remote {
 			info("warning: %s answers v%s, expected v%s", self, v, remote)
@@ -471,7 +473,14 @@ func launcherFollow(local, remote string) (replace bool, why string) {
 // root-owned setuid helper (renaming needs the DIRECTORY, which is ours).
 // Windows: the running exe can't be overwritten but CAN be renamed aside, so
 // park it as .old, slot the new one in, roll back if that fails.
-func replaceBinary(target string, data []byte) error {
+// grant, when set, is handed the path of the new binary BEFORE it is moved into
+// place. That ordering is the whole point. The privilege used to be granted after
+// the rename, on the target PATH: between the two, anyone able to write the
+// directory (and plug installs into ~/.local/bin, which the user owns) could put
+// their own file there and have sudo hand IT setuid root or CAP_SYS_ADMIN. Doing
+// it first means the inode that arrives at the destination is the one we wrote,
+// already privileged, and there is no in-between to race.
+func replaceBinary(target string, data []byte, grant func(string)) error {
 	dir := filepath.Dir(target)
 	tmp, err := os.CreateTemp(dir, ".plug-update-*")
 	if err != nil {
@@ -485,6 +494,9 @@ func replaceBinary(target string, data []byte) error {
 	tmp.Chmod(0o755)
 	if err := tmp.Close(); err != nil {
 		return err
+	}
+	if grant != nil {
+		grant(tmp.Name())
 	}
 	if runtime.GOOS != "windows" {
 		return os.Rename(tmp.Name(), target)
@@ -507,26 +519,50 @@ func replaceBinary(target string, data []byte) error {
 // on Windows there is nothing to re-grant: the service's binPath still points
 // at this exe, and the service starts on demand — the next session runs the
 // new binary.
-func regrantPrivilege(target string) {
-	var grant string
+// regrantPrivilege re-grants what the launcher needs, on the file at path, which
+// is the NEW binary before it is moved into place (see replaceBinary).
+//
+// No shell. It used to build a command string and run it through `sudo sh -c`,
+// interpolating the path between single quotes: an install path containing an
+// apostrophe closed the quote and the rest ran as root. Nothing here needs a
+// shell, so there is none, and the path travels as one argv element that no
+// quoting can split.
+func regrantPrivilege(path string) {
 	switch runtime.GOOS {
 	case "windows":
 		info("the datapath service starts on demand — new sessions run the new binary (current ones keep the old until they end)")
 		return
 	case "darwin":
-		grant = fmt.Sprintf("chown root:wheel '%s' && chmod u+s '%s'", target, target)
-	default:
-		grant = fmt.Sprintf("setcap cap_net_admin,cap_sys_admin,cap_net_bind_service+ep '%s'", target)
-	}
-	if isTTY(os.Stdin) || isTTY(os.Stderr) {
-		info("re-granting the privilege (one sudo)…")
-		c := exec.Command("sudo", "sh", "-c", grant)
-		c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
-		if c.Run() == nil {
+		// Already root: plug is setuid on macOS, so `plug update` runs with euid 0
+		// and can do this itself. No sudo prompt, and nothing that takes a path
+		// through another process while we are not looking.
+		if os.Geteuid() == 0 {
+			if os.Chown(path, 0, 0) == nil && os.Chmod(path, 0o755|os.ModeSetuid) == nil {
+				return
+			}
+		}
+		if runSudo("chown", "root:wheel", path) && runSudo("chmod", "u+s", path) {
 			return
 		}
+		info("re-grant the privilege to keep no-sudo runs:  sudo chown root:wheel %q && sudo chmod u+s %q", path, path)
+	default:
+		if runSudo("setcap", "cap_net_admin,cap_sys_admin,cap_net_bind_service+ep", path) {
+			return
+		}
+		info("re-grant the privilege to keep no-sudo runs:  sudo setcap cap_net_admin,cap_sys_admin,cap_net_bind_service+ep %q", path)
 	}
-	info("re-grant the privilege to keep no-sudo runs:  sudo sh -c \"%s\"", grant)
+}
+
+// runSudo runs one command under sudo, arguments passed as argv and never as a
+// string a shell could re-read. Reports whether it succeeded.
+func runSudo(args ...string) bool {
+	if !isTTY(os.Stdin) && !isTTY(os.Stderr) {
+		return false // nowhere to ask for a password; the caller prints what to run
+	}
+	info("re-granting the privilege (one sudo)…")
+	c := exec.Command("sudo", args...)
+	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
+	return c.Run() == nil
 }
 
 // semverOK reports whether s is a released x.y.z version (dev builds are not).
