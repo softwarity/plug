@@ -266,6 +266,80 @@ first version waited for the lookup to return, and when the routing was
 deliberately broken it took sixty seconds to fail and reported it as a test
 binary timeout with a goroutine dump instead of saying what was wrong.
 
+
+### An answer the agent could not read came back as a success
+
+The agent talks to Docker and to Kubernetes through two helpers that had the same
+twenty lines at the bottom and had stopped agreeing on them: the Docker one
+returned the error when it could not decode the reply, the Kubernetes one dropped
+it. So a Kubernetes answer the agent could not parse came back as "200, all
+fine", with the output left at its zero value, and the caller acted on that. A
+Service read as having no selector and no ports is indistinguishable, from there,
+from a Service that really has none, and the repoint that follows is made on
+nothing.
+
+There is one such helper now, so the two cannot disagree again, and it has tests.
+
+### The resolver could be taken down by a query it was built to receive
+
+plug's DNS answers on an address the machine's own resolver forwards to, on
+macOS for the whole system, so anything on the box can send it anything. The
+parser is properly defensive and always was, but nothing said so: its one test
+parsed a single well-formed query, so every bound could have been removed and it
+would still have passed. Thirteen malformed shapes now go through it, from an
+empty packet to a compression pointer it does not implement, and none of them may
+crash it.
+
+Writing those found something the reading had not. The function follows a pointer
+to the upstream resolver in two places, nothing declares that pointer as
+mandatory, and a caller wired without one would have taken the datapath down on
+the first query for a name plug does not own, which is to say almost immediately.
+It answers SERVFAIL now, which is what is true: there is no upstream to ask.
+
+### Two labels the agent reads in four places were written by hand
+
+The label marking a signpost, and the one naming its owner, were string literals
+at six sites, two writing and four reading, six hundred lines apart, while every
+neighbouring label in the same file was already a constant. A typo in one of the
+four readers makes another agent's signpost look like a residue belonging to
+nobody, and the boot sweep removes exactly that.
+
+
+### Five functions that existed twice, and had started to differ
+
+Counting live sessions, waiting for a cluster to come up, reporting which
+clusters have clients, saying where dotted names are forwarded, and running the
+autonomous datapath: each was written out once per platform, in files that share
+a build tag the repository already uses elsewhere. Nothing in any of them is
+platform-specific; every function they call is itself declared for both.
+
+They had begun to drift in the way copies drift, not in behaviour but in what
+they explain. The macOS copy of one carried a paragraph on why it reports the
+daemon's recorded reason for a failure, and the Windows copy had the same code
+with no explanation. Whoever read the second learned less than whoever read the
+first, and a fix applied to one would have missed the other.
+
+### Three things the harness could not have caught
+
+`kind` was installed from `latest`, with no checksum and no retry, written as
+root into a system directory and then run, on the critical path of the three
+Kubernetes legs. An upstream release could have turned that family red on a day
+nobody touched this repository. It is pinned, checksummed against a digest, and
+retried, which the image build already did for the WinTUN driver and for the same
+reason.
+
+The predicate deciding whether a probe answered with an address or with an error
+only asked whether the string was made of digits and dots, which "...." and "999"
+both are. Two truncated replies from a probe that had stopped answering properly
+would have compared equal and read as "the address was kept". It now wants four
+numbers, each in range.
+
+And five background sessions were awaited without a bound, in cells that rely on
+a session honouring its own time limit. One that did not held the leg until the
+job timeout, twenty-five minutes later, with nothing in the log naming what was
+being waited for. The bounded wait the rest of the file already used now covers
+them too.
+
 ## 2.13.0
 
 ### A copy of the relay loop had quietly lost a branch

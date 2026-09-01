@@ -21,10 +21,28 @@ docker image inspect softwarity/plug:e2e >/dev/null 2>&1 || {
   exit 1
 }
 
-echo "=== install kind (latest release) ==="
-sudo curl -fsSLo /usr/local/bin/kind \
-  https://github.com/kubernetes-sigs/kind/releases/latest/download/kind-linux-amd64
-sudo chmod +x /usr/local/bin/kind
+# Pinned, checksummed and retried, because this binary is written as ROOT into
+# /usr/local/bin and then run, and it sat on the critical path of the three k8s
+# legs with none of the three.
+#
+# Pinned: `latest` meant an upstream release could change what kind-config.yaml
+# means, or what --wait does, and turn the whole k8s family red on a day nobody
+# touched this repository. Checksummed: the Dockerfile already does exactly this
+# for the WinTUN driver, for exactly this reason, and kind was the one download
+# that escaped it. Retried: a bad minute on the network must not redden a good
+# commit, which is why go-mod-download.sh exists next door.
+KIND_VERSION=v0.33.0
+KIND_SHA256=aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d
+echo "=== install kind $KIND_VERSION ==="
+curl -fsSL --retry 3 --retry-connrefused --retry-delay 2 -o /tmp/kind \
+  "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64"
+echo "$KIND_SHA256  /tmp/kind" | sha256sum -c - || {
+  echo "::error::kind $KIND_VERSION does not match the digest this script pins. Either the download was" >&2
+  echo "         corrupted, or the release was replaced upstream. Refusing to run it as root." >&2
+  exit 1
+}
+sudo install -m 0755 /tmp/kind /usr/local/bin/kind
+rm -f /tmp/kind
 kind version
 
 echo "=== create the kind cluster ==="

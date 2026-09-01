@@ -4,7 +4,6 @@ package main
 
 import (
 	"os"
-	"time"
 
 	"github.com/softwarity/plug/cli/internal/tun"
 	"golang.org/x/sys/windows"
@@ -23,7 +22,7 @@ func coreRun(cfg config, cmdArgs []string) int {
 	if serviceInstalled() {
 		return coreRunViaService(cfg, cmdArgs)
 	}
-	return coreRunInProcess(cfg, cmdArgs)
+	return runCoreInProcess(cfg, cmdArgs)
 }
 
 // coreRunViaService registers as a client of the cluster, makes sure the service is
@@ -51,46 +50,6 @@ func coreRunViaService(cfg config, cmdArgs []string) int {
 	}
 	defer stopExposes()
 	return runChildEnv(cmdArgs, nil)
-}
-
-// coreRunInProcess holds the datapath in this elevated process for the child's
-// lifetime — the single-cluster fallback (the pre-service Windows path).
-func coreRunInProcess(cfg config, cmdArgs []string) int {
-	tr, err := dialTunnel(cfg)
-	if err != nil {
-		info("connect: %v", err)
-		return 1
-	}
-	defer tr.Close()
-	stopExposes, err := startExposes(cfg)
-	if err != nil {
-		info("expose: %v", err)
-		return 1
-	}
-	defer stopExposes()
-	info("tunnel ready — running your command")
-	code, rerr := tun.Run(tr, cmdArgs, info)
-	if rerr != nil {
-		info("%v", rerr)
-	}
-	return code
-}
-
-// waitClusterReady blocks until the service opened OUR cluster's tunnel (its ready
-// marker) or a short timeout, then runs the child anyway (best effort).
-func waitClusterReady(key string) {
-	deadline := time.Now().Add(12 * time.Second)
-	for time.Now().Before(deadline) {
-		if tun.ClusterReady(key) {
-			return
-		}
-		time.Sleep(150 * time.Millisecond)
-	}
-	if msg := tun.ClusterError(key); msg != "" {
-		info("cluster %s: %s", key, msg)
-		return
-	}
-	info("cluster %s: tunnel not ready yet — starting anyway", key)
 }
 
 // serviceInstalled reports whether the SCM service exists, regardless of run state.

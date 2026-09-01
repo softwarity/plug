@@ -107,36 +107,7 @@ func doctorOS(add func(check)) {
 		}
 	}
 
-	// WHERE dotted names actually go. Read from what the running datapath
-	// published, never re-derived from the system here: those two answers differ
-	// exactly when it matters — a capture that went stale (the VPN moved after
-	// the session started) looks perfectly healthy if you ask the system again.
-	// This is the one place that can show the difference.
-	if ups := tun.CurrentUpstreams(); len(ups) > 0 {
-		d := "forwarding dotted names to " + strings.Join(ups, ", ")
-		st := stOK
-		for _, u := range ups {
-			if strings.HasPrefix(u, "8.8.8.8") || strings.HasPrefix(u, "1.1.1.1") {
-				st = stWarn
-				d += " — a PUBLIC resolver: internal names will not resolve, and these lookups leave your network"
-			}
-		}
-		add(check{area: "local", name: "dns forwarding", status: st, detail: d})
-	}
-}
-
-// doctorSessions reports the registry view: which clusters have live clients.
-func doctorSessions(add func(check)) {
-	keys := tun.ActiveClusters()
-	if len(keys) == 0 {
-		add(check{area: "local", name: "sessions", status: stOK, detail: "none running"})
-		return
-	}
-	var parts []string
-	for _, k := range keys {
-		parts = append(parts, fmt.Sprintf("%s (%d)", k, tun.LiveClients(k)))
-	}
-	add(check{area: "local", name: "sessions", status: stOK, detail: strings.Join(parts, " · ")})
+	doctorDNSForwarding(add)
 }
 
 // resolverRestartRemedy: the DNS Client service holds the cache Windows answers

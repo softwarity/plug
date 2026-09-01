@@ -261,13 +261,3 @@ func removeService() {
 // piece of machine-wide state, the NRPT rule, is cleared by the datapath's own
 // teardown — and by `plug doctor`, which owns that check.
 func repairOrphanResolver() {}
-
-// liveSessions counts the plug sessions running on this machine, all clusters
-// together — the registry is the service's own client list.
-func liveSessions() int {
-	n := 0
-	for _, k := range tun.ActiveClusters() {
-		n += tun.LiveClients(k)
-	}
-	return n
-}

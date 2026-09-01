@@ -3,7 +3,9 @@
 package main
 
 import (
+	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -278,4 +280,64 @@ func closeAll(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transport) {
 		tr.Close()
 		delete(tunnels, key)
 	}
+}
+
+// liveSessions and waitClusterReady lived in two files each, byte for byte the
+// same, one under //go:build darwin and one under //go:build windows, while the
+// tag this file already carries covers both. They read tun.ActiveClusters,
+// tun.LiveClients, tun.ClusterReady and tun.ClusterError, every one of which is
+// itself declared for darwin || windows: there was never anything per-platform
+// about either.
+//
+// The copies had already started to drift, in the way duplication drifts: the
+// darwin one had grown a paragraph explaining why it reports the daemon's
+// recorded reason, and the windows one had the code without the explanation.
+
+// liveSessions counts the clients currently attached across every live cluster.
+func liveSessions() int {
+	n := 0
+	for _, k := range tun.ActiveClusters() {
+		n += tun.LiveClients(k)
+	}
+	return n
+}
+
+// waitClusterReady blocks until the daemon has the tunnel up for this cluster,
+// then gets out of the way. It gives up after twelve seconds and starts anyway:
+// a session that cannot reach the cluster yet is still worth running, and the
+// alternative is refusing to start over a tunnel that may be seconds away.
+//
+// The daemon records WHY it could not open the tunnel (agent unreachable, host
+// key, and so on). Saying it here is what turns "not ready" into something the
+// person can act on; without it every failure looked the same.
+func waitClusterReady(key string) {
+	deadline := time.Now().Add(12 * time.Second)
+	for time.Now().Before(deadline) {
+		if tun.ClusterReady(key) {
+			return
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	if msg := tun.ClusterError(key); msg != "" {
+		info("cluster %s: %s", key, msg)
+		return
+	}
+	info("cluster %s: tunnel not ready yet - starting anyway", key)
+}
+
+// doctorSessions reports the registry view: which clusters have live clients.
+// Identical in the darwin and windows doctors, because the registry it reads is
+// itself shared. Linux has its own, saying there is nothing machine-wide to
+// report, which is true there: each launch owns a private datapath.
+func doctorSessions(add func(check)) {
+	keys := tun.ActiveClusters()
+	if len(keys) == 0 {
+		add(check{area: "local", name: "sessions", status: stOK, detail: "none running"})
+		return
+	}
+	var parts []string
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s (%d)", k, tun.LiveClients(k)))
+	}
+	add(check{area: "local", name: "sessions", status: stOK, detail: strings.Join(parts, " · ")})
 }

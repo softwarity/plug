@@ -204,13 +204,3 @@ func stopDaemon() bool {
 	}
 	return true
 }
-
-// liveSessions counts the plug sessions running on this machine, all clusters
-// together — the registry is the daemon's own client list.
-func liveSessions() int {
-	n := 0
-	for _, k := range tun.ActiveClusters() {
-		n += tun.LiveClients(k)
-	}
-	return n
-}

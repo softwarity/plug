@@ -180,9 +180,28 @@ cmd_python() { echo "$py $clients/python/client.py"; }
 cmd_java()   { echo "java -jar $clients/java/target/client.jar"; }
 
 # is_addr: the reading is an IPv4 address, not an error string. Every address
-# assertion goes through it — comparing two identical error messages once read
+# assertion goes through it, and comparing two identical error messages once read
 # as "address kept", a test that passed without testing.
-is_addr() { case "${1:-}" in ""|*[!0-9.]*) return 1 ;; *) return 0 ;; esac; }
+#
+# The first version only asked whether the string was made of digits and dots,
+# which "....", "999" and "1" all are. Two truncated replies from a probe that
+# had stopped answering properly would have compared equal again, in a different
+# costume. Four numbers, each in range, or it is not an address.
+is_addr() {
+  case "${1:-}" in
+    *[!0-9.]*|"") return 1 ;;
+  esac
+  local IFS=. n=0 part
+  for part in $1; do
+    n=$((n + 1))
+    case "$part" in
+      ""|*[!0-9]*) return 1 ;;
+    esac
+    [ "${#part}" -gt 3 ] && return 1
+    [ "$part" -gt 255 ] && return 1
+  done
+  [ "$n" -eq 4 ]
+}
 glyph() { case "$1" in PASS) printf "✅" ;; FAIL) printf "❌" ;; SKIP) printf "·" ;; *) printf "?" ;; esac; }
 sum()   { echo "$*" >> "${GITHUB_STEP_SUMMARY:-/dev/stderr}"; }
 
@@ -1184,7 +1203,7 @@ do_collision() {
   # that once — a prompt on a Windows runner with no console to answer it.
   co="$(perl -e 'alarm 60; exec @ARGV or exit 127' \
         "$PLUG" --host "$ip" --port "$port" -s "$cname:$cport:9" curl --version 2>&1 || true)"
-  wait $a_pid 2>/dev/null || true
+  wait_bg "$a_pid" "the collision session A" 60
   if printf '%s' "$co" | grep -qiE "another session|denied by peer|already"; then
     # The refusal must NAME the holder's agent port. That port is what lets a
     # session tell ITS OWN forgotten holder from a stranger's, and so what
@@ -1253,7 +1272,7 @@ do_lease() {
   if [ "$base" != "lease-a" ]; then
     echo "--- lease FAIL — baseline: prober said '${base:-nothing}' (want lease-a)"
     tail -8 /tmp/lease-a.out 2>/dev/null | sed 's/^/    /'
-    wait $a_pid 2>/dev/null || true; sum "**name survives a swept signpost** ❌ baseline"; return 1
+    wait_bg "$a_pid" "the lease session" 70; sum "**name survives a swept signpost** ❌ baseline"; return 1
   fi
 
   # Sweep A's signpost behind its back — exactly what a boot-gc does.
@@ -1261,13 +1280,13 @@ do_lease() {
   swept="$(plug curl -s --max-time 15 "http://chaos:8095/rm-signpost?name=$lname" 2>/dev/null | tr -d '\r' | tail -1)"
   if [ "$swept" != "removed" ]; then
     echo "--- lease FAIL — chaos could not sweep $lname's signpost (said '${swept:-nothing}')"
-    wait $a_pid 2>/dev/null || true; sum "**name survives a swept signpost** ❌ sweep"; return 1
+    wait_bg "$a_pid" "the lease session" 70; sum "**name survives a swept signpost** ❌ sweep"; return 1
   fi
 
   # B, same name, while A is still very much alive: must bounce.
   local co
   co="$("$PLUG" --host "$ip" --port "$port" -s "$lname:$lport:9" curl --version 2>&1 || true)"
-  wait $a_pid 2>/dev/null || true
+  wait_bg "$a_pid" "the lease session" 70
   if printf '%s' "$co" | grep -qiE "another live session|another session|already"; then
     echo "lease OK — $lname stayed its session's with no signpost to prove it"
     sum "**name survives a swept signpost** ✅"; return 0
@@ -1431,7 +1450,11 @@ do_resilience() {
     esac
   fi
 
-  wait $res_pid 2>/dev/null || true # the -ttl fires; teardown restores the deployed service
+  # Bounded like the others: the -ttl is 150s, so 190 leaves room for a slow
+  # teardown without ever becoming an unbounded wait. A session that ignores
+  # its own ttl used to hold the leg until the job timeout, twenty-five
+  # minutes later, with nothing in the log naming what it waited for.
+  wait_bg "$res_pid" "the resilience session" 190
 
   # The deployed workload is coming back from a stop, on a runner that has just
   # restarted an agent under it — a "connection reset by peer" here is that

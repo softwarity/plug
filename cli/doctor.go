@@ -492,3 +492,31 @@ func openBrowser(u string) {
 		fmt.Println("(could not open a browser — copy the URL above)")
 	}
 }
+
+// doctorDNSForwarding reports where plug sends the names it does not own.
+//
+// It was written out three times, once per OS file, and nothing about it is
+// per-OS: tun.CurrentUpstreams carries no build tag. The three had already begun
+// to differ in the way copies differ, the darwin one carrying a paragraph
+// explaining why a public resolver is a warning and not a failure while the
+// other two carried the same code with no explanation.
+//
+// A public resolver here is worth saying out loud. It keeps ordinary names
+// working, which is why it looks fine, and it is exactly why the internal ones
+// stop resolving: those lookups leave the network to ask a server that has never
+// heard of them.
+func doctorDNSForwarding(add func(check)) {
+	ups := tun.CurrentUpstreams()
+	if len(ups) == 0 {
+		return
+	}
+	d := "forwarding dotted names to " + strings.Join(ups, ", ")
+	st := stOK
+	for _, u := range ups {
+		if strings.HasPrefix(u, "8.8.8.8") || strings.HasPrefix(u, "1.1.1.1") {
+			st = stWarn
+			d += " - a PUBLIC resolver: internal names will not resolve, and these lookups leave your network"
+		}
+	}
+	add(check{area: "local", name: "dns forwarding", status: st, detail: d})
+}

@@ -5,7 +5,6 @@ package main
 import (
 	"os"
 	"strings"
-	"time"
 
 	"github.com/softwarity/plug/cli/internal/tun"
 )
@@ -65,25 +64,4 @@ func goResolverEnv() []string {
 		}
 	}
 	return append(env, "GODEBUG=netdns=go")
-}
-
-// waitClusterReady blocks until the daemon has opened OUR cluster's tunnel (its
-// ready marker) or a short timeout — then runs the child anyway (best effort: the
-// datapath is up daemon-wide, the tunnel opens on the daemon's next reconcile).
-func waitClusterReady(key string) {
-	deadline := time.Now().Add(12 * time.Second)
-	for time.Now().Before(deadline) {
-		if tun.ClusterReady(key) {
-			return
-		}
-		time.Sleep(150 * time.Millisecond)
-	}
-	// The daemon records WHY it could not open the tunnel (agent unreachable,
-	// host key…). Windows already surfaced it; here it sat in a file nobody
-	// read, and every failure looked the same.
-	if msg := tun.ClusterError(key); msg != "" {
-		info("cluster %s: %s", key, msg)
-		return
-	}
-	info("cluster %s: tunnel not ready yet — starting anyway", key)
 }

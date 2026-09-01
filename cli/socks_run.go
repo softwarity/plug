@@ -478,3 +478,35 @@ func isLoopback(host string) bool {
 	}
 	return false
 }
+
+// runCoreInProcess is the autonomous datapath: this process dials its own tunnel
+// and holds it for the child's lifetime.
+//
+// It existed twice, as coreRun on Linux and coreRunInProcess on Windows, the same
+// twenty lines under two names. Windows chooses between the service model and
+// this one at runtime, Linux only ever has this one, and neither difference is in
+// the body. Having it once means a fix to the teardown order, or to what is said
+// when the tunnel will not open, lands on both rather than on whichever file the
+// person had open.
+func runCoreInProcess(cfg config, cmdArgs []string) int {
+	tr, err := dialTunnel(cfg)
+	if err != nil {
+		info("connect: %v", err)
+		return 1
+	}
+	defer tr.Close()
+
+	stopExposes, err := startExposes(cfg)
+	if err != nil {
+		info("expose: %v", err)
+		return 1
+	}
+	defer stopExposes()
+
+	info("tunnel ready - running your command")
+	code, rerr := tun.Run(tr, cmdArgs, info)
+	if rerr != nil {
+		info("%v", rerr)
+	}
+	return code
+}
