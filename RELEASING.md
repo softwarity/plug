@@ -45,9 +45,9 @@ itself.
 
 A build with no key mounted signs nothing and says so: that is the normal case
 for a local `docker build` and for a fork, and the launcher tolerates an unsigned
-core until the cutover date in `cli/release_sig.go`. A release build that takes
-that path silently would publish an image that stops working on the cutover date,
-so the message it prints is worth grepping for if a release ever looks wrong.
+core outright. A release build that took that path silently would publish an
+image whose CLI refuses to run, so the message it prints is worth grepping for
+if a release ever looks wrong.
 
 ### If it is lost or stolen: replace it
 
@@ -64,10 +64,9 @@ The procedure is the same either way:
 3. `gh secret set PLUG_RELEASE_KEY` with the new private half.
 4. Release.
 
-**Every CLI already installed stops working at that point**, immediately, not on
-the cutover date: the date only tolerates a signature that is *absent*, never one
-that fails to verify. Those CLIs print the reinstall command and their users run
-it. That is the accepted cost, and it is why the failure message is worth keeping
+**Every CLI already installed stops working at that point**, immediately: a
+signature that does not verify is refused, and there is nothing that tolerates
+it. Those CLIs print the reinstall command and their users run it. That is the accepted cost, and it is why the failure message is worth keeping
 accurate.
 
 This works because `install` carries no signature check, deliberately. Installing
@@ -78,14 +77,22 @@ as the user can rewrite. The signature exists for the second one. Bolting it ont
 the first would only remove the escape hatch that makes replacing the key
 survivable.
 
-### The cutover date
+### No grace period
 
-`signedFrom` in `cli/release_sig.go`. Before it, an unsigned core is accepted
-with a warning. After it, refused.
+A signature is required, always. There is no date after which it starts mattering
+and no version below which an unsigned core is tolerated, because every value
+such a rule could read is announced by the party being checked: an agent that
+wanted the tolerant branch would claim whatever bought it.
 
-It is a date and not a version on purpose: a fake agent announces its own
-version, so any rule that read the version would be told whatever made it pass.
-A date is the one input the party being checked does not control.
+It costs nothing to anyone who has not moved. An old CLI never asks for a
+signature, so an untouched CLI/agent pair keeps working exactly as it did. The
+only pair this refuses is one where half has already been updated, and there the
+answer is to update the other half.
+
+One consequence to know when cutting the first signed release: the e2e update
+cells drive `plug update` against an agent on the PREVIOUS release, which is
+unsigned until that previous release is itself a signed one. That is a one-cycle
+condition and it clears by itself.
 
 ## The other secrets this repo uses
 

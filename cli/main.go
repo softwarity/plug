@@ -899,7 +899,7 @@ func ensureVersion(v string, cfg config) (*os.File, error) {
 			// measurement here, not a claim. The signature is checked against it
 			// on every launch, not only on the download: the cache is what gets
 			// executed with privilege, and it outlives the download by weeks.
-			if serr := verifyCore(att, osArch, v, want); serr != nil {
+			if serr := verifyCore(att, osArch, want); serr != nil {
 				f.Close()
 				return nil, serr
 			}
@@ -937,7 +937,7 @@ func ensureVersion(v string, cfg config) (*os.File, error) {
 	// Before the bytes ever reach the disk. What follows writes them into a store
 	// only root can touch and then executes them with privilege, so this is the
 	// last point where refusing costs nothing.
-	if serr := verifyCore(att, osArch, v, got); serr != nil {
+	if serr := verifyCore(att, osArch, got); serr != nil {
 		return nil, serr
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {

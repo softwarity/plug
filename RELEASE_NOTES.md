@@ -107,21 +107,22 @@ every launch, on the cached core as well as on a fresh download, and on the byte
 `plug update` is about to write over plug itself. A digest binds bytes to a claim;
 a signature binds them to an author, and an author is what was missing.
 
-The statement covers the platform and the version as well as the hash, so a
-signature genuinely issued for one target cannot be presented for another.
-
 plug trusts exactly one release key. If it ever has to be replaced, whether it
 was lost or stolen, the replacement revokes the old one by the same act, and
 every CLI already installed says so and asks to be reinstalled from the cluster.
 Installing carries no signature check on purpose: it is aimed at a host you
 typed, while you are watching, which is what fetching the core is not.
 
-An agent too old to answer `sig=` is still accepted, with a warning, until
-1 December 2026. After that date plug refuses to run an unsigned core with
-privilege. The deadline is a date rather than a version on purpose: a fake agent
-announces its own version, so any rule reading the version would be told whatever
-made it pass. Redeploy the softwarity/plug image on your clusters before then;
-CLIs and agents can be updated in either order until the cutover.
+An agent too old to answer `sig=` is refused, with no grace period. That costs
+nothing to anyone who has not moved: an older CLI never asks for a signature, so
+an untouched CLI and agent pair keeps working exactly as it did. The only pair
+this refuses is one where half has already been updated, and there the answer is
+to update the other half, which for a developer tool is one command.
+
+The signed statement covers the platform and the hash, and deliberately not the
+version: an embedder that links the agent into its own binary announces its own
+version while serving these binaries, and binding it would refuse every launch
+there.
 
 ### The agent stopped announcing that it was ready over work it had not finished
 

@@ -53,8 +53,15 @@ func TestEnsureVersionCacheHit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Signed, because that is what a real agent answers now: the cached core is
+	// executed with privilege and an unsigned one is refused outright, so a stub
+	// without a signature would be testing a cluster that cannot exist.
+	priv, restoreKey := testKey(t)
+	defer restoreKey()
 	saved := fetchDigest
-	fetchDigest = func(config, string) (coreAttestation, error) { return coreAttestation{sha256: sum}, nil }
+	fetchDigest = func(_ config, osArch string) (coreAttestation, error) {
+		return coreAttestation{sha256: sum, sig: signed(priv, osArch, sum)}, nil
+	}
 	defer func() { fetchDigest = saved }()
 
 	got, err := ensureVersion("9.9.9", config{})

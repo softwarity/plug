@@ -405,12 +405,7 @@ func updateLauncher(cfg config, remote string) {
 		// says the download matches what this agent announced, and the agent is
 		// whoever the caller pointed at. This is the difference between updating
 		// plug and installing somebody else's binary as root, permanently.
-		// remote verbatim, not shortVersion: what the release workflow signed is
-		// the exact string in the agent's VERSION file, which is what agentVersion
-		// returned here. Trimming the build metadata off one side of a signed
-		// statement and not the other is how a signature scheme quietly stops
-		// verifying anything.
-		if serr := verifyCore(att, osArch, remote, got); serr != nil {
+		if serr := verifyCore(att, osArch, got); serr != nil {
 			fatal("%v", serr)
 		}
 	}

@@ -7,9 +7,9 @@
 # STOLEN one worse, because the stolen key stays trusted until somebody
 # remembers to delete its line.
 #
-# Replacing it forces a reinstall of every CLI in the field, immediately, not on
-# the cutover date: a signature that does not verify is refused whatever the
-# date says. That is the accepted cost. Reinstalling is one command and the
+# Replacing it forces a reinstall of every CLI in the field, immediately: a
+# signature that does not verify is refused, full stop. That is the accepted
+# cost. Reinstalling is one command and the
 # install path carries no signature check, by design: it is a deliberate act
 # aimed at a host the user typed, which is exactly what the fetch path is not.
 #

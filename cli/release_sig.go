@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"strings"
-	"time"
 )
 
 // --- Release signatures over the core binary ---------------------------------
@@ -39,17 +38,6 @@ import (
 //go:embed keys/release_ed25519.pub
 var releasePubKeysRaw string
 
-// signedFrom is the date this becomes mandatory. Before it, an unsigned core is
-// accepted and says so; after, it is refused.
-//
-// Why a DATE and not a version. The obvious rule, "accept unsigned from an agent
-// older than the signing release", is worthless: the fake agent announces its own
-// version, so it would simply claim to be old. Every value the check could read
-// from the agent is chosen by the party being checked. A date is the one input
-// that is not, and it lets a fleet migrate agents before its CLIs cut over rather
-// than breaking everyone the day a CLI updates.
-const signedFrom = "2026-12-01"
-
 // coreAttestation is what an agent says about the binary it serves. The digest
 // verb answers key=value lines precisely so this could grow a sig without
 // breaking a parser written before it existed.
@@ -58,12 +46,23 @@ type coreAttestation struct {
 	sig    string // base64 ed25519 over coreStatement; empty from an agent built before signing
 }
 
-// coreStatement is what gets signed. Not the bare hash: the platform and the
-// version are bound in too, so a signature genuinely issued for the linux binary
-// cannot be replayed over the darwin one, nor an old release's signature over a
-// new version's bytes.
-func coreStatement(osArch, version, sha256hex string) []byte {
-	return []byte("plug-core-v1\n" + osArch + "\n" + strings.TrimPrefix(version, "v") + "\n" + sha256hex + "\n")
+// coreStatement is what gets signed: the platform and the hash, and deliberately
+// NOT the version.
+//
+// Binding the version looked like free defence in depth and is not. It buys
+// almost nothing, because the version is announced by the very party being
+// checked: an attacker replaying a genuinely signed old binary just announces
+// that binary's version and the binding is satisfied. And it costs a great deal,
+// because an EMBEDDER sets Config.Version to its own identity while serving plug
+// binaries signed by this pipeline (see meerkat_integration.md, "le piege du
+// versioning"): the signature would cover plug's version, the check would use the
+// embedder's, and every launch would be refused.
+//
+// This format is a wire contract from the first release that ships it. Changing
+// it later breaks every CLI already carrying the old one, so it is worth being
+// right about now rather than sorry about in a year.
+func coreStatement(osArch, sha256hex string) []byte {
+	return []byte("plug-core-v1\n" + osArch + "\n" + sha256hex + "\n")
 }
 
 func releasePubKeys() ([]ed25519.PublicKey, error) {
@@ -92,19 +91,24 @@ func releasePubKeys() ([]ed25519.PublicKey, error) {
 // given the digest the CLI computed ITSELF from the bytes on disk, never the one
 // the agent announced: the signature vouches for a hash, and that hash has to be
 // the one we measured or the chain proves nothing.
-func verifyCore(att coreAttestation, osArch, version, measured string) error {
+func verifyCore(att coreAttestation, osArch, measured string) error {
 	if att.sha256 != measured {
 		return fmt.Errorf("the core does not hash to what the agent announced")
 	}
+	// No grace period, and no version below which unsigned is tolerated. A window
+	// would have to be closed by something, and every value this code could read
+	// from the agent is chosen by the party being checked: an agent that wanted
+	// the tolerant branch would simply claim whatever bought it.
+	//
+	// It costs nothing to anyone who has not moved. An old CLI against an old
+	// agent never reaches this function, so an untouched pair keeps working
+	// exactly as before, bugs and all. The only pair this refuses is one where
+	// half has already been updated, and there the answer is to update the other
+	// half: plug is a developer tool, and redeploying its agent is one command.
 	if att.sig == "" {
-		if now().Before(signedFromDate()) {
-			info("WARNING this agent serves an UNSIGNED core, so plug is trusting the cluster it was pointed at.\n"+
-				"      Redeploy the softwarity/plug image before %s: after that date plug refuses to run an unsigned core with privilege.", signedFrom)
-			return nil
-		}
-		return fmt.Errorf("this agent serves an UNSIGNED core, and plug will not run one with privilege.\n"+
-			"      Signatures became mandatory on %s. Redeploy the softwarity/plug image on this cluster;\n"+
-			"      the agent must be recent enough to answer 'sig=' to the digest verb", signedFrom)
+		return fmt.Errorf("this agent is too old to sign what it serves, and plug will not run an\n" +
+			"      unsigned core with root privilege. Redeploy the softwarity/plug image on this\n" +
+			"      cluster; its agent must be recent enough to answer 'sig=' to the digest verb")
 	}
 	keys, err := releasePubKeys()
 	if err != nil {
@@ -114,7 +118,7 @@ func verifyCore(att coreAttestation, osArch, version, measured string) error {
 	if err != nil {
 		return fmt.Errorf("the agent answered a malformed signature (%v)", err)
 	}
-	stmt := coreStatement(osArch, version, measured)
+	stmt := coreStatement(osArch, measured)
 	ok := false
 	for _, key := range keys {
 		if ed25519.Verify(key, stmt, sig) {
@@ -132,17 +136,4 @@ func verifyCore(att coreAttestation, osArch, version, measured string) error {
 			"      (Git Bash on Windows: ssh -n -p <port> get@<host> install-windows | bash -s -- <host> <port>)")
 	}
 	return nil
-}
-
-// now is a var so a test can stand on either side of the deadline. The cutover
-// is the whole point of the design, and a date that only the calendar can reach
-// is a date nobody ever tests.
-var now = time.Now
-
-func signedFromDate() time.Time {
-	d, err := time.Parse("2006-01-02", signedFrom)
-	if err != nil {
-		return time.Time{} // an unparsable constant means mandatory now, never never
-	}
-	return d
 }

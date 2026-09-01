@@ -5,13 +5,16 @@
 // private key arriving through a BuildKit secret mount: the key is readable for
 // the length of one RUN and lands in no layer. When no key is mounted, which is
 // every local `docker build` and every fork, it signs nothing and says so. The
-// launcher tolerates an unsigned core until the cutover date compiled into it,
-// so an unsigned image is a warning rather than a broken build.
+// launcher refuses an unsigned core, so such an image serves a CLI that will not
+// run: fine for a local build, never for a release.
 //
 // The statement it signs is the one cli/release_sig.go verifies. The two must
 // agree exactly, which is why the format lives in a comment in both places:
 //
-//	plug-core-v1\n<os>-<arch>\n<version>\n<sha256 hex>\n
+//	plug-core-v1\n<os>-<arch>\n<sha256 hex>\n
+//
+// The version is deliberately absent: an embedder announces its own version
+// while serving these binaries, so binding it would refuse every launch there.
 package main
 
 import (
@@ -61,7 +64,7 @@ func main() {
 			fail("cannot read %s: %v", path, err)
 		}
 		sum := fmt.Sprintf("%x", sha256.Sum256(data))
-		stmt := "plug-core-v1\n" + osArch + "\n" + strings.TrimPrefix(version, "v") + "\n" + sum + "\n"
+		stmt := "plug-core-v1\n" + osArch + "\n" + sum + "\n"
 		sig := base64.StdEncoding.EncodeToString(ed25519.Sign(priv, []byte(stmt)))
 		if err := os.WriteFile(path+".sig", []byte(sig+"\n"), 0o644); err != nil {
 			fail("cannot write the signature for %s: %v", name, err)
@@ -69,8 +72,8 @@ func main() {
 		fmt.Printf("plug-sign: %s %s\n", name, sum[:12])
 		signed++
 	}
-	// A release that silently signed nothing would publish an image the launcher
-	// refuses after the cutover, and the build is the only place that can still
+	// A release that silently signed nothing would publish an image whose core the
+	// launcher refuses outright, and the build is the only place that can still
 	// tell the difference.
 	if signed == 0 {
 		fail("no plug-<os>-<arch> binary found in %s: the release would ship unsigned", binDir)
