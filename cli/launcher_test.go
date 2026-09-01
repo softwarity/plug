@@ -92,25 +92,64 @@ func TestEnsureVersionCacheHit(t *testing.T) {
 // A too-small cached file must NOT be trusted: ensureVersion falls through to
 // the download path, which fails fast here (unreachable host) — proving the
 // truncated cache was rejected.
+// A truncated download left in the store must never be executed, and the guard
+// that refuses it is a size floor: below a megabyte, a cached file is not a cache
+// hit at all.
+//
+// This test used to assert none of that. It wrote its fixture under $HOME while
+// macOS looks for the store in /var/db, and it pointed the config at a closed
+// port, so fetchDigest failed and the branch carrying the size guard was never
+// reached. What it actually proved was that a config naming a dead port returns
+// an error. Replacing `fi.Size() > 1<<20` with `fi.Size() >= 0` left it green,
+// and passing in 0.00 seconds because it never got as far as a download.
 func TestEnsureVersionRejectsTruncatedCache(t *testing.T) {
 	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
-	t.Setenv("USERPROFILE", tmp)
-
 	name := "plug"
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
-	dir := filepath.Join(tmp, ".plug", "versions", "9.9.8")
+	store := filepath.Join(tmp, "store")
+	savedStore := versionsDir
+	versionsDir = func() string { return store }
+	defer func() { versionsDir = savedStore }()
+	savedGuard := guardStorePath
+	guardStorePath = func(string) {}
+	defer func() { guardStorePath = savedGuard }()
+
+	dir := filepath.Join(store, "9.9.8")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, name), make([]byte, 1024), 0o755); err != nil {
+	bin := filepath.Join(dir, name)
+	// Under the floor, and otherwise perfect: the right name, in the right place,
+	// hashing to exactly what the agent announces. Size is the only thing wrong
+	// with it, which is what makes this a test of the size guard and not of
+	// something else that happens to reject it too.
+	if err := os.WriteFile(bin, make([]byte, 1024), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	sum, err := fileSHA256(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	priv, restoreKey := testKey(t)
+	defer restoreKey()
+	saved := fetchDigest
+	fetchDigest = func(_ config, osArch string) (coreAttestation, error) {
+		return coreAttestation{sha256: sum, sig: signed(priv, osArch, sum)}, nil
+	}
+	defer func() { fetchDigest = saved }()
 
-	if _, err := ensureVersion("9.9.8", config{host: "127.0.0.1", port: "1"}); err == nil {
-		t.Fatal("a truncated cache must not be returned as a valid binary")
+	// The download that follows has nowhere to go, and that is how we know the
+	// cached file was not handed back instead.
+	got, err := ensureVersion("9.9.8", config{host: "127.0.0.1", port: "1"})
+	if err == nil {
+		got.Close()
+		t.Fatal("a 1 KiB file in the store was accepted as the core, and macOS runs the core as root")
+	}
+	if strings.Contains(err.Error(), "hash") {
+		t.Fatalf("the cache was rejected for its digest rather than its size, so this proves nothing "+
+			"about the floor: %v", err)
 	}
 }
 

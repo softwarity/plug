@@ -236,6 +236,36 @@ outright left the package green and silent. That was measured. A CI runner has
 those tools; there, an unanswerable question is now a failure, which is the shape
 the Windows elevation tests already used.
 
+
+### Two tests that asserted nothing
+
+One of them checked that a truncated download in the core store is refused, which
+matters because macOS runs that binary as root. It wrote its fixture under the
+home directory while macOS keeps the store in /var/db, and it pointed at a closed
+port, so the branch carrying the size floor was never reached. What it proved was
+that a dead port returns an error. Removing the floor left it green, and passing
+in no time at all because it never got as far as a download.
+
+The other three were gated on environment variables that nothing in the
+repository has ever set, so they had never run anywhere; and had they run, one
+logged the status code it received and the other checked that a slice was not
+empty. They stood in for coverage of the tunnel's data path without providing
+any.
+
+They are replaced by tests that run everywhere, against an SSH server in the same
+process that actually forwards what it is asked to forward. One asserts that a
+name existing only in the cluster answers with its own bytes, and that the agent
+was asked for that name verbatim rather than for something resolved on this side
+first, which is the difference between a tunnel and a proxy the application has
+to know about. The other asserts that the resolver asks the cluster's DNS over
+that same tunnel, since a lookup falling back to the host's resolver would
+succeed on some machines and fail on others.
+
+That second one waits for the routing decision rather than for the answer. Its
+first version waited for the lookup to return, and when the routing was
+deliberately broken it took sixty seconds to fail and reported it as a test
+binary timeout with a goroutine dump instead of saying what was wrong.
+
 ## 2.13.0
 
 ### A copy of the relay loop had quietly lost a branch
