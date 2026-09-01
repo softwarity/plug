@@ -14,7 +14,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -43,34 +42,6 @@ const (
 type Logf func(format string, a ...any)
 
 var errClosed = errors.New("tunnel: transport closed")
-
-// relay copies bidirectionally. On EOF in one direction it half-closes that
-// write side (CloseWrite) so the peer can still drain the other direction,
-// then closes both once both directions finish — preserving protocols that
-// shut down one half and keep reading.
-// One of three copies; the others are cli/internal/tun/netstack.go and agent/main.go.
-// The agent is a separate module, so sharing one would mean publishing a package
-// for fifteen lines. Duplicated deliberately, and identical - the netstack copy
-// had quietly lost its else branch below, which is the whole hazard of keeping
-// three.
-func relay(a, b net.Conn) {
-	var wg sync.WaitGroup
-	wg.Add(2)
-	cp := func(dst, src net.Conn) {
-		defer wg.Done()
-		io.Copy(dst, src)
-		if cw, ok := dst.(interface{ CloseWrite() error }); ok {
-			cw.CloseWrite()
-		} else {
-			dst.Close()
-		}
-	}
-	go cp(a, b)
-	go cp(b, a)
-	wg.Wait()
-	a.Close()
-	b.Close()
-}
 
 // Transport is a self-healing SSH connection to the agent, used as a demux for
 // outbound cluster traffic. It is safe for concurrent use: ssh.Client

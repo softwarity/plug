@@ -35,7 +35,6 @@ var version = "dev"
 const sshUser = "plug" // tunnel user (public-key)
 const getUser = "get"  // download user (passwordless, ForceCommand)
 const defaultPort = "2222"
-const agentHome = "/opt/plug"
 
 // usage lists the everyday commands only — no implementation talk, and no rarely
 // needed ones (down: the background tears itself down — still works, just unlisted).
@@ -1711,10 +1710,6 @@ func coreMain() {
 		fatal("core: no command")
 	}
 	runCore(cfg, cmdArgs)
-}
-
-func runChild(cmdArgs []string) int {
-	return runChildEnv(cmdArgs, nil)
 }
 
 // runChildEnv runs the command, optionally with an explicit environment

@@ -21,19 +21,12 @@ import (
 // per-OS primitives (pidroute_windows.go) but not yet the N-tunnel daemon — that
 // SYSTEM service is the remaining step; the single-cluster path calls none of this.
 
-// clusterRouter maps an intercepted flow (identified by its source port) to the
-// cluster key it must be spliced to, or ok=false to refuse it. handleTCP will
-// hold one once wired; a single-cluster daemon uses a trivial router that always
-// returns its one key (no PID lookup, zero regression).
-type clusterRouter interface {
-	route(srcPort uint16) (clusterKey string, ok bool)
-}
-
-// staticRouter is the single-cluster case: every flow goes to the one cluster,
-// no attribution needed. This is what preserves today's behaviour untouched.
-type staticRouter struct{ key string }
-
-func (s staticRouter) route(uint16) (string, bool) { return s.key, true }
+// The multicluster case is the only one left with a type: a clusterRouter
+// interface and a staticRouter that always answered its one key used to sit here,
+// the second being "the single-cluster case, which preserves today's behaviour
+// untouched". Neither was ever instantiated, not even by a test: multiDial holds
+// a pidRouter directly and takes its own shortcut when one cluster is up. An
+// interface with one implementer is a seam that seams nothing.
 
 // pidRouter is the multicluster case: source port → owning PID (OS socket table)
 // → parent chain → the registered `plug -p X` launcher → its cluster key.
