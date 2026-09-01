@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.13.0
+
 ### A copy of the relay loop had quietly lost a branch
 
 The function that splices two connections together exists three times: twice in
