@@ -1078,19 +1078,7 @@ func dockerAPI(method, path string, body any, out any) (int, error) {
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(resp.Body)
-	if out != nil && resp.StatusCode < 300 {
-		if err := json.Unmarshal(data, out); err != nil {
-			return resp.StatusCode, err
-		}
-	}
-	if resp.StatusCode >= 300 {
-		var e struct {
-			Message string `json:"message"`
-		}
-		_ = json.Unmarshal(data, &e)
-		return resp.StatusCode, fmt.Errorf("%s", firstNonEmpty(e.Message, strings.TrimSpace(string(data)), resp.Status))
-	}
-	return resp.StatusCode, nil
+	return readAPIReply(resp.StatusCode, resp.Status, data, out, true)
 }
 
 func firstNonEmpty(ss ...string) string {
@@ -1289,6 +1277,14 @@ const (
 	parkedContainersLabel = "plug.parked.containers" // comma-joined container ids to restart
 	parkedServiceLabel    = "plug.parked.service"    // Swarm service to scale back
 	parkedReplicasLabel   = "plug.parked.replicas"   // …to this replica count
+
+	// The signpost's own two, constants for the same reason as their neighbours
+	// above and because they were the last literals left: six sites, two writing
+	// and four READING, spread over six hundred lines. A typo in one of the four
+	// readers makes another agent's signpost look like a residue nobody owns,
+	// which is precisely what the boot sweep then removes.
+	signpostLabel      = "plug.signpost"       // this container or service IS a signpost
+	signpostOwnerLabel = "plug.signpost.owner" // and this session owns it
 )
 
 // sessionOwnerLabel records WHICH AGENT INSTANCE holds a name, as the address
@@ -1378,7 +1374,7 @@ func nameOwners(name string, nets []string) []owner {
 	}
 	var owners []owner
 	for _, c := range list {
-		if c.Labels["plug.signpost"] == "1" {
+		if c.Labels[signpostLabel] == "1" {
 			continue // our own signposts don't count
 		}
 		primary := c.Id[:12]
@@ -1505,7 +1501,7 @@ func swarmNameOwner(name string, self selfInfo) *swarmOwner {
 		return nil // can't tell — Verify is the backstop
 	}
 	for _, s := range list {
-		if s.Spec.Labels["plug.signpost"] == "1" {
+		if s.Spec.Labels[signpostLabel] == "1" {
 			continue // our own signpost services don't count
 		}
 		shared := !scoped // if we couldn't resolve our net ids, assume shared (safe)
@@ -1616,7 +1612,7 @@ func containerServe(name string, pairs []portPair, self selfInfo) {
 		// dials 127.0.0.1 in OUR netns, where the other agent's port never
 		// answers, so its LIVE signpost reads as a leftover and gets swept. The
 		// gc has always checked this label; the serve path never did.
-		if o := insp.Config.Labels["plug.signpost.owner"]; o != "" && o != self.owner() && ownerAlive(o, false) {
+		if o := insp.Config.Labels[signpostOwnerLabel]; o != "" && o != self.owner() && ownerAlive(o, false) {
 			answer("error: %q is served here by another plug agent (%s), which is still running — "+
 				"two agents on one host cannot both own a name. Use a different name, or stop that agent.", name, o)
 		}
@@ -1647,8 +1643,8 @@ func containerServe(name string, pairs []portPair, self selfInfo) {
 		"Image":      signpostImage(self.image),
 		"Entrypoint": signpostArgs(pairs, self.relayTarget()),
 		"Labels": map[string]string{
-			"plug.signpost":       "1",
-			"plug.signpost.owner": self.owner(),
+			signpostLabel:         "1",
+			signpostOwnerLabel:    self.owner(),
 			sessionOwnerLabel:     sessionOwner(self.relayTarget(), pairs),
 			parkedContainersLabel: strings.Join(receipt, ","),
 		},
@@ -1907,7 +1903,7 @@ func swarmServe(name string, pairs []portPair, self selfInfo) {
 		// Same rule as the container shape: a service name is cluster-wide, so
 		// another agent's LIVE signpost must not read as our leftover just
 		// because its port does not answer in our netns.
-		if o := sp.Spec.Labels["plug.signpost.owner"]; o != "" && o != self.owner() && ownerAlive(o, true) {
+		if o := sp.Spec.Labels[signpostOwnerLabel]; o != "" && o != self.owner() && ownerAlive(o, true) {
 			answer("error: %q is served here by another plug agent (%s), which is still running — "+
 				"two agents on one cluster cannot both own a name. Use a different name, or stop that agent.", name, o)
 		}
@@ -1955,9 +1951,9 @@ func swarmServe(name string, pairs []portPair, self selfInfo) {
 		attach = append(attach, map[string]any{"Target": n, "Aliases": []string{name}})
 	}
 	labels := map[string]string{
-		"plug.signpost":       "1",
-		"plug.signpost.owner": self.owner(),
-		sessionOwnerLabel:     sessionOwner(self.relayTarget(), pairs),
+		signpostLabel:      "1",
+		signpostOwnerLabel: self.owner(),
+		sessionOwnerLabel:  sessionOwner(self.relayTarget(), pairs),
 	}
 	if own != nil { // the parking receipt — how unserve/gc restore it
 		labels[parkedServiceLabel] = own.name
@@ -2067,7 +2063,7 @@ func sweepExpiredServiceLingers() {
 			Labels map[string]string `json:"Labels"`
 		} `json:"Spec"`
 	}
-	f := `{"label":["plug.signpost=1"]}`
+	f := `{"label":["` + signpostLabel + `=1"]}`
 	if _, err := dockerAPI("GET", "/services?filters="+urlEscape(f), nil, &slist); err != nil {
 		return
 	}
@@ -2195,7 +2191,7 @@ func dockerGC() {
 	}
 	mine := self.owner()
 	swarm := swarmManager()
-	f := `{"label":["plug.signpost=1"]}`
+	f := `{"label":["` + signpostLabel + `=1"]}`
 	// Standalone-container signposts.
 	var clist []struct {
 		Id     string            `json:"Id"`
@@ -2210,7 +2206,7 @@ func dockerGC() {
 			if sessionLive(c.Labels[sessionOwnerLabel]) {
 				continue
 			}
-			o := c.Labels["plug.signpost.owner"]
+			o := c.Labels[signpostOwnerLabel]
 			if o == mine || !ownerAlive(o, swarm) {
 				// An orphaned signpost's receipt is a takeover that never got
 				// restored (the session died with the agent) — restore it now,
@@ -2255,7 +2251,7 @@ func dockerGC() {
 			if sessionLive(s.Spec.Labels[sessionOwnerLabel]) {
 				continue
 			}
-			o := s.Spec.Labels["plug.signpost.owner"]
+			o := s.Spec.Labels[signpostOwnerLabel]
 			if o == mine || !ownerAlive(o, swarm) {
 				if err := scaleBackParkedService(s.Spec.Labels); err != nil { // undo the orphan's takeover
 					gcNote("could not scale %q back up while cleaning up: %v",
@@ -2354,17 +2350,39 @@ func k8sDo(method, path, contentType string, body any, out any) (int, error) {
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(resp.Body)
-	if out != nil && resp.StatusCode < 300 {
-		_ = json.Unmarshal(data, out)
+	return readAPIReply(resp.StatusCode, resp.Status, data, out, false)
+}
+
+// readAPIReply turns one orchestrator answer into (status, error). Shared by the
+// Docker and Kubernetes callers because they had the same twenty lines and had
+// stopped agreeing on them: the Docker one returned the decode error, the
+// Kubernetes one discarded it with `_ =`. An answer the agent could not read
+// therefore came back from Kubernetes as "200, everything fine" with out left at
+// its zero value, and the caller acted on that: a Service read as having no
+// selector and no ports is indistinguishable from a Service that really has
+// none, and the repoint that follows is made on nothing.
+//
+// withBody says whether the raw response is worth quoting when the API refuses.
+// Docker's errors are often a bare string with no JSON around them; Kubernetes
+// always sends a Status object, whose message is the useful part and whose full
+// text is a wall.
+func readAPIReply(status int, statusText string, data []byte, out any, withBody bool) (int, error) {
+	if out != nil && status < 300 {
+		if err := json.Unmarshal(data, out); err != nil {
+			return status, fmt.Errorf("the API answered %s and this could not be read: %w", statusText, err)
+		}
 	}
-	if resp.StatusCode >= 300 {
+	if status >= 300 {
 		var e struct {
 			Message string `json:"message"`
 		}
 		_ = json.Unmarshal(data, &e)
-		return resp.StatusCode, fmt.Errorf("%s", firstNonEmpty(e.Message, resp.Status))
+		if withBody {
+			return status, fmt.Errorf("%s", firstNonEmpty(e.Message, strings.TrimSpace(string(data)), statusText))
+		}
+		return status, fmt.Errorf("%s", firstNonEmpty(e.Message, statusText))
 	}
-	return resp.StatusCode, nil
+	return status, nil
 }
 
 func k8sNamespace() string {
