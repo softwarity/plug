@@ -135,6 +135,107 @@ thing, the pair is pinned by fingerprint instead of being rewritten: editing
 either side moves the fingerprint and asks whoever edited it to confirm they
 still agree.
 
+
+### The netstack is sixteen months less old
+
+gvisor is the userspace network stack every intercepted flow goes through, and it
+had been pinned since May 2025 with nothing saying why. Nothing was wrong with
+it; a pin with no reason attached simply reconducts itself forever.
+
+The upgrade needed one change: the UDP forwarder's handler now reports whether it
+handled the packet, where before it returned nothing. It answers yes, which is
+what the forwarder used to answer unconditionally, and is also right on its own
+terms, since every packet arriving at that address is a query for us.
+
+How to do it next time is now written in go.mod, because getting it wrong costs
+an hour: gvisor publishes no tags, and `@latest` resolves to a master whose stack
+package carries a test file declaring a different package, which the go tool
+refuses outright. The branch meant for module consumers is `go`.
+
+The upgrade also pulled in a new transitive dependency, and the licence test
+written the same afternoon caught it before anyone else could.
+
+### Dead code that a guard was watching
+
+Three copies of the relay loop were compared against each other to catch drift,
+and one of them, in internal/tunnel, had no callers at all: both deadcode and
+unused reported it on every platform. So a third of that guard's attention went
+to code nothing ran, while the live splice sitting beside it was guarded by
+nothing. That one now has its own tests, the dead copy is gone, and the guard
+counts its copies so one going missing fails instead of quietly comparing less.
+
+Also removed: a constant naming a path the agent already names itself, a one-line
+wrapper nobody called, and an interface with a single implementer whose second
+implementation was never instantiated, not even by a test.
+
+
+### A message the CLI reads was written six times
+
+When a name is already served, the agent refuses and names the port the holder
+sits on. The CLI does not just print that sentence, it PARSES it: finding the
+port is what proves a local record really is the holder and not a leftover naming
+a recycled process, which is what makes it safe to offer to stop it. That
+sentence existed as six copies of a format string across three backends, five of
+them out of sight of the sixth. One losing its second field would have broken the
+offer on one backend and left the other five working.
+
+One constant now, and a test that takes the agent's own text, renders it, and
+runs it through the parser that has to read it. The first version of that test
+passed against a refusal that had lost the field, because Go renders an unused
+argument as trailing "%!(EXTRA ...)" and the parser found what it was looking for
+in there. It is the second version that catches it.
+
+### Smaller things
+
+The two e2e Go modules carried four vulnerabilities that were not merely present
+but actually called, including an authorization bypass in gRPC. They are on
+current releases now, and their versions of the shared libraries match the ones
+the CLI and the agent use.
+
+`uninstall` deletes trees derived from the home directory while running as root
+on macOS, and it was the one privileged path that did not first ask whether those
+trees belong to the user. Every other site that writes as root under a user path
+asks; deleting is not the operation where it stops mattering.
+
+And the last helper still resolved through `$PATH` now goes through the same
+lookup as its neighbours. It was safe today only because its caller happens to
+arrive with a reduced `$PATH`: an invariant held by a coincidence between two
+guards rather than by construction.
+
+
+### The coverage matrix said nothing to anyone who could not see it
+
+Its 111 cells carried their state in a glyph and a colour, so a screen reader
+announced "!" or a dash, and the legend explaining them sat fifty lines away
+linked to nothing. Each cell now carries its word, works or partial or not yet or
+not applicable, next to the glyph rather than instead of it, and every cell is
+named by its feature and its platform. The other tables on the site gained the
+same header markup.
+
+The diagram on the home page looped for as long as the page was open, with no way
+to stop it: the animation is SMIL inside an embedded SVG, which CSS cannot reach
+and cannot switch off. The deployment already renders a still frame of it, and
+that is what a reader who has asked for reduced motion gets now. If the still is
+ever missing, and it is absent from a local build by construction, the page falls
+back to the animated one rather than showing a broken image.
+
+While in there: a service that fetched the released version at runtime was
+deleted rather than fixed. The job it claimed is already done at build time, and
+better, by the step that pins the tag into the manifests the site hands out, so
+what a reader copies and what they download already agree. Two navigation
+landmarks got names, the header and footer became real landmarks instead of being
+buried inside the main one, and a page carried 46 lines of styles for markup it
+does not have.
+
+### The attribution tests skipped instead of failing
+
+The tests that exercise the OS primitives deciding which cluster a flow belongs
+to, the process table and the socket table, skipped when the primitive answered
+nothing. go test says nothing about a skip unless asked, so breaking attribution
+outright left the package green and silent. That was measured. A CI runner has
+those tools; there, an unanswerable question is now a failure, which is the shape
+the Windows elevation tests already used.
+
 ## 2.13.0
 
 ### A copy of the relay loop had quietly lost a branch

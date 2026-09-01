@@ -43,6 +43,15 @@ func uninstall(args []string) {
 
 	home := realUserHome()
 	plugDir := filepath.Join(home, ".plug")
+	// Guarded like every other privileged touch of a user path, and it was the
+	// one place that was not. uninstall runs at euid 0 on macOS and deletes trees
+	// derived from realUserHome, which falls back to $HOME: a value the caller
+	// sets. Every other site that writes as root under a user path asks this
+	// question first (writeProfile, setProfileKey, saveUpdateState, markServed,
+	// writeKeyPair, dialTunnel); deleting is not the one operation where it stops
+	// mattering.
+	guardUserPath(plugDir)
+	guardUserPath(filepath.Join(home, ".local", "bin", "plug"))
 	if !asked && hasProfiles(plugDir) {
 		purge = promptPurge()
 	}

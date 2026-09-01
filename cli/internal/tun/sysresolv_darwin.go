@@ -20,7 +20,12 @@ import (
 func checkSystemResolver(name string, log logfn) error {
 	for i := 0; i < 3; i++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		out, _ := exec.CommandContext(ctx, "dscacheutil", "-q", "host", "-a", "name", name).CombinedOutput()
+		// HelperPath, like every other helper this package runs. It is the last
+		// one that was resolved through $PATH, and it survived only because the
+		// caller happens to arrive with a reduced PATH: an invariant held by
+		// coincidence between two guards rather than by construction, which is
+		// the shape that breaks silently when one of them moves.
+		out, _ := exec.CommandContext(ctx, HelperPath("dscacheutil"), "-q", "host", "-a", "name", name).CombinedOutput()
 		cancel()
 		for _, line := range strings.Split(string(out), "\n") {
 			if v, ok := strings.CutPrefix(strings.TrimSpace(line), "ip_address:"); ok {

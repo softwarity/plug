@@ -25,7 +25,8 @@ func TestPidForLocalPortSelf(t *testing.T) {
 
 	pid, ok := pidForLocalPort(uint16(srcPort))
 	if !ok {
-		t.Skip("lsof did not find the socket (unavailable in this environment)")
+		mustWorkInCI(t, ok, "the socket table lookup (lsof)")
+		return
 	}
 	if pid != os.Getpid() {
 		t.Fatalf("pidForLocalPort(%d) = %d, want self %d", srcPort, pid, os.Getpid())

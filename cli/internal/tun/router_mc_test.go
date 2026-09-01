@@ -42,7 +42,8 @@ func TestMultiDialSelf(t *testing.T) {
 
 	d, key, ok := multiDial(ct)(srcPort)
 	if !ok {
-		t.Skip("connect-time lookup unavailable in this environment")
+		mustWorkInCI(t, ok, "the connect-time attribution")
+		return
 	}
 	if key != "hostZ:2222" {
 		t.Fatalf("attributed to %q, want hostZ:2222", key)

@@ -592,6 +592,15 @@ func takeNameLease(name, port string) {
 }
 
 // heldBy describes the session holding a name, for a refusal message. The agent
+// nameHeldRefusal is the one refusal a client PARSES rather than just prints:
+// heldPort in cli/servedmark.go looks for "agent port " inside it to decide
+// whether the session holding the name is one of yours, and therefore whether it
+// is safe to offer to stop it. Six copies of a format string, five of them out
+// of sight of the sixth, and one losing its "(%s)" would break that offer on one
+// backend and leave the other five working. The file already keeps its labels
+// this way (parkedContainersLabel and its neighbours).
+const nameHeldRefusal = "error: %q is already exposed by another live session (%s) - one -s per name at a time"
+
 // port alone answers "is it taken"; the origin answers "by whom", which is the
 // question the person reading it actually has. Silent when the lease predates
 // this (an older agent wrote it) rather than inventing a source.
@@ -645,7 +654,7 @@ func serveName(name string, pairs []portPair) {
 	// someone else's: it records the port it holds a name on, and only a match
 	// proves its record is the holder rather than a leftover on a recycled PID.
 	if held := leaseHolder(name); nameTaken(held, pairs, agentPortLive) {
-		answer("error: %q is already exposed by another live session (%s) - one -s per name at a time", name, heldBy(name, held))
+		answer(nameHeldRefusal, name, heldBy(name, held))
 	}
 	if len(pairs) > 0 {
 		takeNameLease(name, pairs[0].agent)
@@ -1616,7 +1625,7 @@ func containerServe(name string, pairs []portPair, self selfInfo) {
 		// (same role, same owner label), whose forward answers on the network and
 		// never in this container's loopback.
 		if own := signpostOwner(insp.Config.Labels, insp.Config.Entrypoint); sessionLive(own) {
-			answer("error: %q is already exposed by another live session (%s) - one -s per name at a time", name, heldBy(name, ownerPort(own)))
+			answer(nameHeldRefusal, name, heldBy(name, ownerPort(own)))
 		}
 	}
 	// A leftover signpost (a crashed session's, or a re-run) may carry a parking
@@ -1906,7 +1915,7 @@ func swarmServe(name string, pairs []portPair, self selfInfo) {
 		// shares our owner label, so the check above waves it through, and its
 		// forward answers on the overlay and never in this task's loopback.
 		if own := signpostOwner(sp.Spec.Labels, sp.Spec.TaskTemplate.ContainerSpec.Command); sessionLive(own) {
-			answer("error: %q is already exposed by another live session (%s) - one -s per name at a time", name, heldBy(name, ownerPort(own)))
+			answer(nameHeldRefusal, name, heldBy(name, ownerPort(own)))
 		}
 		// Past those two checks the signpost is ours to take: nobody live is
 		// behind it. Reuse it UNLESS it carries a parking receipt — that receipt
@@ -2764,7 +2773,7 @@ func k8sServe(name string, pairs []portPair) {
 				// twice over. The receipt says whose it is; the address says
 				// whether that is still true.
 				if own := k8sReceiptOwner(existing.Metadata.Annotations[k8sParkedAnn]); own != owner && sessionLive(own) {
-					answer("error: %q is already exposed by another live session (%s) - one -s per name at a time", name, heldBy(name, ownerPort(own)))
+					answer(nameHeldRefusal, name, heldBy(name, ownerPort(own)))
 				}
 				receipt, rerr := k8sSignReceipt(existing.Metadata.Annotations[k8sParkedAnn], owner,
 					k8sReceipt{Selector: existing.Spec.Selector, Ports: existing.Spec.Ports})
@@ -2792,10 +2801,10 @@ func k8sServe(name string, pairs []portPair) {
 		// Service's own single replica could see.
 		if own := existing.Metadata.Annotations[sessionOwnerLabel]; own != "" {
 			if sessionLive(own) {
-				answer("error: %q is already exposed by another live session (%s) - one -s per name at a time", name, heldBy(name, ownerPort(own)))
+				answer(nameHeldRefusal, name, heldBy(name, ownerPort(own)))
 			}
 		} else if tp := k8sTargetPort(existing.Spec.Ports); tp != "" && agentPortLive(tp) {
-			answer("error: %q is already exposed by another live session (%s) - one -s per name at a time", name, heldBy(name, tp))
+			answer(nameHeldRefusal, name, heldBy(name, tp))
 		}
 		// Take it over IN PLACE — never delete-and-recreate. The ClusterIP is
 		// handed out at creation and it is what every caller cached: patching

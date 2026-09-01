@@ -68,7 +68,8 @@ func TestProcStartSelf(t *testing.T) {
 	// The real per-OS procStart must return a positive, readable stamp for us.
 	st, ok := procStart(os.Getpid())
 	if !ok {
-		t.Skip("procStart unavailable on this OS build")
+		mustWorkInCI(t, ok, "procStart")
+		return
 	}
 	if st <= 0 {
 		t.Fatalf("procStart(self) = %d, want > 0", st)
@@ -79,7 +80,8 @@ func TestPpidOfSelf(t *testing.T) {
 	// The real per-OS ppidOf must agree with the runtime for our own process.
 	ppid, ok := ppidOf(os.Getpid())
 	if !ok {
-		t.Skip("ppidOf unavailable on this OS build")
+		mustWorkInCI(t, ok, "ppidOf")
+		return
 	}
 	if ppid != os.Getppid() {
 		t.Fatalf("ppidOf(self) = %d, want %d", ppid, os.Getppid())
