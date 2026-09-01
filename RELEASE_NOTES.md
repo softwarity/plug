@@ -353,6 +353,22 @@ pointing at this repository for something that happened at the registry.
 The credentials already existed and were simply not used there. Absent, on a
 fork, the pull stays anonymous exactly as before.
 
+
+### A stuck e2e cell now says so instead of vanishing
+
+Everything inside a cell was already bounded: the plug sessions carry an alarm,
+the waits go through a bounded helper, every request has a deadline. The cell
+itself was not, and that is the shape the failure kept taking. A Windows leg sat
+in one cell for thirty-five minutes, the runner cancelled the job, and the log
+ended mid-cell with the fifteen cells after it never run and nothing saying which
+was to blame. It has happened on three different cells now, which is why the
+answer belongs at the dispatcher rather than in whichever cell it lands on next.
+
+Twelve minutes, where the slowest cell finishes in about two: not a performance
+budget, the line past which a cell is not slow but stuck. Crossing it prints what
+the shell was doing, the live sessions with their elapsed times, and the tail of
+each session log, then fails the leg by name.
+
 ## 2.13.0
 
 ### A copy of the relay loop had quietly lost a branch

@@ -211,6 +211,7 @@ sum()   { echo "$*" >> "${GITHUB_STEP_SUMMARY:-/dev/stderr}"; }
 # the shell. A status above 128 is a signal, and naming it is the difference
 # between a mystery and a lead.
 trap 'rc=$?
+  [ -n "${cell_watchdog:-}" ] && kill "$cell_watchdog" 2>/dev/null
   if [ "$rc" -gt 128 ]; then
     echo "e2e-matrix: phase $phase left on signal $((rc - 128)) (exit $rc): the SHELL was signalled, not just a child" >&2
   elif [ "$rc" -ne 0 ]; then
@@ -1804,6 +1805,41 @@ do_update_tag() {
   echo "update-tag OK — the unpublished tag was refused and the agent is still up (v$v)"
   sum "**plug update <tag> (an unpublished tag is refused, agent left standing)** ✅"; return 0
 }
+
+# A cell that hangs must say so, not vanish.
+#
+# Everything INSIDE a cell is bounded already: plug sessions carry an alarm,
+# waits go through wait_bg, every curl has --max-time. The cell itself was not,
+# and that is the shape the failure keeps taking: a Windows leg sat in one cell
+# for thirty-five minutes, the runner cancelled the job, and the log ended
+# mid-cell with the ones after it never run and nothing saying which was to
+# blame. It has happened on three different cells now, so the answer belongs here
+# rather than in whichever cell it lands on next.
+#
+# Generous on purpose. The slowest cell finishes in about two minutes; twelve is
+# not a performance budget, it is the line past which the cell is not slow, it is
+# stuck. Crossing it prints what the shell was doing and kills the leg, which
+# turns a silent cancellation into a failure with a name on it.
+#
+# perl's alarm rather than `timeout`: this runs on Git Bash too, and the harness
+# already relies on perl being there for the per-session bound.
+CELL_MAX="${PLUG_CELL_MAX:-720}"
+if [ "$phase" != setup ]; then
+  ( sleep "$CELL_MAX"
+    echo "::error::the '$phase' cell has been running for ${CELL_MAX}s and is not slow, it is stuck." >&2
+    echo "--- what this shell was doing ---" >&2
+    # shellcheck disable=SC2009 # pgrep is not on Git Bash, and the elapsed time
+    # and full argv are the whole point: which session, started when.
+    ps -o pid=,ppid=,etime=,args= 2>/dev/null | grep -iE "plug|sink|echo-local" | grep -v grep | head -20 >&2
+    for f in /tmp/gw.out /tmp/serve.out /tmp/takeover.out /tmp/resilience.out; do
+      [ -s "$f" ] && { echo "--- $f ---" >&2; tail -8 "$f" >&2; }
+    done
+    kill -9 "$$" 2>/dev/null ) &
+  cell_watchdog=$!
+  # Cleaned up by the EXIT trap above, which already exists. Setting a second
+  # one here would have REPLACED it, and with it the line that names the signal
+  # a killed shell left on, which is the only lead those failures ever gave.
+fi
 
 case "$phase" in
   setup)        do_setup ;;
