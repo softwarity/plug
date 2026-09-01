@@ -212,49 +212,75 @@ func registryGET(cl *http.Client, endpoint string, token *string) (body []byte, 
 	return nil, "", fmt.Errorf("%s: unauthorized", endpoint)
 }
 
-// registryToken follows a Bearer challenge (realm/service/scope) and returns
-// the token — the Docker Hub anonymous-pull flow.
+// registryToken answers a Bearer challenge anonymously:
+// WWW-Authenticate: Bearer realm="…",service="…",scope="…"
+//
+// Mirrors the agent's twin, because every place these two had drifted was this
+// copy being the weaker one, and a registry that answers the cluster but not
+// this process turns the fast path into a failure the operator has to read.
 func registryToken(cl *http.Client, challenge string) (string, error) {
-	if !strings.HasPrefix(challenge, "Bearer ") {
+	// RFC 9110 section 11.1: the auth scheme is case-insensitive. A registry
+	// answering `bearer realm=...` was turned away here and accepted by the
+	// agent, so the same registry worked from the cluster and not from here.
+	if !strings.HasPrefix(strings.ToLower(challenge), "bearer ") {
 		return "", fmt.Errorf("unsupported auth challenge %q", challenge)
 	}
-	var realm string
-	params := url.Values{}
-	for _, part := range splitChallenge(strings.TrimPrefix(challenge, "Bearer ")) {
-		k, v, ok := strings.Cut(part, "=")
+	params := map[string]string{}
+	for _, part := range splitChallenge(challenge[len("Bearer "):]) {
+		k, v, ok := strings.Cut(strings.TrimSpace(part), "=")
 		if !ok {
 			continue
 		}
-		v = strings.Trim(v, `"`)
-		if k == "realm" {
-			realm = v
-		} else {
-			params.Add(k, v)
-		}
+		params[strings.ToLower(k)] = strings.Trim(v, `"`)
 	}
+	realm := params["realm"]
 	if realm == "" {
 		return "", fmt.Errorf("auth challenge without a realm: %q", challenge)
 	}
-	resp, err := cl.Get(realm + "?" + params.Encode())
+	// Only service and scope are the token server's business. A 401 challenge
+	// also carries the registry's own diagnostics (RFC 6750 defines error and
+	// error_description); forwarding those is noise at best, and a 400 from a
+	// token server that validates its query at worst.
+	q := url.Values{}
+	if params["service"] != "" {
+		q.Set("service", params["service"])
+	}
+	if params["scope"] != "" {
+		q.Set("scope", params["scope"])
+	}
+	resp, err := cl.Get(realm + "?" + q.Encode())
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
-	b, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	// An auth server that refuses says so with a status and an error document.
+	// Unmarshalled as a token document, that page yields no token and no error,
+	// and the refusal reaches nobody.
+	if resp.StatusCode >= 300 {
+		return "", fmt.Errorf("auth server answered %s", resp.Status)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return "", err
 	}
-	var payload struct {
+	var tok struct {
 		Token       string `json:"token"`
 		AccessToken string `json:"access_token"`
 	}
-	if err := json.Unmarshal(b, &payload); err != nil {
+	if err := json.Unmarshal(data, &tok); err != nil {
 		return "", err
 	}
-	if payload.Token != "" {
-		return payload.Token, nil
+	// A token document with neither field used to return ("", nil) here, and the
+	// retry then went out with a literal `Authorization: Bearer ` behind which
+	// there is nothing: the registry answers 401 again and the report blames the
+	// listing instead of the auth server.
+	if tok.Token != "" {
+		return tok.Token, nil
 	}
-	return payload.AccessToken, nil
+	if tok.AccessToken != "" {
+		return tok.AccessToken, nil
+	}
+	return "", fmt.Errorf("auth server returned no token")
 }
 
 func splitChallenge(s string) []string {

@@ -95,6 +95,46 @@ background was not: it is called inline, and it works only because the one hook
 that exists is a non-blocking send. The requirement now sits on the function that
 registers a hook, where whoever writes the next one will read it.
 
+
+### plug update grants the privilege before the binary is in place, not after
+
+Replacing the launcher wrote the new binary, moved it into place, and only then
+asked sudo to make it setuid root, or to re-apply its capabilities, naming the
+destination by PATH. plug installs into ~/.local/bin, which the user owns, so
+anything running as them could put its own file there in between and have sudo
+grant IT the privilege. The grant now happens on the new file before it is moved,
+so the inode that arrives is the one that was written and there is no in-between.
+
+On macOS it no longer asks sudo at all: plug is setuid there, so the process
+doing the update is already root and can do it itself.
+
+And the command is no longer built as a string for a shell. It interpolated the
+path between single quotes, so an install path containing an apostrophe closed
+the quote and the remainder ran as root. Nothing there needs a shell, so there is
+none.
+
+
+### The two copies of the registry client had drifted, and nothing was watching
+
+`cli/registry.go` says in its own header that its helpers are mirrored from the
+agent's and must be kept in sync. Nothing checked, and four behaviours in the
+token exchange had come apart, each of them the CLI being the weaker copy: it
+matched the `Bearer` scheme case-sensitively where the standard says the scheme
+is case-insensitive, so a registry answering `bearer realm=...` worked from the
+cluster and not from here; it parsed an auth server's error page as a token
+document, so a refusal reached nobody; a document with no token at all came back
+as success, and the retry then went out with an empty `Authorization: Bearer`
+behind which there is nothing; and it forwarded every parameter of the challenge
+to the token server, including the registry's own diagnostics.
+
+The repository already had the dispositif that would have caught this, guarding
+another mirrored function, and that one did not drift. This one now exists too.
+It compares parsed function bodies rather than searching for text, so an inverted
+argument is caught as well. Where the two are written differently but do the same
+thing, the pair is pinned by fingerprint instead of being rewritten: editing
+either side moves the fingerprint and asks whoever edited it to confirm they
+still agree.
+
 ## 2.13.0
 
 ### A copy of the relay loop had quietly lost a branch
