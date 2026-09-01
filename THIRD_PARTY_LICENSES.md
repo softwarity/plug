@@ -17,16 +17,18 @@ The Go-module list is generated from the actual link graph of the `plug` binary
 | `golang.org/x/crypto` | SSH client - the in-process `direct-tcpip` transport | BSD-3-Clause |
 | `golang.org/x/net` | networking helpers | BSD-3-Clause |
 | `golang.org/x/sys` | OS syscalls (unix / windows) | BSD-3-Clause |
+| `golang.org/x/term` | terminal detection, so a prompt is only shown to someone who can answer it | BSD-3-Clause |
 | `golang.org/x/time` | rate limiting | BSD-3-Clause |
 | `golang.zx2c4.com/wireguard` (wireguard-go) | the userspace TUN device | MIT |
 | `golang.zx2c4.com/wintun` | Windows TUN wrapper | MIT |
+| `golang.zx2c4.com/wireguard/windows` | Windows IP Helper bindings (`tunnel/winipcfg`), used to set routes and DNS | MIT |
 | `gvisor.dev/gvisor` | userspace network stack (netstack) that answers DNS and terminates flows | Apache-2.0 |
 | `github.com/google/btree` | data structure used by the netstack | Apache-2.0 |
 
 Sources / copyright holders / full texts:
 
-- **Go, `x/crypto`, `x/net`, `x/sys`, `x/time`** — BSD-3-Clause, © The Go Authors — <https://cs.opensource.google/go>
-- **wireguard-go, wintun** — MIT, © Jason A. Donenfeld / WireGuard LLC — <https://git.zx2c4.com/wireguard-go>
+- **Go, `x/crypto`, `x/net`, `x/sys`, `x/term`, `x/time`**: BSD-3-Clause, © The Go Authors, <https://cs.opensource.google/go>
+- **wireguard-go, wintun, wireguard-windows**: MIT, © Jason A. Donenfeld / WireGuard LLC, <https://git.zx2c4.com/wireguard-go>
 - **gVisor** — Apache-2.0, © The gVisor Authors — <https://github.com/google/gvisor/blob/master/LICENSE>
 - **btree** — Apache-2.0, © Google — <https://github.com/google/btree/blob/master/LICENSE>
 
