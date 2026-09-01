@@ -104,8 +104,16 @@ func buildStack(tab *faketab, df dialFunc, upstream *upstreamDNS, check nameChec
 	// resolver we repoint) sends queries to dnsIP:53; they arrive as IP packets
 	// and this UDP forwarder answers them. No loopback socket — so getaddrinfo on
 	// macOS, which ignores /etc/resolv.conf, reaches us via the system resolver.
-	udpFwd := udp.NewForwarder(s, func(r *udp.ForwarderRequest) {
+	// The handler answers with "handled", which is what the forwarder's own
+	// HandlePacket returns to the stack. gvisor grew that return value; before it,
+	// HandlePacket answered true unconditionally, so true is what keeps the
+	// behaviour identical. It is also correct here on its own terms: every UDP
+	// packet reaching this address is a query for us, and telling the stack
+	// otherwise would have it answer port-unreachable to the resolver we just
+	// pointed at ourselves.
+	udpFwd := udp.NewForwarder(s, func(r *udp.ForwarderRequest) bool {
 		handleDNS(r, tab, upstream, check, log)
+		return true
 	})
 	s.SetTransportProtocolHandler(udp.ProtocolNumber, udpFwd.HandlePacket)
 	return s, ep

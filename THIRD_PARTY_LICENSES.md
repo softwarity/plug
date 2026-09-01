@@ -18,6 +18,7 @@ The Go-module list is generated from the actual link graph of the `plug` binary
 | `golang.org/x/net` | networking helpers | BSD-3-Clause |
 | `golang.org/x/sys` | OS syscalls (unix / windows) | BSD-3-Clause |
 | `golang.org/x/term` | terminal detection, so a prompt is only shown to someone who can answer it | BSD-3-Clause |
+| `golang.org/x/exp` | generic constraints, pulled in by the netstack's buffer and bits packages | BSD-3-Clause |
 | `golang.org/x/time` | rate limiting | BSD-3-Clause |
 | `golang.zx2c4.com/wireguard` (wireguard-go) | the userspace TUN device | MIT |
 | `golang.zx2c4.com/wintun` | Windows TUN wrapper | MIT |
@@ -27,7 +28,7 @@ The Go-module list is generated from the actual link graph of the `plug` binary
 
 Sources / copyright holders / full texts:
 
-- **Go, `x/crypto`, `x/net`, `x/sys`, `x/term`, `x/time`**: BSD-3-Clause, © The Go Authors, <https://cs.opensource.google/go>
+- **Go, `x/crypto`, `x/exp`, `x/net`, `x/sys`, `x/term`, `x/time`**: BSD-3-Clause, © The Go Authors, <https://cs.opensource.google/go>
 - **wireguard-go, wintun, wireguard-windows**: MIT, © Jason A. Donenfeld / WireGuard LLC, <https://git.zx2c4.com/wireguard-go>
 - **gVisor** — Apache-2.0, © The gVisor Authors — <https://github.com/google/gvisor/blob/master/LICENSE>
 - **btree** — Apache-2.0, © Google — <https://github.com/google/btree/blob/master/LICENSE>
