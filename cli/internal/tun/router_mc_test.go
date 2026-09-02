@@ -9,7 +9,7 @@ import (
 )
 
 // localSocket opens a real local TCP connection and returns its source port +
-// a cleanup. lsof must be able to see it and map it back to this process.
+// a cleanup. The socket table lookup must see it and map it back to this process.
 func localSocket(t *testing.T) (uint16, func()) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

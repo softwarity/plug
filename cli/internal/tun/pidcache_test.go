@@ -4,9 +4,11 @@ package tun
 //
 // Multicluster attribution costs a fork per hop: one `ps -o lstart=` and one
 // `ps -o ppid=` per ancestor, each measured at ~16ms on a real Mac, on top of the
-// ~80ms lsof that finds the PID in the first place. A shell -> plug -> app chain
-// therefore paid five forks per CONNECTION, and a database pool opening ten of
-// them paid it ten times over for an answer that had not changed.
+// lookup that finds the PID in the first place (~80ms when that was an lsof over
+// every process's descriptors, ~3ms now it reads the kernel's socket table). A
+// shell -> plug -> app chain therefore paid five forks per CONNECTION, and a
+// database pool opening ten of them paid it ten times over for an answer that had
+// not changed. The lookup got cheaper; the forks per hop did not.
 //
 // The ancestry of a live process does not change. What CAN change under it is the
 // PID itself, recycled onto an unrelated process, and misrouting a flow to

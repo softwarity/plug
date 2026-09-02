@@ -686,7 +686,7 @@ var pathNarrowed bool
 //
 // plug is setuid root on macOS and carries ambient caps on Linux, on purpose:
 // root once at install, never a prompt afterwards. But it then drives system
-// helpers by BARE NAME — ip, ifconfig, route, scutil, sudo, lsof… — resolved
+// helpers by BARE NAME — ip, ifconfig, route, scutil, sudo, netstat… — resolved
 // through the caller's $PATH. A `PATH=/tmp/evil:$PATH` with a fake `ip` is
 // therefore a fake `ip` running as root (macOS) or with CAP_SYS_ADMIN (Linux,
 // which withPrivCaps hands to the child explicitly).

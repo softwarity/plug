@@ -5,12 +5,17 @@ package tun
 import "sync"
 
 // multiDial builds the global daemon's dialFunc. With a SINGLE active cluster
-// there is no ambiguity, so it routes transparently to that one tunnel — exactly
-// like the single-cluster datapath (no PID lookup, nothing to refuse), which keeps
-// that case a non-regression, including detached children. With TWO OR MORE it
-// attributes each flow: the app's source port → the PID owning the socket (lsof) →
-// walk its ancestry (ps) → the registered `plug -p X` launcher (clusterForPID) →
-// that cluster's tunnel, refusing (RST) a flow it can't attribute (e.g. setsid).
+// there is no ROUTING ambiguity, so the flow goes straight to that one tunnel
+// without the ancestry walk, which is what keeps detached children working. It
+// is not free of a PID lookup though, and this comment claimed it was for as
+// long as that was true: soleAllows asks who owns the socket, because one
+// cluster on a shared machine is still not everyone's cluster. That lookup is
+// what made this path worth measuring (see pidForLocalPort).
+//
+// With TWO OR MORE it attributes each flow: the app's source port → the PID
+// owning the socket (the kernel's socket table) → walk its ancestry (ps) → the
+// registered `plug -p X` launcher (clusterForPID) → that cluster's tunnel,
+// refusing (RST) a flow it cannot attribute (e.g. setsid).
 func multiDial(ct *ClusterTransports) dialFunc {
 	r := pidRouter{
 		clusterForPID: clusterForPID,

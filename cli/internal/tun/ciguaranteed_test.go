@@ -10,12 +10,12 @@ import (
 //
 // The tests below reach for the OS primitives that decide WHICH CLUSTER an
 // intercepted flow belongs to: the process table through ps, the socket table
-// through lsof. Every one of them skipped when the primitive said no, and go test
+// through netstat. Every one of them skipped when the primitive said no, and go test
 // prints nothing about a skip unless asked. So forcing procStart and ppidOf to
 // report failure, which is the whole attribution mechanism broken, left the
 // package green and silent. That was measured, not supposed.
 //
-// A CI runner has ps and lsof. There, an unanswerable question is a broken
+// A CI runner has ps and netstat. There, an unanswerable question is a broken
 // build, and this is the same shape route_windows_test.go already uses for the
 // elevation it needs.
 func mustWorkInCI(t *testing.T, ok bool, what string) {

@@ -2,6 +2,37 @@
 
 ## NEXT RELEASE
 
+### Connecting through plug on macOS was paying 92ms to ask who was connecting
+
+Since 2.13.1 a single cluster is no longer open to every account on the machine:
+before a flow is carried, plug asks which process opened the socket and whether
+its user is one that registered a client. Asking cost more than anyone had
+measured. The answer came from `lsof`, which walks every open file descriptor of
+every process on the machine to report on one port: 92ms, on the first packet of
+every new connection, which capped plug at about a dozen connections a second and
+made a connection pool feel like a stall.
+
+The same question is answered by `netstat -anv`, which reads the table the kernel
+already keeps, in 3ms. Measured on the real function, not on the two commands in
+isolation: 92.2ms to 3.26ms. Windows never had this problem, because it asks the
+kernel directly through GetExtendedTcpTable, and macOS is now the same shape.
+
+The reason to prefer it is not only the cost. `lsof` lists open DESCRIPTORS,
+`netstat` lists live CONNECTIONS, and the difference has teeth: a process that has
+not closed the descriptor of a finished connection still appears in `lsof`, in
+state CLOSED, holding a port the kernel has already released and may already have
+given to someone else. Three such ghosts were sitting on the machine this was
+written on. Attributing a flow through one of them answers with whoever held the
+port BEFORE the process actually connecting, which in the multicluster router is
+the wrong cluster. A port with no live connection has no row in the kernel's
+table, so that answer can no longer be produced.
+
+One thing found while testing it, which nobody had asked for: the parser rejected
+a process whose name is empty. Rejecting means "no owner", and no owner is what
+the ownership check lets through. A process able to blank its own name would have
+outranked the check. It is attributed like any other now, and there is a test that
+fails if that guard is put back.
+
 ---
 
 ## 2.13.2
