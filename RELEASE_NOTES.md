@@ -643,6 +643,24 @@ several times each. Built once now. The service account token is still read on
 each call, deliberately, because the kubelet rotates it and a cached one stops
 working mid-session.
 
+
+### Asking three clusters whether they know a name cost three times as long
+
+Before minting an address for a short name it has not seen, plug asks the clusters
+it is attached to whether any of them holds it. It asked them one after another,
+and each question is bounded at three seconds by the agent's own budget, so a
+laptop attached to three clusters where two were reachable but sluggish paid nine
+seconds. That sits on the resolution path, so the time is paid by whatever was
+just typed.
+
+They are asked together now. Unlike the upstream DNS servers, where every extra
+server asked is extra traffic to somebody else's resolver, each cluster here
+receives exactly one question either way and they are different clusters: nothing
+was ever gained by spacing them out. A cluster that holds the name ends it at
+once, and when none does, every reply is still waited for, because "nobody has
+it" and "nobody could answer" lead to different decisions and only the count
+tells them apart.
+
 ## 2.13.0
 
 ### A copy of the relay loop had quietly lost a branch

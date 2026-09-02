@@ -83,22 +83,13 @@ func newNameChecker(dialers func() []Dialer, log logfn) nameChecker {
 		mu.Unlock()
 
 		started := time.Now()
-		answered, found := false, false
+		var resolvers []clusterNameResolver
 		for _, d := range dialers() {
-			cr, is := d.(clusterNameResolver)
-			if !is {
-				continue
-			}
-			f, ok := cr.ResolveInCluster(name)
-			if !ok {
-				continue
-			}
-			answered = true
-			if f {
-				found = true
-				break
+			if cr, is := d.(clusterNameResolver); is {
+				resolvers = append(resolvers, cr)
 			}
 		}
+		found, answered := askEveryCluster(resolvers, name)
 		took := time.Since(started)
 
 		// Nobody could answer (no transport yet, an agent too old): mint, as
@@ -121,4 +112,49 @@ func newNameChecker(dialers func() []Dialer, log logfn) nameChecker {
 		close(f.done)
 		return result
 	}
+}
+
+// askEveryCluster asks all of them at once and reports whether any holds the
+// name, and whether any could answer at all.
+//
+// It used to walk them in turn, and each question is bounded at three seconds by
+// the agent's own budget, so a lookup for an unknown short name cost three
+// seconds per cluster that was slow to reply: nine, on a laptop attached to three
+// clusters where two were reachable but sluggish. This sits on the resolution
+// path, so that time is paid by whatever the user just typed.
+//
+// Parallel rather than staggered, unlike the upstream DNS race next door, and the
+// difference is worth naming: there, every extra server asked is extra traffic to
+// somebody else's resolver. Here each cluster is asked exactly one question
+// either way, and they are different clusters. Nothing is saved by asking them
+// one after another.
+//
+// A cluster holding the name ends it immediately. Otherwise every answer is
+// waited for, because "nobody has it" and "nobody could answer" lead to different
+// decisions upstream, and only counting the replies tells them apart.
+func askEveryCluster(resolvers []clusterNameResolver, name string) (found, answered bool) {
+	if len(resolvers) == 0 {
+		return false, false
+	}
+	type reply struct{ found, ok bool }
+	replies := make(chan reply, len(resolvers))
+	for _, cr := range resolvers {
+		go func(cr clusterNameResolver) {
+			f, ok := cr.ResolveInCluster(name)
+			replies <- reply{f, ok}
+		}(cr)
+	}
+	for range resolvers {
+		r := <-replies
+		if !r.ok {
+			continue
+		}
+		answered = true
+		if r.found {
+			// The remaining goroutines finish into a buffered channel and are
+			// collected; nothing is left blocked behind an answer nobody wants.
+			return true, true
+		}
+	}
+	return false, answered
 }
