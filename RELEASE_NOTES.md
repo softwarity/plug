@@ -471,6 +471,42 @@ its own copy of; and the tests for one source file, which had been living in two
 files with no boundary between them, are in one. There was no answer to where the
 next one should go.
 
+
+### An agent answering is not a cluster ready
+
+The multicluster cell reaches two clusters at once and asserts each name lands in
+the right one. It waited for the second cluster's AGENT to answer, then asked it
+for a service, and on Kubernetes the agent is serving well before the deployments
+behind it are: the cluster was up for three minutes, its agent answering, and the
+service returning nothing.
+
+The retry it had was two attempts five seconds apart, and it could not simply be
+made longer: the whole point is to reach the second cluster WHILE a session on the
+first is alive, and that session lives for eight seconds. So the waiting moved
+ahead of the timed part. Both clusters must actually serve before the assertion
+starts, and a cluster whose agent is up but whose services never come says
+exactly that instead of failing as a routing error.
+
+### Everything the agent does through Kubernetes has its own file now
+
+Three orchestrators lived in one file of three thousand lines, twenty-five
+functions for this one interleaved with the others. Reading how a Service is
+repointed meant scrolling through how a container is parked. Nothing changed and
+nothing could: moving a function between files of one package is invisible to the
+compiler. Checked all the same, the way the command dispatcher was: the same 127
+declarations before and after, and not one line of code lost or added beyond the
+new file's own imports.
+
+### The Linux half of the attribution had no test, and the site said it had
+
+The primitive that maps a connection back to the process that opened it exists
+for all three platforms; the router that uses it is built for two. So the Linux
+implementation had no caller and no test, while the coverage matrix listed it as
+working and unit-tested everywhere. Rather than delete an implementation the day
+the Linux daemon needs it, the claim is now true, including the case where a port
+nobody holds must answer "no" rather than a plausible pid: a wrong answer there
+does not fail a lookup, it routes somebody's traffic to the wrong cluster.
+
 ## 2.13.0
 
 ### A copy of the relay loop had quietly lost a branch

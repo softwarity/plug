@@ -685,6 +685,30 @@ do_multicluster() {
   local ip_b mc=PASS a_out="" b_out="" mc_pid
   ip_b="$(wait_cluster "$peer_b")" || { echo "cluster $peer_b never became reachable" >&2; sum "**multicluster** ❌ (cluster B unreachable)"; return 1; }
   echo "cluster B reachable at $ip_b:$port"
+  # An agent answering is not a cluster ready. wait_cluster proves the AGENT is
+  # up, which on kind happens well before the deployments behind it are: the
+  # `ident` service can still be pulling while its agent is already serving.
+  #
+  # That gap is what this cell kept dying of, on whichever leg happened to start
+  # first: cluster B up for three minutes, its agent answering, and `ident`
+  # returning nothing. The retry it had was two tries five seconds apart, and it
+  # could not be made longer, because the whole point is to reach B WHILE A is
+  # still alive and A lives for eight seconds. So the waiting belongs here,
+  # before the timed part, not inside it.
+  for _who in "A:$ip" "B:$ip_b"; do
+    _lbl="${_who%%:*}"; _cip="${_who#*:}"
+    _ready=""
+    for _ in $(seq 1 40); do
+      if plug_to "$_cip" curl -sS --max-time 5 http://ident:5678 2>/dev/null | grep -q .; then
+        _ready=1; break
+      fi
+      sleep 3
+    done
+    [ -n "$_ready" ] || {
+      echo "--- multicluster FAIL - cluster $_lbl has an agent but its ident service never answered in 120s"
+      sum "**multicluster** ❌ (cluster $_lbl services not up)"; return 1
+    }
+  done
   # BOTH plugs live at once, on every OS: Linux gives each launch a private
   # resolver; Windows' SYSTEM service and macOS' global daemon each hold one
   # tunnel per cluster and attribute every flow by PID at connect.
@@ -1836,6 +1860,11 @@ if [ "$phase" != setup ]; then
     done
     kill -9 "$$" 2>/dev/null ) &
   cell_watchdog=$!
+  # Disowned, so the shell stops tracking it as a job. Without this, killing it on
+  # the way out makes bash announce "Terminated: 15 ( sleep ..." in the log of
+  # every cell that passed, which is noise in exactly the place someone reads when
+  # something failed.
+  disown "$cell_watchdog" 2>/dev/null || true
   # Cleaned up by the EXIT trap above, which already exists. Setting a second
   # one here would have REPLACED it, and with it the line that names the signal
   # a killed shell left on, which is the only lead those failures ever gave.
