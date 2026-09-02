@@ -453,6 +453,24 @@ checking is visible at a glance. Nothing else changed, and that is checked rathe
 than claimed: the hundred statements it held are the same hundred, in the same
 order, from the opening guard to the closing default.
 
+
+### A test that named the wrong subject
+
+One test claimed to cover the shared state of an exposing session as a whole. It
+took and released the lock in the test itself rather than calling the functions
+that do, so removing the mutex from all three writers left it green; removing it
+from the single reader is what fails it. It is named after the reader now, and
+the writers are covered by the test that drives the re-arm wave through them.
+
+Both are kept. They fail on different mutations, and a test that names its
+subject correctly is worth more than one test fewer.
+
+Housekeeping in the same pass: two dependencies the documentation site declared
+and never used are gone, one of them a syntax-highlighting theme the site carries
+its own copy of; and the tests for one source file, which had been living in two
+files with no boundary between them, are in one. There was no answer to where the
+next one should go.
+
 ## 2.13.0
 
 ### A copy of the relay loop had quietly lost a branch

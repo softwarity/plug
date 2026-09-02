@@ -5,14 +5,19 @@ import (
 	"testing"
 )
 
-// The state a name's mappings share across a re-arm wave: every member writes
-// its freshly allocated port while the re-provisioner reads all of them to
-// rebuild the signpost, and OnRearm can land mid-reconnect. Under -race this
-// fails outright without the mutex.
+// This one guards the READER, AgentPort, and only it.
 //
-// Every goroutine is bounded by a fixed count — no stop channel, no spin: a
-// test must not be able to outlive its assertion.
-func TestExposedSharedStateIsRaceFree(t *testing.T) {
+// Its comment used to describe the shared state as a whole, which it does not
+// touch: it takes and releases the lock in the TEST rather than calling rearm or
+// serve, so removing the mutex from all three writers left it green. Removing it
+// from AgentPort alone does fail it, which is what it actually protects and what
+// this comment now says.
+//
+// The writers are covered by TestRearmWaveTouchesSharedStateUnderTheLock, which
+// drives the wave through rearm and serve themselves. Both are kept: they fail on
+// different mutations, and a test that names its subject correctly is worth more
+// than one fewer test.
+func TestAgentPortIsReadUnderTheLock(t *testing.T) {
 	const rounds = 2000
 	members := make([]*Exposed, 4)
 	for i := range members {
