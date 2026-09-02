@@ -94,6 +94,17 @@ cells drive `plug update` against an agent on the PREVIOUS release, which is
 unsigned until that previous release is itself a signed one. That is a one-cycle
 condition and it clears by itself.
 
+## Re-running a red CI
+
+Use `gh run rerun <id>`, never `gh run rerun --failed`.
+
+The e2e legs reach clusters dispatched by a separate job, under names carrying
+the run ATTEMPT. `--failed` re-runs only what failed, that dispatch job is not
+among them, and the new attempt's legs then look for clusters nobody created.
+They all report that the cluster never became reachable, which reads like broken
+infrastructure and is really a re-run that could not have worked. It cost an hour
+once; the same words are in ci.yml beside the line that builds the name.
+
 ## The other secrets this repo uses
 
 - `DOCKERHUB_USERNAME` / `DOCKERHUB_RW`: the account images are pushed as.

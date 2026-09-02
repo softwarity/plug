@@ -460,6 +460,14 @@ jobs:
         # clusters under the same names as attempt 1 and collided with its own
         # leftovers - which is exactly what a re-run is for when something went
         # wrong, and exactly when the collision is least welcome.
+        #
+        # The consequence for whoever re-runs this: `gh run rerun --failed`
+        # CANNOT work here. It re-runs only the jobs that failed, and this one
+        # succeeded, so no cluster is dispatched for the new attempt while the
+        # legs, whose names carry that attempt, go looking for it. They then all
+        # report "cluster ... never became reachable", which reads exactly like a
+        # broken cluster and is really a re-run that could not have worked. Use
+        # `gh run rerun <id>` and let the whole thing go round.
         run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-${{ github.run_attempt }}-a)" >> "$GITHUB_OUTPUT"
       - id: dispatch_b
         env:
