@@ -580,9 +580,6 @@ jobs:
       # v4 is a rewrite in JavaScript. v3 built Tailscale from source on macOS,
       # which dragged in actions/checkout@v4.2.2 (Node 20) and `brew install
       # coreutils` (untrusted tap): both CI warnings came from this one step.
-      # v4 also points the macOS system resolver at MagicDNS after `tailscale
-      # up`, which --accept-dns=false does not prevent. That lands as manual
-      # (Setup:) DNS, which plug repoints and restores itself (route_darwin.go).
       - name: Join the tailnet
         uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
         with:
@@ -591,6 +588,31 @@ jobs:
           tags: tag:ci
           hostname: plug-${{ matrix.alias }}-${{ github.run_id }}-${{ github.run_attempt }}
           args: --accept-dns=false # reach the cluster by tailnet IP; don't let Tailscale drive DNS
+      # And v4 points macOS at MagicDNS on its own once the tunnel is up
+      # (networksetup -setdnsservers Ethernet 100.100.100.100, plus a search
+      # domain). --accept-dns=false does not stop it: the flag tells the client
+      # not to touch DNS, the action then does it anyway, afterwards. That
+      # resolver serves the tailnet and nothing else here, so every public name
+      # stopped resolving and the step right below died with ENOTFOUND fetching
+      # an artifact, before plug was even installed. We reach the cluster by
+      # tailnet IP, so hand the resolver straight back. "Ethernet" is the
+      # service name the action itself hardcodes.
+      - name: Take macOS DNS back from Tailscale
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          sudo networksetup -setdnsservers Ethernet empty
+          sudo networksetup -setsearchdomains Ethernet empty
+          sudo dscacheutil -flushcache || true # belt and braces, not the assertion
+          # Prove it through getaddrinfo, which is what the next action resolves
+          # with. Without this the symptom surfaces one step later, as someone
+          # else's ENOTFOUND.
+          for i in $(seq 1 10); do
+            python3 -c "import socket; socket.getaddrinfo('api.github.com', 443)" 2>/dev/null && exit 0
+            sleep 1
+          done
+          echo "public DNS is still broken after handing the resolver back"
+          exit 1
       - uses: actions/download-artifact@v7 # the last published launchers, for the compat cell
         with:
           name: latest-launchers
@@ -845,6 +867,31 @@ jobs:
           tags: tag:ci
           hostname: plug-k8s-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
           args: --accept-dns=false # reach the cluster by tailnet IP; don't let Tailscale drive DNS
+      # And v4 points macOS at MagicDNS on its own once the tunnel is up
+      # (networksetup -setdnsservers Ethernet 100.100.100.100, plus a search
+      # domain). --accept-dns=false does not stop it: the flag tells the client
+      # not to touch DNS, the action then does it anyway, afterwards. That
+      # resolver serves the tailnet and nothing else here, so every public name
+      # stopped resolving and the step right below died with ENOTFOUND fetching
+      # an artifact, before plug was even installed. We reach the cluster by
+      # tailnet IP, so hand the resolver straight back. "Ethernet" is the
+      # service name the action itself hardcodes.
+      - name: Take macOS DNS back from Tailscale
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          sudo networksetup -setdnsservers Ethernet empty
+          sudo networksetup -setsearchdomains Ethernet empty
+          sudo dscacheutil -flushcache || true # belt and braces, not the assertion
+          # Prove it through getaddrinfo, which is what the next action resolves
+          # with. Without this the symptom surfaces one step later, as someone
+          # else's ENOTFOUND.
+          for i in $(seq 1 10); do
+            python3 -c "import socket; socket.getaddrinfo('api.github.com', 443)" 2>/dev/null && exit 0
+            sleep 1
+          done
+          echo "public DNS is still broken after handing the resolver back"
+          exit 1
       # ── THE COMMON BLOCK ─────────────────────────────────────────────────
       # Identical, to the character, in e2e-compose, e2e-swarm and e2e-k8s: the
       # same cells, in the same order, under the same names. That is the point.
@@ -995,6 +1042,31 @@ jobs:
           tags: tag:ci
           hostname: plug-swarm-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
           args: --accept-dns=false # reach the cluster by tailnet IP; don't let Tailscale drive DNS
+      # And v4 points macOS at MagicDNS on its own once the tunnel is up
+      # (networksetup -setdnsservers Ethernet 100.100.100.100, plus a search
+      # domain). --accept-dns=false does not stop it: the flag tells the client
+      # not to touch DNS, the action then does it anyway, afterwards. That
+      # resolver serves the tailnet and nothing else here, so every public name
+      # stopped resolving and the step right below died with ENOTFOUND fetching
+      # an artifact, before plug was even installed. We reach the cluster by
+      # tailnet IP, so hand the resolver straight back. "Ethernet" is the
+      # service name the action itself hardcodes.
+      - name: Take macOS DNS back from Tailscale
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          sudo networksetup -setdnsservers Ethernet empty
+          sudo networksetup -setsearchdomains Ethernet empty
+          sudo dscacheutil -flushcache || true # belt and braces, not the assertion
+          # Prove it through getaddrinfo, which is what the next action resolves
+          # with. Without this the symptom surfaces one step later, as someone
+          # else's ENOTFOUND.
+          for i in $(seq 1 10); do
+            python3 -c "import socket; socket.getaddrinfo('api.github.com', 443)" 2>/dev/null && exit 0
+            sleep 1
+          done
+          echo "public DNS is still broken after handing the resolver back"
+          exit 1
       # ── THE COMMON BLOCK ─────────────────────────────────────────────────
       # Identical, to the character, in e2e-compose, e2e-swarm and e2e-k8s: the
       # same cells, in the same order, under the same names. That is the point.

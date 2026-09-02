@@ -38,13 +38,16 @@ running on Node 20 and ran a Homebrew install, and the runners now warn that an
 untrusted tap sits in their image. The current major installs a prebuilt binary
 and does neither, so all five go at once.
 
-It is not a free upgrade, and the part worth knowing is not the warning. On macOS
+It is not a free upgrade, and the interesting part is not the warning. On macOS
 the new version points the system resolver at MagicDNS once the tunnel is up, and
-the flag we pass to keep Tailscale away from DNS does not prevent it. It lands as
-manually configured DNS, which is a shape plug already knows: it repoints those
-servers at its own resolver, keeps the search domains it finds beside its own,
-adopts them as the upstream for dotted names, and puts them back on teardown. The
-macOS legs will now exercise that path, which until today they never did.
+the flag we pass to keep Tailscale away from DNS does not prevent it: the flag
+tells the client not to touch DNS, the action then does it anyway, afterwards.
+That resolver serves the tailnet and nothing else on a CI runner, so the machine
+lost every public name. The three macOS legs died on the following step, fetching
+an artifact, with someone else's ENOTFOUND and no mention of DNS anywhere. The
+resolver is handed straight back now, and the step that does it proves the name
+resolution works again through getaddrinfo rather than leaving the next action to
+discover it does not.
 
 ---
 
