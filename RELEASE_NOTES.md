@@ -619,6 +619,30 @@ the reason made the only thing that can go wrong there invisible: the check
 simply never happens, for weeks, and the single symptom is a version notice
 nobody ever sees.
 
+
+### One quiet resolver made every lookup take four seconds
+
+A machine is usually given several DNS servers precisely so that one of them can
+fail. plug asked them strictly in turn, with a four second budget each, so a
+single unreachable resolver, which is what a VPN transition routinely leaves
+behind, made EVERY dotted name take four seconds, and two of them eight. Client
+libraries give up well before that, so a machine whose primary resolver had gone
+quiet looked like a cluster that would not answer.
+
+They are staggered now: the first server gets a fifth of a second alone, and the
+next joins in only if that one is slow. The healthy case still asks exactly one
+server, so the extra queries exist only when they are needed, and a server that
+refuses outright brings the next in at once rather than waiting out a delay it no
+longer shares.
+
+### The agent paid a TLS handshake on every call to Kubernetes
+
+It rebuilt its API client, and with it the connection pool, every time it spoke
+to the cluster: on every serve, every unserve, every boot sweep, every repoint,
+several times each. Built once now. The service account token is still read on
+each call, deliberately, because the kubelet rotates it and a cached one stops
+working mid-session.
+
 ## 2.13.0
 
 ### A copy of the relay loop had quietly lost a branch

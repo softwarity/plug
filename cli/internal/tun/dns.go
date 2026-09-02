@@ -240,10 +240,63 @@ func (u *upstreamDNS) relay(q []byte) []byte {
 	// so that one being unreachable is survivable; asking only the primary threw
 	// that away and made a single sick resolver look like "no such record".
 	// The budget is per server, since a dead one costs its whole timeout.
-	servers := u.all()
-	for _, addr := range servers {
-		if reply := u.ask(addr, q); reply != nil {
-			return reply
+	return raceUpstreams(u.all(), upstreamStagger, func(addr string) []byte { return u.ask(addr, q) })
+}
+
+// upstreamStagger is how long the first server gets alone before the next one is
+// asked as well. Short enough that a dead resolver costs a fifth of a second
+// rather than its whole timeout, long enough that a healthy one answers first
+// and the others are never disturbed.
+const upstreamStagger = 200 * time.Millisecond
+
+// raceUpstreams asks the servers in order, but does not wait for one to fail
+// before starting the next.
+//
+// Asking them strictly in turn was correct and slow: the budget is four seconds
+// per server, so a single unreachable resolver, which is what a VPN transition
+// leaves behind, made EVERY dotted lookup take four seconds, and two of them
+// eight. Client libraries give up well before that, so a machine whose primary
+// resolver had gone quiet looked like a cluster that did not answer.
+//
+// Staggered rather than all at once: the healthy case asks one server and stops,
+// so the extra queries only exist when the first one is slow. First usable reply
+// wins and the rest are abandoned, which is what a resolver is expected to do
+// when it is given several servers precisely so one may fail.
+func raceUpstreams(servers []string, stagger time.Duration, ask func(string) []byte) []byte {
+	if len(servers) == 0 {
+		return nil
+	}
+	// Buffered for every server, so a goroutine whose answer nobody wants still
+	// finishes and is collected rather than blocking on a send forever.
+	replies := make(chan []byte, len(servers))
+	next := 0
+	launch := func() {
+		addr := servers[next]
+		next++
+		go func() { replies <- ask(addr) }()
+	}
+	launch()
+
+	t := time.NewTimer(stagger)
+	defer t.Stop()
+	for answered := 0; answered < len(servers); {
+		select {
+		case r := <-replies:
+			answered++
+			if r != nil {
+				return r
+			}
+			// One said no. Bring the next in immediately rather than waiting out
+			// the stagger it no longer needs to share.
+			if next < len(servers) {
+				launch()
+				t.Reset(stagger)
+			}
+		case <-t.C:
+			if next < len(servers) {
+				launch()
+				t.Reset(stagger)
+			}
 		}
 	}
 	return nil

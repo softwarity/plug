@@ -12,6 +12,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -142,14 +143,7 @@ func k8sDo(method, path, contentType string, body any, out any) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	pool := x509.NewCertPool()
-	if ca, err := os.ReadFile(k8sSA + "/ca.crt"); err == nil {
-		pool.AppendCertsFromPEM(ca)
-	}
-	client := &http.Client{
-		Timeout:   20 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}},
-	}
+	client := k8sClient()
 	var rd io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -679,3 +673,24 @@ func k8sGC() {
 	}
 	k8sNoteEndpointsGrant(ns)
 }
+
+// k8sClient is the API client, built once.
+//
+// It used to be rebuilt on every call, and the cost is not the allocation: a
+// fresh Transport keeps no connections, so every call to the API server paid a
+// full TLS handshake. The agent talks to that server on every serve, every
+// unserve, every boot sweep and every repoint, several times each.
+//
+// The TOKEN is deliberately still read per call, above: the kubelet rotates it
+// and a cached one stops working mid-session. The CA does not rotate on that
+// timescale, and when it does the pod is restarted with it.
+var k8sClient = sync.OnceValue(func() *http.Client {
+	pool := x509.NewCertPool()
+	if ca, err := os.ReadFile(k8sSA + "/ca.crt"); err == nil {
+		pool.AppendCertsFromPEM(ca)
+	}
+	return &http.Client{
+		Timeout:   20 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}},
+	}
+})
