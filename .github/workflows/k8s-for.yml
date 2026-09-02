@@ -126,7 +126,7 @@ jobs:
         run: |
           echo "agent image ready — serves plug version: $(docker run --rm --entrypoint cat softwarity/plug:e2e /opt/plug/VERSION)" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Join the tailnet
-        uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
         with:
           oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
           oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}

@@ -577,8 +577,14 @@ jobs:
             ~\AppData\Local\pip\Cache
           key: pip-${{ runner.os }}-${{ hashFiles('e2e/clients/python/requirements.txt') }}
           restore-keys: pip-${{ runner.os }}-
+      # v4 is a rewrite in JavaScript. v3 built Tailscale from source on macOS,
+      # which dragged in actions/checkout@v4.2.2 (Node 20) and `brew install
+      # coreutils` (untrusted tap): both CI warnings came from this one step.
+      # v4 also points the macOS system resolver at MagicDNS after `tailscale
+      # up`, which --accept-dns=false does not prevent. That lands as manual
+      # (Setup:) DNS, which plug repoints and restores itself (route_darwin.go).
       - name: Join the tailnet
-        uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
         with:
           oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
           oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
@@ -728,7 +734,7 @@ jobs:
           key: pip-${{ runner.os }}-arm64-${{ hashFiles('e2e/clients/python/requirements.txt') }}
           restore-keys: pip-${{ runner.os }}-arm64-
       - name: Join the tailnet
-        uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
         with:
           oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
           oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
@@ -832,7 +838,7 @@ jobs:
           name: latest-launchers
           path: latest-launchers
       - name: Join the tailnet
-        uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
         with:
           oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
           oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
@@ -982,7 +988,7 @@ jobs:
           name: latest-launchers
           path: latest-launchers
       - name: Join the tailnet
-        uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
         with:
           oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
           oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}

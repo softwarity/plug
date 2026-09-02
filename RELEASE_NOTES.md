@@ -29,6 +29,23 @@ runtime, the one after it only changes dependencies, and the single behaviour
 change in it concerns a Java distribution this repository does not use.
 
 
+### The last five CI warnings all came from one step
+
+Five warnings sat on an otherwise green run and read as five problems in four
+places. They were one: the step that joins the tailnet. The version we were on
+built Tailscale from source on macOS, which dragged in a checkout action still
+running on Node 20 and ran a Homebrew install, and the runners now warn that an
+untrusted tap sits in their image. The current major installs a prebuilt binary
+and does neither, so all five go at once.
+
+It is not a free upgrade, and the part worth knowing is not the warning. On macOS
+the new version points the system resolver at MagicDNS once the tunnel is up, and
+the flag we pass to keep Tailscale away from DNS does not prevent it. It lands as
+manually configured DNS, which is a shape plug already knows: it repoints those
+servers at its own resolver, keeps the search domains it finds beside its own,
+adopts them as the upstream for dotted names, and puts them back on teardown. The
+macOS legs will now exercise that path, which until today they never did.
+
 ---
 
 ## 2.13.1
