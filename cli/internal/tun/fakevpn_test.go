@@ -39,10 +39,16 @@ func useTempGraft(t *testing.T) {
 }
 
 // watchStopped closes stop and does not return until the watcher goroutine has
-// actually finished — observed, not slept for. A watcher that outlives its test
-// races the cleanups that follow it (graftDir is one), which shows up as a
-// mystery failure in whichever test runs next.
-func watchStopped(t *testing.T, stop chan struct{}, reads *atomic.Int64) {
+// actually EXITED.
+//
+// It used to wait for the read counter to stop moving, which is not the same
+// thing and let a real race through: the last iteration can be past its read and
+// still inside set(), which publishes to a file whose path is read from graftDir.
+// The test that restores graftDir then raced it, and the race detector said so on
+// a CI runner rather than here, days later, on a commit that had not touched any
+// of it. Waiting on the goroutine's own exit is the only edge that means what
+// this helper's name claims.
+func watchStopped(t *testing.T, stop chan struct{}, reads *atomic.Int64, done <-chan struct{}) {
 	t.Helper()
 	close(stop)
 	last := reads.Load()
@@ -53,7 +59,13 @@ func watchStopped(t *testing.T, stop chan struct{}, reads *atomic.Int64) {
 		return still
 	})
 	if !quiet {
-		t.Error("the watcher kept reading after stop — it outlives the datapath")
+		t.Error("the watcher kept reading after stop - it outlives the datapath")
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Error("the watcher never returned after stop, so whatever it touches can still change " +
+			"under a test that thinks it is finished")
 	}
 }
 
@@ -213,8 +225,9 @@ func TestWatchUpstreamsAdoptsChangesAndIsSilentOtherwise(t *testing.T) {
 		}
 		return current
 	}
-	go watchUpstreams(up, read, 5*time.Millisecond, log, stop)
-	t.Cleanup(func() { watchStopped(t, stop, &reads) })
+	watchDone := make(chan struct{})
+	go func() { defer close(watchDone); watchUpstreams(up, read, 5*time.Millisecond, log, stop) }()
+	t.Cleanup(func() { watchStopped(t, stop, &reads, watchDone) })
 
 	// Same answer, many ticks: nothing to say.
 	time.Sleep(100 * time.Millisecond)
@@ -245,8 +258,12 @@ func TestWatchUpstreamsIgnoresAnEmptyRead(t *testing.T) {
 	up := newUpstream([]string{"192.168.1.1"})
 	stop := make(chan struct{})
 	var reads atomic.Int64
-	go watchUpstreams(up, func() []string { reads.Add(1); return nil }, 5*time.Millisecond, logfn(func(string, ...any) {}), stop)
-	t.Cleanup(func() { watchStopped(t, stop, &reads) })
+	watchDone := make(chan struct{})
+	go func() {
+		defer close(watchDone)
+		watchUpstreams(up, func() []string { reads.Add(1); return nil }, 5*time.Millisecond, logfn(func(string, ...any) {}), stop)
+	}()
+	t.Cleanup(func() { watchStopped(t, stop, &reads, watchDone) })
 
 	time.Sleep(100 * time.Millisecond)
 	if got := up.primary(); got != "192.168.1.1:53" {
@@ -262,11 +279,15 @@ func TestWatchUpstreamsStopsWhenTold(t *testing.T) {
 	up := newUpstream([]string{"192.168.1.1"})
 	stop := make(chan struct{})
 	var reads atomic.Int64
-	go watchUpstreams(up, func() []string { reads.Add(1); return nil },
-		5*time.Millisecond, logfn(func(string, ...any) {}), stop)
+	watchDone := make(chan struct{})
+	go func() {
+		defer close(watchDone)
+		watchUpstreams(up, func() []string { reads.Add(1); return nil },
+			5*time.Millisecond, logfn(func(string, ...any) {}), stop)
+	}()
 
 	if !waitFor(2*time.Second, func() bool { return reads.Load() > 0 }) {
 		t.Fatal("the watcher never read anything — it is not running")
 	}
-	watchStopped(t, stop, &reads)
+	watchStopped(t, stop, &reads, watchDone)
 }

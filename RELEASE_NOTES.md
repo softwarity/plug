@@ -510,6 +510,22 @@ the Linux daemon needs it, the claim is now true, including the case where a por
 nobody holds must answer "no" rather than a plausible pid: a wrong answer there
 does not fail a lookup, it routes somebody's traffic to the wrong cluster.
 
+
+### A test helper promised something it did not deliver
+
+A helper named for stopping a background watcher waited until that watcher's read
+counter stopped moving, and called it stopped. Those are different things: the
+last iteration can be past its read and still inside the call that publishes
+where it forwards, which reads a path from a variable the test restores on the
+way out. The race detector caught the pair on a CI runner, on a commit that had
+touched none of it.
+
+It waits on the goroutine's own exit now, which is the only edge that means what
+the helper's name claims. Said plainly: the window is small enough that twenty
+local runs with the fix removed do not reproduce it, so what is offered here is
+the race report naming both goroutines and the shared variable, not a local
+reproduction.
+
 ## 2.13.0
 
 ### A copy of the relay loop had quietly lost a branch
