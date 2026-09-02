@@ -526,6 +526,33 @@ local runs with the fix removed do not reproduce it, so what is offered here is
 the race report naming both goroutines and the shared variable, not a local
 reproduction.
 
+
+### On Linux, any local account could replace the machine's resolver
+
+plug enters a private mount namespace for your command so the resolver it points
+at is yours alone, and it does that by re-executing itself through a hidden verb
+that bind-mounts a file over /etc/resolv.conf. Inside the namespace the parent
+creates for it, that is exactly right. Nothing checked it was inside one.
+
+Run from a shell, the verb is in the MACHINE's mount namespace, and both mounts
+still succeed: plug carries CAP_SYS_ADMIN as a file capability, and file
+capabilities are granted on exec whoever does the exec'ing. So any account on the
+box could point every other account's resolver at a file of its own, using plug's
+privilege rather than its own.
+
+It now refuses unless it is in a different mount namespace from its parent, which
+is what being cloned into a fresh one means and what running from a shell is not.
+The check cannot be forged: arranging to be in another namespace means having
+created one, and a mount inside a namespace you created affects nobody but you.
+
+Its neighbour, the verb that starts the macOS datapath daemon, was reported
+alongside it as the same kind of hole and is not one: that daemon is machine-wide
+by design and any ordinary `plug <command>` already starts it. Refusing the verb
+would change nothing an attacker could not get by running plug normally. What
+bounds that one is not who may start the daemon but what a flow may reach once it
+is up, which was the single-cluster ownership check earlier in these notes. Both
+findings are now written where the code is, so neither is re-raised as the other.
+
 ## 2.13.0
 
 ### A copy of the relay loop had quietly lost a branch

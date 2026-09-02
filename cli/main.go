@@ -268,6 +268,16 @@ func main() {
 	}
 	// The persistent macOS datapath daemon: a detached re-exec that holds the
 	// datapath for one cluster (see daemonMain). Checked before PLUG_CORE.
+	//
+	// Unguarded, and deliberately so, unlike its neighbour above. An audit paired
+	// the two as "the same unauthenticated primitive"; they are not. The shim
+	// above performs a mount with a caller-named file, and gating it closed a real
+	// hole. This one starts a daemon that ANY `plug <command>` already starts:
+	// the daemon is machine-wide by design, so refusing the verb here would
+	// change nothing an attacker could not get by running plug normally. What
+	// bounds the damage is not who may start the daemon, it is what a flow is
+	// allowed to reach once it is up, which is the ownership check in
+	// internal/tun/router.go.
 	if len(os.Args) > 1 && os.Args[1] == tun.DaemonVerb {
 		os.Exit(daemonMain(os.Args[2:]))
 	}
