@@ -147,79 +147,155 @@ var answer = func(format string, a ...any) {
 // won't, and -s must behave the same whichever backend answers.
 var nameRe = regexp.MustCompile(`^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
+// dispatch is the entry point for every command arriving over SSH. It validates
+// and routes; the work of each verb lives in its own function below.
+//
+// It used to hold all seven bodies inline, at 60 cyclomatic complexity and 250
+// lines, so reading what `resolve` does meant scrolling past everything `info`
+// does. The split is mechanical and changes no logic: each case became a
+// function with the same statements in the same order. What it buys is that the
+// VALIDATION, which is what stands between the network and the cluster, is now
+// visible in one screen instead of being interleaved with six implementations.
 func dispatch(cmd []string) {
 	if len(cmd) == 0 {
 		fatal("plug-agent: this user runs the tunnel and the -s verbs; there is no shell")
 	}
 	switch cmd[0] {
 	case "serve-name":
-		// One verb per NAME, all its ports at once — a service exposing
-		// HTTP+SMTP+POP3 on one name is one signpost listening on all three.
-		// Each pair is <cluster-port>:<agent-port>; the agent port is the
-		// sshd-allocated port that session's forward listens on. Allocated, not
-		// the cluster port itself: many names share one cluster port (every
-		// service has its own IP in the cluster), but they all converge on ONE
-		// agent, where a fixed port could bind only once.
-		if len(cmd) != 4 || cmd[3] != "takeover" {
-			answer("error: usage: serve-name <name> <cluster-port>:<agent-port>[,…] takeover")
-		}
-		name := cmd[1]
-		if !nameRe.MatchString(name) {
-			answer("error: %q is not a valid DNS label", name)
-		}
-		var pairs []portPair
-		for _, pp := range strings.Split(cmd[2], ",") {
-			c, a, ok := strings.Cut(pp, ":")
-			if !ok {
-				answer("error: %q is not <cluster-port>:<agent-port>", pp)
-			}
-			for _, p := range []string{c, a} {
-				if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 {
-					answer("error: %q is not a valid port", p)
-				}
-			}
-			pairs = append(pairs, portPair{cluster: c, agent: a})
-		}
-		serveName(name, pairs)
+		doServeName(cmd)
 	case "unserve-name":
-		// The optional agent port says WHICH session is releasing the name, so a
-		// session that lost it while it was away cannot tear down its successor's.
-		if len(cmd) < 2 || len(cmd) > 3 || !nameRe.MatchString(cmd[1]) {
-			answer("error: usage: unserve-name <name> [<agent-port>]")
-		}
-		mine := ""
-		if len(cmd) == 3 {
-			if n, err := strconv.Atoi(cmd[2]); err != nil || n < 1 || n > 65535 {
-				answer("error: %q is not a valid port", cmd[2])
-			}
-			mine = cmd[2]
-		}
-		unserveName(cmd[1], mine)
+		doUnserveName(cmd)
 	case "info":
-		// One parsable line for `plug doctor`: the agent's version and which
-		// dynamic -s backend THIS deployment actually has — the answer to "will
-		// -s be dynamic here, and is the image current?" asked from the outside.
-		ver := localVersion()
-		backend := "none"
-		switch {
-		case k8sAvailable():
-			backend = "kubernetes"
-		case dockerAvailable():
-			backend = "docker"
-			var inf struct {
-				Swarm struct {
-					LocalNodeState string `json:"LocalNodeState"`
-				} `json:"Swarm"`
-			}
-			if code, err := dockerAPI("GET", "/info", nil, &inf); err == nil && code == 200 &&
-				inf.Swarm.LocalNodeState == "active" {
-				backend = "docker-swarm"
+		doInfo(cmd)
+	case "check-update":
+		doCheckUpdate(cmd)
+	case "resolve":
+		doResolve(cmd)
+	case "self-update":
+		doSelfUpdate(cmd)
+	default:
+		answer("error: unknown command %q", cmd[0])
+	}
+}
+
+func doServeName(cmd []string) {
+	// One verb per NAME, all its ports at once — a service exposing
+	// HTTP+SMTP+POP3 on one name is one signpost listening on all three.
+	// Each pair is <cluster-port>:<agent-port>; the agent port is the
+	// sshd-allocated port that session's forward listens on. Allocated, not
+	// the cluster port itself: many names share one cluster port (every
+	// service has its own IP in the cluster), but they all converge on ONE
+	// agent, where a fixed port could bind only once.
+	if len(cmd) != 4 || cmd[3] != "takeover" {
+		answer("error: usage: serve-name <name> <cluster-port>:<agent-port>[,…] takeover")
+	}
+	name := cmd[1]
+	if !nameRe.MatchString(name) {
+		answer("error: %q is not a valid DNS label", name)
+	}
+	var pairs []portPair
+	for _, pp := range strings.Split(cmd[2], ",") {
+		c, a, ok := strings.Cut(pp, ":")
+		if !ok {
+			answer("error: %q is not <cluster-port>:<agent-port>", pp)
+		}
+		for _, p := range []string{c, a} {
+			if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 {
+				answer("error: %q is not a valid port", p)
 			}
 		}
-		// The image the deployment carries, so the CLI can ask THAT registry
-		// itself (plug update's client-side lookup) — best-effort: an agent
-		// that cannot tell simply omits the field and the CLI falls back to
-		// asking this agent to do the lookup.
+		pairs = append(pairs, portPair{cluster: c, agent: a})
+	}
+	serveName(name, pairs)
+}
+
+func doUnserveName(cmd []string) {
+	// The optional agent port says WHICH session is releasing the name, so a
+	// session that lost it while it was away cannot tear down its successor's.
+	if len(cmd) < 2 || len(cmd) > 3 || !nameRe.MatchString(cmd[1]) {
+		answer("error: usage: unserve-name <name> [<agent-port>]")
+	}
+	mine := ""
+	if len(cmd) == 3 {
+		if n, err := strconv.Atoi(cmd[2]); err != nil || n < 1 || n > 65535 {
+			answer("error: %q is not a valid port", cmd[2])
+		}
+		mine = cmd[2]
+	}
+	unserveName(cmd[1], mine)
+}
+
+func doInfo(cmd []string) {
+	// One parsable line for `plug doctor`: the agent's version and which
+	// dynamic -s backend THIS deployment actually has — the answer to "will
+	// -s be dynamic here, and is the image current?" asked from the outside.
+	ver := localVersion()
+	backend := "none"
+	switch {
+	case k8sAvailable():
+		backend = "kubernetes"
+	case dockerAvailable():
+		backend = "docker"
+		var inf struct {
+			Swarm struct {
+				LocalNodeState string `json:"LocalNodeState"`
+			} `json:"Swarm"`
+		}
+		if code, err := dockerAPI("GET", "/info", nil, &inf); err == nil && code == 200 &&
+			inf.Swarm.LocalNodeState == "active" {
+			backend = "docker-swarm"
+		}
+	}
+	// The image the deployment carries, so the CLI can ask THAT registry
+	// itself (plug update's client-side lookup) — best-effort: an agent
+	// that cannot tell simply omits the field and the CLI falls back to
+	// asking this agent to do the lookup.
+	img := ""
+	switch {
+	case k8sAvailable():
+		_, _, img, _, _ = k8sAgentDeployment()
+	case dockerAvailable():
+		if self, err := dockerSelf(); err == nil {
+			img = self.image
+		}
+	}
+	// Who the Host recognised behind this connection's key, passed in by the
+	// server process (PLUG_WHO) because a verb runs in another process and
+	// cannot ask the Host anything. Empty when the key names no person,
+	// which is what the shared built-in key does and what a standalone
+	// agent always answers. Omitted rather than sent empty: a field that is
+	// there means somebody is identified.
+	who := ""
+	if w := strings.TrimSpace(os.Getenv("PLUG_WHO")); w != "" {
+		who = " who=" + w
+	}
+	if img != "" {
+		answer("version=%s backend=%s image=%s%s", ver, backend, img, who)
+	}
+	answer("version=%s backend=%s%s", ver, backend, who)
+}
+
+func doCheckUpdate(cmd []string) {
+	// WHERE this deployment would go, without going there.
+	//
+	// The CLI's background check normally resolves this from the workstation,
+	// against the registry the image lives in. That has no fallback by
+	// design — "a timeout there is not a slower path, it is no check at all,
+	// silently" — so a machine whose network cannot reach the registry is
+	// never told anything. Measured on GitHub's macOS runners; it is also
+	// the shape of a corporate network, a proxy, or a VPN that splits
+	// routes, which is exactly where plug earns its keep.
+	//
+	// The cluster CAN reach the registry (it pulls from it), so ask it. One
+	// line, same first-word contract as self-update, and no side effect:
+	//   available <tag>   a newer release, or a moving tag that moved
+	//   current           nothing to take
+	//   error: …          could not tell (the CLI stays quiet, as before)
+	//
+	// An agent that predates this answers `unknown command`, which the CLI
+	// already treats as "no answer" — so old clusters keep today's silence
+	// rather than breaking.
+	{
 		img := ""
 		switch {
 		case k8sAvailable():
@@ -229,178 +305,135 @@ func dispatch(cmd []string) {
 				img = self.image
 			}
 		}
-		// Who the Host recognised behind this connection's key, passed in by the
-		// server process (PLUG_WHO) because a verb runs in another process and
-		// cannot ask the Host anything. Empty when the key names no person,
-		// which is what the shared built-in key does and what a standalone
-		// agent always answers. Omitted rather than sent empty: a field that is
-		// there means somebody is identified.
-		who := ""
-		if w := strings.TrimSpace(os.Getenv("PLUG_WHO")); w != "" {
-			who = " who=" + w
+		if img == "" {
+			answer("error: this agent cannot name its own image")
 		}
-		if img != "" {
-			answer("version=%s backend=%s image=%s%s", ver, backend, img, who)
+		target, _, note := retarget(img)
+		if target == "" || target == img || retargetImageOnly(target) == retargetImageOnly(img) {
+			answer("current")
 		}
-		answer("version=%s backend=%s%s", ver, backend, who)
-	case "check-update":
-		// WHERE this deployment would go, without going there.
-		//
-		// The CLI's background check normally resolves this from the workstation,
-		// against the registry the image lives in. That has no fallback by
-		// design — "a timeout there is not a slower path, it is no check at all,
-		// silently" — so a machine whose network cannot reach the registry is
-		// never told anything. Measured on GitHub's macOS runners; it is also
-		// the shape of a corporate network, a proxy, or a VPN that splits
-		// routes, which is exactly where plug earns its keep.
-		//
-		// The cluster CAN reach the registry (it pulls from it), so ask it. One
-		// line, same first-word contract as self-update, and no side effect:
-		//   available <tag>   a newer release, or a moving tag that moved
-		//   current           nothing to take
-		//   error: …          could not tell (the CLI stays quiet, as before)
-		//
-		// An agent that predates this answers `unknown command`, which the CLI
-		// already treats as "no answer" — so old clusters keep today's silence
-		// rather than breaking.
-		{
-			img := ""
-			switch {
-			case k8sAvailable():
-				_, _, img, _, _ = k8sAgentDeployment()
-			case dockerAvailable():
-				if self, err := dockerSelf(); err == nil {
-					img = self.image
-				}
-			}
-			if img == "" {
-				answer("error: this agent cannot name its own image")
-			}
-			target, _, note := retarget(img)
-			if target == "" || target == img || retargetImageOnly(target) == retargetImageOnly(img) {
-				answer("current")
-			}
-			_, _, tag := parseImageRef(target)
-			if note != "" {
-				answer("available %s (%s)", tag, note)
-			}
-			answer("available %s", tag)
+		_, _, tag := parseImageRef(target)
+		if note != "" {
+			answer("available %s (%s)", tag, note)
 		}
-	case "resolve":
-		// Does <name> exist in THIS cluster? The CLI asks before minting a fake
-		// IP for a bare name, so an absent name gets an honest NXDOMAIN instead
-		// of a fake that can only refuse the connect (the Docker-Desktop
-		// DNS-leak fix). Resolution runs here, through the cluster's own
-		// resolver — the only place that truth lives. Both outcomes answer on
-		// stdout ("found"/"nxdomain"): an error would be indistinguishable from
-		// a pre-2.2 agent's "unknown command", which means "mint as before".
-		if len(cmd) != 2 || !nameRe.MatchString(cmd[1]) {
-			answer("error: usage: resolve <name>")
-		}
-		// The witness starts NOW, beside the lookup, not after it.
-		//
-		// It used to run only once the lookup had timed out, so an absent name on
-		// a cluster whose resolver is a network hop away paid 800ms and THEN the
-		// witness — two waits in series, of which only the second decides. That
-		// is the same cascade this file already fixed once, one level down.
-		//
-		// It matters per family, and the measurement says so: four failures of
-		// the honest-NXDOMAIN cell in ten runs, ALL of them on Kubernetes. The
-		// witness there is kubernetes.default, answered by CoreDNS — a pod, a
-		// network hop; on Docker and Swarm it is this agent's own container name,
-		// answered by the daemon from memory in single-digit milliseconds. The
-		// budgets were sized for the second and the first inherited them.
-		//
-		// Run side by side, the worst case is the LONGER of the two rather than
-		// their sum, which is what pays for the witness's larger budget.
-		witness := make(chan bool, 1)
-		go func() { witness <- clusterResolverHealthy() }()
-
-		ctx, cancel := context.WithTimeout(context.Background(), resolveLookupBudget)
-		addrs, lerr := net.DefaultResolver.LookupHost(ctx, cmd[1])
-		cancel()
-		for _, a := range addrs {
-			// 198.18.0.0/15 is the range plug itself mints fakes from — an
-			// answer there can only be an ECHO of a plug resolver upstream
-			// (cluster on a plugged workstation: embedded DNS → VM → host DNS
-			// → plug), never a real cluster service. Filtering it here is what
-			// makes the whole check immune to that loop.
-			if ip := net.ParseIP(a).To4(); ip != nil && ip[0] == 198 && ip[1]&0xFE == 18 {
-				continue
-			}
-			answer("found")
-		}
-		// Nothing came back — which is two different things. "This name does not
-		// exist" is an answer; "I could not ask" is not, and answering nxdomain
-		// to the second tells the CLI to serve a confident NXDOMAIN for a name
-		// that may be perfectly alive, cached for 30s, machine-wide on macOS.
-		//
-		// The error type alone cannot separate them: in an isolated cluster
-		// network an ABSENT name times out exactly like a dead resolver, because
-		// the embedded DNS forwards it upstream and the upstream is unreachable.
-		// A NXDOMAIN that arrives, though, is the resolver speaking — trust it.
-		var dnsErr *net.DNSError
-		if errors.As(lerr, &dnsErr) && dnsErr.IsNotFound {
-			answer("nxdomain")
-		}
-		// Left with a timeout. Ask about something that MUST resolve here: if it
-		// answers, the resolver is fine and the name really is absent; if it does
-		// not, the resolver is the problem and we must not pass judgement on the
-		// name. Anything the CLI does not recognise makes it fail open (mint as
-		// before), so this needs no client change and old clients behave right.
-		if lerr != nil && !<-witness {
-			answer("unreachable")
-		}
-		answer("nxdomain")
-	case "self-update":
-		// An embedder can forbid it, and should: this verb rewrites the image of
-		// the deployment the agent runs in. Standalone that deployment IS plug,
-		// which is the point. Inside a gateway it is the gateway, and any
-		// developer reaching the port could roll it onto a plug image. It finds
-		// its target by the label app=plug, so a gateway not carrying that label
-		// is already inert here, but "already inert" is not a decision anyone
-		// made and a label is one line away from being copied.
-		if os.Getenv(noSelfUpdateEnv) == "1" {
-			answer("error: this agent does not update itself — it is embedded in another program, " +
-				"which owns its own deployment and its own release cycle")
-		}
-		// An optional target names WHERE to go — a stream (latest, a branch) or
-		// the word `tag` for the newest release. Without it, follow the tag the
-		// deployment already carries.
-		// `plug update` — move THIS agent to the newest release, each backend its
-		// own way. A deployment pinned to a release tag has that tag REWRITTEN
-		// (2.3.0 → 2.4.0): plug is infrastructure, not an application dependency
-		// to hold back, and re-resolving a pin can only ever return the same
-		// image. A moving tag (latest, main, a branch) belongs to its publisher
-		// and is only re-pulled.
-		//
-		// One line out; the FIRST WORD is the verdict the CLI parses:
-		//   updating …   a redeploy was triggered (k8s rolling / swarm update)
-		//   current …    already the newest release, or a moving tag that did
-		//                not move — answered WITHOUT rolling anything, so the
-		//                CLI does not poll for a change that cannot come
-		//   pulled …     newer image pulled; recreating is the caller's move
-		//   error: …     no orchestrator access, RBAC gap, not a manager, …
-		//   `apply <tag>` is the CLI-checked path: the caller already resolved
-		//   the target against the registry this image lives in, so the agent
-		//   applies it WITHOUT a lookup of its own — on a plugged workstation
-		//   each registry round-trip from the cluster VM cost ~31s.
-		if len(cmd) >= 2 && cmd[1] == "apply" {
-			if len(cmd) != 3 || !tagRe.MatchString(cmd[2]) {
-				answer("error: usage: self-update apply <tag>")
-			}
-			selfUpdate(applyPlan(cmd[2]))
-		}
-		want := ""
-		if len(cmd) == 2 {
-			want = cmd[1]
-		} else if len(cmd) > 2 {
-			answer("error: usage: self-update [<tag>|tag|latest]")
-		}
-		selfUpdate(followPlan(want))
-	default:
-		answer("error: unknown command %q", cmd[0])
+		answer("available %s", tag)
 	}
+}
+
+func doResolve(cmd []string) {
+	// Does <name> exist in THIS cluster? The CLI asks before minting a fake
+	// IP for a bare name, so an absent name gets an honest NXDOMAIN instead
+	// of a fake that can only refuse the connect (the Docker-Desktop
+	// DNS-leak fix). Resolution runs here, through the cluster's own
+	// resolver — the only place that truth lives. Both outcomes answer on
+	// stdout ("found"/"nxdomain"): an error would be indistinguishable from
+	// a pre-2.2 agent's "unknown command", which means "mint as before".
+	if len(cmd) != 2 || !nameRe.MatchString(cmd[1]) {
+		answer("error: usage: resolve <name>")
+	}
+	// The witness starts NOW, beside the lookup, not after it.
+	//
+	// It used to run only once the lookup had timed out, so an absent name on
+	// a cluster whose resolver is a network hop away paid 800ms and THEN the
+	// witness — two waits in series, of which only the second decides. That
+	// is the same cascade this file already fixed once, one level down.
+	//
+	// It matters per family, and the measurement says so: four failures of
+	// the honest-NXDOMAIN cell in ten runs, ALL of them on Kubernetes. The
+	// witness there is kubernetes.default, answered by CoreDNS — a pod, a
+	// network hop; on Docker and Swarm it is this agent's own container name,
+	// answered by the daemon from memory in single-digit milliseconds. The
+	// budgets were sized for the second and the first inherited them.
+	//
+	// Run side by side, the worst case is the LONGER of the two rather than
+	// their sum, which is what pays for the witness's larger budget.
+	witness := make(chan bool, 1)
+	go func() { witness <- clusterResolverHealthy() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), resolveLookupBudget)
+	addrs, lerr := net.DefaultResolver.LookupHost(ctx, cmd[1])
+	cancel()
+	for _, a := range addrs {
+		// 198.18.0.0/15 is the range plug itself mints fakes from — an
+		// answer there can only be an ECHO of a plug resolver upstream
+		// (cluster on a plugged workstation: embedded DNS → VM → host DNS
+		// → plug), never a real cluster service. Filtering it here is what
+		// makes the whole check immune to that loop.
+		if ip := net.ParseIP(a).To4(); ip != nil && ip[0] == 198 && ip[1]&0xFE == 18 {
+			continue
+		}
+		answer("found")
+	}
+	// Nothing came back — which is two different things. "This name does not
+	// exist" is an answer; "I could not ask" is not, and answering nxdomain
+	// to the second tells the CLI to serve a confident NXDOMAIN for a name
+	// that may be perfectly alive, cached for 30s, machine-wide on macOS.
+	//
+	// The error type alone cannot separate them: in an isolated cluster
+	// network an ABSENT name times out exactly like a dead resolver, because
+	// the embedded DNS forwards it upstream and the upstream is unreachable.
+	// A NXDOMAIN that arrives, though, is the resolver speaking — trust it.
+	var dnsErr *net.DNSError
+	if errors.As(lerr, &dnsErr) && dnsErr.IsNotFound {
+		answer("nxdomain")
+	}
+	// Left with a timeout. Ask about something that MUST resolve here: if it
+	// answers, the resolver is fine and the name really is absent; if it does
+	// not, the resolver is the problem and we must not pass judgement on the
+	// name. Anything the CLI does not recognise makes it fail open (mint as
+	// before), so this needs no client change and old clients behave right.
+	if lerr != nil && !<-witness {
+		answer("unreachable")
+	}
+	answer("nxdomain")
+}
+
+func doSelfUpdate(cmd []string) {
+	// An embedder can forbid it, and should: this verb rewrites the image of
+	// the deployment the agent runs in. Standalone that deployment IS plug,
+	// which is the point. Inside a gateway it is the gateway, and any
+	// developer reaching the port could roll it onto a plug image. It finds
+	// its target by the label app=plug, so a gateway not carrying that label
+	// is already inert here, but "already inert" is not a decision anyone
+	// made and a label is one line away from being copied.
+	if os.Getenv(noSelfUpdateEnv) == "1" {
+		answer("error: this agent does not update itself — it is embedded in another program, " +
+			"which owns its own deployment and its own release cycle")
+	}
+	// An optional target names WHERE to go — a stream (latest, a branch) or
+	// the word `tag` for the newest release. Without it, follow the tag the
+	// deployment already carries.
+	// `plug update` — move THIS agent to the newest release, each backend its
+	// own way. A deployment pinned to a release tag has that tag REWRITTEN
+	// (2.3.0 → 2.4.0): plug is infrastructure, not an application dependency
+	// to hold back, and re-resolving a pin can only ever return the same
+	// image. A moving tag (latest, main, a branch) belongs to its publisher
+	// and is only re-pulled.
+	//
+	// One line out; the FIRST WORD is the verdict the CLI parses:
+	//   updating …   a redeploy was triggered (k8s rolling / swarm update)
+	//   current …    already the newest release, or a moving tag that did
+	//                not move — answered WITHOUT rolling anything, so the
+	//                CLI does not poll for a change that cannot come
+	//   pulled …     newer image pulled; recreating is the caller's move
+	//   error: …     no orchestrator access, RBAC gap, not a manager, …
+	//   `apply <tag>` is the CLI-checked path: the caller already resolved
+	//   the target against the registry this image lives in, so the agent
+	//   applies it WITHOUT a lookup of its own — on a plugged workstation
+	//   each registry round-trip from the cluster VM cost ~31s.
+	if len(cmd) >= 2 && cmd[1] == "apply" {
+		if len(cmd) != 3 || !tagRe.MatchString(cmd[2]) {
+			answer("error: usage: self-update apply <tag>")
+		}
+		selfUpdate(applyPlan(cmd[2]))
+	}
+	want := ""
+	if len(cmd) == 2 {
+		want = cmd[1]
+	} else if len(cmd) > 2 {
+		answer("error: usage: self-update [<tag>|tag|latest]")
+	}
+	selfUpdate(followPlan(want))
 }
 
 // clusterResolverHealthy reports whether the cluster's DNS is answering at all,

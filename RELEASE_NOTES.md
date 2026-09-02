@@ -438,6 +438,21 @@ means the service had no DNS of its own before plug touched it: putting an empty
 one back would pin that service to no resolver at all, so the entry is removed
 instead.
 
+
+### The agent's command entry point is readable again
+
+Every command arriving over SSH lands in one function, which validates it and
+then does the work: all seven verbs inline, 250 lines, the highest branching
+count in the repository by some distance. Reading what `resolve` does meant
+scrolling past everything `info` does, and the validation that stands between the
+network and the cluster was interleaved with six implementations of six different
+things.
+
+Each verb now has its own function and the entry point is twenty lines, so the
+checking is visible at a glance. Nothing else changed, and that is checked rather
+than claimed: the hundred statements it held are the same hundred, in the same
+order, from the opening guard to the closing default.
+
 ## 2.13.0
 
 ### A copy of the relay loop had quietly lost a branch
