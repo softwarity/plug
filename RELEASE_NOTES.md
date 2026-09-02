@@ -540,10 +540,15 @@ capabilities are granted on exec whoever does the exec'ing. So any account on th
 box could point every other account's resolver at a file of its own, using plug's
 privilege rather than its own.
 
-It now refuses unless it is in a different mount namespace from its parent, which
-is what being cloned into a fresh one means and what running from a shell is not.
-The check cannot be forged: arranging to be in another namespace means having
-created one, and a mount inside a namespace you created affects nobody but you.
+It makes its own namespace now, before touching anything, and that is stronger
+than checking for one: from the normal path it copies an already fresh namespace
+and changes nothing, and from a shell it contains the mount to a namespace it has
+just created, which nobody else can see.
+
+Detecting the situation was the first instinct and it was wrong. Comparing our
+mount namespace against the parent's means reading the parent's entry under
+/proc, and the parent has raised capabilities, which makes it unreadable even to
+the same user. All three Linux legs said so within the hour.
 
 Its neighbour, the verb that starts the macOS datapath daemon, was reported
 alongside it as the same kind of hole and is not one: that daemon is machine-wide

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -21,34 +22,34 @@ func NsShimMain(args []string) error {
 	}
 	priv, cmd := args[0], args[1:]
 
-	// Are we actually in the namespace this function's whole design assumes?
+	// Make our own mount namespace before touching anything, so this bind can
+	// never land on the machine's /etc/resolv.conf.
 	//
-	// runChild re-execs plug with CLONE_NEWNS, so the shim lands in a fresh mount
-	// namespace and the bind below is scoped to the command about to run. Nothing
-	// enforced that. Invoked straight from a shell, the shim is in the MACHINE's
-	// mount namespace, and both mounts below still succeed, because plug carries
-	// cap_sys_admin as a file capability and file capabilities are granted on
-	// exec whoever does the exec'ing.
+	// runChild re-execs plug with CLONE_NEWNS and the shim lands in a fresh
+	// namespace, which is what makes the bind below safe. Nothing enforced that.
+	// Run straight from a shell the shim is in the MACHINE's namespace, and both
+	// mounts still succeed, because plug carries CAP_SYS_ADMIN as a file
+	// capability and file capabilities are granted on exec whoever does the
+	// exec'ing. Any local account could therefore point every other account's
+	// resolver at a file of its own, using plug's privilege rather than its own.
 	//
-	// So any local user could run
-	//     plug __plug-ns /tmp/theirs /bin/true
-	// and replace the machine's /etc/resolv.conf with a file of their choosing,
-	// for every account on the box, using plug's privilege rather than their own.
+	// Detecting the situation was the wrong instinct: comparing our mount
+	// namespace with the parent's means reading /proc/<ppid>/ns/mnt, and the
+	// parent has raised capabilities, which makes it non-dumpable and that link
+	// unreadable even to the same user. The e2e said so on all three Linux legs
+	// within the hour. Unsharing needs no permission we do not already have and
+	// needs to detect nothing: from runChild it copies an already fresh namespace,
+	// which changes nothing; from a shell it contains the mount to a namespace
+	// this process just made, which is the whole fix.
 	//
-	// The check compares this process's mount namespace with its PARENT's. Coming
-	// from runChild they differ, because the clone made a new one. Coming from a
-	// shell they are the same, and that is the case to refuse. It cannot be
-	// forged: an attacker who arranges to be in a different namespace from their
-	// own shell has unshared, and a mount inside a namespace they created affects
-	// nobody but themselves. Comparing against PID 1 instead would have been
-	// wrong inside a container, where the shim legitimately shares nothing with
-	// init.
-	if same, err := sameMountNamespaceAsParent(); err != nil {
-		return fmt.Errorf("%s: cannot tell which mount namespace this is (%v), refusing to bind-mount", NsShimVerb, err)
-	} else if same {
-		return fmt.Errorf("%s is not a command: plug re-execs itself through it, inside a mount namespace\n"+
-			"      it has just created for your command. Run from a shell it would bind-mount over the\n"+
-			"      MACHINE's /etc/resolv.conf, for every account on it. Run `plug <your command>` instead", NsShimVerb)
+	// The thread lock matters. A mount namespace is a property of the TASK, so the
+	// unshare applies to the thread that made the call, and the Go runtime is free
+	// to move a goroutine between threads: the mounts below would then run
+	// somewhere the unshare never happened. Locked, they and the exec that follows
+	// stay on the thread that owns the new namespace.
+	runtime.LockOSThread()
+	if err := unix.Unshare(unix.CLONE_NEWNS); err != nil {
+		return fmt.Errorf("%s: cannot create a private mount namespace (%w), refusing to bind-mount", NsShimVerb, err)
 	}
 
 	// MS_PRIVATE on / first: without it the bind-mount could propagate back into
@@ -79,22 +80,4 @@ func NsShimMain(args []string) error {
 // caps were never raised (the unprivileged path), which is the safe direction.
 func clearAmbientCaps() {
 	_ = unix.Prctl(unix.PR_CAP_AMBIENT, unix.PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0)
-}
-
-// sameMountNamespaceAsParent reports whether this process shares its parent's
-// mount namespace, which is how the shim tells "I was cloned into a new one" from
-// "somebody ran me by hand". /proc/<pid>/ns/mnt reads back as an opaque identity;
-// two processes in the same namespace read the same string.
-func sameMountNamespaceAsParent() (bool, error) {
-	mine, err := os.Readlink("/proc/self/ns/mnt")
-	if err != nil {
-		return false, err
-	}
-	theirs, err := os.Readlink(fmt.Sprintf("/proc/%d/ns/mnt", os.Getppid()))
-	if err != nil {
-		// A parent that has already exited is not the shape this guard is aimed
-		// at: runChild waits for its child. Refuse rather than guess.
-		return false, err
-	}
-	return mine == theirs, nil
 }
