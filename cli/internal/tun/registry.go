@@ -249,3 +249,58 @@ func ActiveClusters() []string {
 	}
 	return keys
 }
+
+// ClusterHeldByOther reports the account already holding this cluster when it is
+// not uid's, so a launcher can refuse before it registers.
+//
+// This is where the ownership question belongs, and it took a second look to see
+// it. The check added first was per FLOW, in the single-cluster shortcut: it asked
+// who owned the socket and compared against everyone with a live marker. Two holes
+// followed from that. A client registers BEFORE it authenticates, so a second
+// account had only to run `plug -p <someone-else's-cluster>` to put its own uid in
+// that set and be waved through the tunnel somebody else's key had opened. And the
+// MULTICLUSTER path never asked at all: it walks the ancestry to the registered
+// launcher and hands over that launcher's cluster, uid unread.
+//
+// Refusing the REGISTRATION closes both, because both are downstream of it: no
+// marker, no membership and no ancestor to walk to. It also costs nothing per
+// connection and can say why, where a flow check can only send a RST that the
+// application reports as a connection reset by an unnamed peer.
+//
+// uid 0 is exempt, as it was in the flow check: root already owns the machine, and
+// the daemon's own probes run there.
+//
+// Note what changed in kind, not just in degree: the same set that used to GRANT
+// now REFUSES, so a marker that is wrong no longer merely lets someone in, it
+// keeps the rightful owner out. Liveness here is a pid, and a pid can be recycled
+// onto an unrelated process, which would make a crashed client's marker look alive
+// and hold the cluster against its own account. Two things keep that narrow: a
+// clean exit removes the marker, and ActiveClusters reaps dead ones three times a
+// second for as long as a daemon runs. Stamping the marker with a start time, the
+// way the ancestry walk already does, is what would close it properly.
+//
+// WINDOWS IS NOT COVERED, and saying so here is the point of this paragraph.
+// os.Getuid returns -1 for every process there, so every marker records the same
+// owner and there is nobody to tell apart; pidroute_windows.go's uidOf reports
+// failure for the same reason, which already made the flow check fall through. A
+// negative uid is refused as an answer rather than compared, so this returns "not
+// held" instead of quietly returning "held by -1" for the second account. Covering
+// Windows means giving a client a real identity to record (its token's SID), and
+// that is a different piece of work than this one.
+func ClusterHeldByOther(key string, uid int) (int, bool) {
+	if uid <= 0 {
+		return 0, false
+	}
+	for other := range clientUIDs(key) {
+		if other != uid && other != 0 {
+			return other, true
+		}
+	}
+	return 0, false
+}
+
+// ClusterHeldRefusal is what the launcher prints, kept here beside the rule it
+// states so the two cannot drift. It names the account, because "in use" without
+// a who sends people looking at the cluster instead of at their own machine.
+const ClusterHeldRefusal = "error: cluster %s is in use by another account on this machine (uid %d) - " +
+	"plug gives one cluster to one account, so its tunnel is never shared; wait for that session to end"

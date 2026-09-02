@@ -18,6 +18,13 @@ import (
 // the daemon (and every tunnel) survives them.
 func coreRun(cfg config, cmdArgs []string) int {
 	key := cfg.host + ":" + cfg.port
+	// One cluster, one account. Registering is what makes a process a member of a
+	// cluster, and it happens before anything authenticates, so this is the moment
+	// to refuse: see tun.ClusterHeldByOther.
+	if other, held := tun.ClusterHeldByOther(key, os.Getuid()); held {
+		info(tun.ClusterHeldRefusal, key, other)
+		return 1
+	}
 	// Register FIRST (the marker carries our cluster key) so the daemon's reconcile
 	// always sees us — and opens our cluster's tunnel — before we run.
 	unregister := tun.RegisterClient(key, os.Getpid(), cfg.key)

@@ -30,6 +30,13 @@ func coreRun(cfg config, cmdArgs []string) int {
 // the service to open our cluster's tunnel, then runs the child. No tunnel of its own.
 func coreRunViaService(cfg config, cmdArgs []string) int {
 	key := cfg.host + ":" + cfg.port
+	// One cluster, one account. Registering is what makes a process a member,
+	// and it happens before anything authenticates, so this is the moment to
+	// refuse: see tun.ClusterHeldByOther.
+	if other, held := tun.ClusterHeldByOther(key, os.Getuid()); held {
+		info(tun.ClusterHeldRefusal, key, other)
+		return 1
+	}
 	unregister := tun.RegisterClient(key, os.Getpid(), cfg.key)
 	defer unregister()
 

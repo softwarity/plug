@@ -33,6 +33,34 @@ the ownership check lets through. A process able to blank its own name would hav
 outranked the check. It is attributed like any other now, and there is a test that
 fails if that guard is put back.
 
+### A cluster belongs to one account, and now it actually does
+
+2.13.1 said a single cluster was no longer open to every account on the machine.
+Looking again at how that was enforced, it was not.
+
+The check ran per flow: it asked which account opened the socket and compared it
+against everyone with a live client marker. But a client writes its marker BEFORE
+anything authenticates it. A second account on the same machine had only to run
+`plug -p <the other account's cluster>`, which put its own uid in the very set it
+was about to be compared against, and its traffic then went through a tunnel
+opened with somebody else's key. It never needed a key, only the host and port.
+And with two or more clusters up, no account check ran at all: that path walks the
+process ancestry to the registered launcher and hands over its cluster without
+asking whose launcher it is.
+
+The question is asked one step earlier now, when a client registers, which is what
+makes it a member in the first place. Another account holding the cluster is
+refused there, by name, instead of having its connections reset by something that
+cannot explain itself. Both paths are covered because both are downstream of that
+marker: no marker, no membership, and no ancestor to walk to.
+
+Two things worth knowing rather than discovering. Root is exempt, as it was
+before. And Windows is not covered at all: every process there reports the same
+uid, so there is nobody to tell apart, which is also why the per-flow check was
+already falling through on that platform. Giving a Windows client a real identity
+to record is a separate piece of work, and the code now says so where the rule is
+written instead of leaving it to be inferred.
+
 ---
 
 ## 2.13.2
