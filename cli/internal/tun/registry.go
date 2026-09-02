@@ -127,22 +127,34 @@ const keyFileSuffix = ".key"
 // it; picking either is what "one tunnel per cluster" already means, and the
 // agent decides anyway.
 func ClusterKeyFile(key string) string {
+	kf, _ := ClusterKeyFileFrom(key)
+	return kf
+}
+
+// ClusterKeyFileFrom also names the MARKER the key came from, which is what lets
+// a caller ask the operating system who registered that client. The path inside
+// the sidecar was written by the client and says only what the client chose to
+// say; the marker's ownership is recorded by the system and cannot be claimed.
+// On Windows that difference is the whole guard, since the daemon there runs as
+// the machine account and would otherwise open any file a user named.
+func ClusterKeyFileFrom(key string) (keyFile, marker string) {
 	entries, err := os.ReadDir(clientsDir(key))
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	for _, e := range entries {
 		pid, err := strconv.Atoi(e.Name())
 		if err != nil || !processAlive(pid) {
 			continue
 		}
-		if b, err := os.ReadFile(filepath.Join(clientsDir(key), e.Name()+keyFileSuffix)); err == nil {
+		m := filepath.Join(clientsDir(key), e.Name())
+		if b, err := os.ReadFile(m + keyFileSuffix); err == nil {
 			if kf := strings.TrimSpace(string(b)); kf != "" {
-				return kf
+				return kf, m
 			}
 		}
 	}
-	return ""
+	return "", ""
 }
 
 // clusterForPID reports the cluster a registered launcher PID belongs to

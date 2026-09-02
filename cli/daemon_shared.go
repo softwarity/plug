@@ -172,7 +172,13 @@ func reconcile(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transport, 
 				continue
 			}
 		}
-		cfg := config{host: host, port: port, key: tun.ClusterKeyFile(key)}
+		keyFile, marker := tun.ClusterKeyFileFrom(key)
+		// Whose key is it meant to be? The path came out of a directory users can
+		// write; the marker beside it carries an owner the system recorded. On
+		// Windows that is the difference between reading a user's own key and
+		// reading whatever file they named, as the machine account.
+		guardKeyOwner(keyFile, marker)
+		cfg := config{host: host, port: port, key: keyFile}
 		if wait {
 			tr, err := dialTunnel(cfg)
 			applyDial(ct, tunnels, dialOutcome{key: key, tr: tr, err: err})

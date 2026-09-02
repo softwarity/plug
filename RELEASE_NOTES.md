@@ -34,10 +34,20 @@ service.
 A key must now be a regular file, which rules out a pipe or a device where
 opening is not reading, and it must not live under a system directory, which is
 the only case where the service's privilege buys an attacker something they could
-not do themselves. A user can still name a file inside another user's profile:
-closing that needs the service to open the key as the registering account, which
-is impersonation and a token it does not hold today. Narrowed, not closed, and
-said out loud in the code.
+not do themselves. That left one case, and it is closed too now.
+
+A user could still name a file inside ANOTHER user's profile and have the machine
+account open it. The answer could not come from anything the client wrote, since
+the same user wrote it. It comes from who OWNS the marker the client registered:
+Windows records the creator of a file and a caller cannot make it name somebody
+else, so the account behind that client is known for certain. Its profile
+directory is read from a machine-wide registry key only administrators can write.
+A key path outside that profile is one the client has no business naming.
+
+Every lookup behind it fails open. An owner it cannot read, a profile it cannot
+find, and nothing is refused, exactly as before this existed: refusing on a
+lookup that did not work would turn a service that reads one file too freely into
+a service that reads none.
 
 ### Two licences were missing from THIRD_PARTY_LICENSES.md
 

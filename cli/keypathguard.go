@@ -93,3 +93,44 @@ func systemRootsForKeyGuard() []string {
 		`C:\ProgramData`,
 	}
 }
+
+// keyOutsideOwnersProfile is the second half of the Windows key guard, and the
+// one that closes what the first could only narrow.
+//
+// The SYSTEM service takes the key path out of a directory plain users can write,
+// so a user could name a file inside ANOTHER user's profile and have the most
+// privileged account on the machine open it. Refusing that needs to know whose
+// key it is meant to be, and the answer cannot come from the file's contents,
+// which the same user wrote.
+//
+// It comes from the marker's OWNER instead. Windows records who created a file
+// and a caller cannot make it say somebody else did, so the account that
+// registered the client is known for certain. Its profile directory is then read
+// from a machine-wide registry key only administrators can write. A key path
+// outside that profile is one this client has no business naming.
+//
+// Pure, and taking both paths as arguments, so the rule is testable on any
+// platform: the Windows-only part is looking up the two values, and a rule that
+// compiles only on Windows is a rule exercised on one CI leg and on nobody's
+// machine.
+func keyOutsideOwnersProfile(keyPath, ownerProfile string) bool {
+	if ownerProfile == "" || keyPath == "" {
+		return false // unknown is not outside; the caller decides what to do with that
+	}
+	norm := func(p string) string {
+		p = strings.ToLower(strings.TrimSpace(strings.ReplaceAll(p, "/", `\`)))
+		for strings.Contains(p, `\\`) {
+			p = strings.ReplaceAll(p, `\\`, `\`)
+		}
+		return strings.TrimSuffix(p, `\`)
+	}
+	k, prof := norm(keyPath), norm(ownerProfile)
+	// On the separator boundary: C:\Users\bob2 is not inside C:\Users\bob, and a
+	// rule that said it was would be refusing the wrong thing while looking right.
+	return !strings.HasPrefix(k, prof+`\`)
+}
+
+// guardKeyOwner has a real body only on Windows, where the daemon runs as the
+// machine account and a key path can name another user's file. Everywhere else
+// the daemon keeps the user's own real uid, so guardUserPath already compares the
+// owner and there is nothing to add.

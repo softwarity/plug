@@ -80,3 +80,56 @@ func TestAnEmptyRootRefusesNothing(t *testing.T) {
 		t.Errorf("an unset system root cut off a legitimate key: %s", why)
 	}
 }
+
+// The SYSTEM service on Windows takes a key path out of a directory plain users
+// can write. Narrowing it to regular files outside system directories left the
+// case that matters: a user naming a file inside ANOTHER user's profile, and
+// having the machine account open it for them.
+//
+// The answer cannot come from anything the client wrote, since the same user
+// wrote it. It comes from who OWNS the marker, which Windows records and a caller
+// cannot claim, and from that account's profile directory, which lives in a
+// registry key only administrators can write.
+func TestAKeyOutsideItsOwnersProfileIsRefused(t *testing.T) {
+	const bob = `C:\Users\bob`
+	for _, p := range []string{
+		`C:\Users\alice\.plug\keys\dev`, // the case this exists for
+		`C:\Users\alice\id_ed25519`,
+		`D:\somewhere\else\key`,
+		`C:\Users\bob2\.plug\keys\dev`, // a sibling, not a child
+		`C:\Users\bobby\.plug\keys\dev`,
+	} {
+		if !keyOutsideOwnersProfile(p, bob) {
+			t.Errorf("%s was accepted for a client registered by %s; the service would read one "+
+				"account's file on another's say-so", p, bob)
+		}
+	}
+}
+
+func TestAKeyInsideItsOwnersProfileIsAccepted(t *testing.T) {
+	const bob = `C:\Users\bob`
+	for _, p := range []string{
+		`C:\Users\bob\.plug\keys\dev`,
+		`C:\Users\bob\Documents\keys\id_ed25519`,
+		`c:\users\bob\.plug\keys\dev`,  // casing must not matter
+		`C:/Users/bob/.plug/keys/dev`,  // nor the separator Windows also accepts
+		`C:\Users\bob\\.plug\keys\dev`, // nor a doubled one
+	} {
+		if keyOutsideOwnersProfile(p, bob) {
+			t.Errorf("%s is inside %s and was refused, which would stop that user's own key from "+
+				"being used at all", p, bob)
+		}
+	}
+}
+
+// Unknown is not outside. Every lookup behind this can fail on a machine that is
+// perfectly fine, and refusing then would turn a service that reads one file too
+// freely into a service that reads none.
+func TestAnUnknownProfileRefusesNothing(t *testing.T) {
+	if keyOutsideOwnersProfile(`C:\Users\bob\.plug\keys\dev`, "") {
+		t.Error("an unknown owner profile was treated as a refusal")
+	}
+	if keyOutsideOwnersProfile("", `C:\Users\bob`) {
+		t.Error("an empty key path was treated as a refusal")
+	}
+}
