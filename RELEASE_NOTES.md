@@ -418,6 +418,26 @@ an index out of range rather than the thing it exists to say. Its two siblings
 guard their extraction; this one relied on the panic. It parses the file now, and
 a function that moved is told to take its test with it.
 
+
+### Repairing the machine's resolver after a crash was covered by nothing
+
+When the macOS daemon dies without unwinding, killed outright or out of memory,
+the next launch puts the system resolver back from three saved pieces. That path
+had no test at all, so the order it replays them in was whatever the code
+happened to do.
+
+The order is the whole thing. The service dictionaries have to go back before
+plug's global override is dropped, because the system recomposes the global one
+from them: drop it first and there is a window with no resolver at all, on a
+machine whose owner has just had plug die under them. It also has to remove its
+own saved copies, or the launch after that replays a resolver the machine has
+since moved on from, undoing whatever was done in between.
+
+Both are asserted now, along with the case where a saved piece is empty, which
+means the service had no DNS of its own before plug touched it: putting an empty
+one back would pin that service to no resolver at all, so the entry is removed
+instead.
+
 ## 2.13.0
 
 ### A copy of the relay loop had quietly lost a branch

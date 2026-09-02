@@ -395,13 +395,18 @@ func scutil(script string) (string, error) {
 
 // scutilSet writes the dictionary accumulated by build (d.init/d.add lines) into
 // key of the dynamic store.
-func scutilSet(key, build string) error {
+// A var, like its neighbour below, so the orphan recovery can be tested. That
+// path repairs the resolver of the WHOLE MACHINE after a daemon dies without
+// unwinding, and nothing exercised it: the order it replays the three backups
+// in is the difference between a working resolver and one pointing at a dead
+// address, and no test could see that order.
+var scutilSet = func(key, build string) error {
 	_, err := scutil(build + "set " + key + "\nquit\n")
 	return err
 }
 
 // scutilRemove deletes key from the dynamic store.
-func scutilRemove(key string) error {
+var scutilRemove = func(key string) error {
 	_, err := scutil("remove " + key + "\nquit\n")
 	return err
 }
@@ -460,7 +465,9 @@ func writeResolv(dnsIP string) {
 }
 
 // restoreResolv puts /etc/resolv.conf back from a snapshotResolv() token.
-func restoreResolv(snap string) {
+// Also a var, and for the same reason: the orphan recovery replays it first,
+// before the two scutil backups, and a test needs to see that it did.
+var restoreResolv = func(snap string) {
 	_ = os.Remove(resolvConf)
 	switch kind, rest, _ := strings.Cut(snap, "\n"); kind {
 	case "L":
