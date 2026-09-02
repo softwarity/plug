@@ -1,6 +1,6 @@
 # plug - TODO / plan de travail
 
-_État : 7 août 2026 - **2.10.0 publiée**. L'historique des livraisons vit
+_État : 2 septembre 2026 - **2.13.0 publiée**. L'historique des livraisons vit
 désormais dans `RELEASE_NOTES.md` et la roadmap publique dans
 `docs/src/app/pages/roadmap.component.ts` ; ce fichier ne garde que ce qui est
 **ouvert** et le contexte qui ne tient pas ailleurs._

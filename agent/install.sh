@@ -71,7 +71,22 @@ fi
 cur=$(reg query 'HKCU\Environment' //v Path 2>/dev/null | sed -n 's/.*REG_\(EXPAND_\)\?SZ[[:space:]]*//p' | tr -d '\r' || true)
 case ";${cur};" in
   *";${WIN_DIR};"*) info "already on PATH" ;;
-  *) setx Path "${cur:+$cur;}$WIN_DIR" >/dev/null 2>&1 && info "added to PATH (open a new terminal for it to take effect)" || info "add $WIN_DIR to your PATH manually" ;;
+  *)
+    # setx TRUNCATES silently past 1024 characters. It warns on stderr and then
+    # exits 0, so `>/dev/null 2>&1 && info "added to PATH"` reported success while
+    # amputating the user's PATH: everything they had installed before plug, gone,
+    # and the installer saying it went well. The length is checked before writing,
+    # and the output is kept so a failure can say what it was.
+    _new="${cur:+$cur;}$WIN_DIR"
+    if [ "${#_new}" -ge 1024 ]; then
+      info "your user PATH is ${#_new} characters, and setx silently truncates at 1024."
+      info "Refusing to write it. Add $WIN_DIR to your PATH by hand, or shorten it first."
+    elif _out=$(setx Path "$_new" 2>&1); then
+      info "added to PATH (open a new terminal for it to take effect)"
+    else
+      info "could not add $WIN_DIR to your PATH: $_out"
+    fi
+    ;;
 esac
 
 # 5. The datapath SERVICE — needs admin once. If Git Bash is elevated it installs

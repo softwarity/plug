@@ -369,6 +369,35 @@ budget, the line past which a cell is not slow but stuck. Crossing it prints wha
 the shell was doing, the live sessions with their elapsed times, and the tail of
 each session log, then fails the leg by name.
 
+
+### The version stamped in an image and the version printed on it were never compared
+
+The job that publishes the semver tags carried a comment saying the two cannot
+disagree, same commit, same build, one truth. The reasoning holds only if the
+build saw the tag, and the build job has no dependencies: it starts within
+seconds of a push while the promotion runs half an hour later. A release commit
+and its tag arriving as two separate pushes puts that entire window between them,
+and the image is then stamped with a development version and published as the
+release. Nothing downstream could tell, and every launcher fetching that core is
+told a version its own bytes do not carry.
+
+The promotion now reads the version out of the image it is about to name, and
+refuses if they differ. It costs one pull of an image the job has already
+authenticated for.
+
+### An installer that reported success while shortening your PATH
+
+On Windows, `setx` truncates silently past 1024 characters: it warns on stderr
+and exits 0. The installer sent both to /dev/null and announced "added to PATH",
+so on a machine with a well-populated user PATH it could remove everything
+installed before plug and say it went well. It now checks the length before
+writing, and keeps the output so a failure can say what it was.
+
+Also in this pass: the documentation site's dependency tree is clean again,
+without leaving the major version it declares; the one floating dependency among
+the node e2e client's eight is pinned like its neighbours; and the TODO's status
+line names the version that is actually out.
+
 ## 2.13.0
 
 ### A copy of the relay loop had quietly lost a branch

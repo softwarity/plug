@@ -360,6 +360,24 @@ jobs:
             # inside them cannot disagree: same commit, same build, one truth.
             tags="$tags -t $IMAGE:$ver -t $IMAGE:$maj.$min -t $IMAGE:$maj"
             echo "release $ver — publishing the semver tags too"
+            # Asserted, not assumed. The comment above says the two cannot
+            # disagree, and the reasoning holds only if the build saw the tag:
+            # image-build has no `needs` and starts within seconds of the push,
+            # while this job runs half an hour later. A release commit and its
+            # tag arriving as two separate pushes puts that whole window between
+            # them, and the image is then stamped dev+<sha> and published as
+            # :2.13.0. Nothing downstream could tell, and every launcher fetching
+            # that core would be told a version its bytes do not carry.
+            #
+            # Costs one pull of an image this job is already authenticated for.
+            got=$(docker run --rm --entrypoint cat "$SRC" /opt/plug/VERSION 2>/dev/null || echo "?")
+            if [ "$got" != "$ver" ]; then
+              echo "::error::the image is stamped '$got' and is about to be published as $ver." >&2
+              echo "         The build ran before the tag existed. Re-run the CI on this commit," >&2
+              echo "         which rebuilds with the tag in place, rather than publishing this one." >&2
+              exit 1
+            fi
+            echo "the image is stamped $got, which is the version it is being given"
           fi
           echo "promoting $SRC → $tags"
           docker buildx imagetools create $tags "$SRC"
