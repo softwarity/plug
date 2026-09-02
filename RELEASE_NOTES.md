@@ -2,6 +2,33 @@
 
 ## NEXT RELEASE
 
+### Seven more functions that existed twice, and one that only looked wrong
+
+The readiness and error markers for a cluster were written out in both the macOS
+and the Windows file, under a build tag that already covers the two. The code was
+identical; what differed was what each copy explained. One described the daemon
+and mentioned mirroring the other, the other described the service and was alone
+in saying why the file has to be readable without privilege. Whoever read one
+learned less than whoever read the other, and neither said so. Both explanations
+survive in the single copy.
+
+Their four neighbours stay where they are and genuinely differ: taking the lock,
+telling whether a daemon is alive, where the known hosts live, where the ready
+marker goes.
+
+Alongside it, something that was reported as an inconsistency and is not. The CLI
+requires a patch release of Go where the agent and the e2e modules ask only for a
+minor one, and that is because gvisor declares that minimum: the netstack is not
+optional here. Changing it looks like it works and `go mod tidy` puts it straight
+back, silently. It is left alone and the reason is now in the file, so the next
+reader does not spend the same half hour.
+
+And the two actions GitHub has begun warning about are on their current major.
+Checked rather than assumed: the version that clears the warning only changes the
+runtime, the one after it only changes dependencies, and the single behaviour
+change in it concerns a Java distribution this repository does not use.
+
+
 ---
 
 ## 2.13.1
@@ -664,6 +691,7 @@ was ever gained by spacing them out. A cluster that holds the name ends it at
 once, and when none does, every reply is still waited for, because "nobody has
 it" and "nobody could answer" lead to different decisions and only the count
 tells them apart.
+
 
 ## 2.13.0
 

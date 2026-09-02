@@ -1,5 +1,10 @@
 module github.com/softwarity/plug/cli
 
+// 1.26.3, and not 1.26 like the agent and the e2e modules, because gvisor
+// declares that minimum and the netstack is not optional here. An audit read the
+// difference as an inconsistency to tidy away; `go mod tidy` puts it straight
+// back, silently, because the module graph requires it. Left alone, and said, so
+// the next reader does not spend the same half hour.
 go 1.26.3
 
 require (

@@ -220,12 +220,12 @@ jobs:
           # never was on ten legs racing to write the same key.
           cache: true
           cache-dependency-path: e2e/clients/go/go.sum
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
           cache: maven
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ~/.npm
           key: npm-Linux-${{ hashFiles('e2e/clients/node/package.json') }}
@@ -547,7 +547,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0 # the compat cell decides by ANCESTRY (launcher rev vs fix commit)
-      - uses: actions/setup-java@v4 # pin the JRE — the runners' ambient Java differs by OS; no maven cache, nothing builds here
+      - uses: actions/setup-java@v6 # pin the JRE — the runners' ambient Java differs by OS; no maven cache, nothing builds here
         with:
           distribution: temurin
           java-version: '21'
@@ -568,7 +568,7 @@ jobs:
       # grpcio are compiled wheels. It costs 42s, and unlike the npm cache —
       # which pointed at ~/.npm and therefore NEVER hit on Windows, where npm
       # caches in %LocalAppData% — this one is right on all three.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           # One path per OS; actions/cache ignores the ones that do not exist.
           path: |
@@ -713,7 +713,7 @@ jobs:
       PREBUILT_CLIENTS: e2e-clients
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
@@ -721,7 +721,7 @@ jobs:
         with:
           name: e2e-clients
           path: e2e-clients
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cache/pip
@@ -797,7 +797,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-java@v4 # pin the JRE — the runners' ambient Java differs by OS; no maven cache, nothing builds here
+      - uses: actions/setup-java@v6 # pin the JRE — the runners' ambient Java differs by OS; no maven cache, nothing builds here
         with:
           distribution: temurin
           java-version: '21'
@@ -818,7 +818,7 @@ jobs:
       # grpcio are compiled wheels. It costs 42s, and unlike the npm cache —
       # which pointed at ~/.npm and therefore NEVER hit on Windows, where npm
       # caches in %LocalAppData% — this one is right on all three.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           # One path per OS; actions/cache ignores the ones that do not exist.
           path: |
@@ -947,7 +947,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-java@v4 # pin the JRE — the runners' ambient Java differs by OS; no maven cache, nothing builds here
+      - uses: actions/setup-java@v6 # pin the JRE — the runners' ambient Java differs by OS; no maven cache, nothing builds here
         with:
           distribution: temurin
           java-version: '21'
@@ -968,7 +968,7 @@ jobs:
       # grpcio are compiled wheels. It costs 42s, and unlike the npm cache —
       # which pointed at ~/.npm and therefore NEVER hit on Windows, where npm
       # caches in %LocalAppData% — this one is right on all three.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           # One path per OS; actions/cache ignores the ones that do not exist.
           path: |

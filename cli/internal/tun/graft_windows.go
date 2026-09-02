@@ -36,30 +36,6 @@ func readyPath(key string) string { return filepath.Join(graftDir, ClusterHash(k
 // %SystemProfile% home — a user can edit it to reset a changed key without admin.
 func SharedKnownHosts() string { return filepath.Join(graftDir, "known_hosts") }
 
-// MarkClusterReady / UnmarkClusterReady / ClusterReady let a `plug -p X <cmd>` wait
-// for the service to have opened X's tunnel before running (the datapath is up
-// service-wide, the per-cluster tunnel opens on the next reconcile).
-func MarkClusterReady(key string)   { _ = os.WriteFile(readyPath(key), nil, 0o644) }
-func UnmarkClusterReady(key string) { _ = os.Remove(readyPath(key)) }
-func ClusterReady(key string) bool  { _, err := os.Stat(readyPath(key)); return err == nil }
-
-// errorPath records WHY the service could not open this cluster's tunnel (agent
-// unreachable, host key changed…). The service writes it on a failed reconcile
-// and clears it on success; a launcher waiting past its timeout shows it instead
-// of a blank "not ready". In the shared ProgramData dir, so a non-elevated
-// launcher can read it.
-func errorPath(key string) string { return filepath.Join(graftDir, ClusterHash(key)+".error") }
-
-func MarkClusterError(key, msg string) { _ = os.WriteFile(errorPath(key), []byte(msg), 0o644) }
-func ClearClusterError(key string)     { _ = os.Remove(errorPath(key)) }
-func ClusterError(key string) string {
-	b, err := os.ReadFile(errorPath(key))
-	if err != nil {
-		return ""
-	}
-	return string(b)
-}
-
 // AcquireCluster is a no-op leader on Windows: the datapath is a single SCM service,
 // so the service manager is the one owner — no per-cluster flock needed.
 func AcquireCluster(_ string) (leader bool, release func(), err error) {
