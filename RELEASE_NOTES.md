@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.13.2
+
 ### Seven more functions that existed twice, and one that only looked wrong
 
 The readiness and error markers for a cluster were written out in both the macOS
