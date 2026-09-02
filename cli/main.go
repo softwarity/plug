@@ -149,7 +149,7 @@ func (c config) authKeys() [][]byte {
 	// oracle for whether a root-only file exists and parses as a key.
 	guardUserPath(c.key)
 	guardKeyPath(c.key)
-	personal, err := os.ReadFile(c.key)
+	personal, err := readUserOwnedFile(c.key)
 	if err != nil {
 		fatal("profile key %s: %v\n"+
 			"      that path comes from `key = ...` in the profile. Regenerate it with\n"+

@@ -568,6 +568,23 @@ bounds that one is not who may start the daemon but what a flow may reach once i
 is up, which was the single-cluster ownership check earlier in these notes. Both
 findings are now written where the code is, so neither is re-raised as the other.
 
+
+### The path that was checked and the file that was opened could be two different things
+
+Before reading a personal key, plug checks that the path belongs to the user it
+is acting for, and then opens that path again. Between the two, anything running
+as that user can replace the final component with a link to a file only root can
+read. plug is setuid on macOS, so the second open is root's: the file comes back,
+and is offered to whatever server the caller pointed it at.
+
+The read now refuses to follow a link at that component, and takes the ownership
+from the descriptor it already holds, so what was checked and what was read are
+the same file rather than the same name.
+
+What this does not close, said plainly rather than implied: an ancestor DIRECTORY
+swapped between the walk and the open. Closing that needs a resolution mode that
+exists only on recent Linux, and this code also runs on macOS.
+
 ## 2.13.0
 
 ### A copy of the relay loop had quietly lost a branch

@@ -2,7 +2,10 @@
 
 package main
 
-import "os/exec"
+import (
+	"os"
+	"os/exec"
+)
 
 // Windows has no setuid: plug elevates per launch (UAC / a SYSTEM service), it
 // never runs the child from an inherited root euid, so there is nothing to drop
@@ -24,3 +27,9 @@ func chownToUser(string) {}
 // directory, for not being a regular file, and would have refused
 // %ProgramData%\plug, which plug writes on purpose.
 func guardUserPath(string) {}
+
+// readUserOwnedFile is a plain read here. The ownership question on Windows is
+// answered by guardKeyOwner, which asks who registered the client rather than
+// who owns the file being read, because the account the daemon acts for is not
+// the account it runs as.
+func readUserOwnedFile(path string) ([]byte, error) { return os.ReadFile(path) }

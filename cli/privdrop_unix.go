@@ -3,6 +3,8 @@
 package main
 
 import (
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/user"
@@ -193,4 +195,47 @@ func guardPathOwnedBy(path string, uid int) {
 		}
 		p = parent
 	}
+}
+
+// readUserOwnedFile reads path and proves, on the DESCRIPTOR it read from, that
+// the file belongs to the user plug is acting for.
+//
+// guardUserPath answers a question about a PATH, and the caller then opens that
+// path again. Between the two, anything running as the user can swap the final
+// component for a symlink to a file only root can read, and the answer the guard
+// gave no longer describes what gets opened. plug is setuid on macOS, so the
+// second open is root's: the file comes back, and is offered to whatever SSH
+// server the caller pointed it at.
+//
+// O_NOFOLLOW refuses a symlink at that final component outright, and the fstat
+// is taken from the descriptor already open, so the identity checked and the
+// bytes returned cannot be two different files.
+//
+// What this does NOT close, said plainly: an ancestor DIRECTORY swapped between
+// the walk and this open. Closing that needs openat2 with RESOLVE_BENEATH, which
+// is Linux-only and recent, and the caller here also runs on macOS.
+func readUserOwnedFile(path string) ([]byte, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	uid, _, privileged := resolveDropTarget(os.Geteuid(), os.Getuid(), os.Getgid(),
+		os.Getenv("SUDO_UID"), os.Getenv("SUDO_GID"))
+	if privileged {
+		fi, err := f.Stat()
+		if err != nil {
+			return nil, err
+		}
+		st, ok := fi.Sys().(*syscall.Stat_t)
+		if !ok {
+			return nil, fmt.Errorf("cannot tell who owns %s", path)
+		}
+		if int(st.Uid) != uid {
+			return nil, fmt.Errorf("%s belongs to uid %d, not to you (uid %d), and plug is holding a "+
+				"privilege you do not have", path, st.Uid, uid)
+		}
+	}
+	return io.ReadAll(f)
 }
