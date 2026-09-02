@@ -398,6 +398,26 @@ without leaving the major version it declares; the one floating dependency among
 the node e2e client's eight is pinned like its neighbours; and the TODO's status
 line names the version that is actually out.
 
+
+### The orphan cluster reaper is wired at both ends now
+
+A cluster serving an e2e run leaves early when it sees that run finish, and it
+found the run to watch by splitting the correlation id. That split broke silently
+the day the id grew a field: every cluster then ran out its full timeout, holding
+a runner from a pool of twenty, with the early exit disarmed and nothing saying
+so. The split was fixed, and it remains as the fallback; what was missing is the
+value it exists to guess. The caller now states its own run id when it dispatches
+the cluster, and a value passed outright cannot be parsed wrong.
+
+### A test that failed with an index out of range instead of a sentence
+
+One of the three tests that read source rather than behaviour cut a file from a
+function's name to the next closing brace, using an index that returns -1 when
+the function is renamed. The slice that follows then panics, so the test reported
+an index out of range rather than the thing it exists to say. Its two siblings
+guard their extraction; this one relied on the panic. It parses the file now, and
+a function that moved is told to take its test with it.
+
 ## 2.13.0
 
 ### A copy of the relay loop had quietly lost a branch

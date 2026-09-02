@@ -404,29 +404,28 @@ func TestWhereTheHostKeyIsRecorded(t *testing.T) {
 // root, and the tunnel's own guard then refused it - correctly - as "a file
 // outside your own tree". The feature was right and the ownership was not.
 func TestBothChannelsGuardAndHandBackThePinFile(t *testing.T) {
-	b, err := os.ReadFile("main.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	fn := string(b)
-	fn = fn[strings.Index(fn, "func dialGetUser("):]
-	fn = fn[:strings.Index(fn, "\n}")]
-	for _, want := range []string{"guardUserPath(", "chownToUser("} {
-		if !strings.Contains(fn, want) {
-			t.Errorf("dialGetUser writes the pin file without %s: it runs first, as root, and creates it", want)
+	// Parsed, not sliced. This used to cut the file from "func dialGetUser(" to
+	// the next "\n}" with strings.Index, which returns -1 when the function is
+	// renamed or moved: the slice that follows then panics, so the test failed
+	// with an index out of range instead of saying the thing it exists to say.
+	// Its two siblings guard their extraction; this one relied on that panic.
+	for _, want := range []struct{ file, fn string }{
+		{"main.go", "dialGetUser"},
+		{"socks_run.go", "dialTunnel"},
+	} {
+		bodies := funcBodies(t, want.file)
+		body, ok := bodies[want.fn]
+		if !ok {
+			t.Fatalf("%s no longer defines %s. If it moved, move this test with it: what it checks is "+
+				"that whoever creates the pin file guards the path before and hands the file back after, "+
+				"and that has to be checked wherever the creating happens", want.file, want.fn)
 		}
-	}
-
-	s, err := os.ReadFile("socks_run.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	dt := string(s)
-	dt = dt[strings.Index(dt, "func dialTunnel("):]
-	dt = dt[:strings.Index(dt, "\n}")]
-	for _, want := range []string{"guardUserPath(", "chownToUser("} {
-		if !strings.Contains(dt, want) {
-			t.Errorf("dialTunnel lost %s around the pin file", want)
+		for _, call := range []string{"guardUserPath", "chownToUser"} {
+			if !strings.Contains(body, call) {
+				t.Errorf("%s writes the pin file without calling %s: on macOS it runs first, as root, "+
+					"and creates ~/.plug/known_hosts owned by root, which the tunnel's own guard then "+
+					"refuses as a file outside your own tree", want.fn, call)
+			}
 		}
 	}
 }

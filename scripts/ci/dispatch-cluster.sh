@@ -17,7 +17,12 @@ title="${wf%.yml}-$corr" # each workflow names its runs `run-name: <basename>-<c
 # The image ci.yml just published for this commit, so the cluster PULLS the
 # artefact we ship instead of building its own. Empty is allowed (a manual
 # dispatch): the cluster then builds from its checkout, as it always did.
-gh workflow run "$wf" -r "${GITHUB_REF_NAME:-main}" -f corr="$corr" -f image="${CLUSTER_IMAGE:-}" >&2
+# caller: this run's id, stated rather than left to be recovered by splitting the
+# corr id. That split broke silently the day the corr id grew a field, and every
+# cluster then ran out its full TTL holding a runner, with the early exit disarmed
+# and nothing saying so. A value passed outright cannot be parsed wrong.
+gh workflow run "$wf" -r "${GITHUB_REF_NAME:-main}" -f corr="$corr" \
+  -f caller="${GITHUB_RUN_ID:-}" -f image="${CLUSTER_IMAGE:-}" >&2
 
 echo "waiting for the cluster run ($title) to appear..." >&2
 for _ in $(seq 1 20); do

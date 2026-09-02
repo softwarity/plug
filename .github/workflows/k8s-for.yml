@@ -16,6 +16,16 @@ on:
       corr:
         description: correlation id (the caller's run id) — names the tailnet node
         required: true
+      caller:
+        description: >-
+          The run id of the CI run this cluster serves, stated outright rather
+          than recovered by splitting the correlation id. The split is a
+          fallback: it broke silently once already when the corr id grew a field,
+          and the cluster then ran out its full TTL holding a runner with nothing
+          saying why. Empty on a manual dispatch, where there is no caller to
+          watch.
+        required: false
+        default: ""
       image:
         description: >-
           The agent image to run — the reference ci.yml just published for this
@@ -156,6 +166,7 @@ jobs:
           # finish. Longer than compose's: the TTL starts after the kind
           # rollout, which lands ~2-3 min later, and the legs still need their
           # full chain after that.
+          PLUG_CALLER_RUN_ID: ${{ inputs.caller }} # authoritative; the corr split is the fallback
           PLUG_CLUSTER_TTL: "2100"
           PLUG_CLUSTER_IDENT: ${{ inputs.corr }}
         run: bash scripts/ci/k8s-serve.sh

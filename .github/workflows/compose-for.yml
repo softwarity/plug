@@ -15,6 +15,16 @@ on:
       corr:
         description: correlation id (the caller's run id) — names the tailnet node
         required: true
+      caller:
+        description: >-
+          The run id of the CI run this cluster serves, stated outright rather
+          than recovered by splitting the correlation id. The split is a
+          fallback: it broke silently once already when the corr id grew a field,
+          and the cluster then ran out its full TTL holding a runner with nothing
+          saying why. Empty on a manual dispatch, where there is no caller to
+          watch.
+        required: false
+        default: ""
       image:
         description: >-
           The agent image to run — the reference ci.yml just published for this
@@ -148,6 +158,7 @@ jobs:
       - name: Serve the cluster (idle until cancelled)
         env:
           GH_TOKEN: ${{ github.token }} # idle-until-caller-done polls the caller run
+          PLUG_CALLER_RUN_ID: ${{ inputs.caller }} # authoritative; the corr split is the fallback
           PLUG_CLUSTER_TTL: "1200" # backstop only — kill-cluster cancels this run when the e2e jobs finish
           # The cluster's identity, served by the `ident` service — the multicluster
           # e2e asserts that the SAME name reaches the RIGHT cluster through each plug.

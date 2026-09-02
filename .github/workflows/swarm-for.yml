@@ -15,6 +15,16 @@ on:
       corr:
         description: correlation id (the caller's run id) — names the tailnet node
         required: true
+      caller:
+        description: >-
+          The run id of the CI run this cluster serves, stated outright rather
+          than recovered by splitting the correlation id. The split is a
+          fallback: it broke silently once already when the corr id grew a field,
+          and the cluster then ran out its full TTL holding a runner with nothing
+          saying why. Empty on a manual dispatch, where there is no caller to
+          watch.
+        required: false
+        default: ""
       image:
         description: >-
           The agent image to run — the reference ci.yml just published for this
@@ -154,6 +164,7 @@ jobs:
           # Backstop only — kill-cluster cancels this run when the e2e jobs
           # finish. Same margin as k8s-for's (the legs of the three families
           # run concurrently and finish on the same horizon).
+          PLUG_CALLER_RUN_ID: ${{ inputs.caller }} # authoritative; the corr split is the fallback
           PLUG_CLUSTER_TTL: "2100"
           PLUG_CLUSTER_IDENT: ${{ inputs.corr }}
         run: bash scripts/ci/swarm-serve.sh
