@@ -487,15 +487,18 @@ ahead of the timed part. Both clusters must actually serve before the assertion
 starts, and a cluster whose agent is up but whose services never come says
 exactly that instead of failing as a routing error.
 
-### Everything the agent does through Kubernetes has its own file now
+### Each orchestrator the agent speaks to has its own file now
 
-Three orchestrators lived in one file of three thousand lines, twenty-five
-functions for this one interleaved with the others. Reading how a Service is
-repointed meant scrolling through how a container is parked. Nothing changed and
-nothing could: moving a function between files of one package is invisible to the
-compiler. Checked all the same, the way the command dispatcher was: the same 127
-declarations before and after, and not one line of code lost or added beyond the
-new file's own imports.
+Three of them lived in one file of three thousand lines, interleaved: reading how
+a Kubernetes Service is repointed meant scrolling through how a Docker container
+is parked. They are three files, and what is left is the part that belongs to
+none of them: the SSH verbs, the name leases, the signpost. Three thousand lines
+to sixteen hundred.
+
+Nothing changed and nothing could, moving a function between files of one package
+being invisible to the compiler. Checked all the same, the way the command
+dispatcher was: the same 127 declarations before and after, and not one line of
+code lost, the only additions being the imports each new file needs.
 
 ### The Linux half of the attribution had no test, and the site said it had
 
