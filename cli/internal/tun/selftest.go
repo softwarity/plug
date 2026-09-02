@@ -144,7 +144,7 @@ func SelfTest(logf func(string, ...any)) error {
 	defer st.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	br := &bridge{dev: dev, ep: ep}
+	br := &bridge{dev: dev, ep: ep, log: log}
 	go br.toStack()
 	go br.fromStack(ctx)
 	log.f("selftest: TUN %s up (DNS %s:53), echo at %s", ifname, dnsIP, echo.Addr())

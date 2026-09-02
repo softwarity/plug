@@ -585,6 +585,40 @@ What this does not close, said plainly rather than implied: an ancestor DIRECTOR
 swapped between the walk and the open. Closing that needs a resolution mode that
 exists only on recent Linux, and this code also runs on macOS.
 
+
+### A datapath that dies now says so
+
+The bridge between the network device and the stack is the datapath. When its
+read side ends, packets keep going in and nothing comes back: every name still
+resolves to an address that now answers nothing, so the session looks alive and
+reaches nothing. It used to end without a word, and the ordinary way it happens
+is a laptop waking with the device gone from under it. It reports what happened
+and what to do about it, and a clean shutdown stays silent, since that is how a
+session ENDS rather than how it fails.
+
+The other half, writing replies back to the device, threw its errors away. It
+says the first one and then stops repeating itself: a device refusing one packet
+refuses the next too, and a line per packet would bury the first.
+
+### A signal arriving too early took the launcher down
+
+plug relays a termination signal to the command it is running, and started
+listening for one before that command existed. A signal landing in the window
+between dereferenced nothing and panicked, instead of being passed on. Microseconds
+wide, and reachable by anything that signals plug the moment it starts, which is
+what a shell doing job control does.
+
+Its twin, further down, needs no such guard because it starts after the process
+exists. That difference is now written where the two can be compared, so the
+unguarded shape is not copied.
+
+### And the background update check said nothing when it gave up
+
+Never taking the session down is right, a background nicety must not. Swallowing
+the reason made the only thing that can go wrong there invisible: the check
+simply never happens, for weeks, and the single symptom is a version notice
+nobody ever sees.
+
 ## 2.13.0
 
 ### A copy of the relay loop had quietly lost a branch

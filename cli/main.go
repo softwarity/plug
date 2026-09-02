@@ -599,7 +599,13 @@ func launcherRun(args []string) {
 	defer signal.Stop(sigs)
 	go func() {
 		for s := range sigs {
-			if s == syscall.SIGTERM {
+			// child.Process is nil until Run below reaches its own Start, and this
+			// goroutine is already listening: a SIGTERM landing in that window
+			// dereferenced nil and took the launcher down with a panic instead of
+			// passing the signal on. Microseconds wide, and reachable by anything
+			// that signals plug the moment it starts, which is what a shell doing
+			// job control does.
+			if s == syscall.SIGTERM && child.Process != nil {
 				child.Process.Signal(s)
 			}
 		}
@@ -1775,6 +1781,10 @@ func runChildEnv(cmdArgs []string, env []string) int {
 			// without restoring the terminal they put in raw mode (arrow keys
 			// then echo ^[[A in the shell). A targeted SIGTERM at plug alone
 			// is NOT group-delivered, so that one is relayed.
+			//
+			// No nil guard needed here, unlike its twin in launcherRun: this
+			// goroutine starts after child.Start() has returned, so the process
+			// exists before anything can signal it.
 			if s == syscall.SIGTERM {
 				child.Process.Signal(s)
 			}

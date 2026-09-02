@@ -108,7 +108,17 @@ func saveUpdateState(cfg config, st updateState) {
 // failure of any kind is simply not an answer — the state keeps whatever it
 // held, and the next session asks again.
 func backgroundUpdateCheck(cfg config) {
-	defer func() { _ = recover() }() // a background nicety must never take the session down
+	// Absorbed, and SAID. Never taking the session down is right, a background
+	// nicety must not, and swallowing it in silence made the one thing that could
+	// go wrong here invisible: the check simply never happens, for weeks, and the
+	// only symptom is a version notice nobody ever sees. Which is exactly how you
+	// fail to notice that you failed to notice.
+	defer func() {
+		if r := recover(); r != nil {
+			info("the background update check gave up (%v). Nothing is broken by it, but this session "+
+				"will not tell you about a newer release; `plug update` still works", r)
+		}
+	}()
 
 	if !shouldCheck(normalizeUpdateMode(cfg.updateMode), loadUpdateState(cfg), time.Now()) {
 		return

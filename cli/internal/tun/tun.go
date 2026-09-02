@@ -23,8 +23,11 @@ package tun
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"io"
 	"net"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -172,7 +175,7 @@ func startDatapathDF(df dialFunc, dialers func() []Dialer, logf func(string, ...
 	st, ep := buildStack(tab, df, up, check, log)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	br := &bridge{dev: dev, ep: ep}
+	br := &bridge{dev: dev, ep: ep, log: log}
 	go br.toStack()      // TUN packets  → netstack
 	go br.fromStack(ctx) // netstack replies → TUN
 
@@ -219,6 +222,9 @@ func Run(tr Dialer, cmdArgs []string, logf func(string, ...any)) (int, error) {
 type bridge struct {
 	dev wgtun.Device
 	ep  *channel.Endpoint
+	log logfn // so a datapath that dies says so; see toStack
+
+	wroteBadly sync.Once
 }
 
 func (b *bridge) toStack() {
@@ -231,6 +237,19 @@ func (b *bridge) toStack() {
 	for {
 		n, err := b.dev.Read(bufs, sizes, headroom)
 		if err != nil {
+			// Said, not swallowed. This loop is one half of the datapath, and it
+			// ends once and for all: a device that disappears under it (a laptop
+			// waking, an EIO) leaves packets going in and nothing coming back,
+			// with every name still resolving to a fake IP that now answers
+			// nothing. The session looks alive and reaches nothing, which is the
+			// hardest shape to diagnose from the outside.
+			//
+			// A clean close is how a session ENDS, and saying so every time would
+			// be noise on the normal path.
+			if !errors.Is(err, os.ErrClosed) && !errors.Is(err, io.EOF) {
+				b.log.f("datapath: the TUN device stopped answering (%v). "+
+					"Names still resolve but nothing reaches the cluster: restart the session", err)
+			}
 			return
 		}
 		for i := 0; i < n; i++ {
@@ -265,7 +284,16 @@ func (b *bridge) fromStack(ctx context.Context) {
 			data := v.AsSlice()
 			buf := make([]byte, headroom+len(data))
 			copy(buf[headroom:], data)
-			b.dev.Write([][]byte{buf}, headroom)
+			if _, err := b.dev.Write([][]byte{buf}, headroom); err != nil {
+				// Once, not per packet: a device that refuses a write refuses the
+				// next one too, and a line per packet would bury the first. The
+				// loop carries on, because a single refused packet is not a dead
+				// datapath and the read side reports that case itself.
+				b.wroteBadly.Do(func() {
+					b.log.f("datapath: the TUN device refused a packet (%v). "+
+						"Replies from the cluster are being dropped; further ones are not reported", err)
+				})
+			}
 		}
 		pkb.DecRef()
 	}
