@@ -312,7 +312,12 @@ func ClusterHeldByOther(key string, uid int) (int, bool) {
 		return 0, false
 	}
 	for other := range clientUIDs(key) {
-		if other != uid && other != 0 {
+		// other > 0 rather than != 0: an account only holds a cluster if it is a
+		// real one. Root is exempt as above, and a recorded -1 is a marker written
+		// where identity means nothing, which must not be able to hold anything
+		// against anybody. Guarding only the CALLER's uid left that to depend on
+		// who was asking, which is not where the invariant belongs.
+		if other != uid && other > 0 {
 			return other, true
 		}
 	}

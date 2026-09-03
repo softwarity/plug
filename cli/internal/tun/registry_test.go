@@ -292,6 +292,16 @@ func TestClusterHeldByOther(t *testing.T) {
 	if _, held := ClusterHeldByOther("host-b:2222", 502); held {
 		t.Fatal("holding one cluster must not hold every cluster")
 	}
+
+	// A marker recorded where an account is not a number (os.Getuid is -1 for
+	// every process on Windows) names nobody, so it must hold nothing against
+	// anybody. Checked on the OWNER rather than only on the caller: guarding just
+	// the caller made the answer depend on who happened to be asking.
+	graftDir = t.TempDir()
+	holdCluster(t, key, os.Getpid(), -1)
+	if other, held := ClusterHeldByOther(key, 502); held {
+		t.Fatalf("a marker carrying no real identity held the cluster, as uid %d", other)
+	}
 }
 
 // TestClusterHeldByADeadClientIsFree keeps the rule from outliving the session it
@@ -344,6 +354,13 @@ func TestARecycledPIDDoesNotResurrectAMembership(t *testing.T) {
 
 // And the same marker, stamped with the truth, must still hold: a stamp that
 // refuses everything would close the hole by disabling the rule.
+//
+// The two halves of this test are the two platforms, stated rather than skipped.
+// Where an account is a number, a live stamped client holds its cluster against
+// everyone else. On Windows os.Getuid is -1 for every process, so RegisterClient
+// records -1, there is nobody to tell apart, and the rule declines to judge. That
+// is today's gap, and it is asserted here so the day Windows clients record a
+// real identity this test is what says the assertion has to move.
 func TestAStampedLiveClientStillHoldsTheCluster(t *testing.T) {
 	old := graftDir
 	graftDir = t.TempDir()
@@ -356,7 +373,17 @@ func TestAStampedLiveClientStillHoldsTheCluster(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(clientsDir(key), strconv.Itoa(os.Getpid())+startFileSuffix)); err != nil {
 		t.Fatalf("RegisterClient wrote no start stamp: %v", err)
 	}
-	if other, held := ClusterHeldByOther(key, os.Getuid()+1); !held || other != os.Getuid() {
+
+	me := os.Getuid()
+	other, held := ClusterHeldByOther(key, me+1)
+	if me <= 0 { // Windows: no identity was recorded, so none can be compared
+		if held {
+			t.Fatalf("no account can be told from another on this platform, yet the cluster was "+
+				"reported held by uid %d", other)
+		}
+		return
+	}
+	if !held || other != me {
 		t.Fatalf("a live, correctly stamped client no longer holds its cluster: got (%d,%v)", other, held)
 	}
 }

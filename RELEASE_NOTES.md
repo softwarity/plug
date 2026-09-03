@@ -90,6 +90,13 @@ well, so the question is no longer "is that pid alive" but "is it still the same
 process". A marker written by an older client carries no stamp and is still
 trusted, because turning a version skew into a lockout would be the worse bug.
 
+One correction that came out of the Windows leg of the build rather than from
+reading: whether an account can hold a cluster is now decided on the account
+RECORDED in the marker, not only on the one asking. Guarding just the caller left
+the answer depending on who happened to be enquiring, and a marker written where
+identity means nothing could have been reported as holding a cluster against
+somebody.
+
 ---
 
 ## 2.13.2
