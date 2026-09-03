@@ -61,6 +61,35 @@ already falling through on that platform. Giving a Windows client a real identit
 to record is a separate piece of work, and the code now says so where the rule is
 written instead of leaving it to be inferred.
 
+### Two allocations per packet, and a marker that could outlive its process
+
+Every packet coming back from a cluster was allocating twice: a buffer, and the
+one-element list wrapping it for the device. 165ns and 1560 bytes each time,
+against 12.6ns and nothing when both are reused. The time is the small half; the
+bytes were feeding the garbage collector at the rate of the tunnel.
+
+Reusing them is only allowed if the device consumes what it is handed before it
+returns, and wireguard-go does not promise that in its interface, so the three
+implementations were read rather than assumed: macOS writes the buffer to the
+device file and returns, Windows copies it into a WinTun ring packet, and Linux,
+the one that coalesces packets and writes a header in front of them, keeps only
+indices in a slice it resets on every call. None holds the memory. A test now
+sends a long packet, then a short one, then a long one, and fails if any arrives
+with the previous one's tail attached or if the device is handed memory that
+changes underneath it.
+
+The second half closes a window that yesterday's ownership change opened. A
+client marker records a pid, and the rule reads it to decide whether another
+account holds a cluster. A pid alone only says "something is alive there": a
+client that crashes without unregistering leaves its marker, and the kernel
+reissues pid numbers, so the first unrelated process to land on that number
+resurrects a membership nobody holds. That was a small leak while the marker
+merely granted access. It is a lockout now that it refuses, and it would name an
+account that had already left. The marker carries the client's start time as
+well, so the question is no longer "is that pid alive" but "is it still the same
+process". A marker written by an older client carries no stamp and is still
+trusted, because turning a version skew into a lockout would be the worse bug.
+
 ---
 
 ## 2.13.2

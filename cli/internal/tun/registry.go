@@ -72,10 +72,22 @@ func RegisterClient(key string, pid int, keyFile string) func() {
 	// effective uid is 0 and the real one is the person whose cluster this is,
 	// which is also the uid the dropped child's flows will carry.
 	_ = os.WriteFile(marker+uidFileSuffix, []byte(strconv.Itoa(os.Getuid())), 0o644)
+	// And WHEN it started, in a third sidecar for the same compatibility reason.
+	// A pid alone says "alive"; a pid plus a start time says "still the same
+	// process". That distinction did not matter while this marker only GRANTED
+	// membership, because a recycled pid could at worst let a stranger in through
+	// a cluster they would still have to name. It matters now that the same
+	// marker REFUSES: without it, a client that crashed without unregistering
+	// locks its own account out of its own cluster as soon as the kernel hands
+	// that pid number to anything else.
+	if start, ok := procStart(pid); ok {
+		_ = os.WriteFile(marker+startFileSuffix, []byte(strconv.FormatInt(start, 10)), 0o644)
+	}
 	return func() {
 		_ = os.Remove(marker)
 		_ = os.Remove(marker + keyFileSuffix)
 		_ = os.Remove(marker + uidFileSuffix)
+		_ = os.Remove(marker + startFileSuffix)
 	}
 }
 
@@ -84,6 +96,14 @@ func RegisterClient(key string, pid int, keyFile string) func() {
 // number skips it without being taught to, and a daemon that predates this code
 // never sees it.
 const uidFileSuffix = ".uid"
+
+// startFileSuffix names the sidecar carrying the client's start time. Its own
+// file rather than a second line in the .uid one, because a reader older than
+// this code does TrimSpace over that whole file and would parse "501\n1757..."
+// as no uid at all - which, on the path that refuses, reads as "nobody holds this
+// cluster" and silently gives the check away. A sidecar it does not know about is
+// simply not read.
+const startFileSuffix = ".start"
 
 // clientUIDs is the set of accounts with a live client on this cluster. Empty
 // when nothing registered one, which is what a client older than this code
@@ -100,7 +120,7 @@ func clientUIDs(key string) map[int]bool {
 			continue
 		}
 		pid, err := strconv.Atoi(strings.TrimSuffix(name, uidFileSuffix))
-		if err != nil || !processAlive(pid) {
+		if err != nil || !markerStillItsProcess(clientsDir(key), pid) {
 			continue
 		}
 		b, err := os.ReadFile(filepath.Join(clientsDir(key), name))
@@ -304,3 +324,28 @@ func ClusterHeldByOther(key string, uid int) (int, bool) {
 // a who sends people looking at the cluster instead of at their own machine.
 const ClusterHeldRefusal = "error: cluster %s is in use by another account on this machine (uid %d) - " +
 	"plug gives one cluster to one account, so its tunnel is never shared; wait for that session to end"
+
+// markerStillItsProcess reports whether pid is not merely alive but is still the
+// process that registered. A crashed client leaves its marker behind, and the
+// kernel reissues pid numbers: without the stamp, the first unrelated process to
+// land on that number resurrects a membership nobody holds.
+//
+// No stamp means a client older than startFileSuffix wrote the marker, and there
+// the answer stays what it always was: alive is good enough. Refusing on a
+// missing stamp would turn a version skew into a lockout, and this file already
+// takes the opposite side of that trade twice.
+func markerStillItsProcess(dir string, pid int) bool {
+	if !processAlive(pid) {
+		return false
+	}
+	b, err := os.ReadFile(filepath.Join(dir, strconv.Itoa(pid)+startFileSuffix))
+	if err != nil {
+		return true
+	}
+	want, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+	if err != nil {
+		return true
+	}
+	start, ok := procStart(pid)
+	return !ok || start == want
+}

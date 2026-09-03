@@ -273,7 +273,29 @@ func (b *bridge) toStack() {
 	}
 }
 
+// fromStack carries the cluster's replies from the netstack to the TUN device.
+//
+// The buffer and the one-element slice around it are reused across packets, and
+// that is only allowed because wireguard-go's Write consumes them before it
+// returns. Its interface does not promise that, so the three implementations were
+// read: darwin writes the buffer to the device file synchronously, windows copies
+// it into a WinTun ring packet, and linux (the one worth checking, since it
+// coalesces packets and writes a virtio header in front of them) keeps only
+// indices, in a slice it resets on every call. None of them holds the memory past
+// the call, so nothing can still be reading the bytes when the next packet
+// overwrites them.
+//
+// It matters because this is per PACKET: allocating both cost 165ns and 1560
+// bytes each time, against 12.6ns and nothing when they are reused. The time is
+// the small half. The bytes were feeding the garbage collector at the rate of the
+// tunnel, which is the kind of load that shows up as jitter somewhere else.
+//
+// Sized like the read side's buffers, and for the same reason stated there. The
+// grow branch below should therefore never run; it is what keeps an unexpectedly
+// large packet from panicking the datapath rather than dropping one frame.
 func (b *bridge) fromStack(ctx context.Context) {
+	buf := make([]byte, headroom+65535)
+	bufs := make([][]byte, 1) // Write takes a slice of packets; ours is always one
 	for {
 		pkb := b.ep.ReadContext(ctx)
 		if pkb == nil {
@@ -282,9 +304,13 @@ func (b *bridge) fromStack(ctx context.Context) {
 		v := pkb.ToView()
 		if v != nil {
 			data := v.AsSlice()
-			buf := make([]byte, headroom+len(data))
+			if need := headroom + len(data); need > cap(buf) {
+				buf = make([]byte, need)
+			}
+			buf = buf[:headroom+len(data)]
 			copy(buf[headroom:], data)
-			if _, err := b.dev.Write([][]byte{buf}, headroom); err != nil {
+			bufs[0] = buf
+			if _, err := b.dev.Write(bufs, headroom); err != nil {
 				// Once, not per packet: a device that refuses a write refuses the
 				// next one too, and a line per packet would bury the first. The
 				// loop carries on, because a single refused packet is not a dead

@@ -310,3 +310,53 @@ func TestClusterHeldByADeadClientIsFree(t *testing.T) {
 		t.Fatalf("a dead client (pid %d) still held the cluster for uid %d", dead, other)
 	}
 }
+
+// TestARecycledPIDDoesNotResurrectAMembership is the failure the start stamp
+// exists for, and it only became a failure when this marker started REFUSING.
+//
+// A client that crashes leaves its marker behind. The kernel then reissues pid
+// numbers, and the first unrelated process to land on that number makes the dead
+// marker look alive again. While membership only granted access that was a small
+// leak; now that it turns another account away, it locks the rightful owner out
+// of their own cluster with an error naming an account that left.
+func TestARecycledPIDDoesNotResurrectAMembership(t *testing.T) {
+	old := graftDir
+	graftDir = t.TempDir()
+	defer func() { graftDir = old }()
+
+	const key = "host-a:2222"
+	const owner = 501
+
+	// This process stands in for the recycled pid: alive, and demonstrably not
+	// the one that registered, because the stamp says the marker's process
+	// started long before any machine this runs on was booted.
+	holdCluster(t, key, os.Getpid(), owner)
+	stamp := filepath.Join(clientsDir(key), strconv.Itoa(os.Getpid())+startFileSuffix)
+	if err := os.WriteFile(stamp, []byte("1000000000"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if other, held := ClusterHeldByOther(key, 502); held {
+		t.Fatalf("a marker left by a dead client held the cluster for uid %d, because a live pid "+
+			"reused its number: the start stamp is what tells the two apart", other)
+	}
+}
+
+// And the same marker, stamped with the truth, must still hold: a stamp that
+// refuses everything would close the hole by disabling the rule.
+func TestAStampedLiveClientStillHoldsTheCluster(t *testing.T) {
+	old := graftDir
+	graftDir = t.TempDir()
+	defer func() { graftDir = old }()
+
+	const key = "host-a:2222"
+	un := RegisterClient(key, os.Getpid(), "")
+	defer un()
+
+	if _, err := os.Stat(filepath.Join(clientsDir(key), strconv.Itoa(os.Getpid())+startFileSuffix)); err != nil {
+		t.Fatalf("RegisterClient wrote no start stamp: %v", err)
+	}
+	if other, held := ClusterHeldByOther(key, os.Getuid()+1); !held || other != os.Getuid() {
+		t.Fatalf("a live, correctly stamped client no longer holds its cluster: got (%d,%v)", other, held)
+	}
+}
