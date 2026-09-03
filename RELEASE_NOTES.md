@@ -2,6 +2,43 @@
 
 ## NEXT RELEASE
 
+### plug --dockerrun puts a container in the cluster, which prefixing docker never could
+
+`plug docker run my-image` looks like it works. plug says the tunnel is ready,
+the container starts, and nothing it does reaches the cluster. plug carries the
+traffic of the process it launches, and that process is the docker CLI, which
+posts a request to a socket and exits: the container is made by the docker
+daemon, which is nobody's child. The failure is silent, which is what makes it
+expensive. People look at their image and at their cluster, never at what
+prefixing docker with plug actually means.
+
+    plug -p prod -c --dockerrun docker run --rm my-image
+
+holds the datapath in a sidecar container and runs yours in its network
+namespace, unmodified. Nothing is rebuilt, nothing is added to the image. It
+works the same on macOS, Windows and Linux for a reason worth stating: a
+container is a Linux environment everywhere, so the Linux datapath is what runs
+in all three cases, VM or no VM. The host needs no privilege at all, since the
+capabilities are granted by docker inside the sidecar.
+
+`-s` and `-c` mean here exactly what they mean elsewhere, and are handed to the
+sidecar rather than swallowed: a container in a cluster is a member of it like
+any process, so it either answers to a name or says it is a pure client. `-s`
+costs nothing extra, because the two containers share one network and a port
+yours listens on is already on the sidecar's loopback.
+
+Two things it deliberately does not do. It does not parse docker's command line:
+its two flags go in right after `run`, where docker takes options in any order,
+and the rest of the line is passed through untouched. Working out where the
+user's options end and the image begins would mean maintaining a table of which
+of docker's sixty-odd flags take a value, and getting it wrong means editing a
+command plug does not understand. When the line does conflict, docker refuses it
+and plug translates the refusal into the flag the user actually typed. And it
+covers `docker run` only, in the foreground: `docker compose up`, `docker
+create` and podman build containers differently, and a detached container would
+outlive the network it was given, so both are refused by name rather than
+half-supported.
+
 ### Connecting through plug on macOS was paying 92ms to ask who was connecting
 
 Since 2.13.1 a single cluster is no longer open to every account on the machine:
@@ -105,43 +142,6 @@ RECORDED in the marker, not only on the one asking. Guarding just the caller lef
 the answer depending on who happened to be enquiring, and a marker written where
 identity means nothing could have been reported as holding a cluster against
 somebody.
-
-### plug --dockerrun puts a container in the cluster, which prefixing docker never could
-
-`plug docker run my-image` looks like it works. plug says the tunnel is ready,
-the container starts, and nothing it does reaches the cluster. plug carries the
-traffic of the process it launches, and that process is the docker CLI, which
-posts a request to a socket and exits: the container is made by the docker
-daemon, which is nobody's child. The failure is silent, which is what makes it
-expensive. People look at their image and at their cluster, never at what
-prefixing docker with plug actually means.
-
-    plug -p prod -c --dockerrun docker run --rm my-image
-
-holds the datapath in a sidecar container and runs yours in its network
-namespace, unmodified. Nothing is rebuilt, nothing is added to the image. It
-works the same on macOS, Windows and Linux for a reason worth stating: a
-container is a Linux environment everywhere, so the Linux datapath is what runs
-in all three cases, VM or no VM. The host needs no privilege at all, since the
-capabilities are granted by docker inside the sidecar.
-
-`-s` and `-c` mean here exactly what they mean elsewhere, and are handed to the
-sidecar rather than swallowed: a container in a cluster is a member of it like
-any process, so it either answers to a name or says it is a pure client. `-s`
-costs nothing extra, because the two containers share one network and a port
-yours listens on is already on the sidecar's loopback.
-
-Two things it deliberately does not do. It does not parse docker's command line:
-its two flags go in right after `run`, where docker takes options in any order,
-and the rest of the line is passed through untouched. Working out where the
-user's options end and the image begins would mean maintaining a table of which
-of docker's sixty-odd flags take a value, and getting it wrong means editing a
-command plug does not understand. When the line does conflict, docker refuses it
-and plug translates the refusal into the flag the user actually typed. And it
-covers `docker run` only, in the foreground: `docker compose up`, `docker
-create` and podman build containers differently, and a detached container would
-outlive the network it was given, so both are refused by name rather than
-half-supported.
 
 ---
 

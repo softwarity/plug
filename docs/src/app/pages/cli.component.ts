@@ -136,6 +136,15 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
         <td><a routerLink="/getting-started">Getting started</a></td>
       </tr>
       <tr>
+        <td><code>--dockerrun</code></td>
+        <td>
+          put a <strong>container</strong> in the cluster instead of a process:
+          <code>plug -p prod -c --dockerrun docker run --rm my-image</code>. Your image is not
+          modified and nothing is rebuilt. <code>docker run</code> only, and in the foreground
+        </td>
+        <td><a routerLink="/docker">Docker</a></td>
+      </tr>
+      <tr>
         <td><code>-h, --help</code></td>
         <td>show the built-in help (this page, condensed)</td>
         <td></td>
