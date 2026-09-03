@@ -39,6 +39,10 @@ func TestTheOwnerSidecarLeavesTheMarkerAlone(t *testing.T) {
 	}
 }
 
+// What a client WRITES is what the owner set READS. That contract is the whole
+// mechanism, and it is asserted through clientAccounts rather than clientUIDs
+// because the two are no longer the same reader: an account is a uid here and a
+// SID on Windows, so the set that decides who holds a cluster reads text.
 func TestTheOwnerSidecarRoundTrips(t *testing.T) {
 	dir := t.TempDir()
 	saved := graftDir
@@ -48,16 +52,44 @@ func TestTheOwnerSidecarRoundTrips(t *testing.T) {
 	const key = "cluster.example:2222"
 	cleanup := RegisterClient(key, os.Getpid(), "")
 
-	owners := clientUIDs(key)
-	if !owners[os.Getuid()] {
-		t.Fatalf("this process registered a client and its account is not in the owner set %v", owners)
+	owners := clientAccounts(key)
+	if !owners[thisAccount()] {
+		t.Fatalf("this process registered a client and its account %q is not in the owner set %v", thisAccount(), owners)
 	}
 
 	// Gone when the client goes, or the set grows one entry per launch forever
 	// and eventually names accounts that left the machine.
 	cleanup()
-	if len(clientUIDs(key)) != 0 {
-		t.Errorf("the owner sidecar outlived its client: %v", clientUIDs(key))
+	if len(clientAccounts(key)) != 0 {
+		t.Errorf("the owner sidecar outlived its client: %v", clientAccounts(key))
+	}
+}
+
+// clientUIDs is the NUMERIC view of that same set, and it is the only reader the
+// per-flow check has. On macOS it holds the uid. On Windows it is empty, because
+// a SID is not a number, and that is not a regression to fix: uidOf reports
+// failure on that platform, so the flow check already fell through there when the
+// set held the -1 every client used to record. This test says so out loud, since
+// an empty set looks like a bug to anyone reading clientUIDs on its own.
+func TestTheNumericOwnerViewIsPlatformShaped(t *testing.T) {
+	dir := t.TempDir()
+	saved := graftDir
+	graftDir = dir
+	defer func() { graftDir = saved }()
+
+	const key = "cluster.example:2222"
+	cleanup := RegisterClient(key, os.Getpid(), "")
+	defer cleanup()
+
+	uids := clientUIDs(key)
+	if _, numeric := strconv.Atoi(thisAccount()); numeric == nil {
+		if !uids[os.Getuid()] {
+			t.Fatalf("an account that IS a number must appear in the numeric view: %v", uids)
+		}
+		return
+	}
+	if len(uids) != 0 {
+		t.Fatalf("an account that is not a number cannot appear in the numeric view, got %v", uids)
 	}
 }
 
@@ -77,7 +109,7 @@ func TestAClientWithoutAnOwnerSidecarReadsAsUnknown(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(clientsDir(key), strconv.Itoa(os.Getpid())), []byte(key), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if n := len(clientUIDs(key)); n != 0 {
+	if n := len(clientAccounts(key)); n != 0 {
 		t.Fatalf("an older client produced %d owners; it must produce none, so the check stays out of its way", n)
 	}
 }
