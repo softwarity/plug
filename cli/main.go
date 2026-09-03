@@ -88,6 +88,15 @@ Options:
                          name, no port reserved on the agent. For GUI DB tools
                          (DBeaver, Compass…), one-off scripts, batch consumers.
                          Mutually exclusive with -s.
+      --dockerrun        put a CONTAINER in the cluster, not a process:
+                           plug -p prod --dockerrun docker run my-image
+                         Prefixing docker with plug alone cannot work: the
+                         container is created by the docker daemon, not as a
+                         child of plug, so nothing of it goes through the
+                         tunnel. This holds the datapath in a sidecar container
+                         and runs yours in its network namespace, unmodified.
+                         docker run only, and foreground only: a detached
+                         container would outlive the network it was given.
   -h, --help             show this help
 `
 }
@@ -251,6 +260,11 @@ type options struct {
 	port    string
 	exposes []string // raw -s values; validated once, re-prefixed on the core exec
 	client  bool     // -c/--client: pure consumer — no name, nothing served
+	// dockerRun: put a CONTAINER in the cluster instead of a process. A different
+	// mode rather than a variation, and explicit rather than detected: see
+	// dockerrun.go for why prefixing docker with plug cannot work, and why
+	// rewriting somebody's `docker run` without being asked would be worse.
+	dockerRun bool
 }
 
 func main() {
@@ -470,6 +484,13 @@ func launcherRun(args []string) {
 	cfg := resolveConfig(opts)
 	if cfg.host == "" {
 		fatal("no agent host: use --host or a profile in ~/.plug/")
+	}
+
+	// --dockerrun leaves before everything below. It starts no datapath on this
+	// machine and runs no child here: the tunnel lives in a container, and the
+	// version dance below is about the core THIS host would have run.
+	if opts.dockerRun {
+		os.Exit(runDockerRun(cfg, cmdArgs, opts.exposes, opts.client))
 	}
 
 	remote, err := agentVersion(cfg)
@@ -1477,6 +1498,8 @@ func parseArgs(args []string) (options, []string) {
 			o.exposes = append(o.exposes, flagValue(args, &i))
 		case "-c", "--client":
 			o.client = true
+		case "--dockerrun":
+			o.dockerRun = true
 		default:
 			return o, args[i:]
 		}

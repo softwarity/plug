@@ -533,3 +533,16 @@ func parseName(q []byte, off int) (string, int) {
 	}
 	return sb.String(), p + 1 // skip the root 0
 }
+
+// FirstInstanceResolver is what a container joining a plug datapath must be
+// pointed at: the resolver of instance 0, and the search domain that makes a
+// BARE name reach it. Exported for `plug --dockerrun`, which writes a resolv.conf
+// for a container that has no other way to learn either.
+//
+// Instance 0 because a sidecar holding one cluster is the first datapath in its
+// own network namespace, always. Composed from the same instanceNet the datapath
+// uses rather than spelled out again, so the two cannot drift.
+func FirstInstanceResolver() (nameserver, search string) {
+	_, dnsIP, _ := instanceNet(0)
+	return dnsIP, searchSuffix
+}

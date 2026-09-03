@@ -3,8 +3,6 @@
 package tun
 
 import (
-	"crypto/sha1"
-	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -20,12 +18,6 @@ import (
 // presence — so a client killed with -9 never wedges the count (the exact
 // "kill and relaunch 10×/h" case). Linux needs none of this: each launch owns
 // its private datapath via its mount namespace.
-
-// ClusterHash is the short, filesystem-safe id for a cluster key (host:port).
-func ClusterHash(key string) string {
-	sum := sha1.Sum([]byte(key))
-	return hex.EncodeToString(sum[:8])
-}
 
 // clientsDir is the per-cluster directory of live-client PID markers.
 func clientsDir(key string) string { return filepath.Join(graftDir, ClusterHash(key)+".clients") }
