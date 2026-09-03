@@ -33,7 +33,7 @@ func coreRunViaService(cfg config, cmdArgs []string) int {
 	// One cluster, one account. Registering is what makes a process a member,
 	// and it happens before anything authenticates, so this is the moment to
 	// refuse: see tun.ClusterHeldByOther.
-	if other, held := tun.ClusterHeldByOther(key, os.Getuid()); held {
+	if other, held := tun.ClusterHeldByOther(key, tun.ThisAccount()); held {
 		info(tun.ClusterHeldRefusal, key, other)
 		return 1
 	}

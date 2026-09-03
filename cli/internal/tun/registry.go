@@ -71,7 +71,7 @@ func RegisterClient(key string, pid int, keyFile string) func() {
 	// os.Getuid, not Geteuid: the launcher is setuid root on macOS, so the
 	// effective uid is 0 and the real one is the person whose cluster this is,
 	// which is also the uid the dropped child's flows will carry.
-	_ = os.WriteFile(marker+uidFileSuffix, []byte(strconv.Itoa(os.Getuid())), 0o644)
+	_ = os.WriteFile(marker+uidFileSuffix, []byte(thisAccount()), 0o644)
 	// And WHEN it started, in a third sidecar for the same compatibility reason.
 	// A pid alone says "alive"; a pid plus a start time says "still the same
 	// process". That distinction did not matter while this marker only GRANTED
@@ -105,11 +105,12 @@ const uidFileSuffix = ".uid"
 // simply not read.
 const startFileSuffix = ".start"
 
-// clientUIDs is the set of accounts with a live client on this cluster. Empty
-// when nothing registered one, which is what a client older than this code
-// produces: callers must read that as "unknown", never as "nobody".
-func clientUIDs(key string) map[int]bool {
-	out := map[int]bool{}
+// clientAccounts is the set of accounts with a live client on this cluster, as
+// each client wrote itself: a decimal uid on macOS, a SID on Windows. Empty when
+// nothing registered one, which is what a client older than this code produces:
+// callers must read that as "unknown", never as "nobody".
+func clientAccounts(key string) map[string]bool {
+	out := map[string]bool{}
 	entries, err := os.ReadDir(clientsDir(key))
 	if err != nil {
 		return out
@@ -127,7 +128,23 @@ func clientUIDs(key string) map[int]bool {
 		if err != nil {
 			continue
 		}
-		if uid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil {
+		if account := strings.TrimSpace(string(b)); account != "" {
+			out[account] = true
+		}
+	}
+	return out
+}
+
+// clientUIDs is clientAccounts for the per-flow check, which compares numbers.
+// A SID is not one and is skipped, which is what that check already did with the
+// -1 every Windows client used to record: it falls through and allows. The rule
+// that actually holds a cluster is ClusterHeldByOther, and it reads the accounts
+// as written.
+
+func clientUIDs(key string) map[int]bool {
+	out := map[int]bool{}
+	for account := range clientAccounts(key) {
+		if uid, err := strconv.Atoi(account); err == nil {
 			out[uid] = true
 		}
 	}
@@ -271,64 +288,55 @@ func ActiveClusters() []string {
 }
 
 // ClusterHeldByOther reports the account already holding this cluster when it is
-// not uid's, so a launcher can refuse before it registers.
+// not me, so a launcher can refuse before it registers.
 //
 // This is where the ownership question belongs, and it took a second look to see
 // it. The check added first was per FLOW, in the single-cluster shortcut: it asked
 // who owned the socket and compared against everyone with a live marker. Two holes
 // followed from that. A client registers BEFORE it authenticates, so a second
-// account had only to run `plug -p <someone-else's-cluster>` to put its own uid in
-// that set and be waved through the tunnel somebody else's key had opened. And the
-// MULTICLUSTER path never asked at all: it walks the ancestry to the registered
-// launcher and hands over that launcher's cluster, uid unread.
+// account had only to run `plug -p <someone-else's-cluster>` to put its own
+// identity in that set and be waved through the tunnel somebody else's key had
+// opened. And the MULTICLUSTER path never asked at all: it walks the ancestry to
+// the registered launcher and hands over that launcher's cluster, owner unread.
 //
 // Refusing the REGISTRATION closes both, because both are downstream of it: no
 // marker, no membership and no ancestor to walk to. It also costs nothing per
-// connection and can say why, where a flow check can only send a RST that the
+// connection and can say who, where a flow check can only send a RST that the
 // application reports as a connection reset by an unnamed peer.
 //
-// uid 0 is exempt, as it was in the flow check: root already owns the machine, and
-// the daemon's own probes run there.
+// THE SCOPE IS ONE MACHINE, and this is the sentence to read before worrying
+// about a team. Everything here comes from a local directory, /var/run/plug or
+// %ProgramData%\plug; nothing is asked of the agent or of the network. Ten
+// developers on ten machines share a cluster exactly as before, each with their
+// own key and their own tunnel, and none of them can see that the others exist.
+// What is refused is two accounts of the SAME computer holding one cluster at the
+// same time, and only for as long as the first session lives.
 //
-// Note what changed in kind, not just in degree: the same set that used to GRANT
-// now REFUSES, so a marker that is wrong no longer merely lets someone in, it
-// keeps the rightful owner out. Liveness here is a pid, and a pid can be recycled
-// onto an unrelated process, which would make a crashed client's marker look alive
-// and hold the cluster against its own account. Two things keep that narrow: a
-// clean exit removes the marker, and ActiveClusters reaps dead ones three times a
-// second for as long as a daemon runs. Stamping the marker with a start time, the
-// way the ancestry walk already does, is what would close it properly.
-//
-// WINDOWS IS NOT COVERED, and saying so here is the point of this paragraph.
-// os.Getuid returns -1 for every process there, so every marker records the same
-// owner and there is nobody to tell apart; pidroute_windows.go's uidOf reports
-// failure for the same reason, which already made the flow check fall through. A
-// negative uid is refused as an answer rather than compared, so this returns "not
-// held" instead of quietly returning "held by -1" for the second account. Covering
-// Windows means giving a client a real identity to record (its token's SID), and
-// that is a different piece of work than this one.
-func ClusterHeldByOther(key string, uid int) (int, bool) {
-	if uid <= 0 {
-		return 0, false
+// accountHolds carries what an account is per platform, and what cannot be one:
+// root and LocalSystem are exempt, since they already own the machine, and
+// anything that names nobody must not hold a cluster against anybody.
+func ClusterHeldByOther(key, me string) (string, bool) {
+	if !accountHolds(me) {
+		return "", false
 	}
-	for other := range clientUIDs(key) {
-		// other > 0 rather than != 0: an account only holds a cluster if it is a
-		// real one. Root is exempt as above, and a recorded -1 is a marker written
-		// where identity means nothing, which must not be able to hold anything
-		// against anybody. Guarding only the CALLER's uid left that to depend on
-		// who was asking, which is not where the invariant belongs.
-		if other != uid && other > 0 {
+	for other := range clientAccounts(key) {
+		if other != me && accountHolds(other) {
 			return other, true
 		}
 	}
-	return 0, false
+	return "", false
 }
+
+// ThisAccount is thisAccount for the launcher, which asks the question in package
+// main and must spell the answer the same way the marker does.
+func ThisAccount() string { return thisAccount() }
 
 // ClusterHeldRefusal is what the launcher prints, kept here beside the rule it
 // states so the two cannot drift. It names the account, because "in use" without
 // a who sends people looking at the cluster instead of at their own machine.
-const ClusterHeldRefusal = "error: cluster %s is in use by another account on this machine (uid %d) - " +
-	"plug gives one cluster to one account, so its tunnel is never shared; wait for that session to end"
+const ClusterHeldRefusal = "error: cluster %s is in use by another account on THIS machine (%s) - " +
+	"plug gives one cluster to one account at a time, so its tunnel is never shared between them; " +
+	"wait for that session to end. Other machines are unaffected: a cluster is shared by a team as before"
 
 // markerStillItsProcess reports whether pid is not merely alive but is still the
 // process that registered. A crashed client leaves its marker behind, and the

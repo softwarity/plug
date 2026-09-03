@@ -54,12 +54,21 @@ refused there, by name, instead of having its connections reset by something tha
 cannot explain itself. Both paths are covered because both are downstream of that
 marker: no marker, no membership, and no ancestor to walk to.
 
-Two things worth knowing rather than discovering. Root is exempt, as it was
-before. And Windows is not covered at all: every process there reports the same
-uid, so there is nobody to tell apart, which is also why the per-flow check was
-already falling through on that platform. Giving a Windows client a real identity
-to record is a separate piece of work, and the code now says so where the rule is
-written instead of leaving it to be inferred.
+Windows is covered too, and it had never been. Every process there reports the
+same uid, so every client recorded the same owner, no account could be told from
+another, and the per-flow check fell through on that platform for the same reason.
+A client now records the SID of its own token, which is a question a process is
+never in doubt about, and the rule reads the same sentence on both systems. Root
+and LocalSystem are exempt: they already own the machine, and the service's own
+work must not be refused by the rule the service enforces.
+
+READ THIS BEFORE WORRYING ABOUT YOUR TEAM: the scope is ONE COMPUTER. Everything
+the rule consults is a local directory, and nothing is asked of the agent or of
+the network. Ten developers on ten machines share a cluster exactly as before,
+each with their own key and their own tunnel, and none of them can see that the
+others exist. What is refused is two accounts of the SAME computer holding one
+cluster at the same time, for as long as the first session lives. Different
+clusters, or the same cluster one after the other, are unaffected.
 
 ### Two allocations per packet, and a marker that could outlive its process
 
