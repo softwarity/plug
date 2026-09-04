@@ -49,6 +49,14 @@ const dockerRunResolvName = "resolv.conf"
 // build from source is stamped with a version that was never pushed anywhere,
 // and telling someone to publish an image before they can try a flag would be
 // absurd.
+//
+// It follows the FLAVOUR without being told, and that is worth knowing rather
+// than rediscovering: the flavour rides in the version string, so a hosted
+// launcher stamped 2.13.2-hosted composes softwarity/plug:2.13.2-hosted, which
+// is exactly the tag its own release publishes. The property holds by
+// composition, not by design, which is why there is a test on it: a sidecar
+// running the standalone client for a gateway-served cluster would authenticate
+// with the wrong identity model and fail somewhere far from here.
 func dockerSidecarImage() string {
 	if img := os.Getenv("PLUG_DOCKER_IMAGE"); img != "" {
 		return img

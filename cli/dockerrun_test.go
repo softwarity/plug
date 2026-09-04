@@ -97,3 +97,26 @@ func TestTheSidecarImageCanBeOverridden(t *testing.T) {
 	}
 	_ = os.Unsetenv("PLUG_DOCKER_IMAGE")
 }
+
+// The sidecar must run the client of the SAME flavour as the launcher starting
+// it, and nothing in the code says so out loud: it works because the flavour is
+// part of the version string and the image tag is built from that string. A
+// hosted cluster checks a personal key that the standalone client does not even
+// have a verb to create (see flavour.go), so getting this wrong would fail at
+// authentication, one container away from anything that mentions flavours.
+func TestTheSidecarFollowsTheLauncherFlavour(t *testing.T) {
+	saved := version
+	defer func() { version = saved }()
+	t.Setenv("PLUG_DOCKER_IMAGE", "")
+
+	for _, c := range []struct{ version, want string }{
+		{"2.13.2", "softwarity/plug:2.13.2"},
+		{"2.13.2-hosted", "softwarity/plug:2.13.2-hosted"},
+		{"dev+abc1234-hosted", "softwarity/plug:dev+abc1234-hosted"},
+	} {
+		version = c.version
+		if got := dockerSidecarImage(); got != c.want {
+			t.Errorf("a launcher stamped %q would pull %q, want %q", c.version, got, c.want)
+		}
+	}
+}

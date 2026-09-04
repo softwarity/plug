@@ -27,6 +27,13 @@ any process, so it either answers to a name or says it is a pure client. `-s`
 costs nothing extra, because the two containers share one network and a port
 yours listens on is already on the sidecar's loopback.
 
+The sidecar runs the client of the same FLAVOUR as the launcher that started it,
+without being told to. The flavour rides in the version string, so a hosted
+launcher composes the hosted image tag, which is what its own release publishes.
+That holds by composition rather than by design, so there is a test on it: a
+standalone client serving a gateway-managed cluster would fail at authentication,
+one container away from anything that mentions flavours.
+
 Two things it deliberately does not do. It does not parse docker's command line:
 its two flags go in right after `run`, where docker takes options in any order,
 and the rest of the line is passed through untouched. Working out where the
