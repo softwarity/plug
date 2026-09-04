@@ -21,6 +21,11 @@ import { MatIconModule } from '@angular/material/icon';
       .status-icon.soon {
         color: var(--accent-yellow);
       }
+      /* Neither promised nor finished. Without it, a line that is half done has
+         to lie in one direction or the other, and both readings mislead. */
+      .status-icon.partial {
+        color: var(--accent-blue);
+      }
     `,
   ],
   template: `
@@ -68,6 +73,14 @@ import { MatIconModule } from '@angular/material/icon';
       simply expose the same surface, so the CLI will not need to relearn anything. That gateway is
       <a href="https://softwarity.github.io/meerkat/" target="_blank" rel="noopener">Meerkat</a>,
       a companion project.
+    </p>
+    <p>
+      Part of it is here. Meerkat's Enterprise edition already integrates plug and gives sessions an
+      <strong>identity</strong>: a developer deposits their own public key through the gateway, it is
+      tied to their name, and who is plugged into what stops being anonymous. plug ships the CLI
+      flavour that goes with it, published and signed beside the standalone one. What is still ahead
+      is the end of the dedicated agent - the gateway hosting the tunnel itself. See
+      <a routerLink="/meerkat">Meerkat</a> for the model.
     </p>
 
     <div class="callout">
@@ -124,7 +137,7 @@ import { MatIconModule } from '@angular/material/icon';
         <tr><td>Takeover (default): a deployed service owning a <code>-s</code> name is parked for the session and restored on exit</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
         <tr><td><code>plug status</code> and verbs to act on a running session, out of band (never a keystroke: your command owns stdin)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
         <tr><td><code>kubectl exec</code> transport (no exposed port)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
-        <tr><td>Gateway hosting the tunnel + install surface (<a href="https://softwarity.github.io/meerkat/" target="_blank" rel="noopener">Meerkat</a>)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
+        <tr><td>Gateway hosting the tunnel + install surface (<a routerLink="/meerkat">Meerkat</a>): the hosted CLI flavour and the named-identity model ship today; the gateway replacing the agent outright does not</td><td><mat-icon class="status-icon partial">timelapse</mat-icon> in progress</td></tr>
         <tr><td>IPv6 fake-pool + v6-literal tunnelling (overlays are IPv4 today)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
         <tr><td>UDP by name - framed datagram relay over the tunnel (TCP-only today)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
         <tr><td>Native protocol e2e on every OS (8 protocols × 4 languages, by name over a mesh)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
