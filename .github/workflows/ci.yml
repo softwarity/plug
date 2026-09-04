@@ -653,6 +653,10 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh multicluster "$A" "$B" 2222
+      - name: Container member, an unmodified image in the cluster (--dockerrun)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh dockerrun "$A" "$B" 2222
       - name: Outage recovery
         if: always()
         shell: bash
@@ -778,6 +782,11 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh multicluster "$A" "$B" 2222
+      # No --dockerrun cell here, and the reason is the image rather than the
+      # feature. AGENT_IMAGE is the CLUSTER's image, tagged -amd64; this leg is
+      # an arm64 runner, and the multi-arch tag does not exist yet at this point
+      # of the pipeline - the promotion job that merges the manifest runs after
+      # these legs. The three families cover the cell on their ubuntu legs.
       - name: Expose — serve a local port to the cluster (-s)
         if: always()
         shell: bash
@@ -922,6 +931,10 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh multicluster "$A" "$B" 2222
+      - name: Container member, an unmodified image in the cluster (--dockerrun)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh dockerrun "$A" "$B" 2222
       - name: Outage recovery
         if: always()
         shell: bash
@@ -1097,6 +1110,10 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh multicluster "$A" "$B" 2222
+      - name: Container member, an unmodified image in the cluster (--dockerrun)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh dockerrun "$A" "$B" 2222
       - name: Outage recovery
         if: always()
         shell: bash

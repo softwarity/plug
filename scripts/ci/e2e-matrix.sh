@@ -553,6 +553,74 @@ do_env() {
 # matrix_lang <lang> <port-base> <index> — ONE language against all eight
 # protocols, under a name of its own so it can run beside the other three.
 #
+# A CONTAINER as a member of the cluster: `--dockerrun`.
+#
+# The one cell whose subject is not a process. Everything else here launches a
+# program under plug; this launches an IMAGE, which plug cannot serve by
+# prefixing docker (the container is made by the daemon, not as plug's child).
+# It asserts the same thing the client-only cell does, from inside a container
+# nobody modified: httpbin, by name, through the tunnel.
+#
+# LINUX ONLY, and it says so rather than pretending. The macOS and Windows
+# runners have no Linux docker daemon, so the cell reports a skip there instead
+# of a pass it did not earn. It stays in the common block all the same: the
+# three families must run the same list, and what is being asked is exactly the
+# family question - does a container reach a name provisioned by compose, by
+# swarm and by k8s alike.
+#
+# COST, since the legs are a matrix and the slowest sets the wall clock: this
+# runs on the three ubuntu legs, which finish 2 to 5 minutes ahead of the macOS
+# ones. The image pull it adds fits in that gap. It is also why the cell does
+# not pull anything on the platforms that would only skip it.
+do_dockerrun() {
+  echo "=== a container as a member of the cluster (--dockerrun) ==="
+  case "$(uname -s)" in
+    Linux) ;;
+    *) echo "not Linux: no docker daemon for a Linux container here, skipped"
+       sum "**container member (--dockerrun)** ⏭️ (Linux only)"; return 0 ;;
+  esac
+  if ! docker info >/dev/null 2>&1; then
+    echo "--- FAIL: no usable docker daemon on a Linux leg, where there must be one"
+    sum "**container member (--dockerrun)** ❌"; return 1
+  fi
+  if [ -z "${AGENT_IMAGE:-}" ]; then
+    echo "--- FAIL: AGENT_IMAGE is unset, so the sidecar has no plug image to run"
+    sum "**container member (--dockerrun)** ❌"; return 1
+  fi
+
+  # The sidecar runs THIS build's client, not a published release: the flavour
+  # and the version have to match the agent it dials, and AGENT_IMAGE is the
+  # image this very run built and the cluster is already running.
+  local dr_code dr_err=/tmp/dockerrun.err
+  dr_code="$(PLUG_DOCKER_IMAGE="$AGENT_IMAGE" perl -e 'alarm 180; exec @ARGV or exit 127' \
+    "$PLUG" --host "$ip" --port "$port" -c --dockerrun \
+    docker run --rm curlimages/curl:8.11.1 \
+      -sS --max-time 20 -o /dev/null -w '%{http_code}' http://httpbin:8080/get \
+    2>"$dr_err" | tr -d '\r' | tail -1)"
+
+  if [ "$dr_code" = "200" ]; then
+    echo "container OK - an unmodified image reached httpbin by name, through the sidecar's tunnel"
+    sum "**container member (--dockerrun)** ✅"
+    return 0
+  fi
+  echo "--- container FAIL - got '${dr_code:-nothing}' (want 200)"
+  echo "    plug said: $(tr -d '\r' < "$dr_err" | tail -5 | tr '\n' ' ')"
+  # The three ways this cell fails, and they are not the same bug. Naming them
+  # is the difference between a red square and a place to look.
+  case "$(cat "$dr_err" 2>/dev/null)" in
+    *"never reported a tunnel"*)
+      echo "    the sidecar could not reach $ip:$port FROM A CONTAINER. The leg itself can,"
+      echo "    over the tailnet, so this is docker's bridge not carrying that route - a real"
+      echo "    limitation of --dockerrun behind a VPN, not a harness fault." ;;
+    *"Unable to find image"*|*"not found"*)
+      echo "    the sidecar image $AGENT_IMAGE could not be pulled (rate limit, or never published)." ;;
+    *"conflicting options"*)
+      echo "    docker refused our injected flags against the ones in the command above." ;;
+  esac
+  sum "**container member (--dockerrun)** ❌"
+  return 1
+}
+
 # Prints "RESULT <lang> <proto> PASS|FAIL" lines the caller collects, and any
 # diagnosis a failure earns. It runs in a background subshell, so nothing it
 # assigns survives: the file it writes is the only thing that comes back.
@@ -1874,6 +1942,7 @@ case "$phase" in
   setup)        do_setup ;;
   env)          do_env ;;
   matrix)       do_matrix ;;
+  dockerrun)    do_dockerrun ;;
   multicluster) do_multicluster ;;
   outage)       do_outage ;;
   expose)       do_expose ;;

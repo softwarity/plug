@@ -27,6 +27,14 @@ any process, so it either answers to a name or says it is a pure client. `-s`
 costs nothing extra, because the two containers share one network and a port
 yours listens on is already on the sidecar's loopback.
 
+It has an e2e cell now, in the block the three families share: an unmodified
+`curlimages/curl` reaching httpbin by name, from inside a container, against a
+cluster provisioned by compose, by swarm and by k8s in turn. That is the family
+question asked of a container rather than of a process. It runs on the Linux legs
+and reports a skip on the others, which have no Linux docker daemon, and it costs
+no wall clock: those legs finish two to five minutes ahead of the macOS ones,
+which is where the image pull it adds fits.
+
 The sidecar runs the client of the same FLAVOUR as the launcher that started it,
 without being told to. The flavour rides in the version string, so a hosted
 launcher composes the hosted image tag, which is what its own release publishes.
