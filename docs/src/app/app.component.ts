@@ -43,7 +43,6 @@ export class AppComponent {
     { path: '/', label: 'About', icon: 'sync_alt' },
     { path: '/getting-started', label: 'Getting started', icon: 'rocket_launch' },
     { path: '/cli', label: 'CLI reference', icon: 'terminal' },
-    { path: '/docker', label: 'Docker', icon: 'inventory_2' },
     { path: '/how-it-works', label: 'How it works', icon: 'account_tree' },
     { path: '/profiles', label: 'Profiles & versions', icon: 'settings' },
     { path: '/swarm', label: 'Swarm', icon: 'dns' },

@@ -25,11 +25,6 @@ export const routes: Routes = [
     loadComponent: () => import('./pages/cli.component').then((m) => m.CliComponent),
   },
   {
-    path: 'docker',
-    title: 'plug - Docker',
-    loadComponent: () => import('./pages/docker.component').then((m) => m.DockerComponent),
-  },
-  {
     path: 'how-it-works',
     title: 'plug - How it works',
     loadComponent: () => import('./pages/how-it-works.component').then((m) => m.HowItWorksComponent),

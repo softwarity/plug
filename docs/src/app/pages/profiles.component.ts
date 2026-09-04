@@ -116,6 +116,40 @@ plug versions        # launcher + every cached cluster version</app-code>
       (<code>version</code> + <code>&lt;os-arch&gt;</code>) is frozen - if it ever must change, just
       reinstall it from the cluster.
     </p>
+
+    <h3>Updating a cluster</h3>
+    <p>
+      New plug release? <code>plug update</code> walks that chain upstream: the agent moves
+      <em>itself</em> to the newest release, then the launcher refreshes itself from the agent and
+      re-applies its privilege. Live sessions ride the roll out - they reconnect onto the new agent
+      by themselves.
+    </p>
+    <p>
+      Moving itself means the deployment's <strong>tag is rewritten</strong> when it pins a release
+      - <code>softwarity/plug:2.3.0</code> becomes <code>softwarity/plug:2.4.0</code>, majors
+      included. plug is infrastructure carrying your sessions, not an application dependency you
+      hold back for reproducibility; and re-resolving a pinned tag could only ever return the same
+      image, which made <code>update</code> a no-op exactly where it was needed. Each backend
+      applies it its own way: Swarm updates the service's image, Kubernetes patches the
+      Deployment's container image, and a plain container - which cannot recreate itself - pulls
+      the new image and hands you the one command that does.
+    </p>
+    <p>
+      <code>plug update</code> follows the tag the deployment already carries. To move a cluster to a
+      <strong>different</strong> one, name it: <code>plug -p neo update tag</code> takes the newest
+      release published, <code>plug -p neo update latest</code> the latest stream, and
+      <code>plug -p neo update feat-09</code> a branch's tag at whatever it points to now - an exact
+      release (<code>2.3.0</code>) works too, downgrades included. The agent checks the tag exists on
+      the registry before repointing anything: aiming a deployment at a tag nobody published would
+      leave you with an agent that cannot pull.
+    </p>
+    <p>
+      A <strong>moving</strong> tag (<code>latest</code>, <code>main</code>, a branch) is left
+      exactly as it is and simply re-pulled: it already resolves to whatever its publisher last
+      pushed, and repointing it would override a deliberate choice. And when a pinned deployment is
+      already on the newest release, plug says so immediately instead of rolling the workload to
+      find out.
+    </p>
   `,
 })
 export class ProfilesComponent {}

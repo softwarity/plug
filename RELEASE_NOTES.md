@@ -143,6 +143,26 @@ the answer depending on who happened to be enquiring, and a marker written where
 identity means nothing could have been reported as holding a cluster against
 somebody.
 
+### Getting started asks which system you are on, and stops answering three at once
+
+The page had grown a tail. After "run your process" it dissolved into how
+`plug update` rewrites a deployment's tag, which moving tags are left alone, and
+what happens when a pinned deployment is already current: real material, and none
+of it something you need before your first session. It has moved to Profiles &
+versions, under a heading that says so.
+
+What is left is numbered, and each number is one thing you might want to do:
+deploy the agent, install the CLI, run a process as a service, run one as a pure
+client, run a container, let plug pick the local port. The instructions that
+differ by system no longer sit three abreast in the prose. A selector next to the
+title picks one, guessed from your browser, and the install line and the examples
+follow it.
+
+The Docker page introduced with `--dockerrun` is gone with it. It promised a
+chapter on working with Docker and delivered one flag, which is a section of
+Getting started, not a place of its own; the full detail lives in the CLI
+reference, where the other flags are.
+
 ---
 
 ## 2.13.2

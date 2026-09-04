@@ -138,11 +138,16 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
       <tr>
         <td><code>--dockerrun</code></td>
         <td>
-          put a <strong>container</strong> in the cluster instead of a process:
-          <code>plug -p prod -c --dockerrun docker run --rm my-image</code>. Your image is not
-          modified and nothing is rebuilt. <code>docker run</code> only, and in the foreground
+          run the <strong>container</strong> as the cluster member instead of the process:
+          <code>plug -c --dockerrun docker run --rm my-image</code>. Your image is not modified and
+          nothing is rebuilt; <code>-s</code> and <code>-c</code> mean what they always mean. plug
+          holds the data path in a sidecar container and runs yours in its network namespace, so
+          <code>--network</code>, <code>-p</code> and <code>--dns</code> belong to the sidecar and
+          are refused on your line. <code>docker run</code> only, in the foreground - a detached
+          container would outlive the network it was given. This machine needs no privilege: docker
+          grants them inside the sidecar
         </td>
-        <td><a routerLink="/docker">Docker</a></td>
+        <td><a routerLink="/getting-started">Getting started</a></td>
       </tr>
       <tr>
         <td><code>-h, --help</code></td>
@@ -157,6 +162,8 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
       <li><code>plug down</code> - tear down plug's background state now (it does so by itself ~30&nbsp;s after the last session; this is the impatient path). It is never needed to pick up a new version - closing your sessions is - and a resolver left stale by a datapath that died is repaired by <code>plug doctor --fix</code>.</li>
       <li><code>plug install-service</code> / <code>plug remove-service</code> - Windows only: create/remove the datapath service (one elevated run; the <a routerLink="/getting-started">installer</a> already does it).</li>
       <li><code>plug init</code> - run the profile wizard explicitly (it runs by itself when no profile exists).</li>
+      <li><code>PLUG_DOCKER_IMAGE</code> - the image <code>--dockerrun</code> takes its Linux plug binary from. Defaults to the published <code>softwarity/plug</code> matching your CLI; set it when running a plug built from source, whose version was never published.</li>
+      <li><code>PLUG_DOCKER_NETWORK</code> - the docker network from which your agent is reachable, when the agent is itself a container rather than a host on your network.</li>
     </ul>
   `,
 })
