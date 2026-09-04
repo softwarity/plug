@@ -46,10 +46,18 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: '22'
+          # Without this the 410 packages below are fetched from the registry on
+          # every deploy: 6m34s measured, against a 7-second Angular build. The
+          # lockfile is not at the repo root, so the path has to be named.
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
 
       - name: Install doc-site deps
         working-directory: docs
-        run: npm ci
+        # --no-audit: the audit round-trip is what prints "this endpoint is being
+        # retired" and buys nothing here, where the lockfile is committed. --no-fund
+        # silences 99 lines nobody reads.
+        run: npm ci --prefer-offline --no-audit --no-fund
 
       # Before building, not after: a snippet that does not parse is one a reader
       # copies into kubectl and gets an error from, and the Angular build never
@@ -78,29 +86,60 @@ jobs:
         working-directory: docs
         run: cp dist/doc-site/browser/index.html dist/doc-site/browser/404.html
 
+      # The rendered media are a PURE FUNCTION of three things: the SVG, the
+      # script that seeks through it, and the ffmpeg flags below. Nothing else
+      # can change them, so a hit on this key means the step under it would
+      # reproduce exactly what is already here. It was costing about 7 minutes
+      # on every deploy, apt-get plus a Playwright install plus a Chromium
+      # download, to re-render a diagram that changes a few times a year.
+      #
+      # This workflow is IN the key on purpose: the ffmpeg invocations live
+      # here, so editing them has to invalidate what they produced.
+      - name: The rendered diagram, if its sources have not moved
+        id: diagram
+        uses: actions/cache@v6
+        with:
+          path: docs/.media
+          key: >-
+            diagram-${{ hashFiles('docs/src/assets/about-diagram.svg',
+            'docs/scripts/render-diagram.mjs', '.github/workflows/deploy-doc.yml') }}
+
       # The social media kit (mp4 / gif / hero png) is DERIVED from the animated
       # SVG — rendered here and served by Pages under /plug/media/, never
       # committed (binaries would bloat the git history on every re-render).
       # Playwright seeks the SMIL loop frame by frame; ffmpeg assembles (not on
       # the runner image any more — installed here).
       - name: Render the diagram media
+        if: steps.diagram.outputs.cache-hit != 'true'
         working-directory: docs
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg >/dev/null
-          npm i --no-save playwright@1.61.1
+          npm i --no-save --prefer-offline --no-audit --no-fund playwright@1.61.1
           npx playwright install --with-deps chromium
           node scripts/render-diagram.mjs
-          mkdir -p dist/doc-site/browser/media
+          mkdir -p .media
           ffmpeg -y -framerate 15 -i .frames/f%03d.png -c:v libx264 -pix_fmt yuv420p -crf 20 \
-            -movflags +faststart dist/doc-site/browser/media/about-diagram.mp4
+            -movflags +faststart .media/about-diagram.mp4
           ffmpeg -y -framerate 15 -i .frames/f%03d.png \
             -vf "fps=12,scale=800:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4" \
-            dist/doc-site/browser/media/about-diagram.gif
-          cp .frames/f180.png dist/doc-site/browser/media/about-diagram-hero.png
+            .media/about-diagram.gif
+          cp .frames/f180.png .media/about-diagram-hero.png
           # The Open Graph card (og:image): 1200x630, the 1.91:1 ratio link
           # previews expect — a centred crop of the round-2 hero frame.
           ffmpeg -y -i .frames/f180.png -vf "crop=1800:945:0:38,scale=1200:630" \
-            dist/doc-site/browser/media/about-diagram-og.png
+            .media/about-diagram-og.png
+
+
+      # Separate from the render, because it has to run on a cache HIT too,
+      # which is the whole point. It fails loudly on an empty .media rather
+      # than publishing a site whose hero image 404s.
+      - name: Publish the diagram media with the site
+        working-directory: docs
+        run: |
+          test -f .media/about-diagram.mp4 || { echo 'no rendered media to publish'; exit 1; }
+          mkdir -p dist/doc-site/browser/media
+          cp .media/* dist/doc-site/browser/media/
+          ls -la dist/doc-site/browser/media
 
       - name: Setup Pages
         uses: actions/configure-pages@v6
