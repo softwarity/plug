@@ -116,6 +116,26 @@ ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get&#64;
     } @else {
       <app-code lang="bash">plug -c mongodb-compass</app-code>
     }
+    <p>
+      <strong>Give plug the program, not a launcher for it.</strong>
+      @if (os() === 'macos') {
+        <code>open -a Compass</code> is the reflex here, and it does not work: <code>open</code>
+        asks LaunchServices to start the app and returns in about 50 milliseconds, with the app
+        parented to <code>launchd</code>.
+      } @else if (os() === 'windows') {
+        <code>start</code> is the reflex here, and it does not work: it hands the program to the
+        shell and returns at once, with the program parented to something else.
+      } @else {
+        <code>xdg-open</code> is the reflex here, and it does not work: it hands the program to the
+        desktop session and returns at once, with the program parented to something else.
+      }
+      plug then sees your command finish, ends the session and takes the tunnel down, while the
+      program it was supposed to serve is only just starting - and being nobody's child of plug, it
+      cannot be attributed to a cluster either. Same reason as
+      <a routerLink="/cli"><code>--dockerrun</code></a> further down: what you launched handed the
+      real work to another process manager. Point plug at the executable itself, as above, and it
+      stays for as long as the program runs.
+    </p>
 
     <h3>5. Run a container as a member of the cluster</h3>
     <p>
