@@ -103,6 +103,11 @@ Options:
                          docker run only, and foreground only: a detached
                          container would outlive the network it was given.
   -h, --help             show this help
+
+  Options may be written in ANY ORDER, and a long one takes its value either way
+  (--profile prod or --profile=prod). They all come BEFORE your command; from
+  your command on, every word is its own, flags included. Use -- if your own
+  command's name starts with a dash.
 `
 }
 
@@ -1485,22 +1490,68 @@ func looksLikeBinary(data []byte) bool {
 
 // ---- profiles ----
 
+// parseArgs reads plug's own options and hands back everything from the first
+// thing that is not one. The options may come in ANY ORDER; only the command has
+// to be last, and once it starts, every remaining word is its own.
+//
+// Three shapes are accepted for the same reason: people type them.
+//
+//   - `--profile prod` and `--profile=prod`. The second used to fall through to
+//     the command, so `plug --profile=prod -c psql` complained about a missing
+//     -s/-c: the real fault was the equals sign, and the message pointed
+//     somewhere else entirely.
+//   - `--` ends plug's options, for a command whose own name starts with a dash.
+//
+// An unknown flag is NOT refused, and that is deliberate rather than lazy. It
+// stops the parse and goes to the command untouched, which is how a launcher
+// carries a flag it has never heard of to a core that has: a launcher is
+// installed once and runs cached cores for months, so refusing what it does not
+// recognise would freeze the flag surface at whatever it knew on install day.
+// TestParseArgsServe states that contract; refusing typos would have broken it,
+// and the cost of keeping it is that `plug -c --typo prog` tries to run --typo.
 func parseArgs(args []string) (options, []string) {
 	var o options
 	i := 0
 	for i < len(args) {
-		switch args[i] {
+		arg := args[i]
+		if arg == "--" { // everything after this belongs to the command
+			return o, args[i+1:]
+		}
+		// A long option may carry its value after an equals sign. Split it here
+		// so the switch below sees the same name either way.
+		name, inline, glued := arg, "", false
+		if strings.HasPrefix(arg, "--") {
+			if eq := strings.IndexByte(arg, '='); eq > 0 {
+				name, inline, glued = arg[:eq], arg[eq+1:], true
+			}
+		}
+		value := func() string {
+			if glued {
+				if inline == "" {
+					fatal("missing value for %s", name)
+				}
+				return inline
+			}
+			return flagValue(args, &i)
+		}
+		// A value glued to an option that takes none is not ours to judge: some
+		// future core may well define it. Fall through and let it travel, on the
+		// same reasoning as an unknown flag.
+		if glued && !valueOptions[name] {
+			return o, args[i:]
+		}
+		switch name {
 		case "-h", "--help":
 			fmt.Print(usage())
 			os.Exit(0)
 		case "-p", "--profile":
-			o.profile = flagValue(args, &i)
+			o.profile = value()
 		case "-H", "--host":
-			o.host = flagValue(args, &i)
+			o.host = value()
 		case "--port":
-			o.port = flagValue(args, &i)
+			o.port = value()
 		case "-s", "--serve":
-			o.exposes = append(o.exposes, flagValue(args, &i))
+			o.exposes = append(o.exposes, value())
 		case "-c", "--client":
 			o.client = true
 		case "--dockerrun":
@@ -1511,6 +1562,12 @@ func parseArgs(args []string) (options, []string) {
 		i++
 	}
 	return o, nil
+}
+
+// valueOptions are the long options that take one, which is all the equals form
+// has to know: everything else keeps travelling as it was written.
+var valueOptions = map[string]bool{
+	"--profile": true, "--host": true, "--port": true, "--serve": true,
 }
 
 func flagValue(args []string, i *int) string {

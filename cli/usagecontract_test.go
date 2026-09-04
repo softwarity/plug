@@ -130,3 +130,52 @@ func TestTheCommandOwnsEverythingAfterIt(t *testing.T) {
 		t.Errorf("the command was rewritten: %q", got)
 	}
 }
+
+// The same option, written the three ways people write it.
+//
+// `--profile=prod` used to fall through to the command, so the run failed on a
+// missing -s/-c and the message pointed at the stance instead of at the equals
+// sign. plug advertises long forms in its help; accepting only the spaced one
+// was a promise half kept.
+func TestALongOptionTakesItsValueEitherWay(t *testing.T) {
+	spaced, cmd1 := parseArgs([]string{"--profile", "prod", "--host", "h.example", "--port", "2200", "-c", "psql"})
+	glued, cmd2 := parseArgs([]string{"--profile=prod", "--host=h.example", "--port=2200", "-c", "psql"})
+
+	if spaced.profile != glued.profile || spaced.host != glued.host || spaced.port != glued.port {
+		t.Errorf("the equals form parsed differently:\n spaced %+v\n glued  %+v", spaced, glued)
+	}
+	if glued.profile != "prod" || glued.host != "h.example" || glued.port != "2200" {
+		t.Errorf("the equals form lost a value: %+v", glued)
+	}
+	if strings.Join(cmd1, " ") != strings.Join(cmd2, " ") || strings.Join(cmd2, " ") != "psql" {
+		t.Errorf("the command differs between the two forms: %q vs %q", cmd1, cmd2)
+	}
+}
+
+// Everything after -- is the command's, which is what keeps a program whose own
+// name starts with a dash runnable now that a stray dash is refused.
+func TestTheSeparatorEndsPlugsOptions(t *testing.T) {
+	o, cmd := parseArgs([]string{"-c", "--", "--host", "not-plugs-host"})
+	if o.host != "" {
+		t.Errorf("plug read --host from beyond the separator: %q", o.host)
+	}
+	if got := strings.Join(cmd, " "); got != "--host not-plugs-host" {
+		t.Errorf("the command after -- was rewritten: %q", got)
+	}
+}
+
+// The equals form must not eat what it does not own. A launcher carries flags it
+// has never heard of to a core that has (TestParseArgsServe holds that contract),
+// and splitting on "=" is a new place for that to go wrong: --future=value is
+// two things to a naive splitter and one thing to the core waiting for it.
+func TestTheEqualsFormLeavesUnknownFlagsWhole(t *testing.T) {
+	for _, arg := range []string{"--future=value", "--client=yes", "--dockerrun=maybe", "--help=x"} {
+		o, cmd := parseArgs([]string{"-p", "x", arg, "npm", "start"})
+		if o.profile != "x" {
+			t.Errorf("%s: the options before it were lost: %+v", arg, o)
+		}
+		if len(cmd) == 0 || cmd[0] != arg {
+			t.Errorf("%s did not reach the command as written: %q", arg, cmd)
+		}
+	}
+}

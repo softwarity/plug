@@ -185,6 +185,21 @@ permutation parses: the options may be written in any order, and only the comman
 has to come last. A sentence like that is worse than saying nothing, because a
 reader obeys it and never finds out it was unnecessary.
 
+`--profile=prod` did not work either, and the failure pointed elsewhere: the
+equals form fell through to the command, so plug complained that nothing said
+whether the process was a service or a client. plug advertises long options in
+its help; taking only the spaced form was a promise half kept. Both forms work
+now, and `--` ends plug's options for a command whose own name starts with a
+dash.
+
+What did NOT change, after an attempt: an unknown flag is still not refused. It
+stops the parse and travels to the core untouched, which is how a launcher
+carries a flag it has never heard of to a core that has. A launcher is installed
+once and runs cached cores for months, so refusing what it does not recognise
+would freeze the flag surface at whatever it knew on install day. The test that
+states that contract is what stopped the change, and the price of keeping it is
+that a mistyped option is still treated as a command name.
+
 All three are now held by tests rather than by attention. One walks every example
 in the help through `serveRequired`, the same function the launcher runs, so what
 is refused at runtime is refused at build time. Another permutes the options and
