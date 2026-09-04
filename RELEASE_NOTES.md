@@ -27,6 +27,15 @@ any process, so it either answers to a name or says it is a pure client. `-s`
 costs nothing extra, because the two containers share one network and a port
 yours listens on is already on the sidecar's loopback.
 
+One branch of it had never executed anywhere, and now something says what is and
+is not covered. A standalone cluster checks no personal key, so the profile key
+is empty on every cluster this repository can stand up, e2e included, and the
+mount that carries it into the sidecar was written, compiled and shipped without
+running once. Its argv is asserted now: mounted read-only, named to the core by
+path, and absent entirely when the profile has none. Whether a container then
+authenticates with that key against a gateway is the gateway's integration to
+test, and saying so beats a green tick that would not have covered it.
+
 It has an e2e cell now, in the block the three families share: an unmodified
 `curlimages/curl` reaching httpbin by name, from inside a container, against a
 cluster provisioned by compose, by swarm and by k8s in turn. That is the family

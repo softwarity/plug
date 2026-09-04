@@ -120,3 +120,61 @@ func TestTheSidecarFollowsTheLauncherFlavour(t *testing.T) {
 		}
 	}
 }
+
+// The profile key is the one piece of the caller's identity that crosses into
+// the sidecar, and this branch had never executed anywhere. A standalone cluster
+// checks no personal key - flavour.go keeps keygen to the hosted build - so
+// cfg.key is empty on every cluster this repository can stand up, e2e included.
+// It was written, compiled and shipped without ever running.
+//
+// This asserts the argv, which is the half that lives here: the key is mounted
+// read-only and named to the core by path. Whether a container then authenticates
+// with it against a gateway is the gateway's integration to test, and saying so
+// is more honest than a green tick that would not have covered it.
+func TestTheProfileKeyReachesTheSidecar(t *testing.T) {
+	withKey := sidecarArgs(config{host: "h", port: "2222", key: "/home/dev/.plug/prod.key"},
+		"", []string{"-c"}, "amd64", "plug-net-abc", "img")
+	joined := strings.Join(withKey, " ")
+
+	if !strings.Contains(joined, "-v /home/dev/.plug/prod.key:/plug/key:ro") {
+		t.Errorf("the profile key is not mounted into the sidecar: %q", joined)
+	}
+	if !strings.Contains(joined, "-e PLUG_CORE_KEY=/plug/key") {
+		t.Errorf("the core in the sidecar is never told where the key is: %q", joined)
+	}
+	if !strings.Contains(joined, ":ro") {
+		t.Errorf("the key is mounted writable: %q", joined)
+	}
+
+	// And no phantom mount when the profile has none: every cluster without a
+	// gateway is in this case, and an empty -v would fail the run outright.
+	none := strings.Join(sidecarArgs(config{host: "h", port: "2222"}, "", []string{"-c"}, "amd64", "n", "img"), " ")
+	if strings.Contains(none, "/plug/key") || strings.Contains(none, "PLUG_CORE_KEY") {
+		t.Errorf("a profile with no key still produced a mount: %q", none)
+	}
+}
+
+// What the sidecar always carries, whatever the profile: without these the
+// container cannot open a TUN at all, and the failure would surface as a tunnel
+// that never comes up rather than as a missing flag.
+func TestTheSidecarCarriesWhatTheDatapathNeeds(t *testing.T) {
+	got := strings.Join(sidecarArgs(config{host: "h.example", port: "2200"},
+		"plug-e2e_edge", []string{"-s", "api:8080:8080"}, "arm64", "plug-net-1", "softwarity/plug:x"), " ")
+
+	for _, want := range []string{
+		"--cap-add NET_ADMIN",                // the TUN device and its routes
+		"--cap-add SYS_ADMIN",                // the per-launch mount namespace
+		"--device /dev/net/tun:/dev/net/tun", // the device plug opens
+		"--security-opt apparmor:unconfined", // the host AppArmor profile blocks the mount ns bind
+		"-e PLUG_CORE=1",                     // run the core directly: no profile to read in there
+		"-e PLUG_CORE_HOST=h.example",
+		"-e PLUG_CORE_PORT=2200",
+		"--network plug-e2e_edge",        // where the agent is reachable from
+		"/opt/plug/bin/plug-linux-arm64", // the daemon's architecture, not this machine's
+		"-s api:8080:8080",               // the stance travels to the sidecar
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the sidecar is missing %q:\n  %s", want, got)
+		}
+	}
+}

@@ -140,31 +140,7 @@ func startDockerSidecar(cfg config, network string, plugFlags []string) (string,
 	// name clash, which says nothing about plug. Ours to clean up, by name.
 	_ = exec.Command("docker", "rm", "-f", name).Run()
 
-	args := []string{"run", "-d", "--name", name,
-		"--cap-add", "NET_ADMIN", // the TUN device and its routes
-		"--cap-add", "SYS_ADMIN", // the per-launch mount namespace
-		// The host's AppArmor profile blocks that mount namespace bind on Linux
-		// hosts. e2e/compose.yml carries the same line for the same reason.
-		"--security-opt", "apparmor:unconfined",
-		"--device", "/dev/net/tun:/dev/net/tun",
-		"-e", "PLUG_CORE=1",
-		"-e", "PLUG_CORE_HOST=" + cfg.host,
-		"-e", "PLUG_CORE_PORT=" + cfg.port,
-	}
-	if network != "" {
-		args = append(args, "--network", network)
-	}
-	if cfg.key != "" {
-		args = append(args, "-v", cfg.key+":/plug/key:ro", "-e", "PLUG_CORE_KEY=/plug/key")
-	}
-	args = append(args, "--entrypoint", "/opt/plug/bin/plug-linux-"+arch, dockerSidecarImage())
-	// -s and -c are the user's, forwarded rather than swallowed. A container in a
-	// cluster is a member of it exactly as a process is, so the rule that a member
-	// either has a name or declares itself a pure client holds here too. -s costs
-	// nothing extra to honour: the user's container shares this one's network, so
-	// a port it listens on is already on this one's loopback.
-	args = append(args, plugFlags...)
-	args = append(args, "sh", "-c", "touch /tmp/plug-ready; sleep infinity")
+	args := sidecarArgs(cfg, network, plugFlags, arch, name, dockerSidecarImage())
 
 	out, err := exec.Command("docker", args...).CombinedOutput()
 	if err != nil {
@@ -189,6 +165,49 @@ func startDockerSidecar(cfg config, network string, plugFlags []string) (string,
 	stop()
 	return "", nil, fmt.Errorf("the sidecar never reported a tunnel to %s:%s. It said:\n%s",
 		cfg.host, cfg.port, strings.TrimSpace(string(logs)))
+}
+
+// sidecarArgs builds the `docker run` for the container that holds the tunnel.
+//
+// Separated from the running of it so the shape can be asserted without a docker
+// daemon, and because one branch of it had never executed anywhere: the profile
+// KEY. A standalone cluster checks no personal key (flavour.go keeps keygen to
+// the hosted build), so cfg.key is empty on every cluster this repository can
+// stand up, and the mount below was written, compiled, shipped and never run.
+// A test on the argv is not the same as a session authenticating with that key,
+// and it does not pretend to be; it is the half that lives here. The other half
+// is the gateway's, and belongs to the gateway's tests.
+func sidecarArgs(cfg config, network string, plugFlags []string, arch, name, image string) []string {
+	args := []string{"run", "-d", "--name", name,
+		"--cap-add", "NET_ADMIN", // the TUN device and its routes
+		"--cap-add", "SYS_ADMIN", // the per-launch mount namespace
+		// The host's AppArmor profile blocks that mount namespace bind on Linux
+		// hosts. e2e/compose.yml carries the same line for the same reason.
+		"--security-opt", "apparmor:unconfined",
+		"--device", "/dev/net/tun:/dev/net/tun",
+		"-e", "PLUG_CORE=1",
+		"-e", "PLUG_CORE_HOST=" + cfg.host,
+		"-e", "PLUG_CORE_PORT=" + cfg.port,
+	}
+	if network != "" {
+		args = append(args, "--network", network)
+	}
+	// The profile's private key, read-only and by path. It is the ONE piece of
+	// the caller's identity that crosses into the container, and it has to: the
+	// core in there opens the tunnel, and a key that stops on this side is a key
+	// never offered - the agent would see the built-in one and refuse a
+	// developer their gateway had enrolled.
+	if cfg.key != "" {
+		args = append(args, "-v", cfg.key+":/plug/key:ro", "-e", "PLUG_CORE_KEY=/plug/key")
+	}
+	args = append(args, "--entrypoint", "/opt/plug/bin/plug-linux-"+arch, image)
+	// -s and -c are the user's, forwarded rather than swallowed. A container in a
+	// cluster is a member of it exactly as a process is, so the rule that a member
+	// either has a name or declares itself a pure client holds here too. -s costs
+	// nothing extra to honour: the user's container shares this one's network, so
+	// a port it listens on is already on this one's loopback.
+	args = append(args, plugFlags...)
+	return append(args, "sh", "-c", "touch /tmp/plug-ready; sleep infinity")
 }
 
 // runDockerRun is the whole mode: hold the datapath in a sidecar, run the user's
