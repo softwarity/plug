@@ -163,6 +163,28 @@ chapter on working with Docker and delivered one flag, which is a section of
 Getting started, not a place of its own; the full detail lives in the CLI
 reference, where the other flags are.
 
+### The help showed a command plug refuses, and claimed an order it never required
+
+Three things wrong in `plug --help`, two of them mine and new.
+
+The `--dockerrun` example read `plug -p prod --dockerrun docker run my-image`,
+which plug turns down: a member of a cluster either names itself with `-s` or
+declares itself a client with `-c`, and a container is a member like any other.
+The help was teaching a command that stops with an error. The container form was
+also missing from the Usage block, where both process forms are listed.
+
+And `-s` carried "place after the other options", which was not true. Every
+permutation parses: the options may be written in any order, and only the command
+has to come last. A sentence like that is worse than saying nothing, because a
+reader obeys it and never finds out it was unnecessary.
+
+All three are now held by tests rather than by attention. One walks every example
+in the help through `serveRequired`, the same function the launcher runs, so what
+is refused at runtime is refused at build time. Another permutes the options and
+checks they parse identically, and a third checks that everything after the
+command belongs to it: `npm run dev -p x` must reach npm with its `-p`, not hand
+plug a profile.
+
 ---
 
 ## 2.13.2

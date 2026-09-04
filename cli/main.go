@@ -50,6 +50,11 @@ Usage:
                                        run <command> as a pure client of the
                                        cluster — reaches services by name, is
                                        never called back (DB tools, scripts)
+  plug [-p profile] {-s …|-c} --dockerrun docker run <image> [args...]
+                                       same, but the member is a CONTAINER: your
+                                       image joins the cluster unmodified, and
+                                       still names itself with -s or declares
+                                       itself a client with -c
   plug ls                              list profiles
   plug test [profile]                  check an agent is reachable
   plug doctor [-p profile] [--fix]     health-check everything plug touches
@@ -78,7 +83,7 @@ Options:
                          parked for the session (containers stopped, Swarm
                          service scaled to 0, k8s Service repointed) and
                          restored when the session ends.
-                         Repeatable; place after the other options.
+                         Repeatable, and the options may come in any order.
                          <local-port> may be a NAME instead of a number — plug
                          then picks a free port for the session and writes it
                          into your command wherever {NAME} appears. Nothing to
@@ -89,7 +94,7 @@ Options:
                          (DBeaver, Compass…), one-off scripts, batch consumers.
                          Mutually exclusive with -s.
       --dockerrun        put a CONTAINER in the cluster, not a process:
-                           plug -p prod --dockerrun docker run my-image
+                           plug -p prod -c --dockerrun docker run my-image
                          Prefixing docker with plug alone cannot work: the
                          container is created by the docker daemon, not as a
                          child of plug, so nothing of it goes through the
