@@ -1,3 +1,4 @@
+import { NgTemplateOutlet } from '@angular/common';
 import { Component, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { CodeComponent } from '../code/code.component';
@@ -17,10 +18,15 @@ function guessOs(): Os {
 
 @Component({
   selector: 'app-getting-started',
-  imports: [CodeComponent, FileComponent, RouterLink],
+  imports: [CodeComponent, FileComponent, RouterLink, NgTemplateOutlet],
   template: `
-    <div class="head">
-      <h2>Getting started</h2>
+    <!-- One switch, written once and placed wherever the reading depends on it.
+         Repeating it is the point: the top of the page is out of sight by
+         section 2, and a reader who cannot see which system a command is for
+         does not know there is a choice to make. The active button names the
+         system, so the same control answers "which one is this?" and "give me
+         the other one" without a trip back up. -->
+    <ng-template #osPicker>
       <div class="os" role="group" aria-label="Choose your operating system">
         @for (o of oses; track o.id) {
           <button
@@ -33,6 +39,11 @@ function guessOs(): Os {
           </button>
         }
       </div>
+    </ng-template>
+
+    <div class="head">
+      <h2>Getting started</h2>
+      <ng-container *ngTemplateOutlet="osPicker" />
     </div>
 
     <p>
@@ -66,6 +77,7 @@ function guessOs(): Os {
       One line, straight from the cluster - the agent hands over the right binary. The install
       grants plug its privilege <strong>once</strong>, so that no later run ever needs it.
     </p>
+    <p class="for-os">Commands below are for <ng-container *ngTemplateOutlet="osPicker" /></p>
     @if (os() === 'windows') {
       <p>
         From Git Bash, the assumed Windows shell - it ships with
@@ -106,6 +118,7 @@ ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get&#64;
       script. It reaches services by name, but nothing is named and no port is reserved on the
       agent. One stance or the other, never both:
     </p>
+    <p class="for-os">Commands below are for <ng-container *ngTemplateOutlet="osPicker" /></p>
     @if (os() === 'windows') {
       <app-code lang="bash">plug -c "/c/Program Files/MongoDB Compass/MongoDBCompass.exe"</app-code>
     } @else if (os() === 'macos') {
@@ -241,6 +254,19 @@ plug -s web:80:PORT -s web-tls:443:PORT node server.js --listen=&#123;PORT&#125;
         color: var(--text-primary);
         background: var(--bg-primary);
         box-shadow: inset 0 -2px 0 var(--accent-blue);
+      }
+      /* The reminder line: the switch sits IN the sentence, so it reads as part
+         of it rather than as a control someone parked there. */
+      .for-os {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--text-muted);
+        font-size: 0.9rem;
+      }
+      .for-os .os button {
+        padding: 4px 10px;
+        font-size: 0.85rem;
       }
       .os button:focus-visible {
         outline: 2px solid var(--accent-blue);
