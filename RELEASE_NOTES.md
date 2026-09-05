@@ -39,6 +39,32 @@ like a different process, so a cluster would read as unheld and the
 one-account rule would lapse for sessions open across an upgrade. A saved fork is
 not worth a security check that goes quiet while people update.
 
+### The key `--dockerrun` mounts is now proven to carry the session
+
+`plug --dockerrun` mounts the profile's private key into the sidecar that holds
+the tunnel, because the core in there is the process that opens it and a key
+stopping on this side is a key never offered. Those four lines had never run.
+`keygen` belongs to the hosted build, so a standalone cluster checks no personal
+key and `cfg.key` was empty on every cluster this repository knew how to stand
+up: the mount was written, compiled, shipped and never executed once.
+
+The e2e now builds the cluster that was missing instead of waiting for one. A new
+cell runs an agent whose `authorized_keys` holds a single throwaway key and NOT
+the key built into plug, so the built-in key is refused there and a tunnel that
+comes up could only have been carried by the mounted file. Then it removes the
+`key =` line from the profile and runs the same command again, which must be
+refused: without that half the cell would pass just as well against an agent that
+accepted anything, and would be asserting nothing.
+
+It found no bug. The code was right, which is not the same as known to be right,
+and one of those two is worth having.
+
+The cell runs on CI runners only, and refuses to run anywhere else. An agent
+sweeps orphaned plug signposts on the docker daemon it is handed, at boot. That
+is correct for the dedicated daemon of a cluster and wrong for a workstation,
+where a real deployment's live signposts are none of a test's business. A
+runner's daemon is empty and thrown away with the runner.
+
 ---
 
 ## 2.14.0

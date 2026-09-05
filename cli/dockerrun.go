@@ -172,11 +172,16 @@ func startDockerSidecar(cfg config, network string, plugFlags []string) (string,
 // Separated from the running of it so the shape can be asserted without a docker
 // daemon, and because one branch of it had never executed anywhere: the profile
 // KEY. A standalone cluster checks no personal key (flavour.go keeps keygen to
-// the hosted build), so cfg.key is empty on every cluster this repository can
-// stand up, and the mount below was written, compiled, shipped and never run.
-// A test on the argv is not the same as a session authenticating with that key,
-// and it does not pretend to be; it is the half that lives here. The other half
-// is the gateway's, and belongs to the gateway's tests.
+// the hosted build), so cfg.key was empty on every cluster this repository knew
+// how to stand up, and the mount below was written, compiled, shipped and never
+// run.
+//
+// A test on the argv is not a session authenticating with that key, so the e2e
+// now builds the cluster that was missing rather than waiting for one: the
+// keymount cell in scripts/ci/e2e-matrix.sh runs an agent whose authorized_keys
+// holds one throwaway key and NOT the key built into plug. The built-in key is
+// refused there, so a tunnel that comes up could only have been carried by the
+// file mounted below, and the same profile with its key line removed is refused.
 func sidecarArgs(cfg config, network string, plugFlags []string, arch, name, image string) []string {
 	args := []string{"run", "-d", "--name", name,
 		"--cap-add", "NET_ADMIN", // the TUN device and its routes

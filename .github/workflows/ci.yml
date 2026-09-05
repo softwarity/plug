@@ -758,6 +758,10 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh dockerrun "$A" "$B" 2222
+      - name: Key mount, the profile's own key carried into the sidecar (--dockerrun)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh keymount "$A" "$B" 2222
       - name: Outage recovery
         if: always()
         shell: bash
@@ -1039,6 +1043,10 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh dockerrun "$A" "$B" 2222
+      - name: Key mount, the profile's own key carried into the sidecar (--dockerrun)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh keymount "$A" "$B" 2222
       - name: Outage recovery
         if: always()
         shell: bash
@@ -1221,6 +1229,10 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh dockerrun "$A" "$B" 2222
+      - name: Key mount, the profile's own key carried into the sidecar (--dockerrun)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh keymount "$A" "$B" 2222
       - name: Outage recovery
         if: always()
         shell: bash
