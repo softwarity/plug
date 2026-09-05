@@ -66,7 +66,7 @@ import { MatIconModule } from '@angular/material/icon';
 
     <h3>API-gateway integration</h3>
     <p>
-      The end game: no dedicated agent at all. The (Java) API gateway already deployed in the
+      The end game: no dedicated agent at all. The API gateway already deployed in the
       cluster hosts the tunnel endpoint and turns it on and off dynamically - dev tooling that
       piggybacks on infrastructure you already trust, with the gateway's own authentication in
       front. The install and versioning contract already exists (see below); the gateway will
