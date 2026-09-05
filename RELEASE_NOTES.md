@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.14.1
+
 ### Connecting stopped forking a process to ask who you are
 
 Since 2.14.0 a cluster belongs to one account, and the check that enforces it
