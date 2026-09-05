@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.14.0
+
 ### plug --dockerrun puts a container in the cluster, which prefixing docker never could
 
 `plug docker run my-image` looks like it works. plug says the tunnel is ready,
