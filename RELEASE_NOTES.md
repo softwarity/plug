@@ -270,6 +270,23 @@ The same slowdown found a race in a test, not in the code: the watcher that
 adopts new nameservers sets them and logs them one line apart, and the test
 waited for the first and read the second. It waits for both now.
 
+### `plug doctor` could name the wrong core version, and say it as a fact
+
+Beside a running daemon the doctor prints "core v2.13.2", read out of the cached
+core's path. It scanned that path from the LEFT for the `versions` directory,
+and the store is `~/.plug/versions`: a developer whose home path contained that
+word anywhere earlier got a different segment back, printed as their version,
+next to a pid that was perfectly real. Wrong, and of the shape nobody
+double-checks. It reads from the right now, where the store's own directory is.
+
+Found by asking which uncovered code would be worth a unit test, rather than
+which would raise the number. Two more came with it, both contracts rather than
+percentages: the exit status of `--dockerrun` mirrors the container's, so a
+script reading `$?` is told the truth about work it did not watch; and the
+resolver a container is pointed at is the one the datapath actually installs,
+which if it drifted would break name resolution inside the container while
+everything on the host kept working.
+
 ---
 
 ## 2.13.2

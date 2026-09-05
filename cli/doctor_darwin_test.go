@@ -113,3 +113,25 @@ func TestTheStallThresholdSitsBetweenTheTwoCases(t *testing.T) {
 		t.Errorf("probeStall = %s — a merely slow answer would read as a timeout", probeStall)
 	}
 }
+
+// What the doctor prints beside a running daemon: "core v2.13.2" or, failing
+// that, the raw path. A wrong answer is therefore a wrong VERSION shown as fact,
+// next to a pid that is real, which is the shape of mistake nobody double-checks.
+//
+// The last case is why this scans from the right. The store is ~/.plug/versions,
+// so the last "versions" in the path is the one that means something; an earlier
+// one belongs to whoever owns the home directory.
+func TestVersionFromCorePath(t *testing.T) {
+	for _, c := range []struct{ why, path, want string }{
+		{"the ordinary cached core", "/Users/dev/.plug/versions/2.13.2/plug", "2.13.2"},
+		{"a dev build, which is a version like any other", "/Users/dev/.plug/versions/dev+abc1234/plug", "dev+abc1234"},
+		{"a home directory that also says versions", "/Users/versions/.plug/versions/2.13.2/plug", "2.13.2"},
+		{"the installed launcher, which is not a cached core", "/usr/local/bin/plug", ""},
+		{"nothing after the marker", "/Users/dev/.plug/versions", ""},
+		{"empty", "", ""},
+	} {
+		if got := versionFromCorePath(c.path); got != c.want {
+			t.Errorf("versionFromCorePath(%q) = %q, want %q (%s)", c.path, got, c.want, c.why)
+		}
+	}
+}

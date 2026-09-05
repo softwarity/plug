@@ -185,3 +185,29 @@ func TestNegativeAnswersCarryShortSOA(t *testing.T) {
 		}
 	}
 }
+
+// The contract between the datapath and a container joining it: `plug
+// --dockerrun` writes these two values into the resolv.conf it mounts, and a
+// container reads nothing else. If either drifts from what the datapath actually
+// installs, names stop resolving inside the container while everything on the
+// host keeps working - a failure that looks like the image's fault.
+//
+// Composed from instanceNet rather than spelled out, so the two cannot disagree;
+// this pins that composition, and that instance 0 is the right one to ask for.
+func TestFirstInstanceResolverMatchesTheDatapath(t *testing.T) {
+	ns, search := FirstInstanceResolver()
+
+	_, want, _ := instanceNet(0)
+	if ns != want {
+		t.Errorf("a container would be pointed at %s, while instance 0 answers on %s", ns, want)
+	}
+	if ns != "198.18.0.53" {
+		t.Errorf("the first instance's resolver moved to %s; the docs and the mounted resolv.conf say 198.18.0.53", ns)
+	}
+	if search != searchSuffix {
+		t.Errorf("the search domain is %q, but the datapath appends %q", search, searchSuffix)
+	}
+	if search == "" {
+		t.Error("no search domain: a bare single-label name would never reach plug's resolver from a container")
+	}
+}

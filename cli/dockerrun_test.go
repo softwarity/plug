@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -176,5 +178,23 @@ func TestTheSidecarCarriesWhatTheDatapathNeeds(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("the sidecar is missing %q:\n  %s", want, got)
 		}
+	}
+}
+
+// `plug --dockerrun docker run …` must exit as the container did, or a script
+// that checks $? is told the wrong thing about work it did not watch.
+func TestExitCodeMirrorsTheContainer(t *testing.T) {
+	if got := exitCodeOf(nil); got != 0 {
+		t.Errorf("a container that succeeded reported %d", got)
+	}
+	// The shape docker itself produces: a real exit status, carried through.
+	cmd := exec.Command("sh", "-c", "exit 7")
+	if got := exitCodeOf(cmd.Run()); got != 7 {
+		t.Errorf("a container that exited 7 reported %d", got)
+	}
+	// Anything that is not an exit status is a failure to RUN it, which is ours
+	// and not the container's: 1, and never 0, which would read as success.
+	if got := exitCodeOf(errors.New("docker is not installed")); got != 1 {
+		t.Errorf("a failure to start reported %d, want 1", got)
 	}
 }

@@ -222,10 +222,16 @@ func nxdomainVerdict(addr string, err error, took time.Duration, sessions int) c
 
 // versionFromCorePath extracts "x.y.z" from a cached-core path
 // (…/.plug/versions/<v>/plug), or "" when the path is not one.
+//
+// From the RIGHT, because the store's own directory is the last "versions" in
+// the path and anything earlier belongs to whoever owns the home. Scanning
+// forwards, a developer under /Users/versions/… got told their daemon runs core
+// v.plug: wrong, and silently so, since the doctor prints whatever comes back
+// beside a pid that is perfectly real.
 func versionFromCorePath(p string) string {
 	parts := strings.Split(p, "/")
-	for i, s := range parts {
-		if s == "versions" && i+1 < len(parts) {
+	for i := len(parts) - 2; i >= 0; i-- {
+		if parts[i] == "versions" {
 			return parts[i+1]
 		}
 	}
