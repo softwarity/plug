@@ -242,6 +242,15 @@ func TestWatchUpstreamsAdoptsChangesAndIsSilentOtherwise(t *testing.T) {
 	if !waitFor(2*time.Second, func() bool { return up.primary() == "10.8.0.1:53" }) {
 		t.Fatalf("watcher did not adopt the new servers: %v", up.all())
 	}
+	// Waited for, not read straight away. watchUpstreams sets the servers and
+	// THEN logs (upstream.go: u.set on one line, log.f on the next), so the
+	// waitFor above can return in the gap between them and this assertion would
+	// read an empty log for a change that did happen. It did, on Windows, the
+	// first time coverage instrumentation widened that gap - a race in the test,
+	// not in the watcher.
+	if !waitFor(2*time.Second, func() bool { return len(logged()) >= 1 }) {
+		t.Fatalf("watcher adopted the new servers but never said so")
+	}
 	if got := logged(); len(got) != 1 {
 		t.Errorf("watcher logged %d lines for one change, want exactly 1: %v", len(got), got)
 	}
