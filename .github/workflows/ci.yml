@@ -240,6 +240,12 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: stable
+          # No module cache here, and it has to be said or setup-go looks for a
+          # go.mod at the root, finds none (they live in cli/ and agent/) and
+          # warns on every run. This job downloads no dependencies: it merges
+          # text profiles and calls `go tool cover`, which reads sources already
+          # in the checkout.
+          cache: false
       - uses: actions/download-artifact@v7
         with:
           pattern: cov-*
