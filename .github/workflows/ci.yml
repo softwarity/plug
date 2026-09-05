@@ -1,5 +1,15 @@
 name: CI
 
+# HOW ACTIONS ARE PINNED HERE, since the mix looks like an oversight and is not.
+# actions/* ride moving major tags (checkout@v6, upload-artifact@v7): they are
+# GitHub's own, published from the same place that runs them, and following them
+# is what keeps the deprecation warnings away without a chore. Everything from a
+# third party is pinned to a COMMIT (docker/*, tailscale/*, softwarity/*): a tag
+# is a pointer its owner can move, so pinning is what a compromise of one of
+# those repositories runs into. It buys nothing against a bad release, and is not
+# meant to. The cost is that a pinned action never updates by itself, which is
+# the trade taken deliberately for code we do not publish.
+
 on:
   push:
     branches: ["**"]
@@ -635,9 +645,12 @@ jobs:
       # scales a service to 0 or repoints a Service. Naming the mechanism made
       # three identical tests look like three different ones.
       #
-      # scripts/ci/check-common-block.sh fails the build if the three drift.
-      # Anything a single family needs goes BELOW this block, under its own
-      # heading — there is nothing there today.
+      # scripts/ci/check-common-block.sh fails the build if the three drift, and
+      # it compares EVERY step that runs something, not merely this block. So
+      # there is no place for a cell one family needs and the others do not: the
+      # guard would refuse it. That is the strictness working, not a gap. A real
+      # need for one is the moment to teach that script where the block ends,
+      # deliberately, rather than to work around it here.
       - name: Setup — install plug from the cluster + build clients
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh setup "$A" "$B" 2222
@@ -913,9 +926,12 @@ jobs:
       # scales a service to 0 or repoints a Service. Naming the mechanism made
       # three identical tests look like three different ones.
       #
-      # scripts/ci/check-common-block.sh fails the build if the three drift.
-      # Anything a single family needs goes BELOW this block, under its own
-      # heading — there is nothing there today.
+      # scripts/ci/check-common-block.sh fails the build if the three drift, and
+      # it compares EVERY step that runs something, not merely this block. So
+      # there is no place for a cell one family needs and the others do not: the
+      # guard would refuse it. That is the strictness working, not a gap. A real
+      # need for one is the moment to teach that script where the block ends,
+      # deliberately, rather than to work around it here.
       - name: Setup — install plug from the cluster + build clients
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh setup "$A" "$B" 2222
@@ -1092,9 +1108,12 @@ jobs:
       # scales a service to 0 or repoints a Service. Naming the mechanism made
       # three identical tests look like three different ones.
       #
-      # scripts/ci/check-common-block.sh fails the build if the three drift.
-      # Anything a single family needs goes BELOW this block, under its own
-      # heading — there is nothing there today.
+      # scripts/ci/check-common-block.sh fails the build if the three drift, and
+      # it compares EVERY step that runs something, not merely this block. So
+      # there is no place for a cell one family needs and the others do not: the
+      # guard would refuse it. That is the strictness working, not a gap. A real
+      # need for one is the moment to teach that script where the block ends,
+      # deliberately, rather than to work around it here.
       - name: Setup — install plug from the cluster + build clients
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh setup "$A" "$B" 2222

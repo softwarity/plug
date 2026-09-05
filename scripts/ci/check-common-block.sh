@@ -100,7 +100,8 @@ for job in jobs[1:]:
 
 if bad:
     sys.exit("\nThe three families must run the same cells, in the same order, "
-             "under the same names — a family-specific step belongs BELOW the "
-             "common block, under its own heading.")
+             "under the same names. This compares EVERY step that runs something, "
+             "so there is nowhere to put one a single family needs: if that is what "
+             "you are doing, teach this script where the block ends first.")
 print(f"the three e2e families run the same {len(ref)} cells, in the same order")
 PY
