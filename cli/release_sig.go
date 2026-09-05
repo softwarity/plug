@@ -65,9 +65,10 @@ type coreAttestation struct {
 // checked: an attacker replaying a genuinely signed old binary just announces
 // that binary's version and the binding is satisfied. And it costs a great deal,
 // because an EMBEDDER sets Config.Version to its own identity while serving plug
-// binaries signed by this pipeline (see meerkat_integration.md, "le piege du
-// versioning"): the signature would cover plug's version, the check would use the
-// embedder's, and every launch would be refused.
+// binaries signed by this pipeline: the signature would cover plug's version, the
+// check would use the embedder's, and every launch would be refused. (That trap
+// was written up in a design note this repository no longer carries; the reason
+// is above, which is where it belongs.)
 //
 // This format is a wire contract from the first release that ships it. Changing
 // it later breaks every CLI already carrying the old one, so it is worth being
