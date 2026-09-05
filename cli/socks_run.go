@@ -155,6 +155,27 @@ var errStopped = errors.New("session ending")
 //
 // stopped is polled between probes: this runs alongside the session, and a check
 // outliving it would keep narrating a name nobody is waiting on any more.
+// gaveUp says the two things a reader needs: that it kept trying, and what kept
+// failing. The second half used to depend on WHERE the loop ran out of time. The
+// path after a failed attempt wrapped that attempt's error; the path at the top
+// of the next iteration returned "gave up after N of retries" and threw away the
+// error it was already holding, leaving a message that says it insisted without
+// saying at what. Which path fires is a matter of milliseconds - coverage
+// instrumentation on a Windows runner was enough to move it - so a reader got a
+// different quality of answer depending on the weather.
+//
+// No attempt completing at all is the one case with genuinely nothing to name,
+// and it says so rather than implying a cause it does not have.
+func gaveUp(last error, attempts int) error {
+	if last == nil {
+		return fmt.Errorf("gave up after %s of retries, with no attempt completing", exposeVerifyBudget)
+	}
+	// A bare "context deadline exceeded" reads as one unlucky probe, and sends
+	// the reader looking for a hiccup rather than for a name that never came up.
+	return fmt.Errorf("%w\n      (still failing after %s and %d attempts — the name never carried traffic)",
+		last, exposeVerifyBudget, attempts)
+}
+
 func verifyExposed(ex pathVerifier, name string, stopped func() bool) error {
 	start := time.Now()
 	deadline := start.Add(exposeVerifyBudget)
@@ -163,6 +184,7 @@ func verifyExposed(ex pathVerifier, name string, stopped func() bool) error {
 	// long reads as a hang, so say what is being waited on — and keep saying it,
 	// or the first line looks like the last thing that happened before a freeze.
 	nextNote := start.Add(exposeVerifyNotify)
+	var last error // the most recent failure, so giving up can still name a cause
 	for attempt := 1; ; attempt++ {
 		if stopped() {
 			return errStopped
@@ -171,7 +193,7 @@ func verifyExposed(ex pathVerifier, name string, stopped func() bool) error {
 		if left <= 0 {
 			// Never return nil for "ran out of time" — the caller turns a nil
 			// into a verified session.
-			return fmt.Errorf("gave up after %s of retries", exposeVerifyBudget)
+			return gaveUp(last, attempt-1)
 		}
 		if now := time.Now(); now.After(nextNote) {
 			info("%s: waiting for the cluster name to come up (%s so far) — the agent has provisioned it, "+
@@ -182,12 +204,9 @@ func verifyExposed(ex pathVerifier, name string, stopped func() bool) error {
 		if err == nil {
 			return nil
 		}
+		last = err
 		if time.Until(deadline) <= 0 {
-			// Say we insisted: a bare "context deadline exceeded" reads as one
-			// unlucky probe, and sends the reader looking for a hiccup rather
-			// than for a name that never came up.
-			return fmt.Errorf("%w\n      (still failing after %s and %d attempts — the name never carried traffic)",
-				err, exposeVerifyBudget, attempt)
+			return gaveUp(last, attempt)
 		}
 		budget = min(budget*2, exposeVerifyMax)
 		time.Sleep(exposeVerifyGap)

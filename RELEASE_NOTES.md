@@ -251,6 +251,25 @@ rather than per repository because `go tool cover` resolves sources through the
 module it runs from, and a profile mixing the two fails on whichever one is not
 current. That was found by trying it, not by reasoning about it.
 
+### Giving up on a name now says what kept failing, wherever it gave up
+
+`plug -s` waits for the cluster to actually carry the name before it hands you a
+session, retrying inside a budget. When that budget runs out it has two ways of
+saying so, and only one of them named a cause. The exit after a failed attempt
+wrapped that attempt's error; the exit at the top of the next iteration returned
+"gave up after 90s of retries" and threw away the error it was already holding,
+leaving a message that says it insisted without saying at what.
+
+Which of the two fires is a matter of milliseconds, so the quality of the answer
+depended on the weather. It surfaced when coverage instrumentation slowed a
+Windows runner just enough to shift it. Both exits now carry the cause, and the
+one case with genuinely nothing to name, no attempt completing at all, says that
+rather than implying a reason it does not have.
+
+The same slowdown found a race in a test, not in the code: the watcher that
+adopts new nameservers sets them and logs them one line apart, and the test
+waited for the first and read the second. It waits for both now.
+
 ---
 
 ## 2.13.2
