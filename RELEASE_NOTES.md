@@ -224,6 +224,33 @@ checks they parse identically, and a third checks that everything after the
 command belongs to it: `npm run dev -p x` must reach npm with its `-p`, not hand
 plug a profile.
 
+### The run now says how much of the code its tests ran, and what that leaves out
+
+Coverage was measured nowhere. It is measured now, in the runs that were already
+happening: the same `go test`, one `-coverprofile` heavier, and a job that merges
+them into the run summary. Nothing new executes.
+
+Merged ACROSS the three operating systems, which is the part that matters here. A
+file behind a build tag is not compiled on a runner that does not need it, so it
+is not "uncovered" on that runner, it is absent from both sides of the fraction:
+graft_darwin.go, pidroute_windows.go and nsshim_linux.go would each vanish from a
+single-OS number rather than lower it. The merge is a plain concatenation, which
+is valid because Go sums the counts of identical blocks, checked both ways before
+it was relied on: the same profile twice gives the same total, and an empty
+profile plus a real one gives the real one.
+
+The number is 41%, and the report says in the same breath what that is not.
+Whole files sit at 0% while being exercised hard: a daemon, a selftest, a swarm
+backend only run against a real datapath or a real cluster, and the e2e matrix is
+what proves them, on three systems and three orchestrators, where no counter
+looks. So nothing here fails a build. A floor would push someone to write unit
+tests for exactly those files, duplicating worse what already covers them.
+
+There is a line-by-line HTML report per module too, as an artifact. Per module
+rather than per repository because `go tool cover` resolves sources through the
+module it runs from, and a profile mixing the two fails on whichever one is not
+current. That was found by trying it, not by reasoning about it.
+
 ---
 
 ## 2.13.2

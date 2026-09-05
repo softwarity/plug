@@ -71,7 +71,23 @@ jobs:
           # Written this way round on purpose: in GitHub expressions '' is FALSY,
           # so `windows && '' || '-race'` would hand Windows the -race it excludes.
           RACE: ${{ matrix.os != 'windows-latest' && '-race' || '' }}
-        run: go test $RACE ./...
+        # -coverprofile alongside the run that was already happening: no extra
+        # execution, and the profile is what the coverage job merges. Per OS,
+        # because a file behind a build tag is not compiled on a runner that does
+        # not need it - absent from the fraction rather than uncovered in it.
+        run: go test $RACE -covermode=atomic -coverprofile=coverage.out ./...
+      - name: Keep the coverage profile for the merge
+        if: always()
+        working-directory: cli
+        shell: bash
+        run: test -s coverage.out && cp coverage.out "cli-${{ matrix.os }}.cov" || echo "no profile (the tests did not run)"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: cov-cli-${{ matrix.os }}
+          path: cli/cli-*.cov
+          if-no-files-found: ignore
+          retention-days: 1
       - name: Record result
         if: always()
         shell: bash
@@ -174,7 +190,14 @@ jobs:
       # unit tests).
       - name: Vet & test the agent helper
         working-directory: agent
-        run: go vet ./... && go build ./... && go test -race ./...
+        run: go vet ./... && go build ./... && go test -race -covermode=atomic -coverprofile=agent.cov ./...
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: cov-agent
+          path: agent/agent.cov
+          if-no-files-found: ignore
+          retention-days: 1
       - name: Cross-compile
         working-directory: cli
         env:
@@ -198,6 +221,65 @@ jobs:
   # same names — that is the only way three jobs read as a comparison instead of
   # three separate stories. Drift is silent, so it is checked here rather than
   # noticed months later. No `needs`: it costs seconds and should fail early.
+  # The number, and what it is worth. It runs after the tests rather than beside
+  # them because it has nothing of its own to compute: it merges what they
+  # already measured. `needs` names both producers so a missing profile is a
+  # skipped job rather than a report quietly built from two thirds of the code.
+  #
+  # Nothing here fails a build. A floor would push someone to write unit tests
+  # for the files sitting at 0%, and those are precisely the ones the e2e matrix
+  # proves best - a daemon, a selftest, a swarm backend. See the header of
+  # scripts/ci/coverage-report.py for what the number covers and what it cannot.
+  coverage:
+    name: Coverage
+    needs: [test, build]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: cov-*
+          path: cov
+          merge-multiple: true
+      - name: Merge the profiles and say what they mean
+        shell: bash
+        run: |
+          shopt -s nullglob
+          profiles=(cov/*.cov)
+          if [ ${#profiles[@]} -eq 0 ]; then
+            echo "no coverage profile was produced; the tests did not get far enough" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          python3 scripts/ci/coverage-report.py summary.md "${profiles[@]}"
+          cat summary.md >> "$GITHUB_STEP_SUMMARY"
+      # One report per MODULE, not one for the repository: `go tool cover -html`
+      # resolves each file through the module it is run from, so a profile mixing
+      # cli and agent fails on whichever one is not the current module. Checked,
+      # not assumed.
+      - name: The line-by-line reports, one per module
+        shell: bash
+        run: |
+          shopt -s nullglob
+          mkdir -p html
+          cli=(cov/cli-*.cov)
+          if [ ${#cli[@]} -gt 0 ]; then
+            (cd cli && { echo "mode: atomic"; tail -q -n +2 ../cov/cli-*.cov; } > /tmp/cli-merged.cov \
+              && go tool cover -html=/tmp/cli-merged.cov -o ../html/cli.html)
+          fi
+          if [ -s cov/agent.cov ]; then
+            (cd agent && go tool cover -html=../cov/agent.cov -o ../html/agent.html)
+          fi
+          ls -la html
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage-html
+          path: html/
+          retention-days: 7
+
   ci-shape:
     name: The three e2e blocks are identical
     runs-on: ubuntu-latest
