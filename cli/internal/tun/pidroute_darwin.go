@@ -8,10 +8,24 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
-// procStart returns pid's start time as Unix seconds, via `ps -o lstart=` (cgo-free,
-// like ppidOf). Only comparability feeds the ancestry walk, not the unit, so a
+// procStart returns pid's start time as Unix seconds, via `ps -o lstart=`.
+//
+// NOT moved to kern.proc.pid alongside uidOf, and the reason is persistence
+// rather than cost. The kernel's P_starttime is the true epoch; this parse reads
+// a LOCAL time as if it were UTC, so the two differ by the machine's offset,
+// measured at exactly 7200s here on all 1104 processes. That has never mattered,
+// for the reason below: only comparability feeds the ancestry walk. But this
+// value is also WRITTEN DOWN, in the .start sidecar beside a client marker, and
+// read back by whatever build is running later. Switching the unit would make
+// every marker written by an older plug look like a different process to a newer
+// one - the cluster would read as unheld, and the one-cluster-one-account rule
+// would quietly stop applying to sessions that were already open across the
+// upgrade. A fork saved on the multicluster path is not worth a security check
+// that lapses while people update. Only comparability feeds the ancestry walk, not the unit, so a
 // coarse second granularity is enough to catch a recycled PID — and two processes
 // born in the same second compare equal (<=), never a false "younger parent".
 // LANG/LC pinned to C so we parse the fixed English date form regardless of locale.
@@ -131,17 +145,35 @@ func pidFromNetstat(out string, srcPort uint16) (int, bool) {
 	return 0, false
 }
 
-// uidOf returns the account a process runs under, via `ps -o uid=`. Same
-// cgo-free shape as ppidOf, and asked only on the single-cluster shortcut, where
-// the ancestry walk does not run at all.
+// uidOf returns the account a process runs under, asked of the kernel rather
+// than of a program.
+//
+// It was `ps -o uid=`, one fork on the SYN of every new connection: 1.811ms
+// measured, against 11.9µs for this. 152 times, and the forks mattered more than
+// the microseconds - fifty simultaneous connections spawned fifty processes at
+// once, on the user's machine, for an answer the kernel already had.
+//
+// kern.proc.pid, and NOT a hand-rolled parse. struct kinfo_proc is in the public
+// SDK headers and x/sys generates its Go form from them, so the layout is the
+// toolchain's problem rather than something inferred here from a memory dump.
+// That distinction is the whole reason this landed and the socket-table half did
+// not: xinpcb_n and xsocket_n live in XNU's private headers, and a structure I
+// reconstruct by pattern-matching has no business deciding whose traffic this is.
+//
+// Checked against the thing it replaces before being trusted: every process ps
+// could see, 1109 of them, same uid, no disagreement. A pid that has since
+// exited returns false, which soleAllows reads as "cannot establish" and lets
+// through - exactly what a failed ps did.
+// Ucred.Uid is the EFFECTIVE uid, which is what `ps -o uid=` printed and so what
+// this replaces exactly. Pcred.P_ruid, the real one, sits beside it and the two
+// agree on every ordinary process - no test here can tell them apart, which is
+// why the choice is written down instead of left to be re-derived. Effective is
+// also the right one: it is what decides what a process may do, and plug's own
+// child has had its privilege dropped before it ever opens a socket.
 func uidOf(pid int) (int, bool) {
-	out, err := exec.Command(HelperPath("ps"), "-o", "uid=", "-p", strconv.Itoa(pid)).Output()
-	if err != nil {
+	kp, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
+	if err != nil || kp == nil {
 		return 0, false
 	}
-	uid, err := strconv.Atoi(strings.TrimSpace(string(out)))
-	if err != nil {
-		return 0, false
-	}
-	return uid, true
+	return int(kp.Eproc.Ucred.Uid), true
 }

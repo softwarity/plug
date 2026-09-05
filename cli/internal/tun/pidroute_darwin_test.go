@@ -92,3 +92,28 @@ func TestPidFromNetstatPortIsNotASuffix(t *testing.T) {
 		t.Fatalf("pidFromNetstat(761) = %d,%v; want 90097,true; 61761 is not port 761", pid, ok)
 	}
 }
+
+// uidOf answers on the SYN of every new connection, so it must be right and it
+// must be cheap. It asks the kernel now instead of forking ps; this proves the
+// answer did not change with the method.
+func TestUidOfAgreesWithTheSystem(t *testing.T) {
+	if got, ok := uidOf(os.Getpid()); !ok || got != os.Getuid() {
+		t.Fatalf("uidOf(self) = %d,%v; want %d,true", got, ok, os.Getuid())
+	}
+	// pid 1 is launchd, root, and always there: a second account to tell the
+	// first from, without spawning anything.
+	if got, ok := uidOf(1); !ok || got != 0 {
+		t.Errorf("uidOf(1) = %d,%v; want 0,true (launchd runs as root)", got, ok)
+	}
+	// A pid that cannot exist must not answer. Silence here is what soleAllows
+	// reads as "cannot establish", and it lets the flow through - the same as a
+	// failed ps did, and the reason a wrong answer would be worse than none.
+	if _, ok := uidOf(1 << 30); ok {
+		t.Error("uidOf named an owner for a pid that does not exist")
+	}
+	// And a dead one, which is the case that actually happens: the process ends
+	// between the SYN and the lookup.
+	if _, ok := uidOf(spawnAndKill(t)); ok {
+		t.Error("uidOf named an owner for a process that had exited")
+	}
+}

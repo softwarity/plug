@@ -2,6 +2,43 @@
 
 ## NEXT RELEASE
 
+### Connecting stopped forking a process to ask who you are
+
+Since 2.14.0 a cluster belongs to one account, and the check that enforces it
+runs on the first packet of every new connection: it asks which process opened
+the socket, and which account that process runs under. The second question was
+answered by forking `ps`. Fifty simultaneous connections meant fifty processes
+spawned on your machine, for something the kernel already knew.
+
+It asks the kernel now, through `kern.proc.pid`. 1.811ms becomes 11.9µs, and the
+check as a whole goes from 5.94ms to 3.97ms per connection. The forks matter more
+than the microseconds: a connection pool no longer starts a small process storm.
+
+WHAT WAS NOT DONE, and why, because the remaining 3.97ms is the interesting part.
+The same trick would answer the first question too - which process owns a given
+port - in about 240µs instead of the 3.83ms `netstat` costs. It is not here. The
+structures that describe the kernel's socket table are not in Apple's public
+headers, unlike the one used above, so using them means reconstructing a memory
+layout by inspection. That reconstruction was written, and then checked against
+`netstat` on this machine: it disagreed on 14 sockets out of 38 and missed 142
+others. Code that decides whose traffic this is does not get to be approximately
+right, so it was thrown away rather than shipped.
+
+Two other routes were measured and closed. Skipping the check when no other
+account is present cannot work: macOS runs dozens of system daemons under their
+own accounts, which the check refuses today, so the shortcut would never fire
+without quietly deciding those are allowed. And no external command can be much
+cheaper anyway - spawning any process at all costs 1.30ms here, so 40% of what is
+left is the fork itself, not the work.
+
+Also left alone deliberately: the process start time, which the same kernel call
+would give. It is written into a marker file and read back by whichever build
+runs later, and the kernel's value differs from the current one by the machine's
+UTC offset. Changing it would make every marker written by an older plug look
+like a different process, so a cluster would read as unheld and the
+one-account rule would lapse for sessions open across an upgrade. A saved fork is
+not worth a security check that goes quiet while people update.
+
 ---
 
 ## 2.14.0
