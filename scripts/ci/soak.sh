@@ -48,7 +48,12 @@ tree_pids() {
 # /proc rather than ps for the descriptors: ps cannot count them, and this runs
 # on Linux only.
 tree_rss()  { for p in $(tree_pids "$1"); do awk '/^VmRSS:/{print $2}' "/proc/$p/status" 2>/dev/null; done | awk '{s+=$1} END{print s+0}'; }
-tree_fds()  { for p in $(tree_pids "$1"); do ls "/proc/$p/fd" 2>/dev/null | wc -l; done | awk '{s+=$1} END{print s+0}'; }
+# sudo, because a process that took file capabilities has /proc/<pid>/fd owned by
+# root: an unprivileged ls returns nothing and the count silently reads as zero,
+# which is how the first run reported five descriptors falling to two on a live
+# session. Runners have passwordless sudo; without it this degrades to the same
+# zero rather than failing, and the count is reported, never asserted alone.
+tree_fds()  { for p in $(tree_pids "$1"); do sudo ls "/proc/$p/fd" 2>/dev/null | wc -l; done | awk '{s+=$1} END{print s+0}'; }
 tree_thr()  { for p in $(tree_pids "$1"); do awk '/^Threads:/{print $2}' "/proc/$p/status" 2>/dev/null; done | awk '{s+=$1} END{print s+0}'; }
 
 # --- the verdicts, pure so they can be proven on synthetic series -------------
@@ -158,14 +163,30 @@ say "=== a session held for ${SOAK_MINUTES} min, with traffic ==="
 plug_pid=$!
 sleep 20
 kill -0 "$plug_pid" 2>/dev/null || { say "the session died in its first 20s:"; tail -20 "$work/plug.log" "$work/traffic.log"; exit 1; }
+# Alive is not the same as working, and the first run proved the difference: the
+# process lived its full twelve minutes and ran not one round, so the soak
+# measured an idle launcher and called it healthy. Ask for the first round here,
+# where the answer costs 20 seconds instead of the whole run.
+if [ ! -s "$work/traffic.log" ]; then
+  say "--- FAIL: the session is up but has produced NO traffic in 20s."
+  say "    plug said:"; sed 's/^/      /' "$work/plug.log" | tail -20
+  say "    the command was: sh -c 'curl ... http://httpbin:8080/get' under plug -c"
+  sum "**soak** ❌ (no traffic at all)"
+  exit 1
+fi
+say "first rounds in: $(head -3 "$work/traffic.log" | tr '\n' ' ')"
 
 printf 'elapsed_s\trss_kb\tfds\tthreads\trounds\terrors\n' > "$samples"
 deadline=$(( $(date +%s) + SOAK_MINUTES * 60 ))
 start=$(date +%s)
 while [ "$(date +%s)" -lt "$deadline" ]; do
   now=$(date +%s)
-  rounds=$(grep -c '^200$' "$work/traffic.log" 2>/dev/null || echo 0)
-  errors=$(grep -cvE '^200$|^$' "$work/traffic.log" 2>/dev/null || echo 0)
+  # No `|| echo 0` here: grep -c already PRINTS 0 when it matches nothing, and
+  # only its exit status says so. The fallback appended a second zero, the
+  # variable held "0\n0", and `[ "$errors" -gt 0 ]` died on it with "integer
+  # expression expected" - a failed assertion that left the verdict green.
+  rounds=$(grep -c '^200$' "$work/traffic.log" 2>/dev/null); : "${rounds:=0}"
+  errors=$(grep -cvE '^200$|^$' "$work/traffic.log" 2>/dev/null); : "${errors:=0}"
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$((now - start))" "$(tree_rss "$plug_pid")" \
     "$(tree_fds "$plug_pid")" "$(tree_thr "$plug_pid")" "$rounds" "$errors" >> "$samples"
   kill -0 "$plug_pid" 2>/dev/null || { say "the session DIED after $(( (now - start) / 60 )) min:"; tail -20 "$work/plug.log" "$work/traffic.log"; break; }
@@ -181,7 +202,7 @@ rss_a=$(col 2 | head -n "$half" | median); rss_b=$(col 2 | tail -n "$half" | med
 fd_a=$(col 3 | head -n "$half" | median);  fd_b=$(col 3 | tail -n "$half" | median)
 th_a=$(col 4 | head -n "$half" | median);  th_b=$(col 4 | tail -n "$half" | median)
 rounds=$(col 5 | tail -1); errors=$(col 6 | tail -1)
-recon=$(grep -ci "reconnect" "$work/plug.log" 2>/dev/null || echo 0)
+recon=$(grep -ci "reconnect" "$work/plug.log" 2>/dev/null); : "${recon:=0}"
 
 # Memory in kB: 20 MB of noise, and 50 MB of growth is a finding whatever the
 # ratio. Descriptors and threads are counted things, so their floors are small
@@ -211,6 +232,11 @@ case "$v_rss" in GROWS*) say "--- FAIL: memory keeps climbing after hours, which
 case "$v_fd"  in GROWS*) say "--- FAIL: descriptors keep climbing, so something is not being closed"; bad=1 ;; esac
 case "$v_th"  in GROWS*) say "--- FAIL: threads keep climbing, so goroutines are piling up"; bad=1 ;; esac
 [ "$errors" -gt 0 ] && { say "--- FAIL: $errors round(s) did not answer 200, in a cluster that never moved"; bad=1; }
+# A run that measured nothing is not a run that found nothing. One round every
+# two seconds plus latency, so a quarter of the arithmetic is a floor no healthy
+# session can miss, and no broken one can meet.
+expected=$(( SOAK_MINUTES * 60 / 8 ))
+[ "$rounds" -lt "$expected" ] && { say "--- FAIL: only $rounds rounds in ${SOAK_MINUTES} min, expected at least $expected. The numbers above measured an idle process, not a working session"; bad=1; }
 kill -0 "$plug_pid" 2>/dev/null || { say "--- FAIL: the session did not survive the run"; bad=1; }
 if [ "$bad" = 0 ]; then sum "**soak** ✅"; say "soak OK"; else sum "**soak** ❌"; fi
 exit "$bad"
