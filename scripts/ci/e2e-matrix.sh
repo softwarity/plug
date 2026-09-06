@@ -2029,17 +2029,56 @@ do_update_tag() {
 # perl's alarm rather than `timeout`: this runs on Git Bash too, and the harness
 # already relies on perl being there for the per-session bound.
 CELL_MAX="${PLUG_CELL_MAX:-720}"
+
+# Every process on the machine, and the two words that matter are `-A` and the
+# fallback, both of them measured rather than assumed.
+#
+# WITHOUT -A, ps lists only the processes attached to the caller's terminal, and
+# a CI step has no terminal: asked from inside the watchdog below, plain ps
+# returned NOTHING. So the diagnosis it printed was a heading with an empty list
+# under it, on every hang it ever caught. And Git Bash's ps accepts no -o at all,
+# printing its own columns (PID PPID PGID WINPID TTY UID STIME COMMAND) whose
+# first two fields are the ones read here, which is what the fallback is for.
+ps_all() { ps -A -o pid=,ppid=,etime=,args= 2>/dev/null || ps 2>/dev/null; }
+
 if [ "$phase" != setup ]; then
   ( sleep "$CELL_MAX"
     echo "::error::the '$phase' cell has been running for ${CELL_MAX}s and is not slow, it is stuck." >&2
     echo "--- what this shell was doing ---" >&2
     # shellcheck disable=SC2009 # pgrep is not on Git Bash, and the elapsed time
     # and full argv are the whole point: which session, started when.
-    ps -o pid=,ppid=,etime=,args= 2>/dev/null | grep -iE "plug|sink|echo-local" | grep -v grep | head -20 >&2
+    #
+    # `plugin` is excluded because -A now returns the whole machine: a macOS
+    # runner answers PlugInLibraryService and half a dozen audio plug-ins to a
+    # case-insensitive `plug`, 94 lines of them here against 9 real ones, and
+    # head -20 would show the noise instead of the session.
+    ps_all | grep -iE "plug|sink|echo-local" | grep -viE "plugin" | grep -v grep | head -20 >&2
     for f in /tmp/gw.out /tmp/serve.out /tmp/takeover.out /tmp/resilience.out; do
       [ -s "$f" ] && { echo "--- $f ---" >&2; tail -8 "$f" >&2; }
     done
-    kill -9 "$$" 2>/dev/null ) &
+    # The TREE, not the shell alone, and this is the half that was missing.
+    #
+    # Killing $$ ends the script and nothing else. The children it leaves behind
+    # still hold the step's stdout, and a step ends when its pipe closes, not
+    # when its shell dies - so the step ran on until the JOB hit its 30 minutes,
+    # and GitHub discards the log of a timed-out job, taking this diagnosis down
+    # with it. That is how three hangs ended with no log at all, including the
+    # one that had already been caught here and had nothing to show for it.
+    # Measured on a bench: killing the shell alone let the step run 60s past the
+    # watchdog, cutting the tree ended it in 1.
+    #
+    # Depth-first, so a child is gone before its parent: kill the parent first
+    # and its children are reparented to init, out of reach of a walk that only
+    # descends. The watchdog excludes ITSELF - it is a child of the shell it is
+    # killing, and an earlier attempt cut its own branch before finishing.
+    wd_me=$BASHPID
+    kill_tree() {
+      for kt_c in $(ps_all | awk -v p="$1" '$2==p {print $1}'); do
+        [ "$kt_c" = "$wd_me" ] || kill_tree "$kt_c"
+      done
+      [ "$1" = "$wd_me" ] || kill -9 "$1" 2>/dev/null
+    }
+    kill_tree "$$" ) &
   cell_watchdog=$!
   # Disowned, so the shell stops tracking it as a job. Without this, killing it on
   # the way out makes bash announce "Terminated: 15 ( sleep ..." in the log of
