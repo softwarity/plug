@@ -30,8 +30,10 @@ registre** au lieu de se la faire livrer en artefact.
       l'agent** sur le canal SSH déjà authentifié, vérifiée avant exécution, est
       **livrée en 2.7.2** ; ce qui reste est le durcissement résiduel, dont la
       forme demande un arbitrage (le coût n'est pas le même selon l'OS). La
-      signature de binaires reste souhaitable ensuite, pour une menace
-      différente (une source usurpée plutôt qu'une altération locale). Le
+      signature de binaires, elle, **est livrée** : `cli/release_sig.go` porte
+      l'ancre compilée, `cli/cmd/plug-sign` produit les signatures et la clé
+      privée ne quitte pas le workflow de release (ligne corrigée le 06/09, elle
+      la disait encore à faire). Le
       détail, l'impact et la reproduction vivent dans l'avis. À publier dans les
       notes de version **une fois le correctif livré** - c'est là qu'un défaut
       se raconte, pas avant.
@@ -44,7 +46,7 @@ registre** au lieu de se la faire livrer en artefact.
 - [ ] **Windows sous VPN d'entreprise** : non prouvé sur un vrai client corpo (macOS OK avec GlobalProtect). Il faut un poste Windows avec un vrai client VPN - la box 192.168.2.17 ferait l'affaire si on y installe le client ; banc ~30 min ensuite. **Ce qui est désormais couvert en CI** (cellule « fake VPN » du selftest, ×3 OS) : une interface de plus portant un résolveur qui connaît un nom que rien d'autre ne connaît, annoncée par la porte que plug lit sur cet OS (2ᵉ adaptateur WinTUN + métrique sur Windows, `resolv.conf` sur Linux, dict DNS du service primaire sur macOS) → plug doit le suivre, résoudre le nom témoin à travers son stub, puis revenir quand le VPN disparaît. **Ce qui reste hors CI** : le split-tunnel (le trafic vers l'IP interne doit emprunter le tunnel), le NRPT / DNS conditionnel Windows, la MTU/fragmentation, et les clients qui interceptent le DNS en `127.0.0.1` (écartés par `pickUpstreams` sur Windows - à confronter à un vrai client corpo).
 - [ ] **Linux sous VPN d'entreprise : ni prouvé ni écarté** (17/08) : la ligne ci-dessus ne nomme que Windows, macOS ayant son banc GlobalProtect. Linux n'a ni l'un ni l'autre. Le risque y est plus faible - son mécanisme se résume à `resolv.conf`, là où Windows a le NRPT, les métriques d'interface et le filtre loopback - mais autant l'écrire que de le laisser en creux.
 - [ ] **Le build d'image reste sur le chemin critique** (17/08) : le tag `sha-<court>-amd64` a sorti le *merge* de la file d'attente, pas la dépendance à l'image elle-même. Un build amd64 lent - 18 min 30 mesurées une fois, contre 2 min 30 d'habitude - laisse encore les clusters sans rien à tirer et perd le run. Rien à corriger tant que ça reste exceptionnel ; à rouvrir si ça se répète, et `why_no_cluster` le nommera.
-- [ ] **Sessions longues & charge** : heures, gros transferts, sleep/wake. Piste actée : un workflow « soak » cron hebdo (session tenue 5-6 h, transferts gros volumes, asserts RSS/reconnexions) ; le sleep/wake réel reste un banc local assisté.
+- [ ] **Sessions longues & charge - le soak couvre la DURÉE, pas la charge** (06/09) : `scripts/ci/soak.sh` + `.github/workflows/soak.yml` tiennent une session 4 h chaque lundi contre l'image PUBLIÉE, avec un trafic léger (une requête toutes les 2 s, qui re-résout le nom à chaque tour), et assèrent une tendance sur RSS / descripteurs / threads de tout l'arbre plutôt qu'un seuil. 4 h et non 6 : un job GitHub plafonne à 6 h et un job qui meurt sur son timeout perd son log, donc ses chiffres. **Restent ouverts** : les gros transferts (le soak ne pousse que des requêtes courtes, une fuite proportionnelle au VOLUME lui échapperait) et le sleep/wake, qui ne se teste pas sur un runner et reste un banc local assisté.
 
 ## 🟣 UDP par nom (relais de datagrammes) - REPORTÉ (décision 18/07)
 La motivation « HTTP/3 » ne tient pas : le relais passerait par le tunnel TCP →
@@ -68,7 +70,6 @@ toute façon).
 
 ## 🔵 Transport & intégration (statut public : `roadmap.component.ts`)
 - [ ] **IPv6** : fake-pool v6 + tunneling des littéraux v6 (fakes IPv4 aujourd'hui ; service par nom déjà OK).
-- [ ] **Transport `kubectl exec`** : tunnel via `kubectl exec` sur un pod nu - zéro port exposé, accès gouverné par le kubeconfig RBAC (adoucit le compromis no-auth).
 - [ ] **Gateway hôte du tunnel** : la gateway déjà déployée héberge l'endpoint et l'active dynamiquement - son auth devant. Fin de l'agent dédié. C'est **le mécanisme du « plug autorisé ici ou pas »** (dev : oui, prod : non - l'interdiction est une *absence*) et le point 4 des « implications côté plug » de la note de conception Meerkat (retirée du dépôt le 05/09, sa conception ayant vieilli) - qui figeait la conception d'ensemble et les quatre autres chantiers qu'elle induit : auth par clé par dev, attribution nominative des sessions, API d'état (« qui plugge quoi depuis quand »), et plus tard le signpost-proxy L7.
 
 ## ⚪ Dettes / plus tard

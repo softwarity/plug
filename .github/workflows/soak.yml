@@ -1,0 +1,71 @@
+name: Soak
+
+# Weekly, never on push, and the distinction matters.
+#
+# Everything in ci.yml answers "did this change break something", which has to be
+# fast because someone is waiting for it. This answers "does a session survive an
+# afternoon", which cannot be fast and which no push should have to wait for. It
+# holds one session for hours and watches what the process does, so it belongs on
+# its own clock.
+#
+# It tests the PUBLISHED image, not the branch: the thing people install. That is
+# also why it needs nothing from the rest of the CI - no cluster, no tailnet, no
+# artifacts. It stands its own cluster on the runner and installs plug from it,
+# the same one-liner a user runs.
+on:
+  schedule:
+    - cron: "0 3 * * 1" # Monday, 03:00 UTC
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "How long to hold the session"
+        required: false
+        default: "240"
+      image:
+        description: "Which published image to soak"
+        required: false
+        default: "softwarity/plug:latest"
+      sample:
+        description: "Seconds between samples (lower it for a short trial run)"
+        required: false
+        default: "60"
+
+permissions:
+  contents: read
+
+# One soak at a time. Two of them would share the runner's docker daemon and
+# each would stand an agent on it, which is the one thing an agent must not find.
+concurrency:
+  group: soak
+  cancel-in-progress: false
+
+jobs:
+  soak:
+    name: Soak — one session, held for hours
+    runs-on: ubuntu-latest
+    # The session's own length plus room for the install and the teardown. A job
+    # that dies on its timeout takes its log with it, and the whole point here is
+    # the numbers it prints at the end.
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v6
+      - name: The verdicts, before the hours
+        shell: bash
+        # Proven on synthetic series first: a soak whose rule is wrong costs a
+        # week to find out, and this costs a second.
+        run: SOAK_SELFTEST=1 bash scripts/ci/soak.sh
+      - name: Hold a session and watch it
+        shell: bash
+        env:
+          SOAK_MINUTES: ${{ inputs.minutes || '240' }}
+          SOAK_IMAGE: ${{ inputs.image || 'softwarity/plug:latest' }}
+          SOAK_SAMPLE_SECS: ${{ inputs.sample || '60' }}
+        run: bash scripts/ci/soak.sh
+      - name: Keep the samples
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: soak-samples
+          path: ${{ runner.temp }}/soak/*.tsv
+          if-no-files-found: warn
+          retention-days: 90
