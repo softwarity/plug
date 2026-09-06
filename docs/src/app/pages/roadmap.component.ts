@@ -43,10 +43,15 @@ import { MatIconModule } from '@angular/material/icon';
     <h3>Kubernetes transport</h3>
     <p>
       The agent already runs on Kubernetes (a <a routerLink="/kubernetes">manifest</a> with a NodePort, or
-      <code>kubectl port-forward</code> for an RBAC-gated tunnel with no exposed port). Planned next:
-      a <code>kubectl exec</code> transport (tunnel through <code>kubectl exec</code> to a plain pod:
-      zero exposed port, access governed by each developer's kubeconfig RBAC - which also softens the
-      <a routerLink="/security">no-auth trade-off</a>).
+      <code>kubectl port-forward</code> for an RBAC-gated tunnel with no exposed port). Nothing
+      Kubernetes-only is planned beyond that, and it is a decision rather than an omission. A
+      <code>kubectl exec</code> transport was considered twice and dropped twice, for two reasons that
+      still hold: <code>port-forward</code> already gives the zero-exposed port gated by API-server
+      RBAC that it would have bought, and plug behaves the same way whichever backend provisions the
+      name - a transport existing in one family alone would trade that for a second code path to carry
+      forever. Where the <a routerLink="/security">no-auth trade-off</a> has to go away, the answer is
+      the <a routerLink="/meerkat">gateway</a> hosting the tunnel, which covers every family instead
+      of one.
     </p>
 
     <h3>UDP by name</h3>
@@ -136,7 +141,6 @@ import { MatIconModule } from '@angular/material/icon';
         <tr><td>Reverse direction: serve a local port to the cluster under a cluster name (<code>-s</code>), name provisioned dynamically (docker-sock / k8s-RBAC)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
         <tr><td>Takeover (default): a deployed service owning a <code>-s</code> name is parked for the session and restored on exit</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
         <tr><td><code>plug status</code> and verbs to act on a running session, out of band (never a keystroke: your command owns stdin)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
-        <tr><td><code>kubectl exec</code> transport (no exposed port)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
         <tr><td>Gateway hosting the tunnel + install surface (<a routerLink="/meerkat">Meerkat</a>): the hosted CLI flavour and the named-identity model ship today; the gateway replacing the agent outright does not</td><td><mat-icon class="status-icon partial">timelapse</mat-icon> in progress</td></tr>
         <tr><td>IPv6 fake-pool + v6-literal tunnelling (overlays are IPv4 today)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
         <tr><td>UDP by name - framed datagram relay over the tunnel (TCP-only today)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
