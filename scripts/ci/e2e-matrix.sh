@@ -1824,6 +1824,23 @@ do_update_notify() {
   "$PLUG" --host "$ip_b" --port "$oldport" -c \
     "$root/echo-local$ext" -addr 127.0.0.1:18141 -text "notify-$leg" -ttl 40s >/tmp/notify1.out 2>&1 || true
 
+  # Session 1 records its verdict in ~/.plug/update-<hash of host:port>; session 2
+  # does nothing but read it. Waiting for that file to actually carry one is the
+  # difference between a cell that fails on a race and one that says WHICH half
+  # did not happen, and it costs nothing in the normal case, where the check has
+  # long finished before the session's ttl runs out. The cell failed once with
+  # "the second launch said nothing", which is true and tells you nothing: the
+  # question is whether there was anything to say.
+  upd_waited=0
+  while [ "$upd_waited" -lt 30 ] && ! grep -hq "^available=." "$HOME"/.plug/update-* 2>/dev/null; do
+    upd_waited=$((upd_waited + 1)); sleep 1
+  done
+  if ! grep -hq "^available=." "$HOME"/.plug/update-* 2>/dev/null; then
+    echo "    session 1 recorded NO verdict, after its 40s plus ${upd_waited}s of waiting - so there is nothing for session 2 to announce, and the check is what to look at"
+  elif [ "$upd_waited" -gt 0 ]; then
+    echo "    session 1's verdict landed ${upd_waited}s after the session ended"
+  fi
+
   # Session 2 — the launcher reads what session 1 recorded, on its way past.
   local out2 rc2=0
   out2="$("$PLUG" --host "$ip_b" --port "$oldport" -c \
