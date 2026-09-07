@@ -2,6 +2,52 @@
 
 ## NEXT RELEASE
 
+### An agent that goes quiet no longer holds your session for ever
+
+Connecting to an agent has a fifteen second timeout, and the line that set it
+said so: `dialTimeout // initial TCP+SSH handshake to the agent`. Only the first
+half of that was true. `ssh.ClientConfig.Timeout` is handed to `net.DialTimeout`
+and goes no further: the library sets no deadline of any kind over the banner
+exchange, the key exchange or the authentication that follow. An agent that
+completed the TCP handshake and then said nothing held plug for ever, with no
+timeout and no message, having never run the command it was given. What you saw
+was a command that started and then did nothing at all.
+
+That shape is not hypothetical. A load balancer holding an open socket to a
+backend that has died answers exactly like that, so does a packet filter that
+lets SYN through and drops the rest, and so does an agent container that is still
+starting.
+
+Three places had it, not one, and the first is the one that mattered most: every
+launch asks the agent its version BEFORE anything else, so a launcher could hang
+before printing a single line. All three now go through one bounded dial.
+
+Two more waits had no bound at all, and a dial that succeeds proves only that the
+agent answered a handshake. Once connected, plug asks for a verb and, on a first
+run, downloads the core - and an established SSH session has no deadline of its
+own, since its channel is a stream over a mux with no read deadline. So both of
+those could wait for ever too, both of them before your command starts. A verb
+now has thirty seconds, which is not a budget but the point past which the agent
+is not slow, it is not answering. The core download has ten minutes, generous on
+purpose: that is 15 kB/s, under no working link, and it exists so a transfer that
+has truly stopped ends in a sentence instead of in silence.
+
+Every one of these ends in a sentence naming what went unanswered.
+
+The tests are worth a word, because two of them only became real on the second
+attempt. The deadline over the handshake has to be CLEARED once it succeeds, or
+every session dies fifteen seconds in, which is a worse bug than the one being
+fixed; the test guarding that counts CONNECTIONS rather than errors, because the
+transport is self-healing and hid a session redialling every fifteen seconds
+behind a silent retry. Its first version passed against the bug. And giving up on
+a wait means CLOSING the connection, since nothing else unblocks a read that will
+never end, so the test asserts the close as well as the message.
+
+This came out of the new weekly soak, whose very first run held a session for
+twelve minutes and ran the command zero times. Whether that particular run was
+one of these is not settled - the log that would say so was not being collected
+yet, and it is now. Every one of the defects it sent us looking for is real.
+
 ---
 
 ## 2.14.1

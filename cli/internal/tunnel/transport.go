@@ -34,9 +34,14 @@ const (
 	keepaliveEvery   = 15 * time.Second // ping cadence: keep NAT/LB/VPN paths warm, detect death
 	keepaliveTimeout = 8 * time.Second  // a reply slower than this means the path is DEAD, not slow
 	keepaliveMisses  = 2                // consecutive misses before reconnecting (tolerate one blip)
-	dialTimeout      = 15 * time.Second // initial TCP+SSH handshake to the agent
 	channelTimeout   = 10 * time.Second // bound a single direct-tcpip channel open
 )
+
+// A var rather than a const, and only so a test can shorten it: proving that a
+// silent agent does not hang plug forever means actually waiting for this, and
+// fifteen seconds of a test suite to assert one deadline is a bad trade. Nothing
+// in the shipped paths writes to it.
+var dialTimeout = 15 * time.Second // TCP connect AND the SSH handshake, see dial()
 
 // Logf is where the data paths report progress; set by the caller.
 type Logf func(format string, a ...any)
@@ -102,6 +107,45 @@ func (t *Transport) note(format string, a ...any) {
 	}
 }
 
+// DialSSH is ssh.Dial with the handshake ACTUALLY bounded, and every dial plug
+// makes goes through it.
+//
+// ssh.ClientConfig.Timeout does not do what it looks like it does: x/crypto
+// hands it to net.DialTimeout and stops there. NewClientConn sets no deadline of
+// any kind, so the banner exchange, the key exchange and the authentication that
+// follow are unbounded. An agent that completes the TCP handshake and then says
+// nothing - a container still starting, a load balancer holding a socket open to
+// a dead backend, a filter that accepts SYN and drops the rest - held plug for
+// ever: alive, silent, and having never run the command it was given.
+//
+// The deadline covers the whole handshake and is CLEARED the moment it succeeds.
+// That second half matters as much as the first: left in place it would kill
+// every session `timeout` later, which is a worse bug than the one being fixed.
+//
+// Exported because the launcher dials the agent too, twice, before any of this
+// package is involved - to ask its version and to fetch the core - and those
+// dials had the same hole. One bounded dial, used by all three.
+func DialSSH(addr string, cfg *ssh.ClientConfig, timeout time.Duration) (*ssh.Client, error) {
+	conn, err := net.DialTimeout("tcp", addr, timeout)
+	if err != nil {
+		return nil, err
+	}
+	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	sc, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	if err := conn.SetDeadline(time.Time{}); err != nil {
+		_ = sc.Close()
+		return nil, err
+	}
+	return ssh.NewClient(sc, chans, reqs), nil
+}
+
 // dial establishes a fresh SSH client to the agent.
 func (t *Transport) dial() (*ssh.Client, error) {
 	// Every key must parse. A key that was configured on purpose and cannot be
@@ -126,7 +170,7 @@ func (t *Transport) dial() (*ssh.Client, error) {
 		HostKeyCallback: tofuHostKey(t.knownHosts, addr, t.note),
 		Timeout:         dialTimeout,
 	}
-	client, err := ssh.Dial("tcp", addr, cfg)
+	client, err := DialSSH(addr, cfg, dialTimeout)
 	if err != nil {
 		if isAuthFailure(err) {
 			return nil, &AuthFailure{Addr: addr, Err: err, Offered: fingerprints(signers)}

@@ -1214,11 +1214,58 @@ func dialGetUser(cfg config) (*ssh.Client, error) {
 		guardUserPath(pin)
 		defer chownToUser(pin)
 	}
-	return ssh.Dial("tcp", addr, &ssh.ClientConfig{
+	// tunnel.DialSSH, never ssh.Dial: ClientConfig.Timeout bounds the TCP connect
+	// and NOTHING after it, so an agent that accepts the connection and then goes
+	// quiet used to hold this dial for ever. This is the FIRST thing every launch
+	// does - it is how the agent's version is asked - so it hung before plug had
+	// printed a single line, and what the person saw was a command that never
+	// started. See DialSSH for the whole story.
+	return tunnel.DialSSH(addr, &ssh.ClientConfig{
 		User:            getUser,
 		HostKeyCallback: tunnel.HostKeyCallback(pin, addr, info),
-		Timeout:         15 * time.Second,
-	})
+	}, agentDialTimeout)
+}
+
+// How long the launcher waits on the agent, and the two numbers are different
+// kinds of thing.
+//
+// A verb answers in milliseconds: it is a ForceCommand printing a line. Thirty
+// seconds is not a budget, it is the point past which the agent is not slow, it
+// is not answering. The core is nine megabytes over whatever link the person
+// has, so its ceiling is generous on purpose - ten minutes is 15 kB/s, which no
+// working link is under, and it exists only so that a transfer which has truly
+// stopped ends in a sentence rather than in silence.
+const (
+	agentDialTimeout  = 15 * time.Second
+	agentVerbTimeout  = 30 * time.Second
+	agentFetchTimeout = 10 * time.Minute
+)
+
+// bounded runs f and gives up after d, CLOSING the client to get there.
+//
+// An established SSH session has no deadline of its own: its channel is a stream
+// over a mux, and SetReadDeadline does not exist on it (the same reason expose.go
+// gives). So there is no polite way to bound a read that will never end - closing
+// the connection underneath it is what unblocks f, which then returns an error
+// nobody is left to read.
+//
+// This matters because a dial that succeeds proves the agent answered a
+// handshake, never that it will answer anything else. Both of these run before
+// the person's command does, and a launcher that waits for ever on either one is
+// indistinguishable, from the outside, from a command that silently did nothing.
+// Takes an io.Closer rather than an *ssh.Client: closing is the whole of what it
+// needs, and a rule about giving up is one that has to be provable without
+// standing up an SSH server to prove it.
+func bounded(c io.Closer, d time.Duration, what string, f func() error) error {
+	done := make(chan error, 1)
+	go func() { done <- f() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(d):
+		c.Close()
+		return fmt.Errorf("the agent accepted the connection but never answered %s within %v", what, d)
+	}
 }
 
 func agentVersion(cfg config) (string, error) { return getExec(cfg, "version") }
@@ -1236,7 +1283,12 @@ func getExec(cfg config, verb string) (string, error) {
 		return "", err
 	}
 	defer sess.Close()
-	out, err := sess.Output(verb)
+	var out []byte
+	err = bounded(client, agentVerbTimeout, "`"+verb+"`", func() error {
+		var e error
+		out, e = sess.Output(verb)
+		return e
+	})
 	if err != nil {
 		return "", err
 	}
@@ -1381,7 +1433,12 @@ func getDownload(cfg config, osArch, label string) ([]byte, error) {
 	if err := sess.Start(osArch); err != nil {
 		return nil, err
 	}
-	data, rerr := readWithProgress(stdout, label, isTTY(os.Stderr))
+	var data []byte
+	rerr := bounded(client, agentFetchTimeout, "the "+label+" download", func() error {
+		var e error
+		data, e = readWithProgress(stdout, label, isTTY(os.Stderr))
+		return e
+	})
 	if werr := sess.Wait(); werr != nil {
 		if s := strings.TrimSpace(stderr.String()); s != "" {
 			return nil, fmt.Errorf("%s", s)
