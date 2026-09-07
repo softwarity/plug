@@ -266,8 +266,22 @@ jobs:
           docker buildx imagetools create \
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             $(printf '${{ env.IMAGE }}@sha256:%s ' *)
+      # Retried, because this reads back a tag pushed one step earlier and Docker
+      # Hub is not read-after-write consistent. The create SUCCEEDED, this said
+      # "sha-f22df97: not found", and the tag was readable from another machine
+      # minutes later - so a green run was thrown away, and nothing published,
+      # over the registry's propagation delay. Five attempts over twenty-five
+      # seconds; if it is still invisible then, something is genuinely wrong and
+      # the failure means what it says.
       - name: Inspect
-        run: docker buildx imagetools inspect "${{ env.IMAGE }}:${{ steps.meta.outputs.version }}"
+        run: |
+          for i in 1 2 3 4 5; do
+            docker buildx imagetools inspect "${{ env.IMAGE }}:${{ steps.meta.outputs.version }}" && exit 0
+            echo "attempt $i: not visible yet, the registry is still propagating the tag the previous step pushed"
+            sleep 5
+          done
+          echo "::error::the manifest list was pushed but never became readable, 25s later"
+          exit 1
       # What the e2e clusters pull. A tag rather than a bare digest: the cluster
       # manifests and compose files take an image reference, and `sha-<short>`
       # names this build and only this build.
