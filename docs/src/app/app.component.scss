@@ -195,15 +195,20 @@
     color: var(--accent-purple);
   }
 
-  // A product logo sits where a glyph would, and must occupy exactly the same
-  // box or the labels stop lining up. The Meerkat mark is twice as tall as it is
-  // wide, so it is the WIDTH that is free: height matches the glyphs, and
-  // object-fit keeps the animal in proportion inside the 18px square.
+  // A product mark sits where a glyph would, and must occupy exactly the same box
+  // or the labels stop lining up. It is drawn in currentColor, so `color` is what
+  // paints it, exactly as it paints the Material glyphs above.
+  //
+  // The eye mask is a PUNCH: the mark expects to knock those shapes out to
+  // whatever it sits on, so the variable is set to the nav's own background. At
+  // 18px those ellipses are under a pixel, which is why the active row's tint is
+  // not worth chasing.
   .side-logo {
     width: 18px;
     height: 18px;
-    object-fit: contain;
     flex: 0 0 18px;
+    color: var(--accent-purple);
+    --meerkat-eye: var(--bg-primary);
   }
 }
 
