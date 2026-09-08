@@ -125,59 +125,6 @@ import { MatIconModule } from '@angular/material/icon';
         filter: brightness(1.08);
       }
 
-      .cmp {
-        overflow-x: auto;
-        margin: 4px 0 18px;
-        border: 1px solid var(--border-color);
-        border-radius: 10px;
-      }
-      .cmp table {
-        border-collapse: collapse;
-        width: 100%;
-        min-width: 660px;
-        font-size: 0.85rem;
-        margin: 0;
-      }
-      .cmp th,
-      .cmp td {
-        padding: 9px 13px;
-        border-bottom: 1px solid var(--border-color);
-        text-align: left;
-        vertical-align: top;
-      }
-      .cmp tbody tr:last-child td {
-        border-bottom: none;
-      }
-      .cmp thead th {
-        font-size: 0.7rem;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        color: var(--text-muted);
-        background: var(--bg-secondary);
-        font-weight: 600;
-      }
-      .cmp tbody td:first-child {
-        color: var(--text-secondary);
-        white-space: nowrap;
-      }
-      .cmp th:nth-child(2),
-      .cmp td:nth-child(2) {
-        background: rgba(163, 113, 247, 0.08);
-        color: var(--text-primary);
-      }
-      .cmp-note {
-        color: var(--text-secondary);
-        font-size: 0.88rem;
-        line-height: 1.5;
-        background: var(--bg-secondary);
-        border: 1px solid var(--border-color);
-        border-radius: 8px;
-        padding: 12px 15px;
-        margin: 0 0 24px;
-      }
-      .cmp-note strong {
-        color: var(--text-primary);
-      }
     `,
   ],
   template: `
@@ -276,39 +223,12 @@ import { MatIconModule } from '@angular/material/icon';
 
     <h3>How plug compares</h3>
     <p>
-      plug isn't the only way to run local code against a remote cluster -
+      plug isn't the only way to run local code against a remote cluster:
       <a href="https://metalbear.com/mirrord/" target="_blank" rel="noopener">mirrord</a> and
       <a href="https://telepresence.io/" target="_blank" rel="noopener">Telepresence</a> are the
-      well-known <strong>Kubernetes-native</strong> tools, more mature on Kubernetes and on team
-      workflows. plug's angle is different: it works the same on Docker, Compose, Swarm
-      <em>and</em> Kubernetes, it is fully open source, and it is deliberately simple - and
-      auth-less, so only for dev clusters you trust.
-    </p>
-    <div class="cmp">
-      <table>
-        <thead>
-          <tr><th></th><th scope="col">plug</th><th scope="col">mirrord</th><th scope="col">Telepresence</th></tr>
-        </thead>
-        <tbody>
-          <tr><td>Targets</td><td>Docker · Compose · Swarm · Kubernetes</td><td>Kubernetes</td><td>Kubernetes / OpenShift</td></tr>
-          <tr><td>Mechanism</td><td>userspace TUN over SSH, by name</td><td>mirrors a remote pod's traffic / env / files into your process</td><td>in-cluster traffic-manager + intercepts</td></tr>
-          <tr><td>Both directions</td><td>reach by name + be reachable by name</td><td>steal / mirror incoming + outbound context</td><td>intercept incoming + outbound</td></tr>
-          <tr><td>Any runtime, no code change</td><td>✓ (IP layer)</td><td>✓</td><td>✓</td></tr>
-          <tr><td>Cluster-side</td><td>one agent container</td><td>none (uses your kubeconfig)</td><td>traffic-manager install</td></tr>
-          <tr><td>Auth</td><td>none - trusted dev cluster</td><td>your kubeconfig / RBAC</td><td>your kubeconfig / RBAC</td></tr>
-          <tr><td>Per-dev isolation on a shared service</td><td>one name, one session</td><td>Operator (header / queue split)</td><td>intercept filtering (header / path)</td></tr>
-          <tr><td>Price</td><td><strong>Free · FSL-1.1</strong></td><td>Free OSS · $40/seat/mo Teams · Enterprise custom</td><td>Free OSS · paid cloud features</td></tr>
-        </tbody>
-      </table>
-    </div>
-    <p class="cmp-note">
-      <strong>Why plug:</strong> it brings the cluster onto your own machine - you build your service
-      exactly as if it lived inside the stack, calling the others by their real names and answering
-      to its own name when they call back, with no code change. And, above all,
-      <strong>it works the same everywhere</strong>: Docker, Compose, Swarm <em>and</em> Kubernetes,
-      on Linux, macOS and Windows - where mirrord and Telepresence stop at Kubernetes. Fully open
-      source, no paid tier, just one tiny agent - and because it captures at the IP layer, every
-      runtime works unchanged, Go and gRPC included.
+      well-known Kubernetes-native tools. plug's angle is that it works the same on Docker,
+      Compose, Swarm <em>and</em> Kubernetes, from Linux, macOS and Windows.
+      <a routerLink="/comparison">Side by side, including where they are ahead</a>.
     </p>
 
     <p class="cta">
