@@ -7,6 +7,7 @@
 [![arch](https://img.shields.io/badge/arch-amd64%20·%20arm64-brightgreen)](https://hub.docker.com/r/softwarity/plug/tags)
 [![CLI](https://img.shields.io/badge/CLI-linux%20·%20macOS%20·%20windows-blue)](https://github.com/softwarity/plug/releases)
 [![CI](https://github.com/softwarity/plug/actions/workflows/ci.yml/badge.svg)](https://github.com/softwarity/plug/actions/workflows/ci.yml)
+[![sponsor](https://img.shields.io/badge/sponsor-softwarity-ea4aaa?logo=githubsponsors)](https://github.com/sponsors/softwarity)
 
 Run a local process as a member of your cluster: it resolves cluster service
 names, reaches cluster services, and is itself reachable in the cluster under a
@@ -334,3 +335,13 @@ available - contact **[francois@hhdev.fr](mailto:francois@hhdev.fr)**.
 
 Third-party components are listed in
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+
+## Sponsor
+
+plug is free and there is no paid tier planned. Nothing in it is gated behind
+sponsorship and nothing will be. If it saves you the afternoon it was built to
+save, you can [sponsor its development](https://github.com/sponsors/softwarity),
+one-off or monthly.
+
+That is a different thing from the licence above: a company whose use falls
+outside FSL needs a commercial licence, not a donation.
