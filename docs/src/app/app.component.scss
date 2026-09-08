@@ -194,6 +194,17 @@
     height: 18px;
     color: var(--accent-purple);
   }
+
+  // A product logo sits where a glyph would, and must occupy exactly the same
+  // box or the labels stop lining up. The Meerkat mark is twice as tall as it is
+  // wide, so it is the WIDTH that is free: height matches the glyphs, and
+  // object-fit keeps the animal in proportion inside the 18px square.
+  .side-logo {
+    width: 18px;
+    height: 18px;
+    object-fit: contain;
+    flex: 0 0 18px;
+  }
 }
 
 // Focused by script after every navigation, never by Tab, so the ring would

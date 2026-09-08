@@ -7,6 +7,9 @@ interface DocLink {
   path: string;
   label: string;
   icon: string;
+  // A product logo instead of a Material glyph. Meerkat has one, and a real logo
+  // says what `shield_person` could only gesture at.
+  svg?: string;
 }
 
 @Component({
@@ -49,7 +52,7 @@ export class AppComponent {
     { path: '/swarm', label: 'Swarm', icon: 'dns' },
     { path: '/kubernetes', label: 'Kubernetes', icon: 'hub' },
     { path: '/security', label: 'Security model', icon: 'shield' },
-    { path: '/meerkat', label: 'Meerkat', icon: 'shield_person' },
+    { path: '/meerkat', label: 'Meerkat', icon: 'shield_person', svg: 'assets/meerkat-logo.svg' },
     { path: '/troubleshooting', label: 'Troubleshooting', icon: 'troubleshoot' },
     { path: '/continuous-deployment', label: 'CD & GitOps', icon: 'autorenew' },
     { path: '/coverage', label: 'Coverage matrix', icon: 'table_chart' },

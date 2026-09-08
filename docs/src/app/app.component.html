@@ -91,7 +91,11 @@
               [routerLinkActiveOptions]="{ exact: link.path === '/' }"
               class="side-link"
             >
+            @if (link.svg) {
+              <img class="side-logo" [src]="link.svg" alt="" aria-hidden="true" />
+            } @else {
               <mat-icon>{{ link.icon }}</mat-icon>
+            }
               <span>{{ link.label }}</span>
             </a>
           }
