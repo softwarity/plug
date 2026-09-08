@@ -85,13 +85,11 @@ import { RouterLink } from '@angular/router';
     <h2>How plug compares</h2>
 
     <p>
-      plug isn't the only way to run local code against a remote cluster -
       <a href="https://metalbear.com/mirrord/" target="_blank" rel="noopener">mirrord</a> and
       <a href="https://telepresence.io/" target="_blank" rel="noopener">Telepresence</a> are the
-      well-known <strong>Kubernetes-native</strong> tools, more mature on Kubernetes and on team
-      workflows. plug's angle is different: it works the same on Docker, Compose, Swarm
-      <em>and</em> Kubernetes, and it is deliberately simple - and auth-less, so only for dev
-      clusters you trust.
+      well-known <strong>Kubernetes-native</strong> tools for running local code against a remote
+      cluster. plug's angle is different: the same behaviour on Docker, Compose, Swarm
+      <em>and</em> Kubernetes, and nothing to hold on a developer's machine.
     </p>
 
     <div class="cmp">
@@ -100,52 +98,38 @@ import { RouterLink } from '@angular/router';
           <tr><th></th><th scope="col">plug</th><th scope="col">mirrord</th><th scope="col">Telepresence</th></tr>
         </thead>
         <tbody>
-          <tr><td>Targets</td><td>Docker · Compose · Swarm · Kubernetes</td><td>Kubernetes</td><td>Kubernetes / OpenShift</td></tr>
-          <tr><td>Setup, your machine</td><td><code>ssh get@&lt;cluster&gt; install | sh</code> - the CLI is served BY the cluster, so its version always matches the agent, and it writes your profile for you</td><td>brew / curl / choco, or an IDE extension</td><td>package or installer, or an IDE extension</td></tr>
-          <tr><td>What each developer must hold</td><td><strong>nothing but plug</strong> and network access to the agent - no Kubernetes tooling, no account in the cluster</td><td>a kubeconfig granting rights on the cluster, per developer</td><td>a kubeconfig granting rights on the cluster, per developer</td></tr>
-          <tr><td>Mechanism</td><td>userspace TUN over SSH, by name</td><td>mirrors a remote pod's traffic / env / files into your process</td><td>in-cluster traffic-manager + intercepts</td></tr>
-          <tr><td>Both directions</td><td>reach by name + be reachable by name</td><td>steal / mirror incoming + outbound context</td><td>intercept incoming + outbound</td></tr>
-          <tr><td>Run a CONTAINER as a cluster member</td><td><code>--dockerrun</code>: an unmodified image joins the cluster, no Dockerfile change</td><td><code>mirrord container</code> (docker, podman, nerdctl)</td><td><code>--docker-run</code> / <code>--docker</code></td></tr>
+          <tr><td>Cluster targets</td><td>Docker · Compose · Swarm · Kubernetes</td><td>Kubernetes</td><td>Kubernetes / OpenShift</td></tr>
+          <tr><td>Your machine</td><td>Linux · macOS · Windows (amd64 + arm64)</td><td>Linux · macOS · Windows</td><td>Linux · macOS · Windows</td></tr>
+          <tr><td>What a developer needs</td><td><strong>plug, and a route to the agent</strong></td><td>a kubeconfig with rights on the cluster</td><td>a kubeconfig with rights on the cluster</td></tr>
+          <tr><td>Setup, your machine</td><td>one ssh command, served by the cluster</td><td>brew / curl / choco</td><td>package or installer</td></tr>
+          <tr><td>Setup, cluster side</td><td>one agent container</td><td>none</td><td>traffic-manager</td></tr>
+          <tr><td>Reach cluster services by name</td><td>✓</td><td>✓</td><td>✓</td></tr>
+          <tr><td>Be reachable by a cluster name</td><td>✓</td><td>✓ steal / mirror</td><td>✓ intercept</td></tr>
           <tr><td>Any runtime, no code change</td><td>✓ (IP layer)</td><td>✓</td><td>✓</td></tr>
-          <tr><td>Cluster-side</td><td>one agent container</td><td>none (uses your kubeconfig)</td><td>traffic-manager install</td></tr>
-          <tr><td>Auth</td><td>none - trusted dev cluster</td><td>your kubeconfig / RBAC</td><td>your kubeconfig / RBAC</td></tr>
-          <tr><td>Per-dev isolation on a shared service</td><td>one name, one session</td><td>Operator (header / queue split)</td><td>intercept filtering (header / path)</td></tr>
-          <tr><td>License</td><td><strong>FSL-1.1-Apache-2.0</strong> - source-available, becomes Apache-2.0 two years after each release</td><td>open source, with a paid team tier</td><td>open source, with paid cloud features</td></tr>
+          <tr><td>Run a container as a member</td><td>✓ <code>--dockerrun</code></td><td>✓ <code>mirrord container</code></td><td>✓ <code>--docker-run</code></td></tr>
+          <tr><td>Several devs on one shared service</td><td>one name, one session</td><td>header / queue split</td><td>header / path</td></tr>
+          <tr><td>Auth</td><td>none - trusted dev cluster</td><td>kubeconfig RBAC</td><td>kubeconfig RBAC</td></tr>
+          <tr><td>IDE extensions</td><td>none, CLI only</td><td>VS Code · JetBrains</td><td>JetBrains</td></tr>
+          <tr><td>Mechanism</td><td>userspace TUN over SSH</td><td>syscall layer in your process</td><td>in-cluster traffic-manager</td></tr>
+          <tr><td>Behind it</td><td>softwarity, the team behind <a routerLink="/meerkat">Meerkat</a></td><td>MetalBear</td><td>Ambassador Labs, now a CNCF project</td></tr>
+          <tr><td>License</td><td>FSL-1.1-Apache-2.0</td><td>MIT</td><td>Apache-2.0</td></tr>
         </tbody>
       </table>
     </div>
 
     <p class="cmp-note">
-      <strong>Why plug:</strong> it brings the cluster onto your own machine - you build your service
-      exactly as if it lived inside the stack, calling the others by their real names and answering
-      to its own name when they call back, with no code change. And, above all,
-      <strong>it works the same everywhere</strong>: Docker, Compose, Swarm <em>and</em> Kubernetes,
-      on Linux, macOS and Windows - where mirrord and Telepresence stop at Kubernetes. Free, with no
-      paid tier and no seat to buy, just one tiny agent - and because it captures at the IP layer,
-      every runtime works unchanged, Go and gRPC included.
+      <strong>Why plug:</strong> it behaves the same whichever backend provisions the name, and a
+      developer needs nothing but plug - no Kubernetes tooling, no account in the cluster. The setup
+      lives once in the cluster instead of on every desk, which is also why it works where a
+      kubeconfig does not exist at all: Docker, Compose, Swarm.
     </p>
 
     <p class="cmp-note">
-      <strong>Who carries the setup, and what a developer has to hold.</strong> mirrord and
-      Telepresence deploy nothing in the cluster, which reads as simpler until you ask what each
-      workstation needs: a kubeconfig granting rights on the cluster, for every developer, plus the
-      Kubernetes tooling to go with it. That is not a given on a development machine, it is an
-      access many companies hand out sparingly, and it does not exist at all on Docker, Compose or
-      Swarm. plug puts the setup <em>once</em> in the cluster - one agent container - and asks a
-      developer for nothing but plug itself and a route to that agent. The cost is not removed on
-      either side; it is carried by the cluster instead of by every desk. The flip side is on the
-      Auth row above and it is real: rights you never granted are also rights you cannot revoke or
-      audit, which is what <a routerLink="/meerkat">Meerkat</a> puts back.
-
-    <p class="cmp-note">
-      <strong>Where they are ahead, and it is worth saying:</strong> both authenticate with your
-      kubeconfig and its RBAC, where plug on its own trusts whoever reaches the agent (see the
+      <strong>Where they are ahead:</strong> both authenticate through your kubeconfig and its RBAC,
+      where plug on its own trusts whoever reaches the agent (see the
       <a routerLink="/security">security model</a>, and <a routerLink="/meerkat">Meerkat</a> for
-      named identities). mirrord also needs <strong>nothing deployed in the cluster</strong> for
-      day-to-day use, where plug asks for one agent container - though that is a cost moved rather
-      than removed, see below. Both also isolate several developers on the SAME shared service by routing
-      on a header or a path, where a plug name belongs to one session at a time. And both are older,
-      with more integrations and a larger community behind them.
+      named identities). Both split one shared service between several developers by routing on a
+      header or a path. And both are older, with IDE extensions and a larger community.
     </p>
 
     <p class="cta">
