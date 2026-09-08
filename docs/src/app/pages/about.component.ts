@@ -109,6 +109,19 @@ import { MatIconModule } from '@angular/material/icon';
       .cta {
         margin: 4px 0 8px;
       }
+      .support {
+        color: var(--text-secondary);
+        font-size: 0.88rem;
+        line-height: 1.55;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 12px 15px;
+        margin: 22px 0 8px;
+      }
+      .support strong {
+        color: var(--text-primary);
+      }
       .cta a {
         display: inline-flex;
         align-items: center;
@@ -233,6 +246,16 @@ import { MatIconModule } from '@angular/material/icon';
 
     <p class="cta">
       <a routerLink="/getting-started">Set it up <mat-icon aria-hidden="true" style="font-size:18px;width:18px;height:18px">arrow_forward</mat-icon></a>
+    </p>
+
+    <p class="support">
+      <strong>plug is free, and there is no paid tier planned.</strong> If it saves you the afternoon
+      it was built to save, you can
+      <a href="https://github.com/sponsors/softwarity" target="_blank" rel="noopener">sponsor its
+      development</a> - one-off or monthly, whatever it is worth to you. Nothing in plug is gated
+      behind it, and nothing ever will be. Companies whose use falls outside the
+      <a href="https://github.com/softwarity/plug#license" target="_blank" rel="noopener">licence</a>
+      should ask about that instead.
     </p>
   `,
 })

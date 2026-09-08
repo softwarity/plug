@@ -1,0 +1,18 @@
+# The Sponsor button on this repository, and where it leads.
+#
+# GitHub renders this as a native button at the top of the repo and in its
+# sidebar. It is not a link in the README and does not need one.
+#
+# One beneficiary, not two. A personal listing was created alongside this one and
+# left unpublished: both would have paid into the same company anyway, so the
+# second was a page to keep up to date for no money it could not already receive.
+# An entry whose listing is not live shows a button leading to "this account does
+# not accept sponsorships", which is worse than no button, so only accounts that
+# actually accept sponsorships belong here.
+github: [softwarity]
+
+# plug is free and has no paid tier. This second entry is not a price: FSL allows
+# internal use and building plug into a product, and forbids competing use. An
+# organisation that needs THAT needs a licence rather than a donation, and this is
+# where they find out how to ask.
+custom: ["https://github.com/softwarity/plug#license"]
