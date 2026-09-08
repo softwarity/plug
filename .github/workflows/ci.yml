@@ -113,7 +113,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # windows-11-arm is where the arm64 WinTUN driver meets a real arm64
+        # kernel, which no cross-compile can answer. GA and free on public
+        # repositories, which this one is. It runs the selftest only: the unit
+        # tests already cover three OSes and are architecture-independent, while
+        # opening a real device is exactly the half that is not.
+        os: [ubuntu-latest, macos-latest, windows-latest, windows-11-arm]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
@@ -169,7 +174,7 @@ jobs:
         run: bash scripts/platform-grid.sh plat
 
   build:
-    name: Build the CLI for all five platforms
+    name: Build the CLI for all six platforms
     needs: test
     runs-on: ubuntu-latest
     steps:
@@ -204,7 +209,7 @@ jobs:
           CGO_ENABLED: "0"
         run: |
           mkdir -p ../dist
-          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
             goos=${target%/*} goarch=${target#*/}
             ext=""; [ "$goos" = windows ] && ext=".exe"
             echo "building $goos/$goarch"

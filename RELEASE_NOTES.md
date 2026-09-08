@@ -48,6 +48,33 @@ twelve minutes and ran the command zero times. Whether that particular run was
 one of these is not settled - the log that would say so was not being collected
 yet, and it is now. Every one of the defects it sent us looking for is real.
 
+### Windows on Arm
+
+plug now ships `plug-windows-arm64.exe`, and the installer picks it on its own.
+
+The build was the easy half: everything cross-compiles with cgo disabled, so
+adding the target is one entry in a list. The rest was contracts.
+
+The WinTUN driver is per-architecture, and the `wintun` verb has always answered
+one file. Making that verb architecture-dependent would have handed an arm64
+driver to every amd64 machine on its next update and broken a datapath that was
+working, so `wintun` stays amd64 for ever and arm64 asks for `wintun-arm64`, the
+same shape `<os>-<arch>` has always had for the binaries. An agent too old to
+know the suffixed verb says so, and the installer names that case rather than
+writing a driver that cannot load.
+
+The installer does NOT ask `uname` which machine it is on, and that is
+deliberate: an x86_64 Git Bash runs perfectly well on an arm64 box under
+emulation and reports x86_64 there. It asks Windows, through
+`PROCESSOR_ARCHITEW6432` and `PROCESSOR_ARCHITECTURE`, which name the real
+machine even from an emulated process.
+
+And it is tested rather than assumed. A `windows-11-arm` runner now runs the TUN
+selftest, so the arm64 driver meets a real arm64 kernel on every push, and that
+result is in the verdict the publication gate reads: a red arm64 selftest blocks
+the image like any other. A platform exercised but not gated is a platform
+nobody is watching.
+
 ---
 
 ## 2.14.1

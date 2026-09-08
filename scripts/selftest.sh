@@ -50,7 +50,13 @@ if [ "$os" = Windows ]; then
   echo "$wintun_sha  wintun.zip" | sha256sum -c - \
     || { echo "selftest: wintun.zip is not the archive this build expects"; exit 1; }
   powershell -Command "Expand-Archive -Path wintun.zip -DestinationPath wtun -Force"
-  cp wtun/wintun/bin/amd64/wintun.dll .
+  # The dll must match the MACHINE, not the archive's first folder. go env is the
+  # honest source here: it is the same toolchain that just built the binary this
+  # selftest is about to run, so the two can never disagree - where `uname -m`
+  # under an emulated Git Bash on an arm64 runner cheerfully reports x86_64 and
+  # would hand an amd64 driver to an arm64 kernel.
+  wtun_arch="$(go env GOARCH)"
+  cp "wtun/wintun/bin/$wtun_arch/wintun.dll" .
 fi
 
 # The fake-VPN probe (opt-in, see tun.SelfTest): fabricate what a VPN does to

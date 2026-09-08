@@ -436,7 +436,17 @@ func updateLauncher(cfg config, remote string) {
 	}
 	if runtime.GOOS == "windows" {
 		// wintun.dll lives beside the exe and comes from the agent too.
-		if dll, err := getDownload(cfg, "wintun", "wintun.dll"); err == nil && len(dll) > 100_000 {
+		//
+		// `wintun` is the amd64 driver and stays that way for every launcher
+		// already installed; arm64 asks for the suffixed verb. An agent too old
+		// to know it returns an error, and the existing dll is simply left alone
+		// - which is right: a working driver beside a freshly updated exe beats
+		// no driver at all, and the exe itself was served by the same agent.
+		wintunVerb := "wintun"
+		if runtime.GOARCH == "arm64" {
+			wintunVerb = "wintun-arm64"
+		}
+		if dll, err := getDownload(cfg, wintunVerb, "wintun.dll"); err == nil && len(dll) > 100_000 {
 			_ = os.WriteFile(filepath.Join(filepath.Dir(self), "wintun.dll"), dll, 0o644)
 		}
 	}

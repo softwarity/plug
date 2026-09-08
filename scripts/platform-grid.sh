@@ -36,6 +36,7 @@ out "| Platform | Build + unit tests | TUN selftest (real device, by name) |"
 out "|---|---|---|"
 out "| 🍎 macOS   | $(cell test-macos-latest.txt)   | $(cell selftest-macos-latest.txt)   |"
 out "| 🪟 Windows | $(cell test-windows-latest.txt) | $(cell selftest-windows-latest.txt) |"
+out "| 🪟 Windows arm64 | - | $(cell selftest-windows-11-arm.txt) |"
 out "| 🐧 Linux   | $(cell test-ubuntu-latest.txt)  | $(cell selftest-ubuntu-latest.txt)  |"
 out ""
 out "_TUN selftest = a real utun / WinTUN / tun device, traffic looped BY NAME, plus a fabricated VPN whose resolver plug must follow up and back down. The e2e protocol matrix (7 services × 4 languages) is Linux-only — Docker._"
@@ -45,8 +46,14 @@ out "_TUN selftest = a real utun / WinTUN / tun device, traffic looped BY NAME, 
 # that treats silence as consent is not a gate.
 verdict=pass
 bad=""
+# windows-11-arm carries a selftest and no unit-test marker: the unit tests run
+# on three OSes, and what arm64 adds is a REAL WinTUN device on a real arm
+# kernel, which is the half that could differ. It is in this list, so a red one
+# blocks publication like any other - a platform exercised but not gated is a
+# platform nobody is watching.
 for m in test-macos-latest test-windows-latest test-ubuntu-latest \
-  selftest-macos-latest selftest-windows-latest selftest-ubuntu-latest; do
+  selftest-macos-latest selftest-windows-latest selftest-ubuntu-latest \
+  selftest-windows-11-arm; do
   case "$(cat "$dir/$m.txt" 2>/dev/null)" in
     PASS | success) ;;
     "") verdict=fail; bad="$bad $m(missing)" ;;

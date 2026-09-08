@@ -30,7 +30,7 @@ WORKDIR /src/cli
 RUN mkdir -p /out/bin && \
     if [ -n "${GIT_REV}" ]; then V="${VERSION}+${GIT_REV}"; else V="${VERSION}"; fi && \
     if [ -n "${FLAVOUR}" ]; then V="${V}-${FLAVOUR}"; fi && \
-    for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do \
+    for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do \
       os=${t%/*}; arch=${t#*/}; ext=""; [ "$os" = windows ] && ext=".exe"; \
       CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
         -ldflags "-s -w -X main.version=$V" \
@@ -92,7 +92,10 @@ RUN for i in 1 2 3; do apk add --no-cache curl unzip && break; \
     done; [ -x /usr/bin/curl ] && \
     curl -fsSL --retry 3 --retry-connrefused "https://www.wintun.net/builds/wintun-${WINTUN_VERSION}.zip" -o /tmp/wintun.zip && \
     echo "${WINTUN_SHA256}  /tmp/wintun.zip" | sha256sum -c - && \
-    unzip -j /tmp/wintun.zip 'wintun/bin/amd64/wintun.dll' -d /out
+    unzip -j /tmp/wintun.zip 'wintun/bin/amd64/wintun.dll' -d /out && \
+    mv /out/wintun.dll /out/wintun-amd64.dll && \
+    unzip -j /tmp/wintun.zip 'wintun/bin/arm64/wintun.dll' -d /out && \
+    mv /out/wintun.dll /out/wintun-arm64.dll
 
 FROM alpine:3.24
 
@@ -150,7 +153,13 @@ COPY --from=build --chmod=755 /out/plug-agent /usr/local/bin/plug-agent
 # to create /opt/plug would apply its mode to the directory itself, and the
 # serve-binary script has to traverse it. By now /opt/plug is already 0755, so
 # these only set their own files' modes.
-COPY --from=build /out/wintun.dll /opt/plug/wintun.dll
+# The amd64 DLL keeps the unsuffixed name, and that is a compatibility decision
+# rather than tidiness: the `wintun` verb has always answered one file, and every
+# Windows launcher already installed asks for it by that name. It must keep
+# getting an amd64 DLL after this image ships, or an update would hand an arm64
+# driver to an amd64 machine and break a datapath that was working.
+COPY --from=build /out/wintun-amd64.dll /opt/plug/wintun.dll
+COPY --from=build /out/wintun-arm64.dll /opt/plug/wintun-arm64.dll
 COPY --chmod=644 agent/install.sh /opt/plug/install.sh
 
 EXPOSE 22

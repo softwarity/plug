@@ -22,17 +22,28 @@ fi
 # wintun.dll: the WinTUN driver DLL, baked into the image so the Windows installer
 # fetches it from the agent (not wintun.net — no runtime external dependency, no
 # intermittent fetch). Raw binary on stdout, like the CLI binaries below.
-if [ "$verb" = "wintun" ]; then
-  if [ -f /opt/plug/wintun.dll ]; then
-    exec cat /opt/plug/wintun.dll
+# `wintun` answers the AMD64 dll and always will. Windows arm64 asks for
+# `wintun-arm64` instead, the same shape as `<os>-<arch>` for the binaries, and
+# for the same reason: every Windows launcher already installed asks for `wintun`
+# by that bare name, so making it architecture-dependent would hand an arm64
+# driver to an amd64 machine on its next update and break a datapath that worked.
+# A launcher too old to know the suffixed verb gets the usage text and says the
+# download failed, which is the existing contract for an agent that cannot serve
+# what was asked.
+if [ "$verb" = "wintun" ] || [ "$verb" = "wintun-amd64" ] || [ "$verb" = "wintun-arm64" ]; then
+  wf=/opt/plug/wintun.dll
+  [ "$verb" = "wintun-arm64" ] && wf=/opt/plug/wintun-arm64.dll
+  if [ -f "$wf" ]; then
+    exec cat "$wf"
   fi
-  echo "plug: wintun.dll missing from this agent image" >&2
+  echo "plug: $(basename "$wf") missing from this agent image" >&2
   exit 1
 fi
 
-# install-windows: stream the Git Bash installer. Windows is a single target
-# (amd64), so the script downloads plug-windows-amd64.exe + wintun.dll over ssh
-# (the `windows-amd64` / `wintun` verbs) rather than embedding them. It is bash —
+# install-windows: stream the Git Bash installer. It downloads the exe and the
+# dll over ssh (the `windows-<arch>` and `wintun[-arch]` verbs) rather than
+# embedding them, and it picks the architecture from what WINDOWS reports rather
+# than from uname, which lies under emulation. It is bash —
 # not PowerShell — because Git Bash is the assumed Windows shell and a piped bash
 # script's `exit` is reliable. Versioned at agent/install.sh, baked in at
 # /opt/plug/install.sh. Invoke it with:

@@ -33,10 +33,26 @@ mkdir -p "$DIR"
 # EOF — so ssh would stream the whole binary yet never exit, hanging the install.
 SSH_OPTS=(-n -p "$PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o BatchMode=yes)
 
+# 0. Which Windows. NOT `uname -m`, and the trap is worth spelling out: an x86_64
+#    Git Bash runs perfectly well on an arm64 machine under emulation and reports
+#    x86_64 there. Believing it would install an amd64 plug on an arm64 box - it
+#    would even start, emulated - and then hand an amd64 WinTUN driver to an arm64
+#    kernel, which is not a thing that can work. Windows answers this itself:
+#    PROCESSOR_ARCHITEW6432 is set when the process is emulated or 32-bit and
+#    names the REAL machine; PROCESSOR_ARCHITECTURE names it otherwise. uname is
+#    kept as a last resort for an environment that exposes neither.
+_pa="${PROCESSOR_ARCHITEW6432:-${PROCESSOR_ARCHITECTURE:-}}"
+case "$(printf '%s' "$_pa" | tr 'A-Z' 'a-z')" in
+  arm64|aarch64) ARCH=arm64 ;;
+  amd64|x86_64)  ARCH=amd64 ;;
+  *) case "$(uname -m)" in aarch64|arm64) ARCH=arm64 ;; *) ARCH=amd64 ;; esac ;;
+esac
+info "this machine is windows-$ARCH"
+
 # 1. plug.exe — streamed raw over ssh to a FILE (a bash redirect: byte-exact, and
 #    unlike Go's captured pipe it doesn't hang the Windows ssh).
 info "downloading plug.exe from $HOST ..."
-ssh "${SSH_OPTS[@]}" "get@$HOST" windows-amd64 > "$DIR/plug.exe"
+ssh "${SSH_OPTS[@]}" "get@$HOST" "windows-$ARCH" > "$DIR/plug.exe"
 sz=$(wc -c < "$DIR/plug.exe" | tr -d ' ')
 [ "${sz:-0}" -gt 1000000 ] || die "plug.exe download failed ($sz bytes)"
 [ "$(head -c2 "$DIR/plug.exe")" = "MZ" ] || die "plug.exe is not a Windows executable (bad PE header)"
@@ -45,9 +61,16 @@ info "installed to $DIR/plug.exe"
 # 2. wintun.dll — from the AGENT (baked into the image), not wintun.net: no runtime
 #    dependency on an external host, and no more intermittent fetch. WinTUN loads it
 #    from the exe's own dir, so it lands beside plug.exe.
+#    `wintun` is the amd64 dll and stays that way, so arm64 asks for the suffixed
+#    verb - an agent too old to know it answers its usage text, which fails the
+#    size check below with a clear message rather than installing a driver that
+#    cannot load.
 info "downloading wintun.dll ..."
-ssh "${SSH_OPTS[@]}" "get@$HOST" wintun > "$DIR/wintun.dll"
-[ "$(wc -c < "$DIR/wintun.dll" | tr -d ' ')" -gt 100000 ] || die "wintun.dll download failed"
+_wv=wintun
+[ "$ARCH" = arm64 ] && _wv=wintun-arm64
+ssh "${SSH_OPTS[@]}" "get@$HOST" "$_wv" > "$DIR/wintun.dll"
+[ "$(wc -c < "$DIR/wintun.dll" | tr -d ' ')" -gt 100000 ] || \
+  die "wintun.dll download failed (asked '$_wv'; an agent older than windows-arm64 support does not serve it)"
 info "installed wintun.dll"
 
 # 3. Profile, named after the host (a second cluster adds a second profile).
