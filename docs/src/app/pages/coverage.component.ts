@@ -195,8 +195,8 @@ export class CoverageComponent {
     },
     {
       sev: 'warn',
-      t: 'Long-lived sessions & load',
-      d: 'Every CI session lives seconds with one connection at a time. Hours-long sessions, high connection counts, big transfers and laptop sleep/wake are not yet exercised.',
+      t: 'Load, and laptop sleep/wake',
+      d: 'Duration itself is covered now: a weekly soak holds one session for four hours against the PUBLISHED image, with traffic that re-resolves the name and opens a fresh connection every couple of seconds, and it asserts a trend rather than a threshold - memory, open descriptors and thread count must not climb between the first half of the run and the second, and every round must answer. What it does not do is LOAD: one connection at a time and short requests, so high connection counts and big transfers remain unexercised. Nor laptop sleep/wake, which no CI runner can perform.',
     },
   ];
 
