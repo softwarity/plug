@@ -117,14 +117,14 @@ import { RouterLink } from '@angular/router';
           <tr><td>What a developer needs</td><td class="win">the cluster's address - plug installs itself from it</td><td>a kubeconfig with rights on the cluster</td><td>a kubeconfig with rights on the cluster</td></tr>
           <tr><td>What you point it at</td><td class="win">a name - which need not exist in the cluster yet, and can still take over one that does</td><td>an existing workload, named with <code>--target</code></td><td>an existing service, to intercept</td></tr>
           <tr><td>Setup, your machine</td><td class="win">one ssh command, served by the cluster - always the version the agent runs</td><td>brew / curl / choco</td><td>package or installer</td></tr>
-          <tr><td>Setup, cluster side</td><td>one agent container</td><td>none</td><td>traffic-manager</td></tr>
+          <tr><td>Setup, cluster side</td><td>one agent container</td><td class="win">none</td><td>traffic-manager</td></tr>
           <tr><td>Reach cluster services by name</td><td>✓</td><td>✓</td><td>✓</td></tr>
           <tr><td>Be reachable by a cluster name</td><td class="win">✓ <code>-s name:8080:3000</code> - the name is provisioned for the session</td><td>by stealing or mirroring an existing pod's traffic</td><td>by intercepting an existing service</td></tr>
           <tr><td>Any runtime, no code change</td><td>✓ (IP layer)</td><td>✓</td><td>✓</td></tr>
           <tr><td>Run a container as a member</td><td>✓ <code>--dockerrun</code></td><td>✓ <code>mirrord container</code></td><td>✓ <code>--docker-run</code></td></tr>
-          <tr><td>Several devs on one shared service</td><td>one name, one session</td><td>header / queue split</td><td>header / path</td></tr>
-          <tr><td>Auth</td><td>none on its own - trusted dev cluster; named per-developer identities with <a routerLink="/meerkat">Meerkat</a></td><td>kubeconfig RBAC</td><td>kubeconfig RBAC</td></tr>
-          <tr><td>IDE extensions</td><td>none, CLI only</td><td>VS Code · JetBrains</td><td>JetBrains</td></tr>
+          <tr><td>Several devs on one shared service</td><td>one name, one session</td><td class="win">header / queue split</td><td class="win">header / path</td></tr>
+          <tr><td>Auth</td><td>none on its own - trusted dev cluster; named per-developer identities with <a routerLink="/meerkat">Meerkat</a></td><td class="win">kubeconfig RBAC</td><td class="win">kubeconfig RBAC</td></tr>
+          <tr><td>IDE extensions</td><td>none, CLI only</td><td class="win">VS Code · JetBrains</td><td>JetBrains</td></tr>
           <tr><td>Mechanism</td><td>userspace TUN over SSH</td><td>syscall layer in your process</td><td>in-cluster traffic-manager</td></tr>
           <tr><td>Behind it</td><td>softwarity, the team behind <a routerLink="/meerkat">Meerkat</a></td><td>MetalBear</td><td>Ambassador Labs, now a CNCF project</td></tr>
           <tr><td>License</td><td>FSL-1.1-Apache-2.0</td><td>MIT</td><td>Apache-2.0</td></tr>
@@ -132,7 +132,7 @@ import { RouterLink } from '@angular/router';
       </table>
     </div>
 
-    <p class="cmp-legend">Green marks where plug is ahead on the fact stated in that row.</p>
+    <p class="cmp-legend">Green marks whichever tool is ahead on the fact stated in that row - including when it is not plug. Rows where two of them are level are left plain.</p>
 
     <p class="cmp-note">
       <strong>Why plug:</strong> it behaves the same whichever backend provisions the name, and a
