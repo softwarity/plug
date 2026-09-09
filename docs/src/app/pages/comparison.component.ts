@@ -113,13 +113,13 @@ import { RouterLink } from '@angular/router';
         </thead>
         <tbody>
           <tr><td>Cluster targets</td><td class="win">Docker · Compose · Swarm · Kubernetes</td><td>Kubernetes</td><td>Kubernetes / OpenShift</td></tr>
-          <tr><td>Your machine</td><td>Linux · macOS · Windows (amd64 + arm64)</td><td>Linux · macOS · Windows</td><td>Linux · macOS · Windows</td></tr>
+          <tr><td>Your machine</td><td>Linux · macOS · Windows - amd64 <em>and</em> arm64 on all three</td><td>Linux · macOS · Windows - arm64 on Linux and macOS, Windows is amd64 only</td><td>Linux · macOS · Windows - amd64 and arm64 on all three</td></tr>
           <tr><td>What a developer needs</td><td class="win">the cluster's address - plug installs itself from it</td><td>a kubeconfig with rights on the cluster</td><td>a kubeconfig with rights on the cluster</td></tr>
           <tr><td>What you point it at</td><td class="win">a name - which need not exist in the cluster yet, and can still take over one that does</td><td>an existing workload, named with <code>--target</code></td><td>an existing service, to intercept</td></tr>
           <tr><td>Setup, your machine</td><td class="win">one ssh command, served by the cluster - always the version the agent runs</td><td>brew / curl / choco</td><td>package or installer</td></tr>
           <tr><td>Setup, cluster side</td><td>one agent container</td><td>none</td><td>traffic-manager</td></tr>
           <tr><td>Reach cluster services by name</td><td>✓</td><td>✓</td><td>✓</td></tr>
-          <tr><td>Be reachable by a cluster name</td><td>✓</td><td>✓ steal / mirror</td><td>✓ intercept</td></tr>
+          <tr><td>Be reachable by a cluster name</td><td class="win">✓ <code>-s name:8080:3000</code> - the name is provisioned for the session</td><td>by stealing or mirroring an existing pod's traffic</td><td>by intercepting an existing service</td></tr>
           <tr><td>Any runtime, no code change</td><td>✓ (IP layer)</td><td>✓</td><td>✓</td></tr>
           <tr><td>Run a container as a member</td><td>✓ <code>--dockerrun</code></td><td>✓ <code>mirrord container</code></td><td>✓ <code>--docker-run</code></td></tr>
           <tr><td>Several devs on one shared service</td><td>one name, one session</td><td>header / queue split</td><td>header / path</td></tr>
