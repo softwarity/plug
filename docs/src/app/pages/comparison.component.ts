@@ -113,7 +113,7 @@ import { RouterLink } from '@angular/router';
         </thead>
         <tbody>
           <tr><td>Cluster targets</td><td class="win">Docker · Compose · Swarm · Kubernetes</td><td>Kubernetes</td><td>Kubernetes / OpenShift</td></tr>
-          <tr><td>Your machine</td><td class="win">Linux · macOS · Windows - amd64 <em>and</em> arm64 on all three</td><td>Linux · macOS · Windows - arm64 on Linux and macOS, Windows is amd64 only</td><td class="win">Linux · macOS · Windows - amd64 and arm64 on all three</td></tr>
+          <tr><td>Your machine</td><td class="win">Linux - amd64, arm64<br />macOS - amd64, arm64<br />Windows - amd64, arm64</td><td>Linux - amd64, arm64<br />macOS - amd64, arm64<br />Windows - amd64</td><td class="win">Linux - amd64, arm64<br />macOS - amd64, arm64<br />Windows - amd64, arm64</td></tr>
           <tr><td>What a developer needs</td><td class="win">the cluster's address - plug installs itself from it</td><td>a kubeconfig with rights on the cluster</td><td>a kubeconfig with rights on the cluster</td></tr>
           <tr><td>What you point it at</td><td class="win">a name - which need not exist in the cluster yet, and can still take over one that does</td><td>an existing workload, named with <code>--target</code></td><td>an existing service, to intercept</td></tr>
           <tr><td>Setup, your machine</td><td class="win">one ssh command, served by the cluster - always the version the agent runs</td><td>brew / curl / choco</td><td>package or installer</td></tr>
