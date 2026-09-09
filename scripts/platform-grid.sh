@@ -39,7 +39,7 @@ out "| 🪟 Windows | $(cell test-windows-latest.txt) | $(cell selftest-windows-
 out "| 🪟 Windows arm64 | - | $(cell selftest-windows-11-arm.txt) |"
 out "| 🐧 Linux   | $(cell test-ubuntu-latest.txt)  | $(cell selftest-ubuntu-latest.txt)  |"
 out ""
-out "_TUN selftest = a real utun / WinTUN / tun device, traffic looped BY NAME, plus a fabricated VPN whose resolver plug must follow up and back down. The e2e protocol matrix (7 services × 4 languages) is Linux-only — Docker._"
+out "_TUN selftest = a real utun / WinTUN / tun device, traffic looped BY NAME, plus a fabricated VPN whose resolver plug must follow up and back down. The e2e protocol matrix (8 protocols × 4 languages) runs natively on all three._"
 
 # The verdict, from the same markers the grid just rendered. A MISSING marker is
 # a fail, not a blank: it means a job never got to say how it went, and a gate
