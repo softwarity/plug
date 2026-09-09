@@ -48,6 +48,20 @@ import { RouterLink } from '@angular/router';
         background: rgba(163, 113, 247, 0.08);
         color: var(--text-primary);
       }
+      /* Where plug is ahead. Declared AFTER the column rule on purpose: both have
+         the same specificity, so the later one wins and the green replaces the
+         column's purple rather than fighting it. Only cells that are ahead on a
+         fact stated in the same row - nothing here is highlighted for emphasis. */
+      .cmp td.win {
+        background: rgba(63, 185, 80, 0.14);
+        color: var(--text-primary);
+        font-weight: 600;
+      }
+      .cmp-legend {
+        color: var(--text-muted);
+        font-size: 0.78rem;
+        margin: -10px 0 18px;
+      }
       .cmp-note {
         color: var(--text-secondary);
         font-size: 0.88rem;
@@ -98,11 +112,11 @@ import { RouterLink } from '@angular/router';
           <tr><th></th><th scope="col">plug</th><th scope="col">mirrord</th><th scope="col">Telepresence</th></tr>
         </thead>
         <tbody>
-          <tr><td>Cluster targets</td><td>Docker · Compose · Swarm · Kubernetes</td><td>Kubernetes</td><td>Kubernetes / OpenShift</td></tr>
+          <tr><td>Cluster targets</td><td class="win">Docker · Compose · Swarm · Kubernetes</td><td>Kubernetes</td><td>Kubernetes / OpenShift</td></tr>
           <tr><td>Your machine</td><td>Linux · macOS · Windows (amd64 + arm64)</td><td>Linux · macOS · Windows</td><td>Linux · macOS · Windows</td></tr>
-          <tr><td>What a developer needs</td><td><strong>the cluster's address</strong> - plug installs itself from it</td><td>a kubeconfig with rights on the cluster</td><td>a kubeconfig with rights on the cluster</td></tr>
-          <tr><td>What you point it at</td><td>a <strong>name</strong> - which need not exist in the cluster yet, and can still take over one that does</td><td>an existing workload, named with <code>--target</code></td><td>an existing service, to intercept</td></tr>
-          <tr><td>Setup, your machine</td><td>one ssh command, served by the cluster</td><td>brew / curl / choco</td><td>package or installer</td></tr>
+          <tr><td>What a developer needs</td><td class="win">the cluster's address - plug installs itself from it</td><td>a kubeconfig with rights on the cluster</td><td>a kubeconfig with rights on the cluster</td></tr>
+          <tr><td>What you point it at</td><td class="win">a name - which need not exist in the cluster yet, and can still take over one that does</td><td>an existing workload, named with <code>--target</code></td><td>an existing service, to intercept</td></tr>
+          <tr><td>Setup, your machine</td><td class="win">one ssh command, served by the cluster - always the version the agent runs</td><td>brew / curl / choco</td><td>package or installer</td></tr>
           <tr><td>Setup, cluster side</td><td>one agent container</td><td>none</td><td>traffic-manager</td></tr>
           <tr><td>Reach cluster services by name</td><td>✓</td><td>✓</td><td>✓</td></tr>
           <tr><td>Be reachable by a cluster name</td><td>✓</td><td>✓ steal / mirror</td><td>✓ intercept</td></tr>
@@ -117,6 +131,8 @@ import { RouterLink } from '@angular/router';
         </tbody>
       </table>
     </div>
+
+    <p class="cmp-legend">Green marks where plug is ahead on the fact stated in that row.</p>
 
     <p class="cmp-note">
       <strong>Why plug:</strong> it behaves the same whichever backend provisions the name, and a
