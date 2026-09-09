@@ -100,7 +100,7 @@ import { RouterLink } from '@angular/router';
         <tbody>
           <tr><td>Cluster targets</td><td>Docker · Compose · Swarm · Kubernetes</td><td>Kubernetes</td><td>Kubernetes / OpenShift</td></tr>
           <tr><td>Your machine</td><td>Linux · macOS · Windows (amd64 + arm64)</td><td>Linux · macOS · Windows</td><td>Linux · macOS · Windows</td></tr>
-          <tr><td>What a developer needs</td><td><strong>plug, and a route to the agent</strong></td><td>a kubeconfig with rights on the cluster</td><td>a kubeconfig with rights on the cluster</td></tr>
+          <tr><td>What a developer needs</td><td><strong>the cluster's address</strong> - plug installs itself from it</td><td>a kubeconfig with rights on the cluster</td><td>a kubeconfig with rights on the cluster</td></tr>
           <tr><td>Setup, your machine</td><td>one ssh command, served by the cluster</td><td>brew / curl / choco</td><td>package or installer</td></tr>
           <tr><td>Setup, cluster side</td><td>one agent container</td><td>none</td><td>traffic-manager</td></tr>
           <tr><td>Reach cluster services by name</td><td>✓</td><td>✓</td><td>✓</td></tr>
@@ -108,7 +108,7 @@ import { RouterLink } from '@angular/router';
           <tr><td>Any runtime, no code change</td><td>✓ (IP layer)</td><td>✓</td><td>✓</td></tr>
           <tr><td>Run a container as a member</td><td>✓ <code>--dockerrun</code></td><td>✓ <code>mirrord container</code></td><td>✓ <code>--docker-run</code></td></tr>
           <tr><td>Several devs on one shared service</td><td>one name, one session</td><td>header / queue split</td><td>header / path</td></tr>
-          <tr><td>Auth</td><td>none - trusted dev cluster</td><td>kubeconfig RBAC</td><td>kubeconfig RBAC</td></tr>
+          <tr><td>Auth</td><td>none on its own - trusted dev cluster; named per-developer identities with <a routerLink="/meerkat">Meerkat</a></td><td>kubeconfig RBAC</td><td>kubeconfig RBAC</td></tr>
           <tr><td>IDE extensions</td><td>none, CLI only</td><td>VS Code · JetBrains</td><td>JetBrains</td></tr>
           <tr><td>Mechanism</td><td>userspace TUN over SSH</td><td>syscall layer in your process</td><td>in-cluster traffic-manager</td></tr>
           <tr><td>Behind it</td><td>softwarity, the team behind <a routerLink="/meerkat">Meerkat</a></td><td>MetalBear</td><td>Ambassador Labs, now a CNCF project</td></tr>
