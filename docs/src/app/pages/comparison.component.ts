@@ -101,6 +101,7 @@ import { RouterLink } from '@angular/router';
           <tr><td>Cluster targets</td><td>Docker · Compose · Swarm · Kubernetes</td><td>Kubernetes</td><td>Kubernetes / OpenShift</td></tr>
           <tr><td>Your machine</td><td>Linux · macOS · Windows (amd64 + arm64)</td><td>Linux · macOS · Windows</td><td>Linux · macOS · Windows</td></tr>
           <tr><td>What a developer needs</td><td><strong>the cluster's address</strong> - plug installs itself from it</td><td>a kubeconfig with rights on the cluster</td><td>a kubeconfig with rights on the cluster</td></tr>
+          <tr><td>What you point it at</td><td>a <strong>name</strong> - which need not exist in the cluster yet, and can still take over one that does</td><td>an existing workload, named with <code>--target</code></td><td>an existing service, to intercept</td></tr>
           <tr><td>Setup, your machine</td><td>one ssh command, served by the cluster</td><td>brew / curl / choco</td><td>package or installer</td></tr>
           <tr><td>Setup, cluster side</td><td>one agent container</td><td>none</td><td>traffic-manager</td></tr>
           <tr><td>Reach cluster services by name</td><td>✓</td><td>✓</td><td>✓</td></tr>
@@ -119,9 +120,19 @@ import { RouterLink } from '@angular/router';
 
     <p class="cmp-note">
       <strong>Why plug:</strong> it behaves the same whichever backend provisions the name, and a
-      developer needs nothing but plug - no Kubernetes tooling, no account in the cluster. The setup
-      lives once in the cluster instead of on every desk, which is also why it works where a
-      kubeconfig does not exist at all: Docker, Compose, Swarm.
+      developer needs nothing but the cluster's address - no Kubernetes tooling, no account in the
+      cluster. The setup lives once in the cluster instead of on every desk, which is also why it
+      works where a kubeconfig does not exist at all: Docker, Compose, Swarm.
+    </p>
+
+    <p class="cmp-note">
+      <strong>And there is nothing to point at.</strong> Both of the others work by substitution:
+      you name an existing workload and they stand in its place, which is why they need a target and
+      a dialog to pick it. plug ADDS a member to the cluster, so you declare a name and that is the
+      whole of it - a name that <em>does not have to exist yet</em>. The service you are writing
+      right now, which is deployed nowhere, is reachable from the rest of the stack by its future
+      name. And when a deployed workload does own that name, plug parks it for the session and puts
+      it back on the way out.
     </p>
 
     <p class="cmp-note">
