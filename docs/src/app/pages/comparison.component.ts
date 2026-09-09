@@ -113,7 +113,7 @@ import { RouterLink } from '@angular/router';
         </thead>
         <tbody>
           <tr><td>Cluster targets</td><td class="win">Docker · Compose · Swarm · Kubernetes</td><td>Kubernetes</td><td>Kubernetes / OpenShift</td></tr>
-          <tr><td>Your machine</td><td>Linux · macOS · Windows - amd64 <em>and</em> arm64 on all three</td><td>Linux · macOS · Windows - arm64 on Linux and macOS, Windows is amd64 only</td><td>Linux · macOS · Windows - amd64 and arm64 on all three</td></tr>
+          <tr><td>Your machine</td><td class="win">Linux · macOS · Windows - amd64 <em>and</em> arm64 on all three</td><td>Linux · macOS · Windows - arm64 on Linux and macOS, Windows is amd64 only</td><td class="win">Linux · macOS · Windows - amd64 and arm64 on all three</td></tr>
           <tr><td>What a developer needs</td><td class="win">the cluster's address - plug installs itself from it</td><td>a kubeconfig with rights on the cluster</td><td>a kubeconfig with rights on the cluster</td></tr>
           <tr><td>What you point it at</td><td class="win">a name - which need not exist in the cluster yet, and can still take over one that does</td><td>an existing workload, named with <code>--target</code></td><td>an existing service, to intercept</td></tr>
           <tr><td>Setup, your machine</td><td class="win">one ssh command, served by the cluster - always the version the agent runs</td><td>brew / curl / choco</td><td>package or installer</td></tr>
@@ -132,7 +132,7 @@ import { RouterLink } from '@angular/router';
       </table>
     </div>
 
-    <p class="cmp-legend">Green marks whichever tool is ahead on the fact stated in that row - including when it is not plug. Rows where two of them are level are left plain.</p>
+    <p class="cmp-legend">Green marks whichever tool is ahead on the fact stated in that row - including when it is not plug, and both of them when two are ahead of the third. Rows where all three are level are left plain.</p>
 
     <p class="cmp-note">
       <strong>Why plug:</strong> it behaves the same whichever backend provisions the name, and a
