@@ -328,10 +328,13 @@ func doctorProfile(name string, add func(check)) {
 	defer tr.Close()
 
 	if out, err := tr.Exec("info"); err == nil && strings.HasPrefix(out, "version=") {
-		backend := "none"
+		backend, grant := "none", ""
 		for _, f := range strings.Fields(out) {
 			if v, ok := strings.CutPrefix(f, "backend="); ok {
 				backend = v
+			}
+			if v, ok := strings.CutPrefix(f, "endpoints="); ok {
+				grant = v
 			}
 		}
 		if backend == "none" {
@@ -340,6 +343,25 @@ func doctorProfile(name string, add func(check)) {
 				remedy: "mount /var/run/docker.sock (on Swarm, on a manager node), or apply plug-k8s.yaml"})
 		} else {
 			add(check{area: name, name: "-s names", status: stOK, detail: backend})
+		}
+		// The RBAC a Kubernetes agent was DEPLOYED with, which `plug update` never
+		// touches: it moves the image and never the manifest. Without the
+		// endpoints grant a served name still works, by the old shape - the agent
+		// adds `app: plug` to the Service's SELECTOR instead of writing Endpoints
+		// - and that is a field a GitOps controller may also own. When the two
+		// disagree the takeover's receipt can be dropped, and the Service is then
+		// left selecting a pod that is gone: no endpoints, no traffic. Recent
+		// agents repair that on their own at boot, which is a net and not a fix.
+		if grant == "missing" {
+			add(check{area: name, name: "endpoints grant", status: stWarn,
+				detail: "this cluster's RBAC predates it — served names go through the Service selector",
+				remedy: "re-apply deploy/plug-k8s.yaml, or grant it alone: kubectl -n <ns> patch role " +
+					"plug-serve-names --type=json -p '[{\"op\":\"add\",\"path\":\"/rules/-\"," +
+					"\"value\":{\"apiGroups\":[\"\"],\"resources\":[\"endpoints\"]," +
+					"\"verbs\":[\"get\",\"create\",\"update\",\"delete\"]}}]'"})
+		} else if grant == "granted" {
+			add(check{area: name, name: "endpoints grant", status: stOK,
+				detail: "served names carry their own Endpoints"})
 		}
 		add(check{area: name, name: "agent features", status: stOK,
 			detail: "≥ 2.2 (honest NXDOMAIN, -c, takeover)"})

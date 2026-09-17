@@ -233,6 +233,59 @@ func k8sRepointPatch(pairs []portPair, ann map[string]any) map[string]any {
 	}
 }
 
+// plugSelectorMark is the label k8sSelectorFallback ADDS to a Service's selector
+// to point it at the agent's own pods, on a cluster whose RBAC predates the
+// endpoints grant.
+const plugSelectorMarkKey, plugSelectorMarkValue = "app", "plug"
+
+// withoutPlugMark removes that mark, and says whether there was one. It is the
+// way back for a Service whose receipt is gone.
+//
+// The receipt annotation is how a takeover is normally undone, and it can be
+// lost without the selector being restored with it: a GitOps controller
+// reconciling the object drops annotations its chart does not declare, and then
+// nothing in plug knows what the selector used to be. But the mark is OURS, and
+// the fallback only ever ADDED it - so removing exactly that key returns the
+// Service to the selector it had.
+//
+// It refuses a selector that is ONLY the mark, and that guard is not theoretical:
+// the agent's own Service selects `app: plug` and nothing else. Stripping it
+// there would leave an empty selector, which matches every pod in the namespace
+// rather than none.
+func withoutPlugMark(sel map[string]string) (map[string]string, bool) {
+	if len(sel) < 2 || sel[plugSelectorMarkKey] != plugSelectorMarkValue {
+		return sel, false
+	}
+	out := make(map[string]string, len(sel)-1)
+	for k, v := range sel {
+		if k != plugSelectorMarkKey {
+			out[k] = v
+		}
+	}
+	return out, true
+}
+
+// k8sReclaimOrphanSelector puts a Service back when its receipt is gone, which is
+// the one case the restore cannot handle: no receipt, no known original, and a
+// selector naming a pod that no longer exists - so no endpoints, no traffic, and
+// a service that is simply down until somebody works out why by hand.
+func k8sReclaimOrphanSelector(ns, name string, sel map[string]string) {
+	clean, had := withoutPlugMark(sel)
+	if !had {
+		return
+	}
+	patch := map[string]any{"spec": map[string]any{"selector": selectorPatch(clean, sel)}}
+	if _, err := k8sMergePatch("/api/v1/namespaces/"+ns+"/services/"+name, patch); err != nil {
+		gcNote("Service %s/%s still points at this agent with no receipt to restore it from, and "+
+			"removing that (%v) failed - it has no endpoints until its selector loses `%s: %s`",
+			ns, name, err, plugSelectorMarkKey, plugSelectorMarkValue)
+		return
+	}
+	gcNote("Service %s/%s was left pointing at this agent by a session that died, with no receipt "+
+		"to restore it from - removed the `%s: %s` this agent had added, so its own pods answer it again",
+		ns, name, plugSelectorMarkKey, plugSelectorMarkValue)
+}
+
 // k8sSelectorFallback puts the OLD shape back: a Service selecting the agent by
 // label. It is what a cluster whose deployed RBAC predates the endpoints grant
 // gets, and it is right there: that RBAC was written for the single replica the
@@ -415,6 +468,20 @@ func k8sDropName(ns, name string) {
 	_, _ = k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/endpoints/"+name, nil, nil)
 }
 
+// k8sEndpointsGranted reports whether this agent may write the Endpoints of the
+// names it creates. A GET on a name nothing uses separates "may not touch
+// endpoints" (403) from "there is none" (404): one call, and no object created
+// to find out.
+//
+// Split out of the boot note so `info` can answer it too. The boot log is where
+// the person who applied the manifest is looking; it is NOT where the developer
+// whose service just went quiet is looking, and that gap is what let a cluster
+// run for a month on the fallback without anyone knowing.
+func k8sEndpointsGranted(ns string) bool {
+	code, _ := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/endpoints/plug-endpoints-grant-probe", nil, nil)
+	return code != 403
+}
+
 // k8sNoteEndpointsGrant says, once per boot and in the container's log, that this
 // agent will fall back to the old selector shape. A verb cannot say it: its
 // stdout and stderr are merged into the one line the CLI reads as the answer, so
@@ -427,9 +494,7 @@ func k8sNoteEndpointsGrant(ns string) {
 			"deploy/plug-k8s.yaml, or set PLUG_POD_IP from the downward API (status.podIP)")
 		return
 	}
-	// A GET on a name nothing uses separates "may not touch endpoints" (403) from
-	// "there is none" (404): one call, and no object created to find out.
-	if code, _ := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/endpoints/plug-endpoints-grant-probe", nil, nil); code == 403 {
+	if !k8sEndpointsGranted(ns) {
 		gcNote("the deployed RBAC predates the endpoints grant, so a served name will select every agent " +
 			"replica by label instead of naming this pod - right at one replica, a lottery past it. " +
 			"Re-apply deploy/plug-k8s.yaml")
@@ -490,8 +555,14 @@ func k8sServe(name string, pairs []portPair) {
 				if own := k8sReceiptOwner(existing.Metadata.Annotations[k8sParkedAnn]); own != owner && sessionLive(own) {
 					answer(nameHeldRefusal, name, heldBy(name, ownerPort(own)))
 				}
+				// What the receipt saves as "original" must not include this agent's
+				// own mark. Taking over a Service orphaned by an earlier session -
+				// repointed, receipt lost - would otherwise record the repointed
+				// selector as the way home, and every restore after that would put
+				// the breakage back.
+				original, _ := withoutPlugMark(existing.Spec.Selector)
 				receipt, rerr := k8sSignReceipt(existing.Metadata.Annotations[k8sParkedAnn], owner,
-					k8sReceipt{Selector: existing.Spec.Selector, Ports: existing.Spec.Ports})
+					k8sReceipt{Selector: original, Ports: existing.Spec.Ports})
 				if rerr != nil {
 					answer("error: recording %q's original spec: %v", name, rerr)
 				}
@@ -669,7 +740,13 @@ func k8sGC() {
 		if sessionLive(k8sReceiptOwner(s.Metadata.Annotations[k8sParkedAnn])) {
 			continue
 		}
-		_, _ = k8sRestoreParked(ns, s.Metadata.Name, s.Metadata.Annotations, s.Spec.Selector)
+		// No receipt means there is nothing to restore FROM, which used to end the
+		// matter and leave a repointed Service down for good. It only ends the
+		// restore: a selector still carrying this agent's mark is an orphan of a
+		// session that died, and that much can be undone without a receipt.
+		if parked, _ := k8sRestoreParked(ns, s.Metadata.Name, s.Metadata.Annotations, s.Spec.Selector); !parked {
+			k8sReclaimOrphanSelector(ns, s.Metadata.Name, s.Spec.Selector)
+		}
 	}
 	k8sNoteEndpointsGrant(ns)
 }

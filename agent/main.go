@@ -265,10 +265,26 @@ func doInfo(cmd []string) {
 	if w := strings.TrimSpace(os.Getenv("PLUG_WHO")); w != "" {
 		who = " who=" + w
 	}
-	if img != "" {
-		answer("version=%s backend=%s image=%s%s", ver, backend, img, who)
+	// Whether this deployment can write Endpoints, which decides HOW a served
+	// name points at the agent: its own Endpoints, or the old shape that adds
+	// `app: plug` to the Service's selector. That difference is invisible until
+	// it bites - a takeover then edits a field a GitOps controller also owns -
+	// and the only place it was ever said is the container's boot log. Said here
+	// too, so `plug doctor` can say it from the developer's own terminal. Always
+	// emitted on kubernetes, never elsewhere: an absent field means an agent too
+	// old to know rather than a grant in place.
+	grant := ""
+	if backend == "kubernetes" {
+		if k8sEndpointsGranted(k8sNamespace()) {
+			grant = " endpoints=granted"
+		} else {
+			grant = " endpoints=missing"
+		}
 	}
-	answer("version=%s backend=%s%s", ver, backend, who)
+	if img != "" {
+		answer("version=%s backend=%s image=%s%s%s", ver, backend, img, grant, who)
+	}
+	answer("version=%s backend=%s%s%s", ver, backend, grant, who)
 }
 
 func doCheckUpdate(cmd []string) {

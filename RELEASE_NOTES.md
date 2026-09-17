@@ -75,6 +75,45 @@ result is in the verdict the publication gate reads: a red arm64 selftest blocks
 the image like any other. A platform exercised but not gated is a platform
 nobody is watching.
 
+### A killed session could leave a Kubernetes Service with no way back
+
+Found in production, on a cluster that had been running this way for a month.
+
+A takeover parks the deployed workload and puts it back when the session ends.
+On Kubernetes the way back is a RECEIPT, an annotation holding the Service's
+original selector, and everything - the clean exit, the agent's boot sweep -
+reads that receipt and nothing else. Lose it and the Service keeps pointing at a
+session that no longer exists: no endpoints, no traffic, and nothing in plug able
+to work out what it used to be. The service is simply down, and stays down.
+
+Losing it is easier than it sounds. A cluster whose deployed RBAC predates the
+`endpoints` grant cannot write the Endpoints of the names it creates, so a
+takeover falls back to the older shape and adds `app: plug` to the Service's
+SELECTOR - a field a GitOps controller may also own. When Argo CD reconciled that
+Service, the receipt went with the annotations its chart does not declare, and
+the selector kept the mark.
+
+Two things change, and neither is the fix for the other.
+
+The mark is OURS, so a Service carrying it with no receipt is now repaired rather
+than abandoned: the agent removes exactly that key at boot, which returns the
+selector it had, since the fallback only ever added. It refuses a selector that
+is only the mark - the agent's own Service selects `app: plug` and nothing else,
+and stripping it there would match every pod in the namespace instead of none.
+And a takeover no longer records a repointed selector as the way home, which
+would have frozen the breakage into the next receipt.
+
+The second is why nobody knew. The agent HAD detected the missing grant, at boot,
+in the container's log, on the reasoning that this is where whoever applied the
+manifest is looking. It is not where the developer whose service just went quiet
+is looking. `plug doctor` now reports it from your own terminal, with the command
+to fix it.
+
+Worth knowing: `plug update` moves the IMAGE and never the manifest. An agent can
+therefore be perfectly current and still be running on RBAC from the day it was
+deployed, which is exactly what happened here. Updating plug does not grant
+anything; re-applying `deploy/plug-k8s.yaml` does.
+
 ---
 
 ## 2.14.1
