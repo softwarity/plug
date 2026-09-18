@@ -384,7 +384,11 @@ do_setup() {
   done
   [ "$svc_t" -lt 150 ] || echo "--- services still not answering after ${svc_t}s — the cells will say what that costs"
 
-  { echo "PLUG='$PLUG'"; echo "ip='$ip'"; echo "built='$built'"; } > "$envfile"
+  # The job's own clock, so a LATE cell can work out how long it may safely hang.
+  # See CELL_MAX below: a fixed budget protects the cells at the start of a leg
+  # and cannot protect the ones at the end, which are the ones that hang.
+  { echo "PLUG='$PLUG'"; echo "ip='$ip'"; echo "built='$built'"
+    echo "job_started='$(date +%s)'"; } > "$envfile"
   echo "state → $envfile"
   sum "### plug mesh e2e — $(uname -s)"
   sum "**install** ✅ · clients built:${built:- none}"
@@ -1741,7 +1745,7 @@ do_update() {
 # ================================ dispatch ================================
 if [ "$phase" != setup ]; then
   [ -f "$envfile" ] || { echo "no e2e state at $envfile — run the setup phase first" >&2; exit 1; }
-  . "$envfile" # PLUG, ip, built
+  . "$envfile" # PLUG, ip, built, job_started
   { [ -n "${PLUG:-}" ] && [ -x "$PLUG" ]; } || { echo "plug not usable ('${PLUG:-}') — did setup fail?" >&2; exit 1; }
 fi
 
@@ -2045,7 +2049,25 @@ do_update_tag() {
 #
 # perl's alarm rather than `timeout`: this runs on Git Bash too, and the harness
 # already relies on perl being there for the per-session bound.
+#
+# AND IT IS CAPPED BY WHAT IS LEFT OF THE JOB, which the fixed budget was not -
+# a calibration error that made this whole guard useless exactly where it was
+# needed. A leg gets 25 or 30 minutes; `resilience` is the fifteenth cell of
+# twenty-two and starts around minute twenty, so a twelve-minute alarm would ring
+# at minute thirty-two, after GitHub has killed the job. A killed job takes its
+# log with it, so the diagnosis this watchdog had just printed died with it: the
+# flake has now cost three runs and left `log not found` every time.
+#
+# So a late cell gets a SHORT alarm rather than none: whatever is left before the
+# job's own timeout, less a minute for the kill and the summary to be written
+# while the runner is still alive. A cell with no room left keeps a floor of 60s,
+# because a watchdog that fires immediately would fail healthy cells.
 CELL_MAX="${PLUG_CELL_MAX:-720}"
+if [ -n "${job_started:-}" ] && [ -n "${PLUG_JOB_MINUTES:-}" ]; then
+  cell_left=$(( job_started + PLUG_JOB_MINUTES * 60 - $(date +%s) - 60 ))
+  [ "$cell_left" -lt 60 ] && cell_left=60
+  [ "$cell_left" -lt "$CELL_MAX" ] && CELL_MAX="$cell_left"
+fi
 
 # Every process on the machine, and the two words that matter are `-A` and the
 # fallback, both of them measured rather than assumed.

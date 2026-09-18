@@ -68,6 +68,24 @@ if len(set(map(tuple, legs.values()))) != 1:
 # families stay perfectly identical AND stop proving anything, and the check that
 # is supposed to notice would agree with itself. Refused wherever it appears,
 # including on the reference family.
+# PLUG_JOB_MINUTES must equal the job's own timeout-minutes, on EVERY e2e job.
+#
+# The cell watchdog caps itself with it: a late cell computes what is left of the
+# job and takes a short alarm rather than a twelve-minute one that would ring
+# after GitHub has killed the job - and a killed job takes its log with it, which
+# is how one flake cost three runs and left "log not found" each time. A stale
+# copy of that number silently restores the bug it was written to fix, and
+# nothing else would notice.
+for job in [j for j in d["jobs"] if j.startswith("e2e-")]:
+    spec = d["jobs"][job]
+    declared = str((spec.get("env") or {}).get("PLUG_JOB_MINUTES", ""))
+    actual = str(spec.get("timeout-minutes", ""))
+    if declared != actual:
+        bad = True
+        print(f"\n{job}: PLUG_JOB_MINUTES is {declared!r} but timeout-minutes is {actual!r}")
+        print("  the cell watchdog budgets itself from the first and the runner enforces the\n"
+              "  second; a late cell would get an alarm that rings after its job is gone.")
+
 for job in jobs:
     for i, c in enumerate(block(job)):
         coe = c.get("continue-on-error")

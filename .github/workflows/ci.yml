@@ -636,6 +636,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25 # a hung cell must not run the job (and the cluster) for hours
     env:
+      # What CELL_MAX may spend: kept in step with timeout-minutes below by
+      # check-common-block.sh, because a stale copy would give a late cell a
+      # watchdog that rings after the job is already dead - which is the bug it
+      # exists to fix.
+      PLUG_JOB_MINUTES: "25"
       A: plug-cluster-${{ github.run_id }}-${{ github.run_attempt }}-a
       B: plug-cluster-${{ github.run_id }}-${{ github.run_attempt }}-b
       AGENT_IMAGE: docker.io/softwarity/plug:sha-${{ needs.start-cluster.outputs.short_sha }}-amd64
@@ -873,6 +878,11 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 25
     env:
+      # What CELL_MAX may spend: kept in step with timeout-minutes below by
+      # check-common-block.sh, because a stale copy would give a late cell a
+      # watchdog that rings after the job is already dead - which is the bug it
+      # exists to fix.
+      PLUG_JOB_MINUTES: "25"
       A: plug-cluster-${{ github.run_id }}-${{ github.run_attempt }}-a
       B: plug-cluster-${{ github.run_id }}-${{ github.run_attempt }}-b
       AGENT_IMAGE: docker.io/softwarity/plug:sha-${{ needs.start-cluster.outputs.short_sha }}-amd64
@@ -964,6 +974,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30 # compose's 25 + the extra wait for the kind rollout — a hung cell must still not run the cluster for hours
     env:
+      # What CELL_MAX may spend: kept in step with timeout-minutes below by
+      # check-common-block.sh, because a stale copy would give a late cell a
+      # watchdog that rings after the job is already dead - which is the bug it
+      # exists to fix.
+      PLUG_JOB_MINUTES: "30"
       A: plug-k8s-${{ github.run_id }}-${{ github.run_attempt }}-ka
       B: plug-k8s-${{ github.run_id }}-${{ github.run_attempt }}-kb
       AGENT_IMAGE: docker.io/softwarity/plug:sha-${{ needs.start-cluster.outputs.short_sha }}-amd64
@@ -1159,6 +1174,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
+      # What CELL_MAX may spend: kept in step with timeout-minutes below by
+      # check-common-block.sh, because a stale copy would give a late cell a
+      # watchdog that rings after the job is already dead - which is the bug it
+      # exists to fix.
+      PLUG_JOB_MINUTES: "30"
       A: plug-swarm-${{ github.run_id }}-${{ github.run_attempt }}-sa
       B: plug-swarm-${{ github.run_id }}-${{ github.run_attempt }}-sb
       AGENT_IMAGE: docker.io/softwarity/plug:sha-${{ needs.start-cluster.outputs.short_sha }}-amd64
