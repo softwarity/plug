@@ -114,6 +114,49 @@ therefore be perfectly current and still be running on RBAC from the day it was
 deployed, which is exactly what happened here. Updating plug does not grant
 anything; re-applying `deploy/plug-k8s.yaml` does.
 
+### doctor explains the captive portal you cannot reach
+
+A hotel, an airport or a train answers every DNS query with its own sign-in page
+until you authenticate, and it does that from the resolver it hands out over
+DHCP. Set 1.1.1.1 by hand and you never ask that resolver: your queries go to an
+address the network will not route before you sign in, every name fails, the
+browser is never redirected, and the page you need in order to get online is the
+one page you cannot load. Nothing is broken. The machine is asking a server it is
+not yet allowed to talk to.
+
+plug does not cause this - it neither sets those resolvers nor keeps them, it
+overwrites them for the session and hands them back at teardown - but it is what
+you are looking at when it happens, because plug is the thing that touches DNS.
+`plug doctor` now names it, and says so: the network answers DNS only from
+<its own resolver>, this machine asks Cloudflare, and that will not route until
+you sign in.
+
+The remedy names BOTH directions. Clearing the resolvers removes a setting
+somebody chose deliberately, and a remedy that destroys a choice without handing
+back the way to restore it is worse than none - so the line to put them back,
+with the current values in it, is printed beside the line that clears them.
+
+It reports with or without a session, which is the whole point: the moment you
+are stuck in front of a portal is the moment no session is running, and a check
+that needed one would be silent exactly when it is wanted.
+
+Three conditions, and all of them must hold - the resolvers in use are public
+ones, the network offered a different one, and they do not answer while the
+gateway does. That last pair is what separates "the portal is holding DNS" from
+"there is no network at all", without which this would fire on every flaky wifi.
+The two probes it needs run ONLY once everything free has already matched, so an
+ordinary machine pays nothing for the check.
+
+And the older public-resolver warning stopped naming just two addresses. Somebody
+setting one by hand is as likely to type Quad9 or OpenDNS, and the consequence
+for internal names is identical.
+
+macOS only for now, and it says nothing elsewhere rather than guessing. The rule
+is shared and tested on all three OSes; what is missing is the half that gathers
+the facts, because the commands have nothing in common - and a warning built on
+facts nobody gathered would send people to rewrite their DNS settings for a
+problem they do not have.
+
 ---
 
 ## 2.14.1

@@ -513,6 +513,24 @@ func restoreDNSBackup(path string) error {
 // SaveDNSBackup snapshots the current primary-service DNS into the cluster's
 // backup file so a kill -9 of the daemon can be repaired. Call BEFORE the DNS is
 // overridden (StartDatapath).
+// SystemResolvers reports the resolvers this machine sends dotted names to when
+// NO session is running: the addresses configured on the primary service.
+//
+// Exported for `plug doctor`, and it is the half CurrentUpstreams cannot give.
+// That one reads what the datapath PUBLISHED, so it is empty with no session -
+// and "no session" is exactly the moment somebody is stuck in front of a captive
+// portal wondering why nothing resolves. During a session this key holds plug's
+// own resolver instead, which is why the caller prefers the published upstreams
+// and falls back here.
+func SystemResolvers() []string {
+	svc, err := primaryService()
+	if err != nil {
+		return nil
+	}
+	_, servers, _ := readDNSDict("Setup:/Network/Service/" + svc + "/DNS")
+	return servers
+}
+
 func SaveDNSBackup(key string) error {
 	// Snapshot /etc/resolv.conf too — configure() restores it on a clean exit, this
 	// is the net for a crashed daemon (restored by RestoreOrphanDNS).

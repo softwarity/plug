@@ -528,17 +528,54 @@ func openBrowser(u string) {
 // stop resolving: those lookups leave the network to ask a server that has never
 // heard of them.
 func doctorDNSForwarding(add func(check)) {
-	ups := tun.CurrentUpstreams()
-	if len(ups) == 0 {
+	if ups := tun.CurrentUpstreams(); len(ups) > 0 {
+		d := "forwarding dotted names to " + strings.Join(ups, ", ")
+		st := stOK
+		for _, u := range ups {
+			// Any well-known public resolver, not the two that used to be spelled
+			// out here: somebody who sets one by hand is as likely to type Quad9
+			// or OpenDNS, and the consequence is identical.
+			if n := publicResolverName(u); n != "" {
+				st = stWarn
+				d += " - " + n + " is a PUBLIC resolver: internal names will not resolve, and these lookups leave your network"
+				break
+			}
+		}
+		add(check{area: "local", name: "dns forwarding", status: st, detail: d})
+	}
+	doctorCaptivePortal(add)
+}
+
+// doctorCaptivePortal explains the one failure people blame plug for and plug
+// did not cause: hand-set public resolvers on a network that holds DNS until you
+// sign in.
+//
+// Reported WITH OR WITHOUT a session, deliberately. The moment somebody is stuck
+// in front of a portal is the moment no session is running, so a check that
+// needed one would be silent exactly when it is wanted.
+//
+// The probes are last and conditional: they cost two timeouts, and they only run
+// once everything free has already matched.
+func doctorCaptivePortal(add func(check)) {
+	f := captiveCollect()
+	name := captiveCandidate(f)
+	if name == "" {
 		return
 	}
-	d := "forwarding dotted names to " + strings.Join(ups, ", ")
-	st := stOK
-	for _, u := range ups {
-		if strings.HasPrefix(u, "8.8.8.8") || strings.HasPrefix(u, "1.1.1.1") {
-			st = stWarn
-			d += " - a PUBLIC resolver: internal names will not resolve, and these lookups leave your network"
+	answers := false
+	for _, r := range f.configured {
+		if resolverAnswers(r, 1500*time.Millisecond) {
+			answers = true
+			break
 		}
 	}
-	add(check{area: "local", name: "dns forwarding", status: st, detail: d})
+	if captiveVerdict(f, answers, gatewayAnswers(f.gateway, 1500*time.Millisecond)) == "" {
+		return
+	}
+	add(check{area: "local", name: "captive portal", status: stWarn,
+		detail: "this network answers DNS only from " + strings.Join(f.dhcp, ", ") +
+			", and this machine asks " + name + " (" + strings.Join(f.configured, ", ") +
+			") - which it will not route until you sign in, so the portal page never loads. " +
+			"plug does not set these servers; it hands them back untouched at teardown",
+		remedy: captiveRemedy(f)})
 }
