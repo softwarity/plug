@@ -752,7 +752,22 @@ func unserveName(name, mine string) {
 }
 
 func gc() {
+	// Leases are cleared at BOOT only. A lease names the session port holding a
+	// name and is the collision guard: it is what refuses a second session the
+	// same name. An agent restart orphans every port, so the leases are all
+	// stale and go; but the periodic sweep below runs while sessions are live,
+	// and clearing there would drop the guard on every one of them, once a
+	// minute. The orchestrator sweeps decide by liveness, not by lease, and
+	// are safe to repeat.
 	clearNameLeases()
+	sweepOrchestrators()
+}
+
+// sweepOrchestrators is the part of gc that is safe to run at any time:
+// restore parked workloads whose session no longer answers, reap lingering
+// names past their grace. Each backend asks the session port before touching
+// anything, so a live session is never undone by a sweep that happens to run.
+func sweepOrchestrators() {
 	if k8sAvailable() {
 		k8sGC()
 	}

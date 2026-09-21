@@ -2,6 +2,33 @@
 
 ## NEXT RELEASE
 
+### A parked workload comes back on its own, without restarting the agent
+
+A takeover parks the deployed workload and the session's clean exit puts it
+back. That exit is a message to the agent, and the likeliest moment for it to
+fail is a network that has just gone - which is exactly when you hit Ctrl-C.
+plug said so on the way out, honestly: "anything this session parked is STILL
+parked", re-run the session or restart the agent. Both of those were you. Until
+one of them happened, a Kubernetes Service kept pointing at a port nobody
+listened on, and the deployed service was down.
+
+The boot sweep already knew how to fix this. It restores every parked workload
+whose session no longer answers, and it is why an agent restart put things right.
+It ran once, at boot, and an agent that does not restart never ran it again.
+
+It runs every minute now. Same code, same rules - a session that still answers
+its port is live and is left alone, a plug-created name inside its grace keeps
+its address warm - only WHEN changed. A workload whose session died without
+saying so is back within a minute or two, and nobody types kubectl.
+
+One thing the boot sweep does that this one must NOT: clear the name leases. A
+lease names the session port holding a name and is the collision guard, the
+thing that refuses a second session the same name. At boot every port is
+orphaned and the leases are all stale, so clearing is right; once a minute under
+live sessions it would drop the guard on every one of them. The two are separate
+functions now, and a test pins the split by routing the ticker through the boot
+sweep and watching a live lease vanish.
+
 ---
 
 ## 2.15.0

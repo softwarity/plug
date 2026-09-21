@@ -159,9 +159,12 @@ Developing a service that is **already deployed** in the stack? Its name is
 taken - so plug **takes it over**: the deployed workload is parked for the
 session (containers stopped, Swarm service scaled to 0, Kubernetes Service
 repointed) and **restored when the session ends**, replica count included,
-even across an agent restart. Your local process answers the name in its
-place; afterwards the cluster is exactly as it was. A name held by another
-live plug session is still refused.
+even across an agent restart - and even when the session never gets to say
+so: a laptop closed, a network gone at the moment of Ctrl-C. The agent checks
+every minute whether the session holding a parked workload still answers, and
+puts the workload back when it does not. Your local process answers the name
+in its place; afterwards the cluster is exactly as it was. A name held by
+another live plug session is still refused.
 
 ## Let plug pick the local port
 

@@ -116,6 +116,29 @@ import { CodeComponent } from '../code/code.component';
       meanwhile, its own teardown leaves yours alone.
     </p>
 
+    <h3>My session is over and the deployed service has not come back</h3>
+    <p>
+      A takeover parks the deployed workload and the session's clean exit puts it back. The exit
+      can fail to reach the agent - the likeliest moment is a network that has just gone, which is
+      exactly when you hit Ctrl-C - and plug says so on the way out:
+      <em>"could not release &lt;name&gt; - anything this session parked is STILL parked"</em>.
+    </p>
+    <p>
+      Nothing to do. The agent sweeps once a minute, asks whether the session holding each parked
+      workload still answers, and restores the ones whose session is gone. Give it a minute or two.
+      If it stays parked past that, the agent is older than this behaviour and only its restart
+      runs the sweep: <code>kubectl rollout restart deploy/plug</code>, or
+      <code>docker service update --force</code> on Swarm - then <code>plug update</code> so it does
+      not happen again.
+    </p>
+    <p>
+      <strong>Kubernetes with a GitOps controller</strong> (Argo CD, Flux): a takeover edits the
+      Service, and a controller that self-heals will put its own version back under your session -
+      the workload returns to normal, and your session stops receiving the name. That is the safe
+      failure. To let takeovers hold, exclude <code>spec.selector</code> from the controller's diff
+      for that Service.
+    </p>
+
     <h3>A name that exists nowhere answers "unknown host"</h3>
     <p>
       That is intended (since 2.2): plug asks the cluster before answering, so a typo or a

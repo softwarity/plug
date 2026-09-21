@@ -179,6 +179,14 @@ func Start(ctx context.Context, cfg Config) error {
 	// An agent (re)start orphans every session's dynamic name, so sweep before
 	// serving.
 	gcQuietly(cfg.Logf)
+	// And KEEP sweeping. The boot sweep was the only thing that ever restored a
+	// workload whose session died without releasing it - and an agent that does
+	// not restart never runs it again. A session's clean exit sends unserve, and
+	// the likeliest moment for that to fail is a network that has just gone,
+	// which is exactly when somebody hits Ctrl-C: the name stayed parked, the
+	// deployed Service kept pointing at a port nobody listened on, and it took a
+	// `kubectl rollout restart` of the agent to get the boot sweep to run.
+	go sweepPeriodically(ctx, cfg.Logf)
 
 	hostKey, err := cfg.Host.HostKey()
 	if err != nil {
@@ -235,6 +243,45 @@ func boolEnv(b bool) string {
 		return "1"
 	}
 	return "0"
+}
+
+// sweepInterval is how often the periodic sweep looks. A minute is long against
+// a re-arm, which the CLI finishes within a few tens of seconds of a keepalive
+// miss, and short against a workload sitting unreachable.
+const sweepInterval = time.Minute
+
+// sweepPeriodically runs the same sweep as boot, for the life of the agent.
+//
+// Same code, deliberately: the boot sweep already knows every rule - a parked
+// Service whose owner still answers is a live session and is left alone, a
+// lingering plug-created name inside its grace keeps its address warm - and a
+// second implementation would drift from the first. What this adds is only WHEN.
+//
+// The liveness check is what makes a repeated sweep safe: a session in the
+// middle of a re-arm has a dead owner port for a few seconds, and the sweep
+// asks `sessionLive` at each pass. A workload restored under a session that was
+// about to come back is put right by that session's own re-provision, which
+// re-parks it - the same recovery a boot in that window already relies on.
+func sweepPeriodically(ctx context.Context, logf func(string, ...any)) {
+	t := time.NewTicker(sweepInterval)
+	defer t.Stop()
+	// NOT gc: that also clears the name leases, which is right once at boot and
+	// wrong every minute after - see gc.
+	sweepOn(ctx, t.C, logf, sweepOrchestrators)
+}
+
+// sweepOn is the loop with its clock and its sweep handed in, so the shape can
+// be proven without an orchestrator: every tick sweeps, a sweep that panics
+// does not end the loop, and cancelling the context does.
+func sweepOn(ctx context.Context, tick <-chan time.Time, logf func(string, ...any), sweep func()) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick:
+			runQuietly("the periodic sweep", logf, sweep)
+		}
+	}
 }
 
 // gcQuietly sweeps orphaned names, best effort. The verbs it reaches call
