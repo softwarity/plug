@@ -2,6 +2,38 @@
 
 ## NEXT RELEASE
 
+### Bare cluster names resolve again on a network that announces its own search domain, on macOS
+
+A service joining `odb` by that bare name got a connect timeout, on every version
+of plug, the moment the laptop's box started announcing a DHCP search domain -
+`lan`. It had worked for weeks on the same machine. Two defects, both in how
+plug plays with macOS's resolver, and the second is the one that mattered.
+
+macOS reaches a bare name by trying each search domain in turn: `odb.lan`, then
+`odb.plug`. plug put its own suffix LAST. And mDNSResponder, on a machine whose
+resolver override lands interface-scoped, keeps only the first search domain in
+the list - the system log says so, "configuring search domains, count: 1". So
+`plug` was the entry dropped, `odb` was never tried as `odb.plug`, and nothing
+plug does was ever asked. It had worked because the box did not announce a
+domain then and plug's was alone, hence first. First is now where it goes, on
+every path that writes the list, because it is the only position that survives
+a resolver keeping one.
+
+The second defect showed once the first was out of the way. getaddrinfo asks A
+and AAAA together, and plug answered the AAAA of a foreign name - `odb.lan` -
+with NODATA, on its own, without asking anyone. NODATA means "this name exists,
+it just has no address of that type"; the A had come back NXDOMAIN from the box.
+Two answers for one name that contradict each other, and the resolver waits on
+the pair instead of moving on. The AAAA of a name that is not plug's now asks the
+upstream for the A first: NXDOMAIN there is NXDOMAIN here. It still never relays
+the AAAA itself and never returns a v6, which is what would send a client past
+the tunnel.
+
+Reproduced in a unit test on the exact case, `odb.lan` with an upstream that
+says NXDOMAIN at once - red before, green after, and the fix mutated back to
+prove the test holds it. Verified on the machine it happened on: with the fix,
+the bare name resolves and the connection reaches the tunnel.
+
 ---
 
 ## 2.15.2

@@ -112,11 +112,20 @@ func TestOurOwnNamesAreNeverRelayed(t *testing.T) {
 
 // AAAA stays NODATA on purpose: the fake addresses are v4, and answering with a
 // real v6 address would send the client straight out of the tunnel.
+//
+// What the upstream may be asked is the A of that name, to learn whether it
+// exists at all - see the odb.lan case in searchdomain_test.go. What it must
+// never be asked is the AAAA itself, and what must never come back is a v6.
 func TestAAAAIsStillNotRelayed(t *testing.T) {
 	up := newFakeUpstream(t, func(q []byte) []byte { return q })
 	resp := answerDNS(query("example.com", 28), newFaketab(fakeBase), up.dns(), nil)
-	if up.wasAsked() {
-		t.Error("an AAAA query was relayed — v6 would bypass the fake-address path")
+	select {
+	case asked := <-up.asked:
+		_, p := parseName(asked, 12)
+		if qt := int(asked[p])<<8 | int(asked[p+1]); qt == 28 {
+			t.Error("the AAAA itself was relayed — a v6 answer would bypass the fake-address path")
+		}
+	case <-time.After(300 * time.Millisecond):
 	}
 	if resp[3]&0x0F != 0 || int(resp[6])<<8|int(resp[7]) != 0 {
 		t.Errorf("AAAA should be NODATA, got rcode=%d ancount=%d", resp[3]&0x0F, int(resp[6])<<8|int(resp[7]))

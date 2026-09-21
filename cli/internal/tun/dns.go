@@ -430,7 +430,30 @@ func answerDNS(q []byte, tab *faketab, upstream *upstreamDNS, check nameChecker)
 	var answerIP net.IP
 	rcode := byte(0)
 	switch {
-	case qtype == 28: // AAAA → NODATA (force v4)
+	case qtype == 28 && !relayable(name, tab): // AAAA for a name of ours → NODATA (force v4)
+	case qtype == 28:
+		// AAAA for a name that is NOT ours. Still NODATA, never a real v6 - a v6
+		// answer would send the client straight past the tunnel - but NODATA
+		// has to be CONSISTENT with what the upstream says of the name, and
+		// that cost a whole day to learn. NODATA means "this name exists, it
+		// just has no address of that type". getaddrinfo asks A and AAAA
+		// together and walks the search list in order, so with the network's
+		// `lan` ahead of plug's `plug` a bare `odb` is first asked as `odb.lan`:
+		// the A came back NXDOMAIN from the box in a millisecond, the AAAA came
+		// back NODATA from here, and a resolver handed "does not exist" and
+		// "exists, no address" for the same name waits on the pair instead of
+		// moving on to `odb.plug`. Every process joining a cluster service by
+		// its bare name died on a connect timeout - on every version of plug
+		// back to the first, on any network whose DHCP announces a search
+		// domain. So ask the upstream for the A first: NXDOMAIN there is
+		// NXDOMAIN here, and the AAAA of a name that exists stays NODATA.
+		if upstream != nil {
+			probe := append([]byte(nil), q...)
+			binary.BigEndian.PutUint16(probe[p:], 1) // same name, type A
+			if reply := upstream.relay(name, probe); reply != nil && len(reply) > 3 && reply[3]&0x0f == 3 {
+				rcode = 3
+			}
+		}
 	case qtype != 1:
 		// Everything that is not an address: SRV, MX, PTR, TXT, NS… On macOS this
 		// stub is the resolver for the WHOLE machine, so answering NODATA broke

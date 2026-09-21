@@ -107,9 +107,34 @@ func TestNoBackupMeansNoAction(t *testing.T) {
 	scutilRemove = func(string) error { touched++; return nil }
 	restoreResolv = func(string) { touched++ }
 
+	// A HEALTHY machine, by construction rather than by reading this one: the
+	// day this test was written to read the real store, the real store was
+	// poisoned, and the test failed for being right about the wrong thing.
+	savedKeys := poisonedKeys
+	poisonedKeys = func() []string { return nil }
+	defer func() { poisonedKeys = savedKeys }()
+
 	RestoreOrphanDNS("cluster.example:2222")
 	if touched != 0 {
-		t.Errorf("a cluster with no backup still touched the machine's resolver %d times", touched)
+		t.Errorf("a cluster with no backup still touched a healthy resolver %d times", touched)
+	}
+}
+
+// And with no backup but a POISONED store, the repair must act: this is the
+// state `plug down` used to answer with "no plug daemon running" and leave.
+func TestNoBackupButAPoisonedStoreIsRepaired(t *testing.T) {
+	graftDir = t.TempDir()
+	var removed []string
+	sRemove := scutilRemove
+	defer func() { scutilRemove = sRemove }()
+	scutilRemove = func(k string) error { removed = append(removed, k); return nil }
+	savedKeys := poisonedKeys
+	poisonedKeys = func() []string { return []string{"State:/Network/Global/DNS"} }
+	defer func() { poisonedKeys = savedKeys }()
+
+	RestoreOrphanDNS("cluster.example:2222")
+	if len(removed) != 1 || removed[0] != "State:/Network/Global/DNS" {
+		t.Fatalf("the poisoned global key was not removed: %v", removed)
 	}
 }
 

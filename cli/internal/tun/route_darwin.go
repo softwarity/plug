@@ -91,7 +91,17 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 	// without one — e.g. a headless CI runner — "my-service" never reaches us. With
 	// "plug" appended, getaddrinfo also tries "my-service.plug", which lands here and
 	// answerDNS strips back to the bare name. Same mechanism as the Windows NRPT suffix.
-	searchList := append(append([]string{}, search...), searchSuffix)
+	//
+	// FIRST in the list, never last, and a day was lost to the difference.
+	// mDNSResponder does not always keep the whole list: on a machine whose
+	// override lands interface-scoped it configured "count: 1", the first entry
+	// only. With the network's own DHCP domain ahead of ours, ours was the one
+	// dropped, a bare `odb` was never tried as `odb.plug`, and every process
+	// joining a cluster service by name died on a connect timeout. It had worked
+	// for weeks on the same machine, because the box did not announce a domain
+	// then and ours was alone. First is the only position that survives a
+	// resolver keeping one.
+	searchList := append([]string{searchSuffix}, search...)
 	set := "d.init\nd.add ServerAddresses * " + dnsIP + "\nd.add SearchDomains * " + strings.Join(searchList, " ") + "\n"
 	if err := scutilSet(dnsKey, set); err != nil {
 		log.f("tun[mac]: could not repoint system DNS (%v) — cluster names may not resolve", err)
@@ -110,7 +120,7 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 	setupOverridden := len(setupServers) > 0
 	var setupSet string
 	if setupOverridden {
-		list := append(append([]string{}, setupSearch...), searchSuffix)
+		list := append([]string{searchSuffix}, setupSearch...)
 		setupSet = "d.init\nd.add ServerAddresses * " + dnsIP + "\nd.add SearchDomains * " + strings.Join(list, " ") + "\n"
 		if err := scutilSet(setupKey, setupSet); err != nil {
 			log.f("tun[mac]: could not repoint manual (Setup:) DNS (%v) — static-binary clients may not resolve", err)
@@ -247,10 +257,10 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 					setupRestore, newSetupServers, newSetupSearch = readDNSDict(setupKey)
 					setupOverridden = len(newSetupServers) > 0
 					set = "d.init\nd.add ServerAddresses * " + dnsIP + "\nd.add SearchDomains * " +
-						strings.Join(append(append([]string{}, newSearch...), searchSuffix), " ") + "\n"
+						strings.Join(append([]string{searchSuffix}, newSearch...), " ") + "\n"
 					if setupOverridden {
 						setupSet = "d.init\nd.add ServerAddresses * " + dnsIP + "\nd.add SearchDomains * " +
-							strings.Join(append(append([]string{}, newSetupSearch...), searchSuffix), " ") + "\n"
+							strings.Join(append([]string{searchSuffix}, newSetupSearch...), " ") + "\n"
 					}
 					// The teardown below follows: it restores whatever dnsKey now
 					// names. The on-disk crash net still snapshots the service
@@ -709,22 +719,37 @@ func RestoreOrphanDNS(key string) {
 	// a Global/DNS pointing into the fake range with no daemon alive is ours and
 	// is wrong, and removing it is always safe: configd recomposes the global
 	// from the services' own dicts, which is the state before plug ran.
-	if _, servers, _ := readDNSDict("State:/Network/Global/DNS"); poisonedByPlug(servers) {
-		_ = scutilRemove("State:/Network/Global/DNS")
+	for _, k := range poisonedKeys() {
+		_ = scutilRemove(k)
 	}
-	// The primary service's own dict too, for the same reason: with no snapshot
-	// to put back, dropping ours lets configd repopulate it from DHCP or the VPN.
+}
+
+// poisonedKeys lists the dynamic-store DNS keys that point at a plug resolver:
+// the global one, and the primary service's. A var so the orphan-repair tests
+// can decide what the machine looks like instead of reading the one they run
+// on - which is exactly the machine this bug lives on, some days.
+var poisonedKeys = func() []string {
+	var out []string
+	if _, servers, _ := readDNSDict("State:/Network/Global/DNS"); poisonedByPlug(servers) {
+		out = append(out, "State:/Network/Global/DNS")
+	}
+	// The primary service's own dict too: with no snapshot to put back, dropping
+	// ours lets configd repopulate it from DHCP or the VPN.
 	if svc, err := primaryService(); err == nil {
 		k := "State:/Network/Service/" + svc + "/DNS"
 		if _, servers, _ := readDNSDict(k); poisonedByPlug(servers) {
-			_ = scutilRemove(k)
+			out = append(out, k)
 		}
 	}
+	return out
 }
 
 // PoisonedViews names the DNS stores that still point at a plug resolver: the
 // global key configd renders /etc/resolv.conf from, the primary service's own
-// dict, and resolv.conf itself. Exported for doctor, which used to read only
+// dict, and resolv.conf itself.
+//
+// Distinct from poisonedKeys: that one returns store keys to REMOVE, this one
+// returns words for a person, resolv.conf included. Exported for doctor, which used to read only
 // what mDNSResponder composes - the one view that stays clean while the other
 // two are broken.
 func PoisonedViews() []string {
