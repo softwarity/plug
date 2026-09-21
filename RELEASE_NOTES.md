@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.15.0
+
 ### An agent that goes quiet no longer holds your session for ever
 
 Connecting to an agent has a fifteen second timeout, and the line that set it
