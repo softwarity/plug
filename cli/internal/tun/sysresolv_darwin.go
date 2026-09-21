@@ -4,6 +4,7 @@ package tun
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"strings"
 	"time"
@@ -37,6 +38,16 @@ func checkSystemResolver(name string, log logfn) error {
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
-	log.f("selftest: NOTE — system resolver didn't return a fake IP for %q; the datapath is fine, but the DNS repoint isn't effective in this environment (e.g. a headless CI runner). Verify on a real desktop.", name)
-	return nil
+	// No tolerance any more, and the reason is a day lost. This note was
+	// printed on EVERY macOS CI run for months, filed under "headless runner",
+	// and the job stayed green. It was not the runner. A runner is a Mac in
+	// plain DHCP, and on a Mac in plain DHCP plug's resolver landed
+	// interface-scoped and mDNSResponder never sent it a packet: the exact bug
+	// the "verify on a real desktop" was deferring to, found on a real desktop
+	// the day its owner cleared their hand-typed DNS servers. A datapath that
+	// getaddrinfo cannot reach is not "fine", it is the one thing every
+	// application on the machine will hit.
+	return fmt.Errorf("the system resolver (getaddrinfo) did not resolve %q to a fake IP: applications on this machine "+
+		"cannot reach cluster names, whatever dig says. On macOS this is the resolver plug wrote landing "+
+		"interface-scoped instead of unscoped", name)
 }
