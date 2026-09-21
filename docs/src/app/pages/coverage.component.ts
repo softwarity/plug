@@ -190,8 +190,9 @@ export class CoverageComponent {
   protected readonly holes: Hole[] = [
     {
       sev: 'warn',
-      t: 'Windows under a real corporate VPN client',
-      d: 'What a VPN does to DNS is now proven in CI on all three OSes: the selftest fabricates an extra adapter carrying a resolver that knows a name nothing else knows, and asserts plug follows it - and follows it back down when the VPN goes away. What no CI runner can bring is a real corporate client: split-tunnel routing, Windows conditional-DNS (NRPT) rules pushed by policy, MTU, and clients that intercept DNS on a loopback address. Everything else on Windows is proven in CI, including self-heal.',
+      t: 'Linux and Windows under a real corporate VPN client',
+      d: 'What a VPN does to DNS is proven in CI on all three OSes: the selftest fabricates an extra adapter carrying a resolver that knows a name nothing else knows, and asserts plug follows it - and follows it back down when the VPN goes away. What that cell does NOT fabricate is a domain-scoped resolver, the split-DNS every corporate client pushes, and that is the gap a real client found on macOS in September: a session broke the VPN\'s own names for a month before anyone connected the two. macOS reads those scopes now; Linux and Windows do not, so a real corporate client there is still unproven - split-tunnel routing, NRPT rules pushed by policy, MTU, and clients that intercept DNS on a loopback address.',
+
     },
     {
       sev: 'warn',
@@ -220,7 +221,8 @@ export class CoverageComponent {
         { feat: 'Userspace TUN (IP-layer capture)', os: ['ok', 'ok', 'ok'], note: '/dev/net/tun · utun · WinTUN' },
         { feat: 'Cluster-name DNS (real apps)', os: ['ok', 'ok', 'ok'], note: 'private resolv.conf · scutil store · WinTUN search-suffix + NRPT' },
         { feat: 'Single-label name via <code>getaddrinfo</code>', os: ['ok', 'ok', 'ok'], note: 'the real app path; Windows needs the <code>.plug</code> search suffix to issue a DNS query' },
-        { feat: 'Works under a corporate VPN', os: ['ok', 'ok', 'warn'], note: 'macOS proven w/ GlobalProtect; a real Windows corporate client is still unproven (split-tunnel, NRPT-by-policy)' },
+        { feat: 'Works under a corporate VPN', os: ['warn', 'ok', 'warn'], note: 'macOS: GlobalProtect and OpenVPN Connect, on real corporate networks' },
+        { feat: "Keeps the VPN's own names resolving (split DNS)", os: ['no', 'ok', 'no'], note: 'a VPN adds a resolver scoped to its domain; plug now honours it on macOS (SupplementalMatchDomains, followed as the VPN comes and goes). Linux (systemd-resolved routing domains) and Windows (NRPT) are not read yet: a session there sends the VPN\'s names to the ordinary resolver, which does not know them', sub: true },
         { feat: 'Follows the resolver when a VPN comes up, drops, or the network changes', os: ['ok', 'ok', 'ok'], note: 'the servers are not a startup fact - <b>in CI on all three OSes</b>: the selftest fabricates a VPN (an extra adapter carrying a resolver that knows a name nothing else knows) and asserts that name resolves <i>through plug</i>, then stops when the VPN goes away. Includes what a VPN does not cause: on macOS one network service serves every SSID, so changing Wi-Fi moves the resolvers without moving the service. <code>plug doctor</code> reports where lookups actually go' },
         { feat: 'Every runtime (Node/JVM/Py/Go/gRPC)', os: ['ok', 'ok', 'ok'], note: 'IP-level capture, socket never touched' },
         { feat: 'A CONTAINER as a cluster member (<code>--dockerrun</code>)', os: ['ok', 'warn', 'warn'], note: 'an unmodified image joins the cluster through a sidecar that holds the datapath - no Dockerfile change. CI cell on all three cluster families (Linux runners); verified by hand on a Docker Desktop mac; untested on Windows' },
