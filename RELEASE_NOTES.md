@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.15.2
+
 ### One dead session could poison every session after it, on macOS
 
 The teardown puts back exactly what it captured at startup. That is right when
