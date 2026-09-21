@@ -34,9 +34,6 @@ says NXDOMAIN at once - red before, green after, and the fix mutated back to
 prove the test holds it. Verified on the machine it happened on: with the fix,
 the bare name resolves and the connection reaches the tunnel.
 
----
-
-## 2.15.2
 
 ### One dead session could poison every session after it, on macOS
 
