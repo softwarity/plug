@@ -157,6 +157,44 @@ the facts, because the commands have nothing in common - and a warning built on
 facts nobody gathered would send people to rewrite their DNS settings for a
 problem they do not have.
 
+### A corporate VPN's own names resolve again during a session, on macOS
+
+A VPN client does not replace your resolvers. It adds one, scoped to its own
+domain: `*.corp.example` goes to the VPN's server, everything else keeps going
+to the machine's ordinary ones. macOS calls that `SupplementalMatchDomains` and
+keeps it in the VPN's own network service, deliberately apart from the primary
+service the rest of the world resolves through.
+
+plug read the primary service alone. It captured the ordinary servers, made
+itself the machine's resolver, and forwarded EVERYTHING to them - the VPN's
+names included, to a server that had never heard of them and said so. A session
+therefore broke exactly the names the VPN exists to serve, while the cluster's
+own names, which go through the tunnel, kept working. From the outside: the
+frontends fine, the services that reach internal dependencies by name dead, and
+nothing said why.
+
+This was never a regression. plug had read the primary alone from the first
+macOS release; it is the twin of the Windows NRPT gap the coverage page has
+listed since August, and what changed is that services started depending on
+names the VPN serves.
+
+plug now reads every network service that carries a domain-scoped resolver, at
+startup and on every tick of the watcher - a VPN that comes up or goes away
+mid-session is followed either way - and routes each name to the resolver whose
+domain is its longest suffix, or to the ordinary servers when none claims it.
+Proven on the exact layout read off a laptop on OpenVPN Connect, boundary cases
+included: `notfint.vn` is not inside `fint.vn`, nor is `fint.vn.example.com`.
+And verified live, inside a session: the VPN's names answer through the VPN and
+public names through the box, exactly as they do with no session running.
+
+`plug doctor` shows the scopes beside the ordinary servers, so where a VPN's
+names go is no longer a guess.
+
+Linux and Windows are not covered by this change. Windows has the NRPT and Linux
+has per-link routing domains under systemd-resolved; both are the same idea and
+neither is read yet. The routing rule is shared and tested on all three; the
+half that gathers the scopes exists for macOS only, and is silent elsewhere.
+
 ---
 
 ## 2.14.1

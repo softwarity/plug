@@ -63,6 +63,15 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 
 	dnsKey := "State:/Network/Service/" + svc + "/DNS"
 	restore, upstreams, search := readDNSDict(dnsKey)
+	// The VPN's own resolvers, for the VPN's own names. Read alongside the
+	// primary rather than instead of it: the primary still answers for the rest
+	// of the world, and the two must not be confused for each other.
+	if scopes := scopedResolvers(dnsIP); len(scopes) > 0 {
+		up.setScoped(scopes)
+		for _, sc := range scopes {
+			log.f("tun[mac]: *.%s resolves through %v (a domain-scoped resolver, kept as the system had it)", sc.domain, sc.addrs)
+		}
+	}
 
 	// Become the primary resolver AND advertise a ".plug" search domain (keeping the
 	// user's existing ones). Override ServerAddresses with dnsIP — dotted names still
@@ -250,6 +259,11 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 					_ = scutilSet(dnsKey, set)
 					input = true
 				}
+				// A VPN that comes up or goes away mid-session moves its scoped
+				// resolver with it, and neither block above sees that: the primary
+				// service does not change and its dict does not either. Re-read the
+				// scopes every tick; setScoped is cheap and the table is small.
+				up.setScoped(scopedResolvers(dnsIP))
 				if _, cur, _ := readDNSDict(globalDNSKey); len(cur) != 1 || cur[0] != dnsIP {
 					_ = scutilSet(globalDNSKey, set)
 					effective = true
@@ -382,6 +396,75 @@ func readDNSDict(key string) (restore string, servers, search []string) {
 		}
 	}
 	return b.String(), servers, search
+}
+
+// scopedResolvers reads every network service that carries a DOMAIN-SCOPED
+// resolver: a VPN's, typically. macOS keeps them out of the primary service on
+// purpose, so the machine resolves the VPN's names through the VPN and everything
+// else through the ordinary servers - and plug, reading the primary alone, took
+// the ordinary servers for everything and broke the VPN's names the moment a
+// session started.
+//
+// OpenVPN Connect publishes under State:/Network/Service/OpenVPNConnect/DNS with
+// SupplementalMatchDomains [fint.vn]; other clients use their own service name,
+// which is why this lists the pattern rather than a known key. A service whose
+// ServerAddresses are plug's own is skipped: that is the one we overwrote.
+func scopedResolvers(own string) []scopedUpstream {
+	out, err := scutil("list State:/Network/Service/.*/DNS\nquit\n")
+	if err != nil {
+		return nil
+	}
+	var scopes []scopedUpstream
+	for _, line := range strings.Split(out, "\n") {
+		_, key, ok := strings.Cut(line, "= ")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		servers, domains := readScopedDict(key)
+		real := systemServers(servers, own)
+		if len(real) == 0 {
+			continue
+		}
+		for _, d := range domains {
+			scopes = append(scopes, scopedUpstream{domain: d, addrs: real})
+		}
+	}
+	return scopes
+}
+
+// readScopedDict returns a DNS dict's servers and its SupplementalMatchDomains.
+// A dict with no match domains is an ordinary resolver and yields none, which is
+// what keeps the primary service - and its plain SearchDomains, which are a
+// different thing - out of the scoped table.
+func readScopedDict(key string) (servers, domains []string) {
+	out, err := scutil("show " + key + "\nquit\n")
+	if err != nil || strings.Contains(out, "No such key") {
+		return nil, nil
+	}
+	var curKey string
+	inArray := false
+	for _, raw := range strings.Split(out, "\n") {
+		line := strings.TrimSpace(raw)
+		switch {
+		case strings.Contains(line, ": <array> {"):
+			curKey = strings.TrimSpace(strings.SplitN(line, ":", 2)[0])
+			inArray = true
+		case line == "}":
+			inArray = false
+		case inArray:
+			if p := strings.SplitN(line, ":", 2); len(p) == 2 {
+				v := strings.TrimSpace(p[1])
+				switch curKey {
+				case "ServerAddresses":
+					servers = append(servers, v)
+				case "SupplementalMatchDomains":
+					domains = append(domains, v)
+				}
+			}
+		}
+	}
+	return servers, domains
 }
 
 // scutil pipes a batch script into scutil (root; the plug core runs under sudo),

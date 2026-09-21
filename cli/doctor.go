@@ -529,9 +529,20 @@ func openBrowser(u string) {
 // heard of them.
 func doctorDNSForwarding(add func(check)) {
 	if ups := tun.CurrentUpstreams(); len(ups) > 0 {
-		d := "forwarding dotted names to " + strings.Join(ups, ", ")
-		st := stOK
+		var plain, scoped []string
 		for _, u := range ups {
+			if dom, srv, ok := strings.Cut(u, "="); ok {
+				scoped = append(scoped, "*."+dom+" -> "+srv)
+			} else {
+				plain = append(plain, u)
+			}
+		}
+		d := "forwarding dotted names to " + strings.Join(plain, ", ")
+		if len(scoped) > 0 {
+			d += "; " + strings.Join(scoped, "; ") + " (domain-scoped, as the system had it)"
+		}
+		st := stOK
+		for _, u := range plain {
 			// Any well-known public resolver, not the two that used to be spelled
 			// out here: somebody who sets one by hand is as likely to type Quad9
 			// or OpenDNS, and the consequence is identical.

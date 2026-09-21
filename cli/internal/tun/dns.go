@@ -140,6 +140,21 @@ type upstreamDNS struct {
 	addrs    []string // "host:port", port defaulted on the way in
 	resolver *net.Resolver
 	timeout  time.Duration // how long relay waits; tests shorten it
+	// scoped are the resolvers that answer ONLY for a domain and its
+	// subdomains: what a corporate VPN pushes for its internal names while the
+	// rest of the world keeps going to the machine's ordinary servers. macOS
+	// calls them SupplementalMatchDomains, Windows the NRPT, systemd-resolved
+	// per-link routing domains. plug used to take the primary servers alone and
+	// route EVERYTHING through them, so the internal names a VPN exists to serve
+	// were the first thing a session broke. Matched longest suffix first.
+	scoped []scopedUpstream
+}
+
+// scopedUpstream is one such scope: the domain, lower-case, without a leading
+// dot, and the servers that answer for it, already dialable.
+type scopedUpstream struct {
+	domain string
+	addrs  []string
 }
 
 func newUpstream(servers []string) *upstreamDNS {
@@ -159,6 +174,67 @@ func newUpstream(servers []string) *upstreamDNS {
 		},
 	}
 	return u
+}
+
+// setScoped replaces the domain-scoped resolvers. Domains are normalised here
+// so serversFor can compare cheaply, and a scope with no usable server is dropped
+// rather than kept as an empty list that would match and then answer nothing.
+func (u *upstreamDNS) setScoped(scopes []scopedUpstream) {
+	clean := make([]scopedUpstream, 0, len(scopes))
+	seen := map[string]bool{}
+	for _, sc := range scopes {
+		d := strings.ToLower(strings.Trim(strings.TrimSpace(sc.domain), "."))
+		addrs := dialable(sc.addrs)
+		// OpenVPN Connect lists its domain twice; once is enough.
+		if d == "" || len(sc.addrs) == 0 || seen[d] {
+			continue
+		}
+		seen[d] = true
+		clean = append(clean, scopedUpstream{domain: d, addrs: addrs})
+	}
+	u.mu.Lock()
+	u.scoped = clean
+	addrs := append([]string(nil), u.addrs...)
+	u.mu.Unlock()
+	// Published beside the ordinary servers, so `plug doctor` says where a
+	// VPN's names go and not only where everything else does. One line per
+	// scope, "domain=servers", which CurrentUpstreams passes through untouched.
+	publishUpstreams(withScopes(addrs, clean))
+}
+
+// withScopes renders the published form: the ordinary servers first, then one
+// "domain=a,b" line per scope. Pure, for the test.
+func withScopes(addrs []string, scopes []scopedUpstream) []string {
+	out := append([]string(nil), addrs...)
+	for _, sc := range scopes {
+		out = append(out, sc.domain+"="+strings.Join(sc.addrs, ","))
+	}
+	return out
+}
+
+// serversFor picks the servers a name goes to: the scoped resolver whose domain
+// is the LONGEST suffix of the name, or the ordinary servers when none matches.
+//
+// Longest wins because scopes nest - corp.example inside example - and the more
+// specific one is the one that knows the name. Pure, so the routing decision
+// that decides whether a VPN's internal names resolve at all is proven rather
+// than reasoned about.
+func (u *upstreamDNS) serversFor(name string) []string {
+	u.mu.RLock()
+	defer u.mu.RUnlock()
+	return pickScoped(name, u.scoped, u.addrs)
+}
+
+// pickScoped is serversFor without the lock, for the tests.
+func pickScoped(name string, scoped []scopedUpstream, def []string) []string {
+	n := strings.ToLower(strings.TrimSuffix(name, "."))
+	best, bestLen := def, -1
+	for _, sc := range scoped {
+		if (n == sc.domain || strings.HasSuffix(n, "."+sc.domain)) && len(sc.domain) > bestLen {
+			best, bestLen = sc.addrs, len(sc.domain)
+		}
+	}
+	return best
 }
 
 // set replaces the servers plug forwards to. Empty falls back to a public
@@ -235,12 +311,17 @@ func (u *upstreamDNS) same(servers []string) bool {
 //
 // Returns nil if the upstream said nothing in time — the caller turns that into
 // SERVFAIL rather than an invented empty answer.
-func (u *upstreamDNS) relay(q []byte) []byte {
+func (u *upstreamDNS) relay(name string, q []byte) []byte {
 	// Every server in turn, not just the first. A VPN pushes several precisely
 	// so that one being unreachable is survivable; asking only the primary threw
 	// that away and made a single sick resolver look like "no such record".
 	// The budget is per server, since a dead one costs its whole timeout.
-	return raceUpstreams(u.all(), upstreamStagger, func(addr string) []byte { return u.ask(addr, q) })
+	//
+	// And the RIGHT servers for this name: a scope's own resolver when one
+	// claims it, the ordinary ones otherwise. Asking the ordinary servers about
+	// a VPN's internal name gets a confident NXDOMAIN from a resolver that has
+	// never heard of it, and with the race above that answer wins.
+	return raceUpstreams(u.serversFor(name), upstreamStagger, func(addr string) []byte { return u.ask(addr, q) })
 }
 
 // upstreamStagger is how long the first server gets alone before the next one is
@@ -370,7 +451,7 @@ func answerDNS(q []byte, tab *faketab, upstream *upstreamDNS, check nameChecker)
 		// first query at all. SERVFAIL is the honest answer: there is no upstream
 		// to ask.
 		if upstream != nil {
-			if reply := upstream.relay(q); reply != nil {
+			if reply := upstream.relay(name, q); reply != nil {
 				return capReply(reply, q, qend)
 			}
 		}
