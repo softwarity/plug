@@ -62,7 +62,7 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 	}
 
 	dnsKey := "State:/Network/Service/" + svc + "/DNS"
-	restore, upstreams, search := readDNSDict(dnsKey)
+	restore, upstreams, _ := readDNSDict(dnsKey)
 	// A dict already pointing at plug is a previous session's leftover, not the
 	// state to return to. Restoring it on exit would hand the breakage on; an
 	// EMPTY restore removes the key instead, and configd recomposes the service's
@@ -92,16 +92,21 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 	// "plug" appended, getaddrinfo also tries "my-service.plug", which lands here and
 	// answerDNS strips back to the bare name. Same mechanism as the Windows NRPT suffix.
 	//
-	// FIRST in the list, never last, and a day was lost to the difference.
-	// mDNSResponder does not always keep the whole list: on a machine whose
-	// override lands interface-scoped it configured "count: 1", the first entry
-	// only. With the network's own DHCP domain ahead of ours, ours was the one
-	// dropped, a bare `odb` was never tried as `odb.plug`, and every process
+	// OURS ALONE. Not the network's search domains with ours appended, and a day
+	// was lost to the difference. Search domains only ever matter for a BARE
+	// name, and during a session a bare name is a cluster service: the network's
+	// `lan` or `corp.example` has no business being tried against it. It is not
+	// harmless either. mDNSResponder does not always keep the whole list - on a
+	// machine whose override lands interface-scoped it configured "count: 1",
+	// the first entry only - so with the network's domain ahead of ours, ours was
+	// the one dropped, `odb` was never tried as `odb.plug`, and every process
 	// joining a cluster service by name died on a connect timeout. It had worked
-	// for weeks on the same machine, because the box did not announce a domain
-	// then and ours was alone. First is the only position that survives a
-	// resolver keeping one.
-	searchList := append([]string{searchSuffix}, search...)
+	// for weeks on that machine because the box announced no domain then and
+	// ours was alone: this makes "alone" the rule instead of the luck. Putting
+	// ours FIRST was tried and rejected: it changed how dotted public names were
+	// walked and broke them. The network's list is captured for the teardown and
+	// handed back untouched.
+	searchList := []string{searchSuffix}
 	set := "d.init\nd.add ServerAddresses * " + dnsIP + "\nd.add SearchDomains * " + strings.Join(searchList, " ") + "\n"
 	if err := scutilSet(dnsKey, set); err != nil {
 		log.f("tun[mac]: could not repoint system DNS (%v) — cluster names may not resolve", err)
@@ -116,18 +121,31 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 	// /etc/resolver/plug. Repoint Setup: too when it defines servers (restored on
 	// teardown; crash net in SaveDNSBackup/RestoreOrphanDNS).
 	setupKey := "Setup:/Network/Service/" + svc + "/DNS"
-	setupRestore, setupServers, setupSearch := readDNSDict(setupKey)
-	setupOverridden := len(setupServers) > 0
-	var setupSet string
-	if setupOverridden {
-		list := append([]string{searchSuffix}, setupSearch...)
-		setupSet = "d.init\nd.add ServerAddresses * " + dnsIP + "\nd.add SearchDomains * " + strings.Join(list, " ") + "\n"
-		if err := scutilSet(setupKey, setupSet); err != nil {
-			log.f("tun[mac]: could not repoint manual (Setup:) DNS (%v) — static-binary clients may not resolve", err)
-		}
-		if len(upstreams) == 0 {
-			upstreams = setupServers // the manual servers are the real upstream for dotted names
-		}
+	setupRestore, setupServers, _ := readDNSDict(setupKey)
+	// ALWAYS written, not only when the person had typed servers in by hand -
+	// and a day was lost to that condition. With no Setup: entry, configd
+	// composes the service's resolver from State: alone, and on a machine in
+	// plain DHCP that resolver lands INTERFACE-SCOPED: mDNSResponder then holds
+	// 198.18.0.53 as "a server reachable through en0", which it is not, and
+	// sends it nothing at all. Every getaddrinfo on the machine waited twenty
+	// seconds on a question that was never asked, while dig, which speaks to
+	// the address directly, answered in ten milliseconds. The person who had
+	// 1.1.1.1 typed in never saw it: their Setup: entry existed, plug repointed
+	// it, and configd folded that into the UNSCOPED resolver, which is the one
+	// getaddrinfo uses. Deleting those servers to get through a captive portal
+	// switched them to the DHCP path and broke every session after. Writing
+	// Setup: whether or not it was there before gives DHCP machines - which is
+	// nearly all of them - the resolver the hand-configured ones had by luck.
+	// Restored on teardown like the rest: an entry we created is removed, one
+	// we replaced is put back.
+	setupOverridden := true
+	list := []string{searchSuffix}
+	setupSet := "d.init\nd.add ServerAddresses * " + dnsIP + "\nd.add SearchDomains * " + strings.Join(list, " ") + "\n"
+	if err := scutilSet(setupKey, setupSet); err != nil {
+		log.f("tun[mac]: could not repoint the service's Setup: DNS (%v) — getaddrinfo may not reach plug", err)
+	}
+	if len(upstreams) == 0 && len(setupServers) > 0 {
+		upstreams = setupServers // the manual servers are the real upstream for dotted names
 	}
 
 	// Write the GLOBAL DNS key too. On some setups (headless runners at least) the
@@ -230,15 +248,17 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 					if restore != "" {
 						_ = scutilSet(dnsKey, restore) // hand the old service back
 					}
-					if setupOverridden && setupRestore != "" {
+					if setupRestore != "" {
 						_ = scutilSet(setupKey, setupRestore)
+					} else {
+						_ = scutilRemove(setupKey)
 					}
 					svc = cur
 					dnsKey = "State:/Network/Service/" + svc + "/DNS"
 					setupKey = "Setup:/Network/Service/" + svc + "/DNS"
-					var newSearch, newSetupSearch, newSetupServers []string
+					var newSetupServers []string
 					var newServers []string
-					restore, newServers, newSearch = readDNSDict(dnsKey)
+					restore, newServers, _ = readDNSDict(dnsKey)
 					// Same rule as at startup: the new primary's dict may be a
 					// leftover of ours too, and must not become the restore.
 					if poisonedByPlug(newServers) {
@@ -254,14 +274,12 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 						up.set(real)
 						log.f("tun[mac]: forwarding dotted names to %v (the new primary's resolver)", real)
 					}
-					setupRestore, newSetupServers, newSetupSearch = readDNSDict(setupKey)
-					setupOverridden = len(newSetupServers) > 0
+					setupRestore, newSetupServers, _ = readDNSDict(setupKey)
+					_ = newSetupServers
+					setupOverridden = true // same rule as at startup: Setup: is always ours during a session
 					set = "d.init\nd.add ServerAddresses * " + dnsIP + "\nd.add SearchDomains * " +
-						strings.Join(append([]string{searchSuffix}, newSearch...), " ") + "\n"
-					if setupOverridden {
-						setupSet = "d.init\nd.add ServerAddresses * " + dnsIP + "\nd.add SearchDomains * " +
-							strings.Join(append([]string{searchSuffix}, newSetupSearch...), " ") + "\n"
-					}
+						searchSuffix + "\n"
+					setupSet = set
 					// The teardown below follows: it restores whatever dnsKey now
 					// names. The on-disk crash net still snapshots the service
 					// that was primary at startup, so a HARD crash after a move
@@ -353,8 +371,10 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 		} else {
 			_ = scutilRemove(globalDNSKey) // configd will recompose it from the services
 		}
-		if setupOverridden {
+		if setupRestore != "" {
 			_ = scutilSet(setupKey, setupRestore) // put the manual DNS back
+		} else {
+			_ = scutilRemove(setupKey) // there was none: leave none, or DHCP would stay overridden by an empty entry
 		}
 		flushDNS()
 		delRoute()

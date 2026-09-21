@@ -78,6 +78,39 @@ all three now, names the one that is wrong, and gives the fix: `plug doctor
 this way (each session has a private resolv.conf in its own mount namespace),
 and Windows already had the equivalent check on its NRPT rule.
 
+### plug now works on a Mac in plain DHCP, which is to say on most Macs
+
+It never had. Every session on a machine with no hand-typed DNS servers broke
+name resolution for the whole machine, and the only reason nobody knew is that
+the people running plug had typed servers in.
+
+macOS composes two resolvers from one network service: one unscoped, which is
+what getaddrinfo - and so every application - uses, and one scoped to the
+interface. plug wrote its resolver into the service's State: key, and on a
+machine in plain DHCP that landed in the scoped one only. mDNSResponder then
+held 198.18.0.53 as a server reachable through en0, which it is not, and sent
+it nothing at all: every lookup on the machine waited twenty seconds on a
+question that was never asked, while dig, which speaks to the address directly,
+answered in ten milliseconds. Half the internet worked, the half that had an
+address already.
+
+Machines with hand-typed servers never saw this. Their Setup: entry existed,
+plug repointed it as well, and configd folded that into the unscoped resolver.
+Deleting those servers to get through a captive portal switched one such
+machine to the DHCP path and broke every session after, which is how this was
+found, eight hours in.
+
+plug now writes the Setup: entry whether or not there was one, so a DHCP
+machine gets the resolver the hand-configured ones had by luck. An entry plug
+created is removed at teardown; one it replaced is put back. Verified in plain
+DHCP on the machine it was found on: a public name and a cluster name both
+resolve through getaddrinfo, and the resolver mDNSResponder reports is no
+longer scoped.
+
+The captive-portal remedy in doctor, which tells you to clear those servers,
+was therefore also telling you to break plug. It no longer does: it stays
+right, and plug now survives it.
+
 ---
 
 ## 2.15.1
