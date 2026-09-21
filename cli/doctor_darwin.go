@@ -95,6 +95,17 @@ func doctorOS(add func(check)) {
 	// broke machine-wide DNS once.
 	out, _ := exec.Command(tun.HelperPath("scutil"), "--dns").Output()
 	plugged := strings.Contains(string(out), "198.18.")
+	// THREE views, not one. `scutil --dns` is what mDNSResponder composes, and
+	// getaddrinfo follows it - so Safari and Python work. configd renders
+	// /etc/resolv.conf from State:/Network/Global/DNS, and dig, curl, Node, Go
+	// and every client with its own resolver read THAT. A leftover in the global
+	// key with a clean mDNSResponder view is a machine where half the internet
+	// works, and this check read only the half that did: it said "untouched" all
+	// day on a laptop whose resolv.conf named a resolver that did not exist.
+	poisoned := tun.PoisonedViews()
+	if len(poisoned) > 0 {
+		plugged = true
+	}
 	sessions := 0
 	for _, k := range tun.ActiveClusters() {
 		sessions += tun.LiveClients(k)
@@ -107,14 +118,20 @@ func doctorOS(add func(check)) {
 		// judgement call, which is why --fix does it rather than printing a
 		// remedy. `plug down` reaches the same code, but naming it here taught
 		// everyone to use a teardown command as a repair tool.
+		where := "the system resolver"
+		if len(poisoned) > 0 {
+			where = strings.Join(poisoned, ", ")
+		}
 		if doctorFix {
 			tun.RestoreOrphanDNS(globalKey)
 			add(check{area: "local", name: "system resolver", status: stOK,
-				detail: "was left pointed at plug by a daemon that died — resolver restored"})
+				detail: where + " pointed at plug with no daemon alive (a session died without its teardown) — restored"})
 		} else {
 			add(check{area: "local", name: "system resolver", status: stFail,
-				detail: "still pointed at plug with NO live daemon and no session (stale override)",
-				remedy: "plug doctor --fix (restores the resolver)"})
+				detail: where + " still point(s) at plug with NO live daemon and no session. A session died " +
+					"without its teardown; until this is undone, dig, curl, Node, Go and any client with its " +
+					"own resolver ask a server that does not exist, while getaddrinfo keeps working",
+				remedy: "plug doctor --fix   (or by hand: sudo scutil <<< $'remove State:/Network/Global/DNS\\nquit')"})
 		}
 	case plugged && sessions == 0:
 		// The daemon lives, the last client just left: the self-teardown window,

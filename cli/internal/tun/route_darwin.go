@@ -722,6 +722,32 @@ func RestoreOrphanDNS(key string) {
 	}
 }
 
+// PoisonedViews names the DNS stores that still point at a plug resolver: the
+// global key configd renders /etc/resolv.conf from, the primary service's own
+// dict, and resolv.conf itself. Exported for doctor, which used to read only
+// what mDNSResponder composes - the one view that stays clean while the other
+// two are broken.
+func PoisonedViews() []string {
+	var out []string
+	if _, servers, _ := readDNSDict("State:/Network/Global/DNS"); poisonedByPlug(servers) {
+		out = append(out, "the global DNS key")
+	}
+	if svc, err := primaryService(); err == nil {
+		if _, servers, _ := readDNSDict("State:/Network/Service/" + svc + "/DNS"); poisonedByPlug(servers) {
+			out = append(out, "the primary service's DNS")
+		}
+	}
+	if b, err := os.ReadFile("/etc/resolv.conf"); err == nil {
+		for _, line := range strings.Split(string(b), "\n") {
+			if f := strings.Fields(line); len(f) == 2 && f[0] == "nameserver" && inFakeRange(f[1]) {
+				out = append(out, "/etc/resolv.conf")
+				break
+			}
+		}
+	}
+	return out
+}
+
 // ClearDNSBackup drops the backup after a clean shutdown (cleanup already restored the DNS).
 func ClearDNSBackup(key string) {
 	_ = os.Remove(backupPath(key))

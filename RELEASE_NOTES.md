@@ -36,6 +36,15 @@ Neither half changes a healthy machine: a global key that is empty or holds the
 network's own servers is left exactly alone, checked on the machine this was
 found on.
 
+And `plug doctor` sees it now. It read `scutil --dns`, which is the view
+mDNSResponder composes - the one view that stays clean while the global key and
+/etc/resolv.conf are broken - so it answered "system resolver: untouched" all
+day on a laptop whose resolv.conf named a resolver that did not exist. It reads
+all three now, names the one that is wrong, and gives the fix: `plug doctor
+--fix`, or the one-line scutil command for doing it by hand. Linux cannot break
+this way (each session has a private resolv.conf in its own mount namespace),
+and Windows already had the equivalent check on its NRPT rule.
+
 ---
 
 ## 2.15.1
