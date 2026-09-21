@@ -2,6 +2,40 @@
 
 ## NEXT RELEASE
 
+### One dead session could poison every session after it, on macOS
+
+The teardown puts back exactly what it captured at startup. That is right when
+what it captured is the machine's own DNS, and a trap when it is plug's: one
+session that dies without its teardown - a kill -9, a lid closed mid-exit -
+leaves 198.18.0.53 in the system's global DNS key. The NEXT session reads that
+as "what was there before", faithfully writes it back on its own clean exit,
+and so does every session after. The breakage survives any number of perfectly
+clean teardowns, and nothing plug does on its own ever undoes it.
+
+What that looks like from a desk: every session of the day "breaks DNS", while
+each one is restoring the first one's wreckage. And it breaks unevenly, which
+is what made it so hard to see. macOS renders /etc/resolv.conf from that global
+key, so dig, curl, Node, Go and every client with its own resolver ask a server
+that only exists during a session - while getaddrinfo, which Safari and Python
+use, keeps a working view. Half the internet works. A whole day went to that.
+
+A captured dict that points into plug's own address range is no longer kept as
+the state to restore. It is dropped instead, and configd recomposes the key
+from the network services' own sources, which is the state the machine would
+be in had plug never run. The watcher, which re-captures when the primary
+service changes, applies the same rule.
+
+And the repair that already existed now works. `plug down`, and every daemon
+at startup, called a routine meant to undo a crashed daemon's leftovers - but
+it did nothing without a backup file to restore from, and those files live on
+a tmpfs. `plug down` therefore said "no plug daemon running" and left the
+machine exactly as broken as it found it. With no backup, a global DNS pointing
+into the fake range with no daemon alive is ours and is wrong, and is removed.
+
+Neither half changes a healthy machine: a global key that is empty or holds the
+network's own servers is left exactly alone, checked on the machine this was
+found on.
+
 ---
 
 ## 2.15.1

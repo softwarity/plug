@@ -63,6 +63,16 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 
 	dnsKey := "State:/Network/Service/" + svc + "/DNS"
 	restore, upstreams, search := readDNSDict(dnsKey)
+	// A dict already pointing at plug is a previous session's leftover, not the
+	// state to return to. Restoring it on exit would hand the breakage on; an
+	// EMPTY restore removes the key instead, and configd recomposes the service's
+	// DNS from its own sources (DHCP, the VPN) - the state the machine would be in
+	// had plug never run. See poisonedByPlug.
+	if poisonedByPlug(upstreams) {
+		log.f("tun[mac]: the primary service's DNS already pointed at a plug resolver (a previous " +
+			"session's leftover) - it will be dropped rather than restored at teardown")
+		restore, upstreams = "", nil
+	}
 	// The VPN's own resolvers, for the VPN's own names. Read alongside the
 	// primary rather than instead of it: the primary still answers for the rest
 	// of the world, and the two must not be confused for each other.
@@ -119,7 +129,16 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 	// writing it makes plug's DNS answer FIRST (~ms). Volatile like the rest of
 	// State:, watched by the watchdog, restored on teardown, crash-netted below.
 	globalDNSKey := "State:/Network/Global/DNS"
-	globalRestore, _, _ := readDNSDict(globalDNSKey)
+	globalRestore, globalServers, _ := readDNSDict(globalDNSKey)
+	// Same trap, and this is the key that actually bit: Global/DNS is what
+	// configd renders /etc/resolv.conf from, so a leftover here breaks dig, curl,
+	// Node, Go and every static-resolver client machine-wide while getaddrinfo
+	// keeps working - the "internet half works" that took a day to see.
+	if poisonedByPlug(globalServers) {
+		log.f("tun[mac]: the global DNS already pointed at a plug resolver (a previous session's " +
+			"leftover) - it will be dropped rather than restored at teardown")
+		globalRestore = ""
+	}
 	if err := scutilSet(globalDNSKey, set); err != nil {
 		log.f("tun[mac]: could not set the global DNS (%v) — single-label lookups may be slow", err)
 	}
@@ -210,6 +229,11 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 					var newSearch, newSetupSearch, newSetupServers []string
 					var newServers []string
 					restore, newServers, newSearch = readDNSDict(dnsKey)
+					// Same rule as at startup: the new primary's dict may be a
+					// leftover of ours too, and must not become the restore.
+					if poisonedByPlug(newServers) {
+						restore, newServers = "", nil
+					}
 					// The new primary's OWN servers, read before we overwrite
 					// them — this is the VPN's resolver when a VPN just came up,
 					// and the only moment it is visible: a second later this key
@@ -343,6 +367,32 @@ func primaryService() (string, error) {
 		}
 	}
 	return "", fmt.Errorf("no PrimaryService in State:/Network/Global/IPv4")
+}
+
+// poisonedByPlug reports whether a captured DNS dict already points at a plug
+// resolver, which means it is NOT the machine's own state and must not be kept
+// as the thing to restore.
+//
+// The teardown puts back exactly what was captured at startup. That is right
+// when what was captured is the machine's, and a trap when it is ours: one
+// session that died without its teardown - a kill -9, a lid closed mid-exit -
+// leaves 198.18.0.53 in the key, the NEXT session reads that as "what was there
+// before", faithfully writes it back on ITS clean exit, and so does every
+// session after it. The breakage survives any number of perfectly clean
+// teardowns, and nothing plug does on its own ever undoes it. Seen on a laptop
+// where every session of a day "broke DNS": every one of them was restoring the
+// first one's wreckage.
+//
+// Any fake-range server disqualifies the dict, not only this instance's own
+// address: another cluster's daemon lives in the same range and its leftovers
+// are just as much not the machine's.
+func poisonedByPlug(servers []string) bool {
+	for _, s := range servers {
+		if inFakeRange(strings.TrimSpace(s)) {
+			return true
+		}
+	}
+	return false
 }
 
 // readDNSDict reads the DNS dict at key and returns (a) a scutil script that
@@ -649,6 +699,26 @@ func RestoreOrphanDNS(key string) {
 		// Drop our Global/DNS override too — with the service dicts restored,
 		// configd recomposes the correct global from them.
 		_ = scutilRemove("State:/Network/Global/DNS")
+		return
+	}
+	// No backup, and this is the case that used to be answered with nothing:
+	// `plug down` said "no plug daemon running" and left the machine exactly as
+	// broken as it found it. The backups live under /var/run, which is a tmpfs,
+	// so a reboot with a session open clears them - and a daemon that died the
+	// hard way may never have written one. Whether or not there is a snapshot,
+	// a Global/DNS pointing into the fake range with no daemon alive is ours and
+	// is wrong, and removing it is always safe: configd recomposes the global
+	// from the services' own dicts, which is the state before plug ran.
+	if _, servers, _ := readDNSDict("State:/Network/Global/DNS"); poisonedByPlug(servers) {
+		_ = scutilRemove("State:/Network/Global/DNS")
+	}
+	// The primary service's own dict too, for the same reason: with no snapshot
+	// to put back, dropping ours lets configd repopulate it from DHCP or the VPN.
+	if svc, err := primaryService(); err == nil {
+		k := "State:/Network/Service/" + svc + "/DNS"
+		if _, servers, _ := readDNSDict(k); poisonedByPlug(servers) {
+			_ = scutilRemove(k)
+		}
 	}
 }
 
