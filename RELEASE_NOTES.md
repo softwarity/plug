@@ -2,10 +2,6 @@
 
 ## NEXT RELEASE
 
----
-
-## 2.15.2
-
 ### Bare cluster names resolve again on a network that announces its own search domain, on macOS
 
 A service joining `odb` by that bare name got a connect timeout, on every version
