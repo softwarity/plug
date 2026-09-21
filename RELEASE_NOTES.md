@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.15.1
+
 ### A parked workload comes back on its own, without restarting the agent
 
 A takeover parks the deployed workload and the session's clean exit puts it
