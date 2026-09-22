@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.16.0
+
 
 ### A plugged process inherits the environment of the workload it replaces
 
