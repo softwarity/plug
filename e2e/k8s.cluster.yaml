@@ -439,9 +439,16 @@ spec:
     metadata: { labels: { app: tko-linux } }
     spec:
       containers:
+        # busybox, not http-echo: the same body on the same port, and an image
+        # WITH a shell and a `cat`, which is what a real service image has and
+        # http-echo (distroless) does not. The env cell reads the running
+        # process through `exec cat /proc/1/environ`; on an image with no cat
+        # the exec opens and fails, the agent falls back to the pod spec, and
+        # FROM_SECRET arrives empty - which is the spec fallback proving itself,
+        # not the exec. An evening went to that.
         - name: echo
-          image: hashicorp/http-echo:1.0.0
-          args: ["-listen=:8085", "-text=deployed-tko-linux"]
+          image: busybox:1.37
+          command: ["sh", "-c", "mkdir -p /www && printf deployed-tko-linux > /www/index.html && exec httpd -f -p 8085 -h /www"]
           env:
             - { name: E2E_DEPLOYED, value: from-the-cluster }
             - { name: SHARED_KEY, value: cluster-value }
@@ -468,9 +475,16 @@ spec:
     metadata: { labels: { app: tko-mac } }
     spec:
       containers:
+        # busybox, not http-echo: the same body on the same port, and an image
+        # WITH a shell and a `cat`, which is what a real service image has and
+        # http-echo (distroless) does not. The env cell reads the running
+        # process through `exec cat /proc/1/environ`; on an image with no cat
+        # the exec opens and fails, the agent falls back to the pod spec, and
+        # FROM_SECRET arrives empty - which is the spec fallback proving itself,
+        # not the exec. An evening went to that.
         - name: echo
-          image: hashicorp/http-echo:1.0.0
-          args: ["-listen=:8086", "-text=deployed-tko-mac"]
+          image: busybox:1.37
+          command: ["sh", "-c", "mkdir -p /www && printf deployed-tko-mac > /www/index.html && exec httpd -f -p 8086 -h /www"]
           env:
             - { name: E2E_DEPLOYED, value: from-the-cluster }
             - { name: SHARED_KEY, value: cluster-value }
@@ -497,9 +511,16 @@ spec:
     metadata: { labels: { app: tko-win } }
     spec:
       containers:
+        # busybox, not http-echo: the same body on the same port, and an image
+        # WITH a shell and a `cat`, which is what a real service image has and
+        # http-echo (distroless) does not. The env cell reads the running
+        # process through `exec cat /proc/1/environ`; on an image with no cat
+        # the exec opens and fails, the agent falls back to the pod spec, and
+        # FROM_SECRET arrives empty - which is the spec fallback proving itself,
+        # not the exec. An evening went to that.
         - name: echo
-          image: hashicorp/http-echo:1.0.0
-          args: ["-listen=:8087", "-text=deployed-tko-win"]
+          image: busybox:1.37
+          command: ["sh", "-c", "mkdir -p /www && printf deployed-tko-win > /www/index.html && exec httpd -f -p 8087 -h /www"]
           env:
             - { name: E2E_DEPLOYED, value: from-the-cluster }
             - { name: SHARED_KEY, value: cluster-value }

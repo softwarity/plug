@@ -50,3 +50,27 @@ func truncate(v []string) []string {
 	}
 	return out
 }
+
+// Channel 3 is the API server's verdict. A Failure there is the error the
+// caller gets - "executable file not found" when the image has no cat, which
+// is what a distroless target says - and a Success, or silence, is none.
+func TestChannelThreeFailureBecomesTheError(t *testing.T) {
+	frame := func(op byte, payload []byte) []byte { return append([]byte{0x80 | op, byte(len(payload))}, payload...) }
+	failing := bytes.Join([][]byte{
+		frame(0x2, append([]byte{3}, []byte(`{"status":"Failure","message":"error executing command in container: executable file not found","reason":"InternalError"}`)...)),
+		frame(0x8, nil),
+	}, nil)
+	out, err := readChannelFrames(bufio.NewReader(bytes.NewReader(failing)), 1)
+	if len(out) != 0 || err == nil || !bytes.Contains([]byte(err.Error()), []byte("executable file not found")) {
+		t.Fatalf("out=%q err=%v", out, err)
+	}
+	succeeding := bytes.Join([][]byte{
+		frame(0x2, append([]byte{1}, []byte("A=1\x00")...)),
+		frame(0x2, append([]byte{3}, []byte(`{"status":"Success"}`)...)),
+		frame(0x8, nil),
+	}, nil)
+	out, err = readChannelFrames(bufio.NewReader(bytes.NewReader(succeeding)), 1)
+	if err != nil || string(out) != "A=1\x00" {
+		t.Fatalf("out=%q err=%v", out, err)
+	}
+}

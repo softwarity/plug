@@ -202,6 +202,11 @@ func k8sEnvOf(ns, name string) []string {
 		envNote("note: the agent may not exec into pods in %s, so %s gets its variables from the pod SPEC: "+
 			"values that come from a Secret or ConfigMap arrive empty. Grant it: kubectl -n %s patch role plug-serve-names "+
 			"--type=json -p '[{\"op\":\"add\",\"path\":\"/rules/-\",\"value\":{\"apiGroups\":[\"\"],\"resources\":[\"pods/exec\"],\"verbs\":[\"get\",\"create\"]}}]'", ns, name, ns)
+	} else if strings.Contains(err.Error(), "executable file not found") {
+		// A distroless image: no /bin/cat to run. Nothing to grant, nothing to
+		// fix on the cluster; the spec is what there is, and the note says so.
+		envNote("note: %s's image has no `cat` (distroless), so the running process cannot be read: %s gets its variables from the pod SPEC, "+
+			"and values that come from a Secret or ConfigMap arrive empty", name, name)
 	} else {
 		envNote("note: reading %s's environment from pod %s failed (%v); using the pod spec instead", name, pod, err)
 	}
@@ -305,6 +310,12 @@ func k8sExecEnviron(ns, pod, container string) ([]string, int, error) {
 	if err != nil && len(stdout) == 0 {
 		return nil, 0, err
 	}
+	if len(stdout) == 0 {
+		// 101 and then nothing on channel 1: the session opened and the
+		// process wrote nothing we kept. Said, not swallowed - an empty
+		// environment is not a thing a running container has.
+		return nil, 0, fmt.Errorf("exec opened but stdout carried nothing (read error: %v)", err)
+	}
 	return procEnviron(stdout), 0, nil
 }
 
@@ -312,8 +323,14 @@ func k8sExecEnviron(ns, pod, container string) ([]string, int, error) {
 // the connection closes or a close frame arrives, and concatenates the payload
 // of every binary/text frame whose first byte is the wanted channel. Pure over
 // its reader, so the framing is proven on bytes rather than on a cluster.
+//
+// Channel 3 is the API server's own verdict on the exec, a JSON Status: it is
+// where "executable file not found" lives when the target image has no `cat`,
+// which hashicorp/http-echo, a distroless image, does not. An evening was
+// spent on an exec that opened and carried nothing, because this channel was
+// dropped on the floor. It is returned as the error now, so the note names it.
 func readChannelFrames(r *bufio.Reader, channel byte) ([]byte, error) {
-	var out []byte
+	var out, status []byte
 	for {
 		h0, err := r.ReadByte()
 		if err != nil {
@@ -360,11 +377,37 @@ func readChannelFrames(r *bufio.Reader, channel byte) ([]byte, error) {
 		}
 		switch opcode {
 		case 0x8: // close
-			return out, nil
+			return out, execStatusError(status)
 		case 0x1, 0x2: // text, binary
-			if len(payload) > 0 && payload[0] == channel {
+			if len(payload) == 0 {
+				continue
+			}
+			switch payload[0] {
+			case channel:
 				out = append(out, payload[1:]...)
+			case 3:
+				status = append(status, payload[1:]...)
 			}
 		}
 	}
+}
+
+// execStatusError turns the channel-3 Status into an error when it says
+// Failure, and nil when it says Success or said nothing.
+func execStatusError(status []byte) error {
+	if len(status) == 0 {
+		return nil
+	}
+	var st struct {
+		Status  string `json:"status"`
+		Message string `json:"message"`
+		Reason  string `json:"reason"`
+	}
+	if json.Unmarshal(status, &st) != nil {
+		return fmt.Errorf("exec ended with an unreadable status: %.200s", string(status))
+	}
+	if st.Status == "Success" {
+		return nil
+	}
+	return fmt.Errorf("exec: %s", strings.TrimSpace(st.Message+" "+st.Reason))
 }
