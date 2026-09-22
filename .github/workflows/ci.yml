@@ -81,7 +81,12 @@ jobs:
         working-directory: cli
         shell: bash
         run: test -s coverage.out && cp coverage.out "cli-${{ matrix.os }}.cov" || echo "no profile (the tests did not run)"
+      # Not worth a release: this is a coverage report. GitHub's artifact service
+      # answered FinalizeArtifact with a 403 once, the action calls that
+      # non-retryable, the step failed, and everything after it in the job was
+      # skipped - the cross-compile and the binaries every e2e leg downloads.
       - uses: actions/upload-artifact@v7
+        continue-on-error: true
         if: always()
         with:
           name: cov-cli-${{ matrix.os }}
@@ -92,9 +97,26 @@ jobs:
         if: always()
         shell: bash
         run: mkdir -p plat && printf '%s' "${{ job.status }}" > "plat/test-${{ matrix.os }}.txt"
+      # Retried once. Other jobs consume this artifact, so it cannot be optional,
+      # but a transient 403 from GitHub's artifact service ("non-retryable" to the
+      # action) must not cost a 25-minute release either. The second attempt
+      # overwrites, since a failed finalize can leave the name taken.
       - uses: actions/upload-artifact@v7
+        id: up_plat_test
+        continue-on-error: true
         if: always()
         with:
+          name: plat-test-${{ matrix.os }}
+          path: plat/*.txt
+          # 30 days, not 1: the release gate re-reads these markers to decide
+          # whether a tagged commit is publishable, and a tag can be cut days
+          # after the commit. Expired markers would fail the gate closed for a
+          # reason that has nothing to do with the code. They are 170 bytes.
+          retention-days: 30
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.up_plat_test.outcome == 'failure'
+        with:
+          overwrite: true
           name: plat-test-${{ matrix.os }}
           path: plat/*.txt
           # 30 days, not 1: the release gate re-reads these markers to decide
@@ -142,9 +164,22 @@ jobs:
           PLAT_OS: ${{ matrix.os }}
         run: bash scripts/selftest.sh
 
+      # Retried once. Other jobs consume this artifact, so it cannot be optional,
+      # but a transient 403 from GitHub's artifact service ("non-retryable" to the
+      # action) must not cost a 25-minute release either. The second attempt
+      # overwrites, since a failed finalize can leave the name taken.
       - uses: actions/upload-artifact@v7
+        id: up_plat_selftest
+        continue-on-error: true
         if: always()
         with:
+          name: plat-selftest-${{ matrix.os }}
+          path: cli/plat/*.txt
+          retention-days: 30 # the release gate re-reads them; see plat-test above
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.up_plat_selftest.outcome == 'failure'
+        with:
+          overwrite: true
           name: plat-selftest-${{ matrix.os }}
           path: cli/plat/*.txt
           retention-days: 30 # the release gate re-reads them; see plat-test above
@@ -196,7 +231,12 @@ jobs:
       - name: Vet & test the agent helper
         working-directory: agent
         run: go vet ./... && go build ./... && go test -race -covermode=atomic -coverprofile=agent.cov ./...
+      # Not worth a release: this is a coverage report. GitHub's artifact service
+      # answered FinalizeArtifact with a 403 once, the action calls that
+      # non-retryable, the step failed, and everything after it in the job was
+      # skipped - the cross-compile and the binaries every e2e leg downloads.
       - uses: actions/upload-artifact@v7
+        continue-on-error: true
         if: always()
         with:
           name: cov-agent
@@ -216,8 +256,21 @@ jobs:
             GOOS=$goos GOARCH=$goarch go build -trimpath -ldflags '-s -w' \
               -o "../dist/plug-$goos-$goarch$ext" .
           done
+      # Retried once. Other jobs consume this artifact, so it cannot be optional,
+      # but a transient 403 from GitHub's artifact service ("non-retryable" to the
+      # action) must not cost a 25-minute release either. The second attempt
+      # overwrites, since a failed finalize can leave the name taken.
       - uses: actions/upload-artifact@v7
+        id: up_binaries
+        continue-on-error: true
         with:
+          name: plug-binaries
+          path: dist/*
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        if: steps.up_binaries.outcome == 'failure'
+        with:
+          overwrite: true
           name: plug-binaries
           path: dist/*
           if-no-files-found: error
@@ -285,7 +338,12 @@ jobs:
             (cd agent && go tool cover -html=../cov/agent.cov -o ../html/agent.html)
           fi
           ls -la html
+      # Not worth a release: this is a coverage report. GitHub's artifact service
+      # answered FinalizeArtifact with a 403 once, the action calls that
+      # non-retryable, the step failed, and everything after it in the job was
+      # skipped - the cross-compile and the binaries every e2e leg downloads.
       - uses: actions/upload-artifact@v7
+        continue-on-error: true
         with:
           name: coverage-html
           path: html/
@@ -297,6 +355,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - run: bash scripts/ci/check-common-block.sh
+      # The cluster idle loop decides which caller job ends it from the corr id;
+      # a wrong family or attempt there means six runners held to their TTL.
+      - run: IDLE_SELFTEST=1 bash scripts/ci/idle-until-caller-done.sh
 
   # The e2e clients, built ONCE for every leg.
   #
@@ -350,8 +411,22 @@ jobs:
           restore-keys: npm-Linux-
       - name: Build them
         run: bash scripts/ci/build-clients.sh e2e-clients
+      # Retried once. Other jobs consume this artifact, so it cannot be optional,
+      # but a transient 403 from GitHub's artifact service ("non-retryable" to the
+      # action) must not cost a 25-minute release either. The second attempt
+      # overwrites, since a failed finalize can leave the name taken.
       - uses: actions/upload-artifact@v7
+        id: up_clients
+        continue-on-error: true
         with:
+          name: e2e-clients
+          path: e2e-clients/*
+          if-no-files-found: error # a leg with no bundle rebuilds everything, silently slow
+          retention-days: 1
+      - uses: actions/upload-artifact@v7
+        if: steps.up_clients.outcome == 'failure'
+        with:
+          overwrite: true
           name: e2e-clients
           path: e2e-clients/*
           if-no-files-found: error # a leg with no bundle rebuilds everything, silently slow
@@ -624,8 +699,21 @@ jobs:
           done
           docker rm pl >/dev/null
           ls -la latest-launchers/
+      # Retried once. Other jobs consume this artifact, so it cannot be optional,
+      # but a transient 403 from GitHub's artifact service ("non-retryable" to the
+      # action) must not cost a 25-minute release either. The second attempt
+      # overwrites, since a failed finalize can leave the name taken.
       - uses: actions/upload-artifact@v7
+        id: up_launchers
+        continue-on-error: true
         with:
+          name: latest-launchers
+          path: latest-launchers/*
+          retention-days: 1
+      - uses: actions/upload-artifact@v7
+        if: steps.up_launchers.outcome == 'failure'
+        with:
+          overwrite: true
           name: latest-launchers
           path: latest-launchers/*
           retention-days: 1
@@ -832,6 +920,10 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh takeover "$A" "$B" 2222
+      - name: Orphaned takeover, session killed with no unserve (the workload comes back without an agent restart)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh orphan "$A" "$B" 2222
       - name: Resilience — agent restarted mid-session (self-heal, boot-gc, re-park)
         if: always()
         shell: bash
@@ -1144,6 +1236,10 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh takeover "$A" "$B" 2222
+      - name: Orphaned takeover, session killed with no unserve (the workload comes back without an agent restart)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh orphan "$A" "$B" 2222
       - name: Resilience — agent restarted mid-session (self-heal, boot-gc, re-park)
         if: always()
         shell: bash
@@ -1344,6 +1440,10 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh takeover "$A" "$B" 2222
+      - name: Orphaned takeover, session killed with no unserve (the workload comes back without an agent restart)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh orphan "$A" "$B" 2222
       - name: Resilience — agent restarted mid-session (self-heal, boot-gc, re-park)
         if: always()
         shell: bash

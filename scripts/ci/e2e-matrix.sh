@@ -8,7 +8,7 @@
 #
 #   e2e-matrix.sh <phase> <cluster-a> <cluster-b> [port]
 #   phases: setup env matrix multicluster dockerrun keymount outage expose exposevar
-#           gateway takeover collision
+#           gateway takeover orphan collision
 #
 # `setup` installs plug + builds the clients and records the shared state
 # ($RUNNER_TEMP/plug-e2e-env) the other phases read back — they run as separate
@@ -1295,6 +1295,82 @@ do_takeover() {
   sum "**takeover (park+restore)** ❌ — during \`${during:-nothing}\` · after \`${after:-nothing}\`"; return 1
 }
 
+# orphan: the session dies WITHOUT ever saying so - kill -9 on the whole tree,
+# which is a closed lid, a crashed terminal, a network gone at the moment of
+# Ctrl-C. No unserve reaches the agent. The deployed workload must come back on
+# its own, and the agent must NOT be restarted to get there.
+#
+# This is the production incident the periodic sweep was written for: Kubernetes
+# Services left pointing at a dead session port, put right only by a
+# `kubectl rollout restart` of the agent, because the sweep that restores parked
+# workloads ran at boot and never again. `takeover` above ends its session
+# cleanly and `resilience` kills the AGENT; nothing killed the session.
+#
+# The budget is the sweep: one pass a minute, a liveness probe, then the
+# orchestrator putting the workload back. 150s covers the worst case of just
+# having missed a pass. The local echo carries a -ttl because on Windows a
+# TerminateProcess on plug.exe does not reach its native children, and a
+# leftover listener must not outlive the cell.
+hard_kill_tree() {
+  for hk_c in $(ps_all | awk -v p="$1" '$2==p {print $1}'); do
+    hard_kill_tree "$hk_c"
+  done
+  kill -9 "$1" 2>/dev/null
+}
+do_orphan() {
+  local tname tport
+  case "$(uname -s)" in
+    Darwin)               tname=tko-mac   tport=8086 ;;
+    MINGW*|MSYS*|CYGWIN*) tname=tko-win   tport=8087 ;;
+    *)                    tname=tko-linux tport=8085 ;;
+  esac
+  echo "=== orphan: take $tname over, kill the session with no unserve, wait for it to come back by itself ==="
+  if ! helper_bin echo-local; then
+    echo "--- orphan FAIL - echo-local did not build"; sum "**orphaned takeover (periodic sweep)** ❌ (build)"; return 1
+  fi
+  probe() { plug curl -s --max-time 10 "http://prober:8097/fetch?url=http://$tname:$tport/" 2>/dev/null | tr -d '\r' | tail -1; }
+
+  local r=""
+  for _ in 1 2 3 4 5; do r="$(probe)"; [ "$r" = "deployed-$tname" ] && break; sleep 3; done
+  if [ "$r" != "deployed-$tname" ]; then
+    echo "--- orphan FAIL - baseline: prober said '${r:-nothing}' (want deployed-$tname)"
+    sum "**orphaned takeover (periodic sweep)** ❌ - baseline"; return 1
+  fi
+
+  "$PLUG" --host "$ip" --port "$port" -s "$tname:$tport:18098" \
+    "$root/echo-local$ext" -addr 127.0.0.1:18098 -text "orphan-$tname" -ttl 120s >/tmp/orphan.out 2>&1 &
+  local or_pid=$! during=""
+  sleep 8 # arm + park + end-to-end verify
+  for _ in 1 2 3; do during="$(probe)"; [ "$during" = "orphan-$tname" ] && break; sleep 3; done
+  if [ "$during" != "orphan-$tname" ]; then
+    hard_kill_tree "$or_pid"; wait "$or_pid" 2>/dev/null || true
+    echo "--- orphan FAIL - the takeover never answered: prober said '${during:-nothing}' (want orphan-$tname)"
+    echo "    --- session output ---"; tail -12 /tmp/orphan.out 2>/dev/null | sed 's/^/    /'
+    sum "**orphaned takeover (periodic sweep)** ❌ - takeover never answered"; return 1
+  fi
+
+  # The kill. Depth-first and -9: nothing in the tree gets to run a teardown.
+  hard_kill_tree "$or_pid"; wait "$or_pid" 2>/dev/null || true
+  local killed_at; killed_at=$(date +%s)
+
+  local after="" waited=0
+  while [ "$waited" -lt 150 ]; do
+    after="$(probe)"
+    [ "$after" = "deployed-$tname" ] && break
+    sleep 5
+    waited=$(( $(date +%s) - killed_at ))
+  done
+  waited=$(( $(date +%s) - killed_at ))
+
+  if [ "$after" = "deployed-$tname" ]; then
+    echo "orphan OK - session killed with no unserve, deployed $tname answering again after ${waited}s, agent never restarted"
+    sum "**orphaned takeover (periodic sweep)** ✅ (${waited}s)"; return 0
+  fi
+  echo "--- orphan FAIL - ${waited}s after the kill the prober still says '${after:-nothing}' (want deployed-$tname): the workload is still parked and only an agent restart would bring it back"
+  echo "    --- session output ---"; tail -12 /tmp/orphan.out 2>/dev/null | sed 's/^/    /'
+  sum "**orphaned takeover (periodic sweep)** ❌ - still parked after ${waited}s"; return 1
+}
+
 # collision: a name ANOTHER live plug session already serves must be REFUSED —
 # the guard the takeover default deliberately keeps (takeover parks DEPLOYED
 # workloads only, never another dev's session). A deployed name is no longer
@@ -2141,6 +2217,7 @@ case "$phase" in
   exposevar)    do_expose_var ;;
   gateway)      do_gateway ;;
   takeover)     do_takeover ;;
+  orphan)       do_orphan ;;
   collision)    do_collision ;;
   lease)        do_lease ;;
   sameport)     do_sameport ;;
