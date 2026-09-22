@@ -206,6 +206,17 @@ import { RouterLink } from '@angular/router';
       <a routerLink="/kubernetes">Kubernetes</a>.
     </p>
 
+    <h3>For an AI coding agent</h3>
+    <p>
+      <code>plug mcp</code> serves what plug knows to an agent, as tools with structured answers
+      rather than prose for a person: which clusters this machine knows, what <code>doctor</code>
+      finds and the exact remedy, the environment a deployed workload runs with, whether a name
+      exists. An agent that reads "the pod's variables came through empty because the role lacks
+      <code>pods/exec</code>" can fix that; one that reads a wall of text guesses. It is the
+      launcher itself, over stdio, so nothing listens on a port and every cluster's version is
+      handled the way it already is.
+    </p>
+
     <h3>Built with open source</h3>
     <p>plug stands on the shoulders of these projects - thank you:</p>
     <table>

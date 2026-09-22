@@ -26,7 +26,7 @@ func TestEveryExampleInTheHelpIsAValidInvocation(t *testing.T) {
 		"ls": true, "test": true, "doctor": true, "update": true, "rn": true,
 		"rm": true, "version": true, "versions": true, "prune": true,
 		"uninstall": true, "about": true, "init": true, "down": true,
-		"install-service": true, "remove-service": true, "selftest": true,
+		"install-service": true, "remove-service": true, "selftest": true, "mcp": true,
 	}
 
 	// Indented, which is what tells an invocation from the title line: every

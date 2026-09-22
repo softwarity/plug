@@ -58,6 +58,8 @@ Usage:
   plug ls                              list profiles
   plug test [profile]                  check an agent is reachable
   plug doctor [-p profile] [--fix]     health-check everything plug touches
+  plug mcp                     an MCP server over stdio, for an AI coding agent: the
+                               cluster's names, doctor, a workload's environment, as tools
                                        (binaries, resolver, service, clusters),
                                        apply the safe repairs with --fix, and
                                        offer to report problems as an issue
@@ -400,6 +402,9 @@ func main() {
 		return
 	case "doctor":
 		cmdDoctor(args[1:])
+		return
+	case "mcp":
+		cmdMCP(args[1:])
 		return
 	case "update":
 		cmdUpdate(args[1:])

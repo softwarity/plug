@@ -43,6 +43,28 @@ session runs with your environment alone, as before: update the agent and it
 starts. The e2e `env passthrough` cell asserts the three rules against a
 deployed service carrying variables nothing else has, in all three families.
 
+### plug mcp: what plug knows, served to an AI coding agent
+
+What an agent lacks is not the ability to run `plug -s …`; it is knowing what
+to run and reading what came of it. Which clusters this machine knows, what
+doctor finds and the exact remedy, the environment a deployed workload runs
+with, whether a name exists in the cluster: plug knew all of that and answered
+in prose for a person. `plug mcp` answers with structure.
+
+It is an MCP server over stdio, the way editors launch one: `{"command":
+"plug", "args": ["mcp"]}` in the editor's MCP config, and nothing listens on a
+port. Five tools: `list_profiles`, `doctor` (per check: status, detail,
+remedy), `env_of` (a workload's variables, secret-looking values masked unless
+`reveal` is asked), `resolve_name`, `agent_info`. Nothing is new on the agent
+side: every tool is a verb the CLI already speaks or the doctor it already
+runs, so the server is the launcher itself, and every cluster's version is
+handled the way it already is.
+
+Driven for real against this machine's profiles: `doctor` on an unreachable
+cluster answers one `fail` with the address, `env_of` an error naming the
+profile it could not reach. Serving a name from a tool is not in this
+version: a session is a process that lives, and it deserves its own shape.
+
 ---
 
 ## 2.15.3

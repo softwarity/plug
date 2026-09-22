@@ -97,6 +97,20 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
         <td>remove plug from this machine (binary, cache, profiles - it lists, you confirm)</td>
         <td></td>
       </tr>
+      <tr>
+        <td><code>plug mcp</code></td>
+        <td>
+          an <strong>MCP server</strong> over stdio, for an AI coding agent (Claude Code, Cursor,
+          Copilot). What an agent lacks is not the ability to run <code>plug -s …</code>, it is
+          knowing what to run and reading what came of it. The server answers with structure: the
+          profiles this machine knows, <code>doctor</code> check by check with the remedy, a
+          workload's environment (<code>env_of</code>, secret-looking values masked unless asked),
+          whether a name exists in the cluster, the agent's own report. One entry in the editor's
+          MCP config - <code>{{ '{' }}"command": "plug", "args": ["mcp"]{{ '}' }}</code> - covers
+          every profile, whatever version each cluster runs: the server is the launcher, and the
+          launcher already follows each cluster's agent.
+        </td>
+      </tr>
       </tbody>
     </table>
 
