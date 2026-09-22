@@ -51,6 +51,11 @@ export const routes: Routes = [
       import('./pages/agent-kubernetes.component').then((m) => m.AgentKubernetesComponent),
   },
   {
+    path: 'mcp',
+    title: 'plug - MCP for AI coding agents',
+    loadComponent: () => import('./pages/mcp.component').then((m) => m.McpComponent),
+  },
+  {
     path: 'troubleshooting',
     title: 'plug - Troubleshooting',
     loadComponent: () =>

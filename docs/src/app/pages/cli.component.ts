@@ -108,7 +108,8 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
           whether a name exists in the cluster, the agent's own report. One entry in the editor's
           MCP config - <code>{{ '{' }}"command": "plug", "args": ["mcp"]{{ '}' }}</code> - covers
           every profile, whatever version each cluster runs: the server is the launcher, and the
-          launcher already follows each cluster's agent.
+          launcher already follows each cluster's agent. Per-agent setup on the
+          <a routerLink="/mcp">MCP page</a>.
         </td>
       </tr>
       </tbody>

@@ -54,6 +54,7 @@ export class AppComponent {
     { path: '/profiles', label: 'Profiles & versions', icon: 'settings' },
     { path: '/swarm', label: 'Swarm', icon: 'dns' },
     { path: '/kubernetes', label: 'Kubernetes', icon: 'hub' },
+    { path: '/mcp', label: 'MCP for AI agents', icon: 'smart_toy' },
     { path: '/security', label: 'Security model', icon: 'shield' },
     { path: '/meerkat', label: 'Meerkat', icon: 'shield_person', logo: 'meerkat' },
     { path: '/troubleshooting', label: 'Troubleshooting', icon: 'troubleshoot' },
