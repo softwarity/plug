@@ -422,7 +422,25 @@ do_env() {
     MINGW*|MSYS*|CYGWIN*) tname=tko-win ;;
     *)                    tname=tko-linux ;;
   esac
+  # Three takeovers of the same name, back to back. Each one parks tko-<os>
+  # and its teardown restores it, and the next must not start until that
+  # restore has landed: the first run of this cell had the first and third
+  # sessions answer nothing at all, on the arm64 leg, because they hit the
+  # previous session's teardown still in flight. takeover waits the same way.
+  local tport
+  case "$tname" in tko-mac) tport=8086 ;; tko-win) tport=8087 ;; *) tport=8085 ;; esac
+  restored() { # until the deployed service answers again, or give up after 30s
+    local r=""
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      r="$(plug curl -s --max-time 5 "http://prober:8097/fetch?url=http://$tname:$tport/" 2>/dev/null | tr -d '\r' | tail -1)"
+      [ "$r" = "deployed-$tname" ] && return 0
+      sleep 3
+    done
+    echo "--- workload env: $tname was not restored between sessions (prober said '${r:-nothing}')"
+    return 1
+  }
   wenv() { # $1 = extra plug flags, $2 = a caller variable or "", prints DEPLOYED/SHARED as the child saw them
+    restored || true
     env $2 perl -e 'alarm 60; exec @ARGV or exit 127' "$PLUG" --host "$ip" --port "$port" $1 -s "$tname:18099:18099" \
       bash -c 'echo "${E2E_DEPLOYED:-unset}/${SHARED_KEY:-unset}"' 2>/dev/null | tr -d '\r' | tail -1
   }
