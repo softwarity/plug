@@ -307,7 +307,8 @@ func probeVPNFollowing(up *upstreamDNS, dnsIP string, original []string, addUndo
 		}
 		if got := resolveThroughPlug(dnsIP, scopeName, 5*time.Second); got != scopeIP {
 			return fmt.Errorf("vpn probe: %s resolved to %q through plug, want %s - "+
-				"plug names the scope's resolver but does not reach it", scopeName, got, scopeIP)
+				"plug names the scope's resolver but does not reach it (routes %s to %v; ordinary %v; the scope's resolver was asked %d times)",
+				scopeName, got, scopeIP, scopeName, up.serversFor(scopeName), up.all(), resolver.asked.Load()-askedBefore)
 		}
 		if resolver.asked.Load() == askedBefore {
 			return fmt.Errorf("vpn probe: %s resolved to %s but the scope's resolver was never asked", scopeName, scopeIP)

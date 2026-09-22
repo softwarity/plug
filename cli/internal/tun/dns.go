@@ -1,7 +1,6 @@
 package tun
 
 import (
-	"context"
 	"encoding/binary"
 	"fmt"
 	"net"
@@ -136,10 +135,9 @@ func (t *faketab) lookup(ip uint32) (string, bool) {
 // gone away (internal names dead) or missed the one that just appeared
 // (internal names never resolving at all) until the session was restarted.
 type upstreamDNS struct {
-	mu       sync.RWMutex
-	addrs    []string // "host:port", port defaulted on the way in
-	resolver *net.Resolver
-	timeout  time.Duration // how long relay waits; tests shorten it
+	mu      sync.RWMutex
+	addrs   []string      // "host:port", port defaulted on the way in
+	timeout time.Duration // how long relay waits; tests shorten it
 	// scoped are the resolvers that answer ONLY for a domain and its
 	// subdomains: what a corporate VPN pushes for its internal names while the
 	// rest of the world keeps going to the machine's ordinary servers. macOS
@@ -164,15 +162,6 @@ func newUpstream(servers []string) *upstreamDNS {
 		timeout: 4 * time.Second,
 	}
 	u.set(servers)
-	u.resolver = &net.Resolver{
-		PreferGo: true,
-		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			var d net.Dialer
-			// Read at DIAL time, never captured: a resolver built once must still
-			// follow the servers as they change.
-			return d.DialContext(ctx, network, u.primary())
-		},
-	}
 	return u
 }
 
@@ -512,13 +501,18 @@ func answerDNS(q []byte, tab *faketab, upstream *upstreamDNS, check nameChecker)
 			rcode = 2 // SERVFAIL: no upstream to resolve it with
 			break
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-		defer cancel()
-		if ips, e := upstream.resolver.LookupIP(ctx, "ip4", name); e == nil && len(ips) > 0 {
-			answerIP = ips[0].To4()
-		} else {
-			rcode = 3 // NXDOMAIN
+		// Relayed as-is, like every other type, and NOT through a Go resolver
+		// dialling u.primary(): that resolver went to the ordinary servers for
+		// every name, scoped or not, so the 2.15.2 routing of a VPN's names to
+		// the VPN's resolver held for AAAA and never for A - the one record
+		// that matters. The selftest's scoped probe found it: the scope's
+		// resolver was asked for the AAAA, the A went to the box, the name did
+		// not resolve. relay picks the servers per name; the reply comes back
+		// untouched, CNAME chain and all, which is what the client asked for.
+		if reply := upstream.relay(name, q); reply != nil {
+			return capReply(reply, q, qend)
 		}
+		rcode = 2 // SERVFAIL: the upstream said nothing, say that rather than invent NXDOMAIN
 	}
 
 	r := make([]byte, 0, 64)

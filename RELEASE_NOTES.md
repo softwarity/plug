@@ -27,6 +27,22 @@ else still goes where it went, then that the scope goes away with the VPN.
 Linux has no such thing in resolv.conf, and the probe says so there rather than
 pretending.
 
+### The A record of a VPN's scoped name went to the wrong resolver, on every OS
+
+The 2.15.2 routing of a VPN's names to the VPN's own resolver held for AAAA
+and never for A, which is the record that matters. The A of a dotted name went
+through a Go resolver dialling the primary upstream, for every name, scoped or
+not; the AAAA went through the relay that picks servers per name. A scoped
+name's AAAA reached the scope, its A reached the box, and the name did not
+resolve. It looked fixed on the machine it was found on because the VPN's
+resolver happened to be the primary upstream there at the time.
+
+Found by the selftest's new scoped probe on its first run under root, before
+it ever reached CI. The A is relayed like every other type now, through the
+same per-name choice, and the reply comes back as the upstream sent it. A
+test pins both halves: the A follows a later change of servers, and it follows
+a scope. Mutating it back to the primary fails that test.
+
 ### doctor diagnoses a captive portal on Windows
 
 The rule was shared and tested everywhere; the collector existed on macOS only.

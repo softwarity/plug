@@ -1,11 +1,9 @@
 package tun
 
 import (
-	"context"
-	"fmt"
-	"net"
 	"strings"
 	"testing"
+	"time"
 )
 
 func up(addr string, metric uint32) dnsCandidate {
@@ -165,32 +163,34 @@ func TestUpstreamSameIgnoresNoOpRefreshes(t *testing.T) {
 	}
 }
 
-// The resolver is built once and lives for the session, so it must read the
-// address at DIAL time. Capturing it at construction was the bug in disguise:
-// set() would update the relay path and leave the A path on the old server.
-func TestResolverFollowsALaterSet(t *testing.T) {
-	u := newUpstream([]string{"192.0.2.1"})
-	dialed := make(chan string, 1)
-	u.resolver = &net.Resolver{PreferGo: true, Dial: func(_ context.Context, _, _ string) (net.Conn, error) {
-		select {
-		case dialed <- u.primary():
-		default:
-		}
-		return nil, errStub
-	}}
-	u.set([]string{"192.0.2.99"})
-	_, _ = u.resolver.LookupHost(context.Background(), "example.com")
-	select {
-	case got := <-dialed:
-		if got != "192.0.2.99:53" {
-			t.Errorf("resolver dialled %q, want the server set after it was built", got)
-		}
-	default:
-		t.Fatal("the resolver never dialled")
+// The A of a dotted name used to go through a Go resolver dialling
+// u.primary(), and that resolver went to the ORDINARY servers for every name:
+// a scoped name's A never reached its scope while its AAAA did, and the name
+// did not resolve. The selftest's scoped probe found it on a real machine. The
+// A is relayed like every other type now, and the two properties that path has
+// to keep are pinned here: it follows a later set(), and it follows a scope.
+func TestTheAOfADottedNameFollowsSetAndScope(t *testing.T) {
+	old := newFakeUpstream(t, nxdomainReply)
+	fresh := newFakeUpstream(t, nxdomainReply)
+	scope := newFakeUpstream(t, nxdomainReply)
+	u := newUpstream([]string{old.conn.LocalAddr().String()})
+	u.timeout = 300 * time.Millisecond
+
+	u.set([]string{fresh.conn.LocalAddr().String()})
+	_ = answerDNS(query("example.com", 1), newFaketab(fakeBase), u, nil)
+	if old.wasAsked() {
+		t.Fatal("the A went to the server set at construction, not the one set later")
+	}
+	if !fresh.wasAsked() {
+		t.Fatal("the A reached neither server")
+	}
+
+	u.setScoped([]scopedUpstream{{domain: "corp.example", addrs: []string{scope.conn.LocalAddr().String()}}})
+	_ = answerDNS(query("db.corp.example", 1), newFaketab(fakeBase), u, nil)
+	if !scope.wasAsked() {
+		t.Fatal("the A of a scoped name went to the ordinary servers, not its scope")
 	}
 }
-
-var errStub = fmt.Errorf("stub dialer")
 
 // The watcher itself is exercised in fakevpn_test.go, against the real goroutine
 // and ticker. What belongs here is the decision it rests on: two readings that
