@@ -620,7 +620,15 @@ jobs:
     # The cluster's pull waits for it while the runner boots, checks out and
     # joins the tailnet. Making the dispatch wait for the build serialised two
     # things that have no reason to be in sequence.
-    if: github.event_name != 'pull_request'
+    # Gated on the selftest, which is 3 minutes and decides the run: a red
+    # selftest means the image is never published, and until now the nine e2e
+    # legs ran their 20 minutes on six clusters anyway, for a run already lost.
+    # fail-fast stays off INSIDE the matrices, so one OS failing still shows
+    # what the others do; this only stops dispatching clusters for a run the
+    # gate has already refused. The kill jobs are conditioned on this job's
+    # result and are skipped with it: nothing dispatched, nothing to kill.
+    needs: [selftest]
+    if: github.event_name != 'pull_request' && needs.selftest.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       actions: write # dispatch the cluster runs

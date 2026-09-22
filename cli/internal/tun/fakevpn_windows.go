@@ -137,6 +137,7 @@ func newVPNRig(_ []string, _ string, log logfn) (*vpnRig, error) {
 		restore:      teardown,
 		scope:        scope,
 		unscope:      unscope,
+		scopeWhileUp: true, // restore is teardown here; see the field
 		close: func() {
 			_ = unscope() // a rule left behind would route *.scoped.corp.test nowhere
 			if err := teardown(); err != nil {

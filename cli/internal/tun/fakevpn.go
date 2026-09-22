@@ -164,6 +164,13 @@ type vpnRig struct {
 	// and the probe says so and skips that part rather than pretending.
 	scope   func() error
 	unscope func() error
+	// scopeWhileUp: the scope must be declared while the VPN is still announced.
+	// On Windows the only faithful way to withdraw the fake VPN is to drop its
+	// adapter, and the scope's resolver lives on that adapter; withdraw it first
+	// and the scope points at an address nothing answers on. macOS and Linux
+	// withdraw by republishing servers and keep the address, so there the scope
+	// is tested the way a real client pushes it: beside the ordinary resolvers.
+	scopeWhileUp bool
 }
 
 // resolveThroughPlug asks plug's own stub, through the TUN, exactly as a child
@@ -294,14 +301,24 @@ func probeVPNFollowing(up *upstreamDNS, dnsIP string, original []string, addUndo
 	// asserts both halves at once: the scoped name reaches the VPN's resolver,
 	// and the ordinary servers are still what everything else goes to.
 	if rig.scope != nil {
-		if err := rig.restore(); err != nil {
-			return fmt.Errorf("vpn probe: put the machine's resolvers back before the scope: %w", err)
+		if !rig.scopeWhileUp {
+			if err := rig.restore(); err != nil {
+				return fmt.Errorf("vpn probe: put the machine's resolvers back before the scope: %w", err)
+			}
 		}
 		resolver.also(scopeName, net.ParseIP(scopeIP))
 		askedBefore := resolver.asked.Load()
-		if err := holdUntil(30*time.Second, rig.scope, func() bool {
-			return up.serversFor(scopeName)[0] == want && up.primary() != want
-		}); err != nil {
+		// What proves the scope was READ: the name is routed to it. With the
+		// ordinary resolvers back, that also means the primary is not the VPN's;
+		// with the VPN still up (Windows) the primary IS the VPN's, and the proof
+		// is that the scoped table names the resolver on its own account.
+		scoped := func() bool {
+			if up.serversFor(scopeName)[0] != want {
+				return false
+			}
+			return rig.scopeWhileUp || up.primary() != want
+		}
+		if err := holdUntil(30*time.Second, rig.scope, scoped); err != nil {
 			return fmt.Errorf("vpn probe: the fake VPN declared *.%s as its own, but plug routes %s to %v "+
 				"with ordinary servers %v - the scope was not read (%v)", scopeDomain, scopeName, up.serversFor(scopeName), up.all(), err)
 		}
@@ -315,14 +332,25 @@ func probeVPNFollowing(up *upstreamDNS, dnsIP string, original []string, addUndo
 		}
 		log.f("vpn probe: *.%s → the VPN's resolver, everything else → %v: the scoped name works beside the ordinary ones",
 			scopeDomain, up.all())
-		if err := holdUntil(30*time.Second, rig.unscope, func() bool { return up.serversFor(scopeName)[0] != want }); err != nil {
+		// With the VPN still up the scoped name falls back to the VPN's resolver
+		// as the primary, which is the same address: the proof that the SCOPE
+		// went is that the scoped table no longer names it, read directly.
+		unscoped := func() bool {
+			u := up
+			u.mu.RLock()
+			defer u.mu.RUnlock()
+			return pickScoped(scopeName, u.scoped, nil) == nil
+		}
+		if err := holdUntil(30*time.Second, rig.unscope, unscoped); err != nil {
 			return fmt.Errorf("vpn probe: the scope went away but plug still routes %s to %v (%v)", scopeName, up.serversFor(scopeName), err)
 		}
 		log.f("vpn probe: the scope went away and %s goes to the ordinary servers again", scopeName)
-		// Back to the "VPN replaced the resolvers" state, for the going-away test
-		// below to mean what it says.
-		if err := holdUntil(30*time.Second, rig.announce, func() bool { return up.primary() == want }); err != nil {
-			return fmt.Errorf("vpn probe: could not re-announce the fake VPN after the scope test: %w", err)
+		if !rig.scopeWhileUp {
+			// Back to the "VPN replaced the resolvers" state, for the going-away
+			// test below to mean what it says.
+			if err := holdUntil(30*time.Second, rig.announce, func() bool { return up.primary() == want }); err != nil {
+				return fmt.Errorf("vpn probe: could not re-announce the fake VPN after the scope test: %w", err)
+			}
 		}
 	} else {
 		log.f("vpn probe: this OS has no domain-scoped resolvers (resolv.conf knows none): the scope half is not run here")
