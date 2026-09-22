@@ -441,9 +441,13 @@ do_env() {
   }
   wenv() { # $1 = extra plug flags, $2 = a caller variable or "", prints DEPLOYED/SHARED as the child saw them
     restored || true
+    # plug's own lines (took over, the agent's notes, N variable(s) given) go
+    # to a file, printed only when the cell fails: three k8s legs answered
+    # "unset" for every variable and the log held nothing to say why.
     env $2 perl -e 'alarm 60; exec @ARGV or exit 127' "$PLUG" --host "$ip" --port "$port" $1 -s "$tname:18099:18099" \
-      bash -c 'echo "${E2E_DEPLOYED:-unset}/${SHARED_KEY:-unset}/${FROM_SECRET:-unset}"' 2>/dev/null | tr -d '\r' | tail -1
+      bash -c 'echo "${E2E_DEPLOYED:-unset}/${SHARED_KEY:-unset}/${FROM_SECRET:-unset}"' 2>>/tmp/wenv.err | tr -d '\r' | tail -1
   }
+  : > /tmp/wenv.err
   local r1 r2 r3
   r1="$(wenv "" "")"
   r2="$(wenv "" "SHARED_KEY=from-the-caller")"
@@ -457,6 +461,7 @@ do_env() {
     sum "**workload env (projected, caller wins, --no-env)** ✅"
   else
     echo "--- workload env FAIL: projected='$r1' (want from-the-cluster/cluster-value/from-a-secret) caller-wins='$r2' (want from-the-cluster/from-the-caller/from-a-secret) no-env='$r3' (want unset/unset/unset)"
+    echo "    --- what plug said across the three sessions ---"; grep -E "^\[plug\]" /tmp/wenv.err | grep -vE "using cluster version|serving |path verified|proving the path" | head -20 | sed "s/^/    /"
     sum "**workload env (projected, caller wins, --no-env)** ❌: \`$r1\` · \`$r2\` · \`$r3\`"; return 1
   fi
 
