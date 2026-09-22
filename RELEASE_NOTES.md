@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.15.3
+
 ### A corporate VPN's own names resolve during a session on Windows too
 
 The 2.15.2 fix read a VPN's domain-scoped resolver on macOS and routed its
