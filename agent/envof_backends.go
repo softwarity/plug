@@ -136,6 +136,7 @@ func k8sEnvOf(ns, name string) []string {
 		} `json:"spec"`
 	}
 	if code, err := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/services/"+name, nil, &svc); err != nil || code != 200 {
+		envNote("note: %s: the Service could not be read (code %d, %v), so no environment was projected", name, code, err)
 		return nil
 	}
 	sel := svc.Spec.Selector
@@ -146,6 +147,7 @@ func k8sEnvOf(ns, name string) []string {
 		}
 	}
 	if len(sel) == 0 {
+		envNote("note: %s: the Service has no selector and no parking receipt names one, so no pod to read", name)
 		return nil
 	}
 	var pods struct {
@@ -170,6 +172,9 @@ func k8sEnvOf(ns, name string) []string {
 	}
 	code, err := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/pods?labelSelector="+url.QueryEscape(labelSelector(sel)), nil, &pods)
 	if err != nil || code != 200 {
+		if code != 403 {
+			envNote("note: %s: listing pods for selector %s failed (code %d, %v)", name, labelSelector(sel), code, err)
+		}
 		if code == 403 {
 			envNote("note: the agent may not list pods in %s, so %s starts with your environment alone. "+
 				"Grant it: kubectl -n %s patch role plug-serve-names --type=json -p '[{\"op\":\"add\",\"path\":\"/rules/-\",\"value\":{\"apiGroups\":[\"\"],\"resources\":[\"pods\"],\"verbs\":[\"get\",\"list\"]}}]'", ns, name, ns)
@@ -188,6 +193,7 @@ func k8sEnvOf(ns, name string) []string {
 		}
 	}
 	if pod == "" {
+		envNote("note: %s: no Running pod behind selector %s (%d pod(s) seen), so no environment to read", name, labelSelector(sel), len(pods.Items))
 		return nil
 	}
 	if env, code, err := k8sExecEnviron(ns, pod, containers[0]); err == nil {
