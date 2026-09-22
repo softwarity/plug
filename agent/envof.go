@@ -33,9 +33,38 @@ func envExcluded(key string) bool {
 		"DYLD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES":
 		return true
 	}
-	return strings.HasPrefix(key, "KUBERNETES_") ||
-		strings.HasSuffix(key, "_SERVICE_HOST") || strings.HasSuffix(key, "_SERVICE_PORT") ||
-		strings.Contains(key, "_SERVICE_PORT_") || strings.HasPrefix(key, "PLUG_")
+	if strings.HasPrefix(key, "KUBERNETES_") || strings.HasPrefix(key, "PLUG_") {
+		return true
+	}
+	// The service links kube injects for every Service in the namespace:
+	// FOO_SERVICE_HOST, FOO_SERVICE_PORT, FOO_PORT=tcp://ip:port, and the
+	// FOO_PORT_<n>_TCP{,_ADDR,_PORT,_PROTO} family. Read off a real pod: sixty
+	// of them for a namespace of twenty services, every one a ClusterIP that
+	// exists nowhere but inside the cluster. An application's own FOO_PORT=3000
+	// is not a tcp:// URL, and that is the difference: only the kube shapes go.
+	return strings.HasSuffix(key, "_SERVICE_HOST") || strings.HasSuffix(key, "_SERVICE_PORT") ||
+		strings.Contains(key, "_SERVICE_PORT_") || kubeServiceLinkPort(key)
+}
+
+// kubeServiceLinkPort matches FOO_PORT_<n>_TCP, FOO_PORT_<n>_TCP_ADDR,
+// FOO_PORT_<n>_TCP_PORT, FOO_PORT_<n>_TCP_PROTO and their UDP twins: the docker
+// links kube still emulates. A bare FOO_PORT is decided by its VALUE (see
+// envLines): "tcp://…" is a link, "3000" is the application's.
+func kubeServiceLinkPort(key string) bool {
+	i := strings.Index(key, "_PORT_")
+	if i < 0 {
+		return false
+	}
+	rest := key[i+len("_PORT_"):]
+	j := 0
+	for j < len(rest) && rest[j] >= '0' && rest[j] <= '9' {
+		j++
+	}
+	if j == 0 {
+		return false
+	}
+	rest = rest[j:]
+	return rest == "_TCP" || rest == "_UDP" || strings.HasPrefix(rest, "_TCP_") || strings.HasPrefix(rest, "_UDP_")
 }
 
 // envLines renders "KEY=VALUE" lines from raw environ entries, dropping the
@@ -48,6 +77,9 @@ func envLines(raw []string) []string {
 		k, v, ok := strings.Cut(kv, "=")
 		if !ok || k == "" || envExcluded(k) {
 			continue
+		}
+		if strings.HasSuffix(k, "_PORT") && (strings.HasPrefix(v, "tcp://") || strings.HasPrefix(v, "udp://")) {
+			continue // a kube service link, not the application's own port
 		}
 		if _, dup := seen[k]; !dup {
 			order = append(order, k)

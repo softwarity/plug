@@ -42,3 +42,21 @@ func TestProcEnvironSplitsOnNUL(t *testing.T) {
 		t.Fatalf("got %v", got)
 	}
 }
+
+// The service links kube injects, as read off a real pod: sixty lines for a
+// namespace of twenty services, every one a ClusterIP that exists nowhere
+// else. They go. An application's own PORT=3000 stays, and so does a FOO_PORT
+// whose value is a number: only the tcp:// shape is a link.
+func TestKubeServiceLinksAreDroppedAndTheAppsOwnPortStays(t *testing.T) {
+	got := envLines([]string{
+		"AERO_CLIM_SVC_PORT=tcp://86.32.143.45:3134", "AERO_CLIM_SVC_PORT_3134_TCP=tcp://86.32.143.45:3134",
+		"AERO_CLIM_SVC_PORT_3134_TCP_ADDR=86.32.143.45", "AERO_CLIM_SVC_PORT_3134_TCP_PORT=3134",
+		"AERO_CLIM_SVC_PORT_3134_TCP_PROTO=tcp", "AERO_CLIM_SVC_SERVICE_HOST=86.32.143.45",
+		"RABBITMQ_PORT_5672_UDP=udp://1.2.3.4:5672",
+		"PORT=3000", "NEO_FLIGHT_FOLDER_SRV_PORT=3017", "NEO_ODB_PASSWORD=s3cret",
+	})
+	want := []string{"NEO_FLIGHT_FOLDER_SRV_PORT=3017", "NEO_ODB_PASSWORD=s3cret", "PORT=3000"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
