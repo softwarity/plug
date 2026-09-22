@@ -67,8 +67,25 @@ func configure(dev any, _ int, _, cidr, dnsIP string, up *upstreamDNS, log logfn
 		log.f("tun[win]: system DNS repointed — *.%s → %s (NRPT)", searchSuffix, dnsIP)
 	}
 
+	// A corporate VPN's own names. Its client pushes NRPT rules - "*.corp.example
+	// goes to 10.0.0.1" - and plug used to read the adapter table alone, which
+	// carries the ordinary servers and nothing about scopes: a session then sent
+	// the VPN's names to the ordinary resolver, which had never heard of them.
+	// The macOS twin of this (SupplementalMatchDomains) cost a day; the rule that
+	// routes a name to its scope is shared, this is only the Windows collector.
+	if scopes := scopedResolversNRPT(dnsIP); len(scopes) > 0 {
+		up.setScoped(scopes)
+		for _, sc := range scopes {
+			log.f("tun[win]: *.%s resolves through %v (an NRPT rule, kept as the system had it)", sc.domain, sc.addrs)
+		}
+	}
 	stopWatch := make(chan struct{})
-	go watchUpstreams(up, func() []string { return systemDNS(luid) }, upstreamPoll, log, stopWatch)
+	go watchUpstreams(up, func() []string {
+		// Re-read the scopes on the same tick as the servers: a VPN that comes up
+		// or goes away mid-session moves its rules with it.
+		up.setScoped(scopedResolversNRPT(dnsIP))
+		return systemDNS(luid)
+	}, upstreamPoll, log, stopWatch)
 	cleanup := func() {
 		close(stopWatch)
 		clearSystemNRPT(dnsIP)
@@ -203,6 +220,37 @@ func clearSystemNRPT(dnsIP string) {
 		}
 	}
 	flushDNS()
+}
+
+// scopedResolversNRPT reads every NRPT rule that is NOT plug's own and turns it
+// into a scoped upstream: the rule's names (".corp.example", leading dot as the
+// table stores them) and its GenericDNSServers (";"-separated). Rules pushed by
+// Group Policy live under the same DnsPolicyConfig key as the ones a VPN client
+// writes, which is why this reads the key rather than asking any one client.
+// A rule with no server, or whose server is plug, is skipped - the former
+// routes nowhere, the latter is us.
+func scopedResolversNRPT(own string) []scopedUpstream {
+	base, err := registry.OpenKey(registry.LOCAL_MACHINE, nrptConfigPath, registry.READ)
+	if err != nil {
+		return nil
+	}
+	defer base.Close()
+	subs, err := base.ReadSubKeyNames(-1)
+	if err != nil {
+		return nil
+	}
+	var out []scopedUpstream
+	for _, sub := range subs {
+		k, err := registry.OpenKey(base, sub, registry.QUERY_VALUE)
+		if err != nil {
+			continue
+		}
+		names, _, _ := k.GetStringsValue("Name")
+		servers, _, _ := k.GetStringValue("GenericDNSServers")
+		k.Close()
+		out = append(out, nrptScopes(names, servers, own)...)
+	}
+	return out
 }
 
 // flushDNS clears the resolver cache via dnsapi.dll — no external process.

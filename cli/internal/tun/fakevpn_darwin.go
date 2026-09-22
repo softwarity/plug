@@ -37,11 +37,22 @@ func newVPNRig(original []string, dnsIP string, log logfn) (*vpnRig, error) {
 	publish := func(servers []string) error {
 		return scutilSet(key, "d.init\nd.add ServerAddresses * "+strings.Join(servers, " ")+"\n")
 	}
+	// The scope is a network service OF ITS OWN, the way OpenVPN Connect and
+	// GlobalProtect publish theirs: State:/Network/Service/<name>/DNS with
+	// SupplementalMatchDomains, and the primary service untouched. That is the
+	// exact key layout scopedResolvers reads.
+	scopeKey := "State:/Network/Service/PlugSelftestVPN/DNS"
 	return &vpnRig{
 		resolverAddr: probeResolverAddr,
 		announce:     func() error { return publish([]string{probeResolverAddr}) },
 		restore:      func() error { return publish(original) },
+		scope: func() error {
+			return scutilSet(scopeKey, "d.init\nd.add ServerAddresses * "+probeResolverAddr+
+				"\nd.add SupplementalMatchDomains * "+scopeDomain+"\nd.add SupplementalMatchDomainsNoSearch # 1\n")
+		},
+		unscope: func() error { return scutilRemove(scopeKey) },
 		close: func() {
+			_ = scutilRemove(scopeKey) // a scope left behind would route *.scoped.corp.test nowhere
 			// Order matters: hand the machine its own resolvers back FIRST, so a
 			// probe that failed mid-way still leaves DNS working, then drop the
 			// address. The watchdog overwrites this key with plug's own address a

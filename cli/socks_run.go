@@ -405,13 +405,7 @@ func startExposes(cfg config) (func(), error) {
 			// (an editor closed, its terminal panes gone, what ran in them still
 			// running). If it is on this machine, we know which one.
 			if strings.Contains(msg, "another live session") {
-				if h := servedHolder(name); h != nil {
-					return fail(fmt.Errorf("%s: agent: %s\n      held on this machine by %s\n"+
-						"      Check it is yours, then free the name with:  kill %d", name, msg, h.describe(), h.pid))
-				}
-				return fail(fmt.Errorf("%s: agent: %s\n"+
-					"      No session of yours on this machine is recorded for it — the holder is on\n"+
-					"      another machine or another account. It frees itself once that session ends.", name, msg))
+				return fail(errors.New(holderVerdict(name, msg, servedHolder(name), tr.LocalAddr())))
 			}
 			return fail(fmt.Errorf("%s: agent: %s", name, msg))
 		}

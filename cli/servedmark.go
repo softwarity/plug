@@ -105,6 +105,55 @@ func (r *servedRecord) describe() string {
 	return out
 }
 
+// heldFrom pulls the holder's origin address out of the agent's refusal, when
+// the agent wrote one: "(agent port 45000, from 10.1.2.3)". Empty when it did
+// not, which an agent older than the origin field simply never does.
+func heldFrom(msg string) string {
+	const marker = "from "
+	i := strings.Index(msg, marker)
+	if i < 0 {
+		return ""
+	}
+	rest := msg[i+len(marker):]
+	end := strings.IndexFunc(rest, func(c rune) bool { return c == ')' || c == ' ' || c == ',' })
+	if end < 0 {
+		end = len(rest)
+	}
+	return rest[:end]
+}
+
+// holderVerdict is the one sentence a refused takeover gets about WHO holds the
+// name, from what the agent said and what this machine knows. Pure, because it
+// was wrong once and the wrong version was confident.
+//
+//   - a live local record on the same agent port: the holder is a process here,
+//     named, with the kill that frees it;
+//   - no record, but the agent says the lease came from THIS machine's address:
+//     a session of yours that is going away - its local mark is already gone,
+//     the agent's lease not yet. Seen in CI between two runs of the same cell,
+//     and the message then sent someone looking for a colleague on another
+//     machine for their own session in teardown. Wait a few seconds;
+//   - anything else: somebody else, somewhere else.
+//
+// A NAT puts every developer behind one address, so "from here" can also mean
+// "from a colleague behind the same NAT"; the verdict says so rather than
+// pretending the address settles it.
+func holderVerdict(name, refusal string, local *servedRecord, myAddr string) string {
+	if local != nil {
+		return fmt.Sprintf("%s: agent: %s\n      held on this machine by %s\n"+
+			"      Check it is yours, then free the name with:  kill %d", name, refusal, local.describe(), local.pid)
+	}
+	if from := heldFrom(refusal); from != "" && myAddr != "" && from == myAddr {
+		return fmt.Sprintf("%s: agent: %s\n"+
+			"      The lease came from this machine's address, and no live session here is recorded for it:\n"+
+			"      most likely a session of yours that is still closing (the name frees itself within a\n"+
+			"      few seconds; try again), or a colleague behind the same NAT.", name, refusal)
+	}
+	return fmt.Sprintf("%s: agent: %s\n"+
+		"      No session of yours on this machine is recorded for it - the holder is on\n"+
+		"      another machine or another account. It frees itself once that session ends.", name, refusal)
+}
+
 // heldPortRe pulls the holder's agent port out of the agent's refusal. It is
 // what proves a local record IS the holder rather than a leftover naming a
 // recycled PID — without it, "stop it?" could point at an innocent process.

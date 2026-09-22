@@ -2,6 +2,57 @@
 
 ## NEXT RELEASE
 
+### A corporate VPN's own names resolve during a session on Windows too
+
+The 2.15.2 fix read a VPN's domain-scoped resolver on macOS and routed its
+names there. Windows keeps the same thing in the NRPT, the table a corporate
+client (or Group Policy) writes ".corp.example goes to 10.0.0.1" into, and plug
+read only the adapter table, which knows the ordinary servers and nothing about
+scopes. A session on Windows sent the VPN's names to the ordinary resolver,
+which had never heard of them.
+
+plug now reads every NRPT rule that is not its own, at start and on every tick
+of the watcher, and routes each name to the rule whose domain is its longest
+suffix. The rule is the one macOS uses; only the collector is new, and its pure
+half (the shapes the registry stores: a leading dot on the name, ";" between
+servers, plug's own rule to skip) is tested on every OS.
+
+And the selftest proves it where it counts. The fake VPN it fabricates used to
+REPLACE the machine's resolvers, which is not what a corporate client does: it
+adds a resolver for its domain and leaves the rest alone. The rig now declares a
+scope the OS's own way (a SupplementalMatchDomains service on macOS, an NRPT
+rule on Windows) with the ordinary resolvers back in place, and the probe
+asserts a name under that domain reaches the VPN's resolver while everything
+else still goes where it went, then that the scope goes away with the VPN.
+Linux has no such thing in resolv.conf, and the probe says so there rather than
+pretending.
+
+### doctor diagnoses a captive portal on Windows
+
+The rule was shared and tested everywhere; the collector existed on macOS only.
+Windows keeps the two facts the verdict rests on per interface in the registry:
+what DHCP offered (DhcpNameServer) and what somebody typed in (NameServer). The
+collector reads those for the adapter carrying the default gateway, with no
+PowerShell to start. The remedy names both cmdlets, the one that lets the
+network's own resolver answer and the one that puts yours back - the second
+line matters, since clearing hand-typed servers and never restoring them is
+what a laptop spent a day on.
+
+### A refused name no longer sends you looking for a colleague who is you
+
+When a name is still held and no session of yours is recorded for it locally,
+plug said the holder was on another machine or another account. Seen in CI
+between two runs of the same cell, that was wrong: the previous session's local
+mark was already gone while the agent's lease was not, and the message sent
+someone looking elsewhere for their own session in teardown.
+
+The agent already says where a lease came from. plug now compares that with the
+address its own tunnel reaches the agent from, and says the honest thing: a
+lease from this machine with no live session here is most likely one of yours
+still closing (try again in a few seconds), or a colleague behind the same NAT.
+A lease from elsewhere is still somebody else. An agent too old to say where a
+lease came from gets the old message, never a guess.
+
 ---
 
 ## 2.15.2

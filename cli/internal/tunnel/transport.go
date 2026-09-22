@@ -228,6 +228,23 @@ func (t *Transport) current() *ssh.Client {
 	return t.client
 }
 
+// LocalAddr is the address this machine reaches the agent FROM, as the tunnel's
+// own socket reports it: the address the agent's sshd sees, up to NAT, and so
+// the one it writes into a name lease. That is what lets a refusal that says
+// "held from 10.1.2.3" be read as "held from here" rather than sending someone
+// looking for a colleague. Empty when nothing is connected.
+func (t *Transport) LocalAddr() string {
+	cl := t.current()
+	if cl == nil {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(cl.LocalAddr().String())
+	if err != nil {
+		return ""
+	}
+	return host
+}
+
 // reconnectFrom swaps in a fresh client, unless another goroutine already
 // replaced `stale` (the client the caller found dead). Returns the client to
 // use next.

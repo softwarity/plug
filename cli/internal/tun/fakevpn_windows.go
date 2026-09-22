@@ -4,6 +4,7 @@ package tun
 
 import (
 	"fmt"
+	"golang.org/x/sys/windows/registry"
 	"net/netip"
 	"sync"
 
@@ -99,11 +100,45 @@ func newVPNRig(_ []string, _ string, log logfn) (*vpnRig, error) {
 		once.Do(func() { closeErr = dev.Close() })
 		return closeErr
 	}
+	// The scope is an NRPT rule of its own, the way a corporate client pushes
+	// one: ".scoped.corp.test → the VPN's resolver", plug's rule and the adapter
+	// table untouched. That is the exact registry shape scopedResolversNRPT reads.
+	const scopeRule = `{7A4C3B2D-5E6F-7081-9AB0-1C2D3E4F5A6C}`
+	scope := func() error {
+		k, _, err := registry.CreateKey(registry.LOCAL_MACHINE, nrptConfigPath+`\`+scopeRule, registry.SET_VALUE)
+		if err != nil {
+			return err
+		}
+		defer k.Close()
+		for _, e := range []error{
+			k.SetDWordValue("Version", 2),
+			k.SetStringsValue("Name", []string{"." + scopeDomain}),
+			k.SetStringValue("GenericDNSServers", probeResolverAddr),
+			k.SetDWordValue("ConfigOptions", 0x8),
+		} {
+			if e != nil {
+				return e
+			}
+		}
+		flushDNS()
+		return nil
+	}
+	unscope := func() error {
+		err := registry.DeleteKey(registry.LOCAL_MACHINE, nrptConfigPath+`\`+scopeRule)
+		flushDNS()
+		if err == registry.ErrNotExist {
+			return nil
+		}
+		return err
+	}
 	return &vpnRig{
 		resolverAddr: probeResolverAddr,
 		announce:     func() error { return luid.SetDNS(v4, []netip.Addr{addr}, nil) },
 		restore:      teardown,
+		scope:        scope,
+		unscope:      unscope,
 		close: func() {
+			_ = unscope() // a rule left behind would route *.scoped.corp.test nowhere
 			if err := teardown(); err != nil {
 				log.f("vpn probe: WARNING the %s adapter may be left behind: %v", probeAdapter, err)
 			}

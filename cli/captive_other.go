@@ -1,4 +1,4 @@
-//go:build !darwin
+//go:build !darwin && !windows
 
 package main
 
@@ -6,10 +6,10 @@ package main
 //
 // The RULE is shared and tested on every OS (captive.go); what is missing is the
 // per-OS half that finds the facts, because the commands differ completely:
-// resolv.conf, NetworkManager or systemd-resolved on Linux, and
-// Get-DnsClientServerAddress with Get-NetIPConfiguration on Windows - each with
-// its own way of separating "what DHCP offered" from "what is configured", which
-// is the comparison the whole verdict rests on.
+// resolv.conf, NetworkManager or systemd-resolved on Linux, each with its own
+// way of separating "what DHCP offered" from "what is configured", which is the
+// comparison the whole verdict rests on. Windows has its collector now
+// (captive_windows.go: the per-interface registry values).
 //
 // Leaving `known` false means doctor stays silent here, which is the right
 // silence: a captive-portal warning that fires on facts nobody gathered would
