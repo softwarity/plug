@@ -425,6 +425,14 @@ func startExposes(cfg config) (func(), error) {
 		unmark = append(unmark, markServed(name, group[0].AgentPort(), os.Args[1:]))
 		if parked {
 			info("took over %s — the deployed workload is parked for this session (restored on exit)", name)
+			// Its environment too, by default: the process that takes a
+			// service's place gets the service's variables, secrets included
+			// as the pod already had them, the caller's own winning. An agent
+			// older than the verb answers "unknown command" and the session
+			// runs with the caller's environment alone, as it always did.
+			if !cfg.envPolicy.off {
+				projectWorkloadEnv(tr, name, cfg.envPolicy)
+			}
 		}
 		for _, ex := range group {
 			spec := ex.Spec()
@@ -522,4 +530,32 @@ func runCoreInProcess(cfg config, cmdArgs []string) int {
 		info("%v", rerr)
 	}
 	return code
+}
+
+// projectWorkloadEnv asks the agent for the parked workload's environment and
+// sets what the merge rule keeps on this process, so the command inherits it.
+// The agent's stderr notes (a missing right, keys that came through empty) are
+// relayed as info lines: they explain, they do not fail the session.
+func projectWorkloadEnv(tr *tunnel.Transport, name string, p envPolicy) {
+	out, err := tr.ExecAll("env-of " + name)
+	if err != nil || strings.HasPrefix(out, "error:") {
+		return // an old agent, or a name it cannot read: the caller's environment alone
+	}
+	var lines []string
+	for _, l := range strings.Split(out, "\n") {
+		if l = strings.TrimRight(l, "\r"); l != "" {
+			lines = append(lines, l)
+		}
+	}
+	set, kept := mergeWorkloadEnv(lines, os.Environ(), p)
+	applyWorkloadEnv(set)
+	switch {
+	case len(set) == 0 && len(kept) == 0:
+		return
+	case len(kept) == 0:
+		info("%s: %d variable(s) from the deployed workload given to your command", name, len(set))
+	default:
+		info("%s: %d variable(s) from the deployed workload given to your command; yours kept for %s",
+			name, len(set), strings.Join(kept, ", "))
+	}
 }

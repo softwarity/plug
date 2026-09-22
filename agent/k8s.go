@@ -482,6 +482,15 @@ func k8sEndpointsGranted(ns string) bool {
 	return code != 403
 }
 
+// k8sExecGranted is the same probe for pods/exec: a POST on the exec subresource
+// of a pod that does not exist answers 404 when the right is there and 403 when
+// it is not, and creates nothing either way. (SubjectAccessReview would be the
+// textbook way; it needs a right of its own that the manifest does not grant.)
+func k8sExecGranted(ns string) bool {
+	code, _ := k8sAPI("POST", "/api/v1/namespaces/"+ns+"/pods/plug-exec-grant-probe/exec?command=true", nil, nil)
+	return code != 403
+}
+
 // k8sNoteEndpointsGrant says, once per boot and in the container's log, that this
 // agent will fall back to the old selector shape. A verb cannot say it: its
 // stdout and stderr are merged into the one line the CLI reads as the answer, so

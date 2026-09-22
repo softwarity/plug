@@ -410,6 +410,34 @@ do_env() {
     echo "--- env FAIL — child saw '${ev:-<nothing>}' (want canary-42)"; sum "**env passthrough** ❌"; return 1
   fi
 
+  # The other direction: a -s that takes a deployed service's place hands the
+  # command that service's environment, by default. tko-<os> carries two
+  # canaries nothing else has. Three assertions, one takeover each: the
+  # workload's variable reaches the command; a variable the caller set with
+  # the same key WINS; --no-env hands over nothing. Each session is bounded
+  # and ends by itself.
+  local tname
+  case "$(uname -s)" in
+    Darwin)               tname=tko-mac ;;
+    MINGW*|MSYS*|CYGWIN*) tname=tko-win ;;
+    *)                    tname=tko-linux ;;
+  esac
+  wenv() { # $1 = extra plug flags, $2 = a caller variable or "", prints DEPLOYED/SHARED as the child saw them
+    env $2 perl -e 'alarm 60; exec @ARGV or exit 127' "$PLUG" --host "$ip" --port "$port" $1 -s "$tname:18099:18099" \
+      bash -c 'echo "${E2E_DEPLOYED:-unset}/${SHARED_KEY:-unset}"' 2>/dev/null | tr -d '\r' | tail -1
+  }
+  local r1 r2 r3
+  r1="$(wenv "" "")"
+  r2="$(wenv "" "SHARED_KEY=from-the-caller")"
+  r3="$(wenv "--no-env" "")"
+  if [ "$r1" = "from-the-cluster/cluster-value" ] && [ "$r2" = "from-the-cluster/from-the-caller" ] && [ "$r3" = "unset/unset" ]; then
+    echo "workload env OK: projected ($r1), the caller wins ($r2), --no-env hands over nothing ($r3)"
+    sum "**workload env (projected, caller wins, --no-env)** ✅"
+  else
+    echo "--- workload env FAIL: projected='$r1' (want from-the-cluster/cluster-value) caller-wins='$r2' (want from-the-cluster/from-the-caller) no-env='$r3' (want unset/unset)"
+    sum "**workload env (projected, caller wins, --no-env)** ❌: \`$r1\` · \`$r2\` · \`$r3\`"; return 1
+  fi
+
   # The privilege the child does NOT get. plug holds root on macOS (setuid) or
   # file capabilities on Linux, and drops none of it for its own work: the drop
   # exists for YOUR command, one level further down. Until now that was a comment

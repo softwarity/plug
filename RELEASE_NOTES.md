@@ -2,6 +2,47 @@
 
 ## NEXT RELEASE
 
+### A plugged process inherits the environment of the workload it replaces
+
+This changes what every `-s` that takes over a deployed service does, by
+default, and that is why it is a minor.
+
+"Your process behaves as it would inside the cluster" was the promise, and the
+configuration is part of it. A service that takes `fpl-svc`'s place needs
+`fpl-svc`'s variables, and until now the developer retyped them: the database
+host, the queue credentials, the password, in a `.env` or on the command line,
+in the clear, out of date the day someone rotated them. mirrord and Telepresence
+both hand the remote environment over; plug did not.
+
+It does now. When `-s` parks a deployed workload, the agent reads that
+workload's environment and the command gets it. On Docker and Swarm that is
+the container's `Config.Env` as docker reports it, already resolved. On
+Kubernetes it is `/proc/1/environ` of the running pod, read with `exec` - the
+process's actual environment, so what came from a Secret arrives as the pod
+already had it, with no right to read Secrets asked for. Two new RBAC rules
+carry that, `pods` (get, list) and `pods/exec` (create); `deploy/plug-k8s.yaml`
+has them, `plug doctor` says when a cluster does not (`exec grant`), and
+without them the agent falls back to the pod spec and names the variables that
+came through empty.
+
+Three rules decide what the command finally sees:
+
+- **yours win.** A variable set in the shell or in `cross-env` keeps its value
+  over the cluster's - there would be no way to point a plugged service at a
+  test database otherwise. The session says which of yours it kept;
+- **the container's plumbing stays out.** `PATH`, `HOME`, `HOSTNAME`, the
+  runtime's own variables, `KUBERNETES_*` and the `*_SERVICE_HOST`/`_PORT`
+  pairs kube injects: addresses that only exist inside the cluster, handed to a
+  process outside it, are the first thing to break, so they are not handed;
+- **`--no-env` opts out.** Alone it turns projection off, the behaviour of
+  every version before this one; `--no-env A,B` leaves out those keys and
+  projects the rest.
+
+An agent older than this answers the new verb with "unknown command" and the
+session runs with your environment alone, as before: update the agent and it
+starts. The e2e `env passthrough` cell asserts the three rules against a
+deployed service carrying variables nothing else has, in all three families.
+
 ---
 
 ## 2.15.3

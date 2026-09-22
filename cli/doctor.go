@@ -328,13 +328,16 @@ func doctorProfile(name string, add func(check)) {
 	defer tr.Close()
 
 	if out, err := tr.Exec("info"); err == nil && strings.HasPrefix(out, "version=") {
-		backend, grant := "none", ""
+		backend, grant, execGrant := "none", "", ""
 		for _, f := range strings.Fields(out) {
 			if v, ok := strings.CutPrefix(f, "backend="); ok {
 				backend = v
 			}
 			if v, ok := strings.CutPrefix(f, "endpoints="); ok {
 				grant = v
+			}
+			if v, ok := strings.CutPrefix(f, "exec="); ok {
+				execGrant = v
 			}
 		}
 		if backend == "none" {
@@ -362,6 +365,24 @@ func doctorProfile(name string, add func(check)) {
 		} else if grant == "granted" {
 			add(check{area: name, name: "endpoints grant", status: stOK,
 				detail: "served names carry their own Endpoints"})
+		}
+		// The environment a plugged process inherits from the workload it
+		// replaces is read with `exec` in the parked pod. Without that right the
+		// agent reads the pod SPEC instead, and every variable that comes from a
+		// Secret or ConfigMap arrives empty - the service starts and cannot log
+		// in anywhere, which looks like anything but a missing RBAC rule.
+		if execGrant == "missing" {
+			add(check{area: name, name: "exec grant", status: stWarn,
+				detail: "the agent may not exec into pods: a plugged service gets its variables from the pod spec, " +
+					"and those that come from a Secret or ConfigMap arrive empty",
+				remedy: "re-apply deploy/plug-k8s.yaml, or grant it alone: kubectl -n <ns> patch role " +
+					"plug-serve-names --type=json -p '[{\"op\":\"add\",\"path\":\"/rules/-\"," +
+					"\"value\":{\"apiGroups\":[\"\"],\"resources\":[\"pods\"],\"verbs\":[\"get\",\"list\"]}}," +
+					"{\"op\":\"add\",\"path\":\"/rules/-\",\"value\":{\"apiGroups\":[\"\"],\"resources\":[\"pods/exec\"]," +
+					"\"verbs\":[\"create\"]}}]'"})
+		} else if execGrant == "granted" {
+			add(check{area: name, name: "exec grant", status: stOK,
+				detail: "a plugged service inherits the parked pod's environment, secrets included"})
 		}
 		add(check{area: name, name: "agent features", status: stOK,
 			detail: "≥ 2.2 (honest NXDOMAIN, -c, takeover)"})

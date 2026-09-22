@@ -513,6 +513,28 @@ func (t *Transport) Resolver() *net.Resolver {
 // "sh: serve-name: not found" — anything off-protocol is an agent that cannot
 // serve the verb, and the caller says so rather than guessing.
 func (t *Transport) Exec(cmd string) (string, error) {
+	out, err := t.execRaw(cmd)
+	if err != nil {
+		return "", err
+	}
+	line := strings.TrimSpace(strings.SplitN(out, "\n", 2)[0])
+	return line, nil
+}
+
+// ExecAll is Exec for the verbs that answer more than one line - env-of, which
+// answers one variable per line. Every verb before it fitted on one line, and
+// Exec keeping only the first is what made a workload's environment arrive one
+// variable short. The whole output, trailing whitespace trimmed; an "error: …"
+// answer is still its first line, which the caller reads as Exec's callers do.
+func (t *Transport) ExecAll(cmd string) (string, error) {
+	out, err := t.execRaw(cmd)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+func (t *Transport) execRaw(cmd string) (string, error) {
 	cl := t.current()
 	if cl == nil {
 		var err error
@@ -526,17 +548,16 @@ func (t *Transport) Exec(cmd string) (string, error) {
 	}
 	defer s.Close()
 	out, cerr := s.CombinedOutput(cmd)
-	line := strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
 	// The agent answers its own errors as an "error: …" line and exits non-zero,
-	// so a non-empty line IS the answer — cerr adds nothing. But an empty line
+	// so a non-empty answer IS the answer — cerr adds nothing. But an empty one
 	// with an error means the session died before the agent said anything (a
 	// teardown over a network that is already gone, typically): reporting that
 	// as ("", nil) makes a command that never ran indistinguishable from one
 	// that succeeded, and the caller then skips the warning it exists to print.
-	if cerr != nil && line == "" {
+	if cerr != nil && strings.TrimSpace(string(out)) == "" {
 		return "", cerr
 	}
-	return line, nil
+	return string(out), nil
 }
 
 // Close tears down the transport (and every channel on it) and stops the

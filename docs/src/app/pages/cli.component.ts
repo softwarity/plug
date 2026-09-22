@@ -136,6 +136,18 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
         <td><a routerLink="/getting-started">Getting started</a></td>
       </tr>
       <tr>
+        <td><code>--no-env [A,B]</code></td>
+        <td>
+          do <strong>not</strong> hand your command the environment of the workload it replaces.
+          By default a <code>-s</code> that takes over a deployed service gives your command that
+          service's variables, secrets included, your own variables winning; <code>--no-env</code>
+          alone turns that off, <code>--no-env A,B</code> leaves out those keys and projects the
+          rest. On Kubernetes this reads the parked pod with <code>exec</code>; see the
+          <code>pods/exec</code> rule in <code>plug-k8s.yaml</code>, and <code>plug doctor</code>
+          says when a cluster lacks it.
+        </td>
+      </tr>
+      <tr>
         <td><code>--dockerrun</code></td>
         <td>
           run the <strong>container</strong> as the cluster member instead of the process:

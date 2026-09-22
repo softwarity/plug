@@ -163,7 +163,11 @@ even across an agent restart - and even when the session never gets to say
 so: a laptop closed, a network gone at the moment of Ctrl-C. The agent checks
 every minute whether the session holding a parked workload still answers, and
 puts the workload back when it does not. Your local process answers the name
-in its place; afterwards the cluster is exactly as it was. A name held by
+in its place, and **inherits its environment**: the variables the deployed
+workload runs with, secrets included as the pod already had them, are handed
+to your command - yours win over the cluster's, so a test database is one
+`export` away, and `--no-env` opts out. No `.env` to retype from the
+deployment. Afterwards the cluster is exactly as it was. A name held by
 another live plug session is still refused.
 
 ## Let plug pick the local port

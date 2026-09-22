@@ -93,6 +93,11 @@ Options:
                          name, no port reserved on the agent. For GUI DB tools
                          (DBeaver, Compass…), one-off scripts, batch consumers.
                          Mutually exclusive with -s.
+      --no-env [A,B]     do NOT give the command the environment of the workload
+                         it replaces. By default a -s that takes over a deployed
+                         service hands its variables to your command, secrets
+                         included, your own variables winning; --no-env alone
+                         turns that off, --no-env A,B leaves out those keys.
       --dockerrun        put a CONTAINER in the cluster, not a process:
                            plug -p prod -c --dockerrun docker run my-image
                          Prefixing docker with plug alone cannot work: the
@@ -134,9 +139,12 @@ Docs: ` + docURL(docHome) + `
 }
 
 type config struct {
-	host    string
-	port    string
-	exposes []tunnel.ExposeSpec
+	host string
+	// envPolicy is what --no-env said about projecting the workload's
+	// environment onto the command; the zero value projects everything.
+	envPolicy envPolicy
+	port      string
+	exposes   []tunnel.ExposeSpec
 	// updateMode is the cluster's update policy (none|notify|auto). It belongs
 	// to the profile because `auto` updates the AGENT, which is shared: you may
 	// govern your own cluster and have no say over the shared one.
@@ -244,14 +252,31 @@ func attachExposes(cfg *config, raw []string) {
 // launcher left at the head of the core's argv (see launcherRun) and parses
 // them — an old launcher forwards them there without understanding them.
 func stripLeadingExposes(args []string) ([]tunnel.ExposeSpec, bool, []string, error) {
+	specs, client, _, rest, err := stripLeadingFlags(args)
+	return specs, client, rest, err
+}
+
+// stripLeadingFlags is stripLeadingExposes plus the --no-env policy, which
+// travels the same way: at the head of the core's argv, put there by the
+// launcher, stripped back here.
+func stripLeadingFlags(args []string) ([]tunnel.ExposeSpec, bool, envPolicy, []string, error) {
 	var specs []tunnel.ExposeSpec
 	client := false
+	policy := envPolicy{}
 	for {
 		switch {
+		case len(args) >= 1 && args[0] == "--no-env":
+			args = args[1:]
+			if len(args) >= 1 && looksLikeKeyList(args[0]) {
+				policy = parseNoEnv(args[0])
+				args = args[1:]
+			} else {
+				policy = parseNoEnv("")
+			}
 		case len(args) >= 2 && (args[0] == "-s" || args[0] == "--serve"):
 			spec, err := parseExpose(args[1])
 			if err != nil {
-				return nil, false, nil, err
+				return nil, false, envPolicy{}, nil, err
 			}
 			specs = append(specs, spec)
 			args = args[2:]
@@ -259,9 +284,26 @@ func stripLeadingExposes(args []string) ([]tunnel.ExposeSpec, bool, []string, er
 			client = true
 			args = args[1:]
 		default:
-			return specs, client, args, nil
+			return specs, client, policy, args, nil
 		}
 	}
+}
+
+// looksLikeKeyList tells "A,B" (a --no-env value) from the command that follows
+// the flag: variable names, commas, nothing else. A command like `npm` is one
+// word with no comma and no upper case, and is left where it is.
+func looksLikeKeyList(s string) bool {
+	if s == "" || strings.HasPrefix(s, "-") {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == ',':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 type options struct {
@@ -275,6 +317,9 @@ type options struct {
 	// dockerrun.go for why prefixing docker with plug cannot work, and why
 	// rewriting somebody's `docker run` without being asked would be worse.
 	dockerRun bool
+	// noEnv: --no-env was given; noEnvList is what followed it ("" = all).
+	noEnv     bool
+	noEnvList string
 }
 
 func main() {
@@ -513,6 +558,9 @@ func launcherRun(args []string) {
 	// Same version as this launcher (or the agent is unversioned): run in-process.
 	if remote == version || remote == "" {
 		attachExposes(&cfg, opts.exposes)
+		if opts.noEnv {
+			cfg.envPolicy = parseNoEnv(opts.noEnvList)
+		}
 		runCore(cfg, cmdArgs)
 		return
 	}
@@ -559,6 +607,9 @@ func launcherRun(args []string) {
 			"      identity in your profile is the one presented. Upgrade the agent to line them up.",
 			shortVersion(remote), shortVersion(version))
 		attachExposes(&cfg, opts.exposes)
+		if opts.noEnv {
+			cfg.envPolicy = parseNoEnv(opts.noEnvList)
+		}
 		runCore(cfg, cmdArgs)
 		return
 	}
@@ -567,6 +618,9 @@ func launcherRun(args []string) {
 	if err != nil {
 		info("cannot fetch v%s (%v) — falling back to this launcher (v%s)", remote, err, version)
 		attachExposes(&cfg, opts.exposes)
+		if opts.noEnv {
+			cfg.envPolicy = parseNoEnv(opts.noEnvList)
+		}
 		runCore(cfg, cmdArgs)
 		return
 	}
@@ -600,6 +654,15 @@ func launcherRun(args []string) {
 	}
 	if opts.client {
 		cmdArgs = append([]string{"-c"}, cmdArgs...) // same wire format as -s: the core strips it back
+	}
+	if opts.noEnv {
+		// Same wire format again. An old core fails loudly on an unknown flag
+		// rather than silently projecting what the person asked it not to.
+		if opts.noEnvList != "" {
+			cmdArgs = append([]string{"--no-env", opts.noEnvList}, cmdArgs...)
+		} else {
+			cmdArgs = append([]string{"--no-env"}, cmdArgs...)
+		}
 	}
 	// Named through the descriptor we verified, not through its path — see
 	// execTarget. The descriptor stays open until the child is started; the child
@@ -1613,6 +1676,13 @@ func parseArgs(args []string) (options, []string) {
 			o.client = true
 		case "--dockerrun":
 			o.dockerRun = true
+		case "--no-env":
+			o.noEnv = true
+			// Optional value: `--no-env` alone, `--no-env A,B`, or `--no-env=A,B`.
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") && strings.Contains(args[i+1], "=") == false && looksLikeKeyList(args[i+1]) {
+				o.noEnvList = args[i+1]
+				i++
+			}
 		default:
 			return o, args[i:]
 		}
@@ -1859,11 +1929,12 @@ func coreConfigFromEnv() config {
 
 func coreMain() {
 	cfg := coreConfigFromEnv()
-	specs, _, cmdArgs, err := stripLeadingExposes(os.Args[1:]) // -c strips to an empty exposes list — exactly the pure-outbound datapath
+	specs, _, policy, cmdArgs, err := stripLeadingFlags(os.Args[1:]) // -c strips to an empty exposes list: exactly the pure-outbound datapath
 	if err != nil {
 		fatal("%v", err)
 	}
 	cfg.exposes = specs
+	cfg.envPolicy = policy
 	if len(cmdArgs) == 0 {
 		fatal("core: no command")
 	}

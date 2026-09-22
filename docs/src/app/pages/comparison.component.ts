@@ -122,6 +122,7 @@ import { RouterLink } from '@angular/router';
           <tr><td>Be reachable by a cluster name</td><td class="win">✓ <code>-s name:8080:3000</code> - the name is provisioned for the session</td><td>by stealing or mirroring an existing pod's traffic</td><td>by intercepting an existing service</td></tr>
           <tr><td>Any runtime, no code change</td><td>✓ (IP layer)</td><td>✓</td><td>✓</td></tr>
           <tr><td>Run a container as a member</td><td>✓ <code>--dockerrun</code></td><td>✓ <code>mirrord container</code></td><td>✓ <code>--docker-run</code></td></tr>
+          <tr><td>Inherit the workload's environment</td><td>✓ by default on a takeover, secrets as the pod has them; yours win, <code>--no-env</code> opts out</td><td>✓ by default, from the target pod</td><td>✓ on intercept, or <code>--env-file</code></td></tr>
           <tr><td>Several devs on one shared service</td><td>one name, one session</td><td class="win">header / queue split</td><td class="win">header / path</td></tr>
           <tr><td>Auth</td><td>none on its own - trusted dev cluster; named per-developer identities with <a routerLink="/meerkat">Meerkat</a></td><td class="win">kubeconfig RBAC</td><td class="win">kubeconfig RBAC</td></tr>
           <tr><td>IDE extensions</td><td>none, CLI only</td><td class="win">VS Code · JetBrains</td><td>JetBrains</td></tr>

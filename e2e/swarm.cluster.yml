@@ -236,16 +236,25 @@ services:
   # ORIGINAL count, and 2 proves restore-to-N (the bench only proved it live).
   tko-linux:
     image: hashicorp/http-echo:1.0.0
+    environment:
+      E2E_DEPLOYED: from-the-cluster
+      SHARED_KEY: cluster-value
     command: ["-listen=:8085", "-text=deployed-tko-linux"]
     networks: [internal]
     deploy: { replicas: 2 }
   tko-mac:
     image: hashicorp/http-echo:1.0.0
+    environment:
+      E2E_DEPLOYED: from-the-cluster
+      SHARED_KEY: cluster-value
     command: ["-listen=:8086", "-text=deployed-tko-mac"]
     networks: [internal]
     deploy: { replicas: 2 }
   tko-win:
     image: hashicorp/http-echo:1.0.0
+    environment:
+      E2E_DEPLOYED: from-the-cluster
+      SHARED_KEY: cluster-value
     command: ["-listen=:8087", "-text=deployed-tko-win"]
     networks: [internal]
     deploy: { replicas: 2 }

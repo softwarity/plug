@@ -167,6 +167,8 @@ func dispatch(cmd []string) {
 		doCheckUpdate(cmd)
 	case "resolve":
 		doResolve(cmd)
+	case "env-of":
+		doEnvOf(cmd)
 	case "self-update":
 		doSelfUpdate(cmd)
 	default:
@@ -279,6 +281,11 @@ func doInfo(cmd []string) {
 			grant = " endpoints=granted"
 		} else {
 			grant = " endpoints=missing"
+		}
+		if k8sExecGranted(k8sNamespace()) {
+			grant += " exec=granted"
+		} else {
+			grant += " exec=missing"
 		}
 	}
 	if img != "" {
