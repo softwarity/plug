@@ -53,6 +53,26 @@ registre** au lieu de se la faire livrer en artefact.
 - [ ] **Une session qui démarre sans jamais lancer la commande - vu UNE fois (06/09), inexpliqué** : au tout premier run du soak, `plug --host <ip> --port 22 -c sh -c '<boucle curl>'` a vécu ses 12 minutes sans exécuter la commande une seule fois - `traffic.log` vide, ni code HTTP ni `ERR`, donc la boucle n'a pas tourné. Le processus était bien vivant (RSS 16 Mo, 6 threads, contre 30 Mo et 13 threads pour une session saine mesurée juste après) : la signature d'un launcher qui n'a pas monté son datapath. Écartés par lecture du code : le parsing (le premier argument non-option termine les options, le `-c` de `sh -c` voyage avec la commande) et la bufferisation (`child.Stdout` est hérité, pas relayé). Le run suivant, même commande, même dispositif, a tourné normalement : **intermittent**. Le soak échoue désormais à 20 s si aucun tour n'est sorti et imprime le stderr de plug, qui est aussi collecté en artefact - à la prochaine occurrence on lira au lieu de deviner.
 - [ ] **Sessions longues & charge - le soak couvre la DURÉE, pas la charge** (06/09) : `scripts/ci/soak.sh` + `.github/workflows/soak.yml` tiennent une session 4 h chaque lundi contre l'image PUBLIÉE, avec un trafic léger (une requête toutes les 2 s, qui re-résout le nom à chaque tour), et assèrent une tendance sur RSS / descripteurs / threads de tout l'arbre plutôt qu'un seuil. 4 h et non 6 : un job GitHub plafonne à 6 h et un job qui meurt sur son timeout perd son log, donc ses chiffres. **Restent ouverts** : les gros transferts (le soak ne pousse que des requêtes courtes, une fuite proportionnelle au VOLUME lui échapperait) et le sleep/wake, qui ne se teste pas sur un runner et reste un banc local assisté.
 
+## 🟢 Un serveur MCP pour les agents IA - NOTÉ (22/09), après la 2.16
+
+Ce qui manque à un agent IA (Claude Code, Cursor, Copilot) n'est pas de lancer
+`plug -s …` : il sait. C'est de **savoir quoi lancer et lire ce que ça donne** : quels
+noms existent dans le cluster, lequel est tenu et par qui, ce que dit `doctor`,
+l'environnement qu'un service reçoit, pourquoi une session a échoué. plug le sait, et
+l'agent l'obtient aujourd'hui en parsant des sorties faites pour un humain.
+
+Un serveur MCP (`plug mcp`, stdio) exposerait ces faits en outils à réponses
+structurées : `list_names` (noms servis, tenus, parqués, par qui), `doctor` (le
+rapport, par check), `env_of` (les variables d'un workload, secrets masqués par défaut,
+la 2.16 fournit le verbe), `serve` / `unserve` (une session, avec ce que la commande
+recevra), `explain_failure` (la dernière session, sa raison). Rien de nouveau côté
+agent : tout existe ou arrive avec `env-of` (2.16) et `doctor <name>` (prévu).
+
+Pourquoi après la 2.16 et `doctor <name>` : ce sont exactement les deux premiers
+outils ; sans eux le MCP n'aurait que `serve`. mirrord n'a pas de MCP documenté (les
+agents IA « utilisent mirrord comme un développeur »), Telepresence rien ; c'est un
+point où plug peut être devant, et le comparatif le dit comme « planned ».
+
 ## 🟣 UDP par nom (relais de datagrammes) - REPORTÉ (décision 18/07)
 La motivation « HTTP/3 » ne tient pas : le relais passerait par le tunnel TCP →
 QUIC-over-TCP est pathologique (HOL blocking, tout l'intérêt de QUIC perdu) et

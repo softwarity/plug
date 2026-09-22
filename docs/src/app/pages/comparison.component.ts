@@ -117,6 +117,8 @@ import { RouterLink } from '@angular/router';
           <tr><td>What a developer needs</td><td class="win">the cluster's address - plug installs itself from it</td><td>a kubeconfig with rights on the cluster</td><td>a kubeconfig with rights on the cluster</td></tr>
           <tr><td>What you point it at</td><td class="win">a name - which need not exist in the cluster yet, and can still take over one that does</td><td>an existing workload, named with <code>--target</code></td><td>an existing service, to intercept</td></tr>
           <tr><td>Setup, your machine</td><td class="win">one ssh command, served by the cluster - always the version the agent runs</td><td>brew / curl / choco</td><td>package or installer</td></tr>
+          <tr><td>Staying up to date</td><td class="win">the launcher follows the version its cluster's agent serves, per cluster: a session on an updated cluster downloads that core once and runs it; <code>plug update</code> moves the agent, <code>update=notify|auto</code> says or does it for you</td><td>reinstall the CLI (brew / curl); the operator is upgraded separately</td><td>reinstall the CLI (brew / package); the traffic-manager is upgraded separately, by Helm</td></tr>
+          <tr><td>Several clusters on several versions</td><td class="win">one launcher, one cached core per version - each profile runs what its agent serves, nothing to pick</td><td>one CLI version at a time</td><td>one CLI version at a time</td></tr>
           <tr><td>Setup, cluster side</td><td>one agent container</td><td class="win">none</td><td>traffic-manager</td></tr>
           <tr><td>Reach cluster services by name</td><td>✓</td><td>✓</td><td>✓</td></tr>
           <tr><td>Be reachable by a cluster name</td><td class="win">✓ <code>-s name:8080:3000</code> - the name is provisioned for the session</td><td>by stealing or mirroring an existing pod's traffic</td><td>by intercepting an existing service</td></tr>
@@ -125,7 +127,8 @@ import { RouterLink } from '@angular/router';
           <tr><td>Inherit the workload's environment</td><td>✓ by default on a takeover, secrets as the pod has them; yours win, <code>--no-env</code> opts out</td><td>✓ by default, from the target pod</td><td>✓ on intercept, or <code>--env-file</code></td></tr>
           <tr><td>Several devs on one shared service</td><td>one name, one session</td><td class="win">header / queue split</td><td class="win">header / path</td></tr>
           <tr><td>Auth</td><td>none on its own - trusted dev cluster; named per-developer identities with <a routerLink="/meerkat">Meerkat</a></td><td class="win">kubeconfig RBAC</td><td class="win">kubeconfig RBAC</td></tr>
-          <tr><td>IDE extensions</td><td>none, CLI only</td><td class="win">VS Code · JetBrains</td><td>JetBrains</td></tr>
+          <tr><td>IDE extensions</td><td>none, CLI only - there is no target to pick, so nothing for a panel to show</td><td class="win">VS Code · JetBrains</td><td>JetBrains</td></tr>
+          <tr><td>For an AI coding agent</td><td>an MCP server is <a routerLink="/roadmap">planned</a>: the cluster's names, who holds one, <code>doctor</code>, a workload's environment, serve and unserve, as tools with structured answers</td><td>the agent drives the CLI like a developer would; no MCP documented</td><td>nothing documented</td></tr>
           <tr><td>Mechanism</td><td>userspace TUN over SSH</td><td>syscall layer in your process</td><td>in-cluster traffic-manager</td></tr>
           <tr><td>Behind it</td><td>softwarity, the team behind <a routerLink="/meerkat">Meerkat</a></td><td>MetalBear</td><td>Ambassador Labs, now a CNCF project</td></tr>
           <tr><td>License</td><td>FSL-1.1-Apache-2.0</td><td>MIT</td><td>Apache-2.0</td></tr>
