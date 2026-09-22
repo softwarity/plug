@@ -730,6 +730,9 @@ jobs:
     name: e2e-compose (${{ matrix.os }}, by name over the mesh)
     needs: [test, start-cluster, build-clients]
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      actions: write # abort the run when this leg fails
     timeout-minutes: 25 # a hung cell must not run the job (and the cluster) for hours
     env:
       # What CELL_MAX may spend: kept in step with timeout-minutes below by
@@ -972,10 +975,26 @@ jobs:
   # prev-agent-<leg> — which exist for linux/mac/win only. A fourth set would
   # double the Linux load on a shared cluster to re-prove AGENT behaviour, and
   # the agent is the same amd64 container whatever the client's architecture.
+      # A red cell condemns the run: the image is never published. Until now
+      # the other eight legs and six clusters ran their twenty minutes anyway,
+      # for a result already known. fail-fast stays off inside the matrices so
+      # a failing OS does not hide what the others do, but a leg that has
+      # ALREADY failed has nothing left to show: it cancels the run, the
+      # clusters see their caller complete and leave within the minute, and
+      # the legs that finished keep their logs.
+      - name: Abort the run, this leg failed
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel "${{ github.run_id }}" --repo "${{ github.repository }}" || true
   e2e-arm64:
     name: e2e-arm64 (a native arm64 client, on the compose cluster)
     needs: [test, start-cluster, build-clients]
     runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      actions: write # abort the run when this leg fails
     timeout-minutes: 25
     env:
       # What CELL_MAX may spend: kept in step with timeout-minutes below by
@@ -1067,11 +1086,27 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh multiport "$A" "$B" 2222
+      # A red cell condemns the run: the image is never published. Until now
+      # the other eight legs and six clusters ran their twenty minutes anyway,
+      # for a result already known. fail-fast stays off inside the matrices so
+      # a failing OS does not hide what the others do, but a leg that has
+      # ALREADY failed has nothing left to show: it cancels the run, the
+      # clusters see their caller complete and leave within the minute, and
+      # the legs that finished keep their logs.
+      - name: Abort the run, this leg failed
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel "${{ github.run_id }}" --repo "${{ github.repository }}" || true
 
   e2e-k8s:
     name: e2e-k8s (${{ matrix.os }}, same chain on kind)
     needs: [test, start-cluster, build-clients]
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      actions: write # abort the run when this leg fails
     timeout-minutes: 30 # compose's 25 + the extra wait for the kind rollout — a hung cell must still not run the cluster for hours
     env:
       # What CELL_MAX may spend: kept in step with timeout-minutes below by
@@ -1272,10 +1307,26 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh updatejump "$A" "$B" 2222
+      # A red cell condemns the run: the image is never published. Until now
+      # the other eight legs and six clusters ran their twenty minutes anyway,
+      # for a result already known. fail-fast stays off inside the matrices so
+      # a failing OS does not hide what the others do, but a leg that has
+      # ALREADY failed has nothing left to show: it cancels the run, the
+      # clusters see their caller complete and leave within the minute, and
+      # the legs that finished keep their logs.
+      - name: Abort the run, this leg failed
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel "${{ github.run_id }}" --repo "${{ github.repository }}" || true
   e2e-swarm:
     name: e2e-swarm (${{ matrix.os }}, same chain on swarm)
     needs: [test, start-cluster, build-clients]
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      actions: write # abort the run when this leg fails
     timeout-minutes: 30
     env:
       # What CELL_MAX may spend: kept in step with timeout-minutes below by
@@ -1476,6 +1527,19 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh updatejump "$A" "$B" 2222
+      # A red cell condemns the run: the image is never published. Until now
+      # the other eight legs and six clusters ran their twenty minutes anyway,
+      # for a result already known. fail-fast stays off inside the matrices so
+      # a failing OS does not hide what the others do, but a leg that has
+      # ALREADY failed has nothing left to show: it cancels the run, the
+      # clusters see their caller complete and leave within the minute, and
+      # the legs that finished keep their logs.
+      - name: Abort the run, this leg failed
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel "${{ github.run_id }}" --repo "${{ github.repository }}" || true
   kill-compose:
     name: kill compose clusters
     # e2e-arm64 runs on the SAME compose clusters and starts later, because the

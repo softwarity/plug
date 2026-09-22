@@ -36,9 +36,11 @@ func doEnvOf(cmd []string) {
 	answer("%s", strings.Join(envLines(raw), "\n"))
 }
 
-// envNote is how a collector explains an empty answer: one line on stderr,
-// which the client relays as a note rather than a failure.
-func envNote(format string, a ...any) { fmt.Fprintf(os.Stderr, format+"\n", a...) }
+// envNote is how a collector explains itself: a "# " line among the answer.
+// stdout, not stderr - the client reads the verb over an SSH session whose two
+// streams are merged, so a note on stderr would land inside the variables and
+// be read as one. The client relays "# " lines as info and merges the rest.
+func envNote(format string, a ...any) { fmt.Printf("# "+format+"\n", a...) }
 
 // dockerEnvOf reads Config.Env of the containers the name resolves to, which
 // docker hands back already resolved (Compose has substituted its ${VAR} and
@@ -66,11 +68,26 @@ func dockerEnvOf(name string) []string {
 			}
 		}
 	}
-	// Containers: the ones the name resolves to, running or parked. nameOwners
-	// lists running ones; a parked one is stopped, so look it up by name too.
+	// Containers: the ones the name resolves to. nameOwners lists RUNNING ones,
+	// and the one this session parked is stopped: its id is in the receipt the
+	// signpost carries, which is how the teardown finds it to start it again.
+	// A Compose container is not named after its service (project-svc-1), so
+	// the name itself finds nothing; the receipt is what finds it.
 	var out []string
 	seen := map[string]bool{}
 	ids := []string{}
+	var sp struct {
+		Config struct {
+			Labels map[string]string `json:"Labels"`
+		} `json:"Config"`
+	}
+	if code, err := dockerAPI("GET", "/containers/"+signpostName(name)+"/json", nil, &sp); err == nil && code == 200 {
+		for _, id := range strings.Split(sp.Config.Labels[parkedContainersLabel], ",") {
+			if id = strings.TrimSpace(id); id != "" {
+				ids = append(ids, id)
+			}
+		}
+	}
 	for _, o := range nameOwners(name, self.attachableNets()) {
 		ids = append(ids, o.id)
 	}

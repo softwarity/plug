@@ -543,7 +543,12 @@ func projectWorkloadEnv(tr *tunnel.Transport, name string, p envPolicy) {
 	}
 	var lines []string
 	for _, l := range strings.Split(out, "\n") {
-		if l = strings.TrimRight(l, "\r"); l != "" {
+		l = strings.TrimRight(l, "\r")
+		switch {
+		case l == "":
+		case strings.HasPrefix(l, "# "):
+			info("%s: %s", name, strings.TrimPrefix(l, "# ")) // the agent explaining itself
+		default:
 			lines = append(lines, l)
 		}
 	}

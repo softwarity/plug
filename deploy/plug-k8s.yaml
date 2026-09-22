@@ -75,8 +75,8 @@ spec:
           type: RuntimeDefault
       containers:
         - name: plug
-          image: docker.io/softwarity/plug:2.13.2
-          imagePullPolicy: IfNotPresent # pinned tag
+          image: docker.io/softwarity/plug:latest
+          imagePullPolicy: Always # image is a moving `latest` (rebuilt in place)
           ports:
             - name: ssh
               containerPort: 22
