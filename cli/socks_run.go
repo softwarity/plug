@@ -538,8 +538,17 @@ func runCoreInProcess(cfg config, cmdArgs []string) int {
 // relayed as info lines: they explain, they do not fail the session.
 func projectWorkloadEnv(tr *tunnel.Transport, name string, p envPolicy) {
 	out, err := tr.ExecAll("env-of " + name)
-	if err != nil || strings.HasPrefix(out, "error:") {
-		return // an old agent, or a name it cannot read: the caller's environment alone
+	if err != nil {
+		info("%s: could not read the deployed workload's environment (%v); your own applies", name, err)
+		return
+	}
+	if strings.HasPrefix(out, "error:") {
+		// An agent older than the verb says "unknown command"; a newer one says
+		// what it could not read. Either way the session says it, once: three
+		// takeovers on a CI leg answered nothing at all here and the cause was
+		// invisible for a whole evening.
+		info("%s: the agent did not hand over the environment: %s", name, strings.TrimSpace(strings.TrimPrefix(out, "error:")))
+		return
 	}
 	var lines []string
 	for _, l := range strings.Split(out, "\n") {
@@ -555,6 +564,10 @@ func projectWorkloadEnv(tr *tunnel.Transport, name string, p envPolicy) {
 	set, kept, empty := mergeWorkloadEnvWithEmpty(lines, os.Environ(), p)
 	applyWorkloadEnv(set)
 	if len(set) == 0 && len(kept) == 0 {
+		// Not silence. An empty answer with no note is an agent that found
+		// nothing to read, and a person (or a CI log) must be able to tell
+		// that from a verb that was never asked.
+		info("%s: the agent handed over no environment for the deployed workload; your own applies", name)
 		return
 	}
 	line := fmt.Sprintf("%s: %d variable(s) from the deployed workload given to your command", name, len(set))
