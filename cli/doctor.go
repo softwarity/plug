@@ -379,7 +379,7 @@ func doctorProfile(name string, add func(check)) {
 					"plug-serve-names --type=json -p '[{\"op\":\"add\",\"path\":\"/rules/-\"," +
 					"\"value\":{\"apiGroups\":[\"\"],\"resources\":[\"pods\"],\"verbs\":[\"get\",\"list\"]}}," +
 					"{\"op\":\"add\",\"path\":\"/rules/-\",\"value\":{\"apiGroups\":[\"\"],\"resources\":[\"pods/exec\"]," +
-					"\"verbs\":[\"create\"]}}]'"})
+					"\"verbs\":[\"get\",\"create\"]}}]'"})
 		} else if execGrant == "granted" {
 			add(check{area: name, name: "exec grant", status: stOK,
 				detail: "a plugged service inherits the parked pod's environment, secrets included"})

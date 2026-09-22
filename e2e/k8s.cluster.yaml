@@ -15,6 +15,15 @@
 # `kind load`ed by k8s-serve.sh, hence imagePullPolicy: Never.
 
 # ---- protocol matrix services (same set cluster-serve.sh brings up) ----
+# A value that only a real `exec` can hand to a plugged process: from the pod
+# SPEC a secretKeyRef has no value, so a collector that fell back to the spec
+# hands it over empty. The first version did exactly that on a real cluster and
+# the CI was green, because every canary here was a plain value. Not any more.
+apiVersion: v1
+kind: Secret
+metadata: { name: tko-secret }
+stringData: { password: from-a-secret }
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -436,6 +445,8 @@ spec:
           env:
             - { name: E2E_DEPLOYED, value: from-the-cluster }
             - { name: SHARED_KEY, value: cluster-value }
+            - name: FROM_SECRET
+              valueFrom: { secretKeyRef: { name: tko-secret, key: password } }
           ports: [{ containerPort: 8085 }]
 ---
 apiVersion: v1
@@ -463,6 +474,8 @@ spec:
           env:
             - { name: E2E_DEPLOYED, value: from-the-cluster }
             - { name: SHARED_KEY, value: cluster-value }
+            - name: FROM_SECRET
+              valueFrom: { secretKeyRef: { name: tko-secret, key: password } }
           ports: [{ containerPort: 8086 }]
 ---
 apiVersion: v1
@@ -490,6 +503,8 @@ spec:
           env:
             - { name: E2E_DEPLOYED, value: from-the-cluster }
             - { name: SHARED_KEY, value: cluster-value }
+            - name: FROM_SECRET
+              valueFrom: { secretKeyRef: { name: tko-secret, key: password } }
           ports: [{ containerPort: 8087 }]
 ---
 apiVersion: v1

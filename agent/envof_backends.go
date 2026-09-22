@@ -1,18 +1,21 @@
 package agent
 
 import (
+	"bufio"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
 	"time"
-
-	"golang.org/x/net/websocket"
 )
 
 // doEnvOf answers the environment of the workload parked under <name>, as
@@ -192,7 +195,7 @@ func k8sEnvOf(ns, name string) []string {
 	} else if code == 403 {
 		envNote("note: the agent may not exec into pods in %s, so %s gets its variables from the pod SPEC: "+
 			"values that come from a Secret or ConfigMap arrive empty. Grant it: kubectl -n %s patch role plug-serve-names "+
-			"--type=json -p '[{\"op\":\"add\",\"path\":\"/rules/-\",\"value\":{\"apiGroups\":[\"\"],\"resources\":[\"pods/exec\"],\"verbs\":[\"create\"]}}]'", ns, name, ns)
+			"--type=json -p '[{\"op\":\"add\",\"path\":\"/rules/-\",\"value\":{\"apiGroups\":[\"\"],\"resources\":[\"pods/exec\"],\"verbs\":[\"get\",\"create\"]}}]'", ns, name, ns)
 	} else {
 		envNote("note: reading %s's environment from pod %s failed (%v); using the pod spec instead", name, pod, err)
 	}
@@ -217,9 +220,6 @@ func k8sEnvOf(ns, name string) []string {
 	return out
 }
 
-// netDialer bounds the exec handshake the way k8sClient bounds a request.
-var netDialer = net.Dialer{Timeout: 10 * time.Second}
-
 func labelSelector(sel map[string]string) string {
 	parts := make([]string, 0, len(sel))
 	for k, v := range sel {
@@ -235,6 +235,16 @@ func labelSelector(sel map[string]string) string {
 // a pre-HTTP/2 protocol nobody else kept, before that); one byte of channel id
 // leads each frame, and channel 1 is stdout. stdout only, no stdin, no tty:
 // the smallest shape of the protocol.
+//
+// The handshake is written by hand, without a WebSocket library, so the
+// dependency tree stays what it was; and the method is GET, because that is
+// what an upgrade is. An RBAC detail cost a withdrawn tag here: the API server
+// evaluates a GET on /exec as the verb `get` and a POST as `create`, kubectl's
+// SPDY path is a POST, and the manifest had granted `create` alone. GET got
+// 403 with the rule in place, POST got 405 (no SPDY here), the agent fell back
+// to the pod spec, and a service whose password comes from a Secret started
+// with none. Kubernetes' own `edit` role grants both verbs on pods/exec; so
+// does the manifest now, and this stays a GET.
 func k8sExecEnviron(ns, pod, container string) ([]string, int, error) {
 	token, err := os.ReadFile(k8sSA + "/token")
 	if err != nil {
@@ -250,42 +260,105 @@ func k8sExecEnviron(ns, pod, container string) ([]string, int, error) {
 	q.Set("stderr", "true")
 	q.Add("command", "cat")
 	q.Add("command", "/proc/1/environ")
-	loc := "wss://kubernetes.default.svc/api/v1/namespaces/" + ns + "/pods/" + pod + "/exec?" + q.Encode()
-	cfg, err := websocket.NewConfig(loc, "https://kubernetes.default.svc")
+	host := "kubernetes.default.svc"
+	path := "/api/v1/namespaces/" + ns + "/pods/" + pod + "/exec?" + q.Encode()
+
+	d := &net.Dialer{Timeout: 10 * time.Second}
+	conn, err := tls.DialWithDialer(d, "tcp", host+":443", &tls.Config{RootCAs: pool, ServerName: host})
 	if err != nil {
 		return nil, 0, err
 	}
-	cfg.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
-	cfg.Protocol = []string{"v4.channel.k8s.io"}
-	cfg.TlsConfig = &tls.Config{RootCAs: pool}
-	cfg.Dialer = &netDialer
-	ws, err := websocket.DialConfig(cfg)
-	if err != nil {
-		// A 403 surfaces as a handshake error carrying the status: name it as
-		// such so the caller can say which right is missing.
-		if strings.Contains(err.Error(), "403") {
-			return nil, 403, err
-		}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
+
+	key := make([]byte, 16)
+	_, _ = rand.Read(key)
+	req := "GET " + path + " HTTP/1.1\r\n" +
+		"Host: " + host + "\r\n" +
+		"Authorization: Bearer " + strings.TrimSpace(string(token)) + "\r\n" +
+		"Connection: Upgrade\r\n" +
+		"Upgrade: websocket\r\n" +
+		"Sec-WebSocket-Version: 13\r\n" +
+		"Sec-WebSocket-Key: " + base64.StdEncoding.EncodeToString(key) + "\r\n" +
+		"Sec-WebSocket-Protocol: v4.channel.k8s.io\r\n" +
+		"\r\n"
+	if _, err := io.WriteString(conn, req); err != nil {
 		return nil, 0, err
 	}
-	defer ws.Close()
-	_ = ws.SetReadDeadline(time.Now().Add(10 * time.Second))
-	var stdout []byte
-	buf := make([]byte, 32*1024)
-	for {
-		n, err := ws.Read(buf)
-		if n > 1 && buf[0] == 1 {
-			stdout = append(stdout, buf[1:n]...)
-		}
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			if len(stdout) > 0 {
-				break
-			}
-			return nil, 0, err
-		}
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, &http.Request{Method: "GET"})
+	if err != nil {
+		return nil, 0, err
+	}
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		resp.Body.Close()
+		return nil, resp.StatusCode, fmt.Errorf("exec handshake: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	stdout, err := readChannelFrames(br, 1)
+	if err != nil && len(stdout) == 0 {
+		return nil, 0, err
 	}
 	return procEnviron(stdout), 0, nil
+}
+
+// readChannelFrames reads WebSocket frames from a server (never masked) until
+// the connection closes or a close frame arrives, and concatenates the payload
+// of every binary/text frame whose first byte is the wanted channel. Pure over
+// its reader, so the framing is proven on bytes rather than on a cluster.
+func readChannelFrames(r *bufio.Reader, channel byte) ([]byte, error) {
+	var out []byte
+	for {
+		h0, err := r.ReadByte()
+		if err != nil {
+			return out, err
+		}
+		h1, err := r.ReadByte()
+		if err != nil {
+			return out, err
+		}
+		opcode := h0 & 0x0f
+		masked := h1&0x80 != 0
+		n := uint64(h1 & 0x7f)
+		switch n {
+		case 126:
+			var b [2]byte
+			if _, err := io.ReadFull(r, b[:]); err != nil {
+				return out, err
+			}
+			n = uint64(binary.BigEndian.Uint16(b[:]))
+		case 127:
+			var b [8]byte
+			if _, err := io.ReadFull(r, b[:]); err != nil {
+				return out, err
+			}
+			n = binary.BigEndian.Uint64(b[:])
+		}
+		var mask [4]byte
+		if masked {
+			if _, err := io.ReadFull(r, mask[:]); err != nil {
+				return out, err
+			}
+		}
+		if n > 16<<20 {
+			return out, fmt.Errorf("exec: frame of %d bytes", n)
+		}
+		payload := make([]byte, n)
+		if _, err := io.ReadFull(r, payload); err != nil {
+			return out, err
+		}
+		if masked {
+			for i := range payload {
+				payload[i] ^= mask[i%4]
+			}
+		}
+		switch opcode {
+		case 0x8: // close
+			return out, nil
+		case 0x1, 0x2: // text, binary
+			if len(payload) > 0 && payload[0] == channel {
+				out = append(out, payload[1:]...)
+			}
+		}
+	}
 }

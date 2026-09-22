@@ -487,7 +487,9 @@ func k8sEndpointsGranted(ns string) bool {
 // it is not, and creates nothing either way. (SubjectAccessReview would be the
 // textbook way; it needs a right of its own that the manifest does not grant.)
 func k8sExecGranted(ns string) bool {
-	code, _ := k8sAPI("POST", "/api/v1/namespaces/"+ns+"/pods/plug-exec-grant-probe/exec?command=true", nil, nil)
+	// GET, the verb a WebSocket upgrade is evaluated as; a POST would test
+	// `create`, which is not the one the agent's exec needs.
+	code, _ := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/pods/plug-exec-grant-probe/exec?command=true", nil, nil)
 	return code != 403
 }
 

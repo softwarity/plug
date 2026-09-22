@@ -2,9 +2,6 @@
 
 ## NEXT RELEASE
 
----
-
-## 2.16.0
 
 ### A plugged process inherits the environment of the workload it replaces
 
@@ -44,8 +41,23 @@ Three rules decide what the command finally sees:
 
 An agent older than this answers the new verb with "unknown command" and the
 session runs with your environment alone, as before: update the agent and it
-starts. The e2e `env passthrough` cell asserts the three rules against a
-deployed service carrying variables nothing else has, in all three families.
+starts.
+
+One thing the first try on a real cluster taught, and the reason the tag was
+withdrawn once. The exec handshake was made with a WebSocket library, which
+dials with GET as the WebSocket RFC says; the API server maps a GET on /exec
+to the verb `get`, and the right the manifest grants is `create` on pods/exec,
+which is what kubectl's POST maps to. The agent got 403 with the right in
+place, fell back to the pod spec, and a service whose password comes from a
+Secret started with no password. The handshake is written by hand now, POST
+then upgrade, the way client-go does it. And the e2e cell that let this
+through - every canary on kind was a plain value, which the spec fallback
+answers - now carries one from a Secret, which only a real read of the running
+process can hand over.
+
+The `env passthrough` cell asserts the three rules against a deployed service
+carrying variables nothing else has, in all three families, the Secret-backed
+one included.
 
 ### plug mcp: what plug knows, served to an AI coding agent
 

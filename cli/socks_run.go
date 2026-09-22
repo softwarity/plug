@@ -552,15 +552,17 @@ func projectWorkloadEnv(tr *tunnel.Transport, name string, p envPolicy) {
 			lines = append(lines, l)
 		}
 	}
-	set, kept := mergeWorkloadEnv(lines, os.Environ(), p)
+	set, kept, empty := mergeWorkloadEnvWithEmpty(lines, os.Environ(), p)
 	applyWorkloadEnv(set)
-	switch {
-	case len(set) == 0 && len(kept) == 0:
+	if len(set) == 0 && len(kept) == 0 {
 		return
-	case len(kept) == 0:
-		info("%s: %d variable(s) from the deployed workload given to your command", name, len(set))
-	default:
-		info("%s: %d variable(s) from the deployed workload given to your command; yours kept for %s",
-			name, len(set), strings.Join(kept, ", "))
 	}
+	line := fmt.Sprintf("%s: %d variable(s) from the deployed workload given to your command", name, len(set))
+	if len(kept) > 0 {
+		line += "; yours kept for " + strings.Join(kept, ", ")
+	}
+	if len(empty) > 0 {
+		line += fmt.Sprintf("; %d arrived EMPTY (%s), see the note above", len(empty), strings.Join(empty, ", "))
+	}
+	info("%s", line)
 }

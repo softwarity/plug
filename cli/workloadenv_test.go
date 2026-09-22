@@ -49,3 +49,16 @@ func TestWorkloadLinesAreReadVerbatim(t *testing.T) {
 		t.Fatalf("got %v", set)
 	}
 }
+
+// A value that came through empty is named, not counted as delivered: on a
+// cluster without pods/exec a Secret-backed variable arrives as "" from the
+// pod spec, and the service fails on a missing password with no hint of RBAC.
+func TestEmptyValuesAreNamedBesideTheCount(t *testing.T) {
+	set, _, empty := mergeWorkloadEnvWithEmpty([]string{"NEO_ODB_HOST=odb", "NEO_ODB_PASSWORD=", "NEO_ODB_USER="}, nil, envPolicy{})
+	if len(set) != 3 {
+		t.Fatalf("set = %v", set)
+	}
+	if !reflect.DeepEqual(empty, []string{"NEO_ODB_PASSWORD", "NEO_ODB_USER"}) {
+		t.Fatalf("empty = %v", empty)
+	}
+}

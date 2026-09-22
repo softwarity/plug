@@ -69,6 +69,7 @@ services:
     environment:
       E2E_DEPLOYED: from-the-cluster
       SHARED_KEY: cluster-value
+      FROM_SECRET: from-a-secret
     command: ["-listen=:8085", "-text=deployed-tko-linux"]
     networks: [internal]
   tko-mac:
@@ -76,6 +77,7 @@ services:
     environment:
       E2E_DEPLOYED: from-the-cluster
       SHARED_KEY: cluster-value
+      FROM_SECRET: from-a-secret
     command: ["-listen=:8086", "-text=deployed-tko-mac"]
     networks: [internal]
   tko-win:
@@ -83,6 +85,7 @@ services:
     environment:
       E2E_DEPLOYED: from-the-cluster
       SHARED_KEY: cluster-value
+      FROM_SECRET: from-a-secret
     command: ["-listen=:8087", "-text=deployed-tko-win"]
     networks: [internal]
 

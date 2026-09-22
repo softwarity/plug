@@ -156,9 +156,12 @@ rules:
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list"]
+  # Both verbs, as Kubernetes' own `edit` role grants them: the API server
+  # evaluates a WebSocket upgrade (a GET) as `get` and a SPDY exec (a POST) as
+  # `create`. `create` alone was tried and answered 403 on a real cluster.
   - apiGroups: [""]
     resources: ["pods/exec"]
-    verbs: ["create"]
+    verbs: ["get", "create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

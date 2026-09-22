@@ -48,8 +48,19 @@ func parseNoEnv(value string) envPolicy {
 // already define. Keys the caller has are returned in `kept` so the session can
 // say which of the cluster's values it left alone.
 func mergeWorkloadEnv(lines []string, callerEnv []string, p envPolicy) (set map[string]string, kept []string) {
+	set, kept, _ = mergeWorkloadEnvWithEmpty(lines, callerEnv, p)
+	return set, kept
+}
+
+// mergeWorkloadEnvWithEmpty is mergeWorkloadEnv that also names the keys whose
+// value came through EMPTY: on Kubernetes without pods/exec the agent reads the
+// pod spec, where a Secret or ConfigMap reference has no value, and a service
+// that starts with an empty password fails in a way that names anything but
+// the missing RBAC rule. The session says which keys those are, beside the
+// count, so the cause is on the same line as the symptom.
+func mergeWorkloadEnvWithEmpty(lines []string, callerEnv []string, p envPolicy) (set map[string]string, kept, empty []string) {
 	if p.off {
-		return nil, nil
+		return nil, nil, nil
 	}
 	have := map[string]bool{}
 	for _, kv := range callerEnv {
@@ -68,8 +79,11 @@ func mergeWorkloadEnv(lines []string, callerEnv []string, p envPolicy) (set map[
 			continue
 		}
 		set[k] = v
+		if v == "" {
+			empty = append(empty, k)
+		}
 	}
-	return set, kept
+	return set, kept, empty
 }
 
 // applyWorkloadEnv sets the merged variables on this process.
