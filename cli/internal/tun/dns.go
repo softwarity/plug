@@ -27,6 +27,38 @@ const (
 // strips it back to the bare name. No effect on macOS/Linux (nothing appends it).
 const searchSuffix = "plug"
 
+// clusterLongName recognises a Kubernetes Service named the long way and gives
+// it back normalised, lower-case and without the trailing dot:
+// rabbitmq.shop.svc.cluster.local, or the shorter rabbitmq.shop.svc.
+// The shape is fixed by Kubernetes itself, <service>.<namespace>.svc[.<cluster
+// domain>], so the third label is the marker and the cluster domain (which a
+// cluster may rename) is whatever follows.
+//
+// A process that inherits the environment of the pod it replaces gets its
+// peers under this form, because that is how a Helm chart tends to write
+// them: `RABBITMQ_HOST=rabbitmq.shop.svc.cluster.local`. Relayed
+// upstream like any other dotted name, it came back NXDOMAIN from a resolver
+// that has never heard of cluster.local, and the service started with its
+// secrets in hand and no broker to talk to.
+//
+// The name is kept WHOLE, checked and minted as it was asked, so the agent
+// dials exactly it: the pod's resolver knows the namespace and the cluster
+// domain, and a Service of another namespace is reached the way the pod would
+// reach it. Cutting it down to its first label would have been simpler and
+// wrong, the same name in this namespace when the pod meant another one.
+//
+// The two-label form, rabbitmq.shop, is left alone: nothing tells it
+// from a name in somebody's real domain, and this stub answers the whole
+// machine on macOS.
+func clusterLongName(name string) (string, bool) {
+	n := strings.ToLower(strings.TrimSuffix(name, "."))
+	labels := strings.Split(n, ".")
+	if len(labels) < 3 || labels[2] != "svc" || labels[0] == "" || labels[1] == "" {
+		return "", false
+	}
+	return n, true
+}
+
 // faketab maps minted fake IPs to cluster names, all within ONE instance's
 // 198.18.<N>.0/24. The DNS forwarder mints; the netstack TCP forwarder looks up.
 // In-process, shared, mutex-guarded.
@@ -493,6 +525,18 @@ func answerDNS(q []byte, tab *faketab, upstream *upstreamDNS, check nameChecker)
 		} else {
 			rcode = 3 // NXDOMAIN — this instance's /24 is exhausted
 		}
+	case isClusterLongName(name):
+		// A Service under its Kubernetes long name: ours, like the bare name,
+		// and handled the same way, only the name stays whole so the connect
+		// carries the namespace to the agent (see clusterLongName).
+		long, _ := clusterLongName(name)
+		if check != nil && !check(long) {
+			rcode = 3
+		} else if ip := tab.mint(long); ip != 0 {
+			answerIP = net.IPv4(byte(ip>>24), byte(ip>>16), byte(ip>>8), byte(ip))
+		} else {
+			rcode = 3
+		}
 	default: // dotted → resolve for real via the saved upstream
 		if upstream == nil {
 			// The second of the two places this pointer is followed. Guarded for
@@ -576,14 +620,23 @@ func answerDNS(q []byte, tab *faketab, upstream *upstreamDNS, check nameChecker)
 	return r
 }
 
+// isClusterLongName is clusterLongName as a predicate, for the switch above.
+func isClusterLongName(name string) bool {
+	_, ok := clusterLongName(name)
+	return ok
+}
+
 // relayable reports whether a name belongs to somebody else, and so may be asked
 // upstream. Ours are the ones that only exist here: a single-label cluster
-// service, the .plug suffix Windows appends to one, and the reverse zone of this
-// instance's own /24. Sending any of them out would leak an internal name to a
-// resolver the user may not control, to be told what we already know.
+// service, the same Service under its Kubernetes long name, the .plug suffix
+// Windows appends to one, and the reverse zone of this instance's own /24.
+// Sending any of them out would leak an internal name to a resolver the user
+// may not control, to be told what we already know. For the long name it also
+// keeps the AAAA a NODATA next to the A we mint: the pair getaddrinfo waits on
+// has to agree, the lesson the AAAA case above cost a day to learn.
 func relayable(name string, tab *faketab) bool {
 	n := strings.ToLower(strings.TrimSuffix(name, "."))
-	if !strings.Contains(n, ".") || n == searchSuffix || strings.HasSuffix(n, "."+searchSuffix) {
+	if !strings.Contains(n, ".") || n == searchSuffix || strings.HasSuffix(n, "."+searchSuffix) || isClusterLongName(n) {
 		return false
 	}
 	// 198.18.<N>.<h> reverses to <h>.<N>.18.198.in-addr.arpa

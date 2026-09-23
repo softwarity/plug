@@ -31,10 +31,10 @@ func TestServedHolderIgnoresARecordWhoseProcessIsGone(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := "pid = " + itoa(dead) + "\nport = 40001\ndir = /tmp\ncmd = nest start --watch\n"
-	if err := os.WriteFile(filepath.Join(servedDir(), "fpl-svc"), []byte(rec), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(servedDir(), "orders-svc"), []byte(rec), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if h := servedHolder("fpl-svc"); h != nil {
+	if h := servedHolder("orders-svc"); h != nil {
 		t.Errorf("a dead holder (pid %d) was reported as live: %+v", dead, h)
 	}
 }

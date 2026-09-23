@@ -21,17 +21,17 @@ import (
 // owner() still answers with the service, and must: it exists to recognise
 // ANOTHER agent's signpost, and every replica of one deployment is the same agent.
 func TestRelayTargetNamesTheTaskNotTheService(t *testing.T) {
-	swarm := selfInfo{name: "neo_plug.1.l5vhiqbv4nqh", service: "neo_plug"}
-	if got := swarm.relayTarget(); got != "neo_plug.1.l5vhiqbv4nqh" {
+	swarm := selfInfo{name: "shop_plug.1.l5vhiqbv4nqh", service: "shop_plug"}
+	if got := swarm.relayTarget(); got != "shop_plug.1.l5vhiqbv4nqh" {
 		t.Errorf("a signpost must relay to the task holding the session, got %q", got)
 	}
-	if got := swarm.owner(); got != "neo_plug" {
+	if got := swarm.owner(); got != "shop_plug" {
 		t.Errorf("ownership stays the agent's role across restarts, got %q", got)
 	}
 	// Off Swarm the container name was always the instance: unchanged, and now
 	// the same sentence in both shapes.
-	compose := selfInfo{name: "neo-plug-1"}
-	if got := compose.relayTarget(); got != "neo-plug-1" {
+	compose := selfInfo{name: "shop-plug-1"}
+	if got := compose.relayTarget(); got != "shop-plug-1" {
 		t.Errorf("off Swarm the relay target is the container, got %q", got)
 	}
 }
@@ -41,7 +41,7 @@ func TestRelayTargetNamesTheTaskNotTheService(t *testing.T) {
 // port, no instance, no owner - and nobody must read that as "alive".
 func TestSessionOwnerIsAnAddressAnyAgentCanDial(t *testing.T) {
 	pairs := []portPair{{cluster: "8081", agent: "41017"}, {cluster: "25", agent: "41018"}}
-	if got := sessionOwner("neo_plug.1.abc", pairs); got != "neo_plug.1.abc:41017" {
+	if got := sessionOwner("shop_plug.1.abc", pairs); got != "shop_plug.1.abc:41017" {
 		t.Errorf("owner = %q, want the instance and the session's first port", got)
 	}
 	if got := sessionOwner("10.244.1.7", pairs); got != "10.244.1.7:41017" {
@@ -52,8 +52,8 @@ func TestSessionOwnerIsAnAddressAnyAgentCanDial(t *testing.T) {
 		pairs []portPair
 	}{
 		{"", pairs},
-		{"neo_plug.1.abc", nil},
-		{"neo_plug.1.abc", []portPair{{cluster: "8081"}}},
+		{"shop_plug.1.abc", nil},
+		{"shop_plug.1.abc", []portPair{{cluster: "8081"}}},
 	} {
 		if got := sessionOwner(c.addr, c.pairs); got != "" {
 			t.Errorf("sessionOwner(%q, %v) = %q, want none: an owner nobody can dial is not an owner", c.addr, c.pairs, got)

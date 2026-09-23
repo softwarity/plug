@@ -66,11 +66,11 @@ func TestServedNamesThePersonAndTheClusterPorts(t *testing.T) {
 	h := newRecordingHost()
 	s, fwd := testServer(h)
 
-	s.announce(fwd, "alice", "serve-name fpl-svc 80:41001,25:41002 takeover", "dynamic")
+	s.announce(fwd, "alice", "serve-name orders-svc 80:41001,25:41002 takeover", "dynamic")
 
 	e := waitServed(t, h)
-	if e.Name != "fpl-svc" {
-		t.Errorf("Name = %q, want fpl-svc", e.Name)
+	if e.Name != "orders-svc" {
+		t.Errorf("Name = %q, want orders-svc", e.Name)
 	}
 	if e.Who != "alice" {
 		t.Errorf("Who = %q, want alice", e.Who)
@@ -89,8 +89,8 @@ func TestARefusedServeAnnouncesNothing(t *testing.T) {
 	h := newRecordingHost()
 	s, fwd := testServer(h)
 
-	s.announce(fwd, "alice", "serve-name fpl-svc 80:41001 takeover",
-		`error: "fpl-svc" is already exposed by another live session`)
+	s.announce(fwd, "alice", "serve-name orders-svc 80:41001 takeover",
+		`error: "orders-svc" is already exposed by another live session`)
 
 	expectNothing(t, h)
 }
@@ -102,9 +102,9 @@ func TestAReassignedNameIsNotWithdrawn(t *testing.T) {
 	h := newRecordingHost()
 	s, fwd := testServer(h)
 
-	s.announce(fwd, "alice", "serve-name fpl-svc 80:41001 takeover", "dynamic")
+	s.announce(fwd, "alice", "serve-name orders-svc 80:41001 takeover", "dynamic")
 	waitServed(t, h)
-	s.announce(fwd, "alice", "unserve-name fpl-svc 41001", "ok reassigned")
+	s.announce(fwd, "alice", "unserve-name orders-svc 41001", "ok reassigned")
 
 	expectNothing(t, h)
 }
@@ -113,20 +113,20 @@ func TestUnserveWithdrawsTheNameOnce(t *testing.T) {
 	h := newRecordingHost()
 	s, fwd := testServer(h)
 
-	s.announce(fwd, "alice", "serve-name fpl-svc 80:41001 takeover", "dynamic")
+	s.announce(fwd, "alice", "serve-name orders-svc 80:41001 takeover", "dynamic")
 	waitServed(t, h)
-	s.announce(fwd, "alice", "unserve-name fpl-svc 41001", "ok")
+	s.announce(fwd, "alice", "unserve-name orders-svc 41001", "ok")
 
 	select {
 	case n := <-h.unserved:
-		if n != "fpl-svc" {
-			t.Fatalf("Unserved(%q), want fpl-svc", n)
+		if n != "orders-svc" {
+			t.Fatalf("Unserved(%q), want orders-svc", n)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("the host was never told the name was released")
 	}
 	// A second release is a leftover from a dead session, not a second event.
-	s.announce(fwd, "alice", "unserve-name fpl-svc 41001", "ok")
+	s.announce(fwd, "alice", "unserve-name orders-svc 41001", "ok")
 	expectNothing(t, h)
 }
 
@@ -137,8 +137,8 @@ func TestADeadConnectionWithdrawsWhatItServed(t *testing.T) {
 	h := newRecordingHost()
 	s, fwd := testServer(h)
 
-	s.announce(fwd, "alice", "serve-name fpl-svc 80:41001 takeover", "dynamic")
-	s.announce(fwd, "alice", "serve-name audgw 25:41002 takeover", "dynamic")
+	s.announce(fwd, "alice", "serve-name orders-svc 80:41001 takeover", "dynamic")
+	s.announce(fwd, "alice", "serve-name audit-gw 25:41002 takeover", "dynamic")
 	waitServed(t, h)
 	waitServed(t, h)
 
@@ -153,7 +153,7 @@ func TestADeadConnectionWithdrawsWhatItServed(t *testing.T) {
 			t.Fatalf("only %d names withdrawn, want 2", len(got))
 		}
 	}
-	if !got["fpl-svc"] || !got["audgw"] {
+	if !got["orders-svc"] || !got["audit-gw"] {
 		t.Errorf("withdrew %v, want both names", got)
 	}
 	// Whatever else happens to the connection, each name goes out once.
@@ -165,13 +165,13 @@ func TestADeadConnectionWithdrawsWhatItServed(t *testing.T) {
 // means a broken one costs its own event and nothing else.
 func TestAPanickingHostDoesNotTakeTheAgentDown(t *testing.T) {
 	h := newRecordingHost()
-	h.panicOn = "fpl-svc"
+	h.panicOn = "orders-svc"
 	s, fwd := testServer(h)
 
-	s.announce(fwd, "alice", "serve-name fpl-svc 80:41001 takeover", "dynamic")
+	s.announce(fwd, "alice", "serve-name orders-svc 80:41001 takeover", "dynamic")
 	// Queued behind it, so it can only be delivered after the panic happened.
-	s.announce(fwd, "alice", "serve-name audgw 25:41002 takeover", "dynamic")
-	if e := waitServed(t, h); e.Name != "audgw" {
+	s.announce(fwd, "alice", "serve-name audit-gw 25:41002 takeover", "dynamic")
+	if e := waitServed(t, h); e.Name != "audit-gw" {
 		t.Fatalf("after a panicking host, got %q", e.Name)
 	}
 }
@@ -240,7 +240,7 @@ func TestParkedIsCarriedFromTheVerbsAnswer(t *testing.T) {
 	} {
 		h := newRecordingHost()
 		s, fwd := testServer(h)
-		s.announce(fwd, "alice", "serve-name fpl-svc 80:41001 takeover", c.reply)
+		s.announce(fwd, "alice", "serve-name orders-svc 80:41001 takeover", c.reply)
 		if got := waitServed(t, h).Parked; got != c.want {
 			t.Errorf("answer %q gave Parked = %v, want %v", c.reply, got, c.want)
 		}
@@ -252,7 +252,7 @@ func TestParkedIsCarriedFromTheVerbsAnswer(t *testing.T) {
 func TestOnlyTheBareWordParkedCounts(t *testing.T) {
 	h := newRecordingHost()
 	s, fwd := testServer(h)
-	s.announce(fwd, "alice", "serve-name fpl-svc 80:41001 takeover", "dynamic unparked")
+	s.announce(fwd, "alice", "serve-name orders-svc 80:41001 takeover", "dynamic unparked")
 	if e := waitServed(t, h); e.Parked {
 		t.Error("a note that merely contains \"parked\" was read as a parked workload")
 	}
@@ -263,13 +263,13 @@ func TestOnlyTheBareWordParkedCounts(t *testing.T) {
 func TestOnlyTheProtocolAnswerCountsAsServed(t *testing.T) {
 	for _, reply := range []string{
 		"sh: serve-name: not found",
-		`error: "fpl-svc" is already exposed by another live session`,
+		`error: "orders-svc" is already exposed by another live session`,
 		"",
 		"ok", // the unserve verdict, never the serve one
 	} {
 		h := newRecordingHost()
 		s, fwd := testServer(h)
-		s.announce(fwd, "alice", "serve-name fpl-svc 80:41001 takeover", reply)
+		s.announce(fwd, "alice", "serve-name orders-svc 80:41001 takeover", reply)
 		expectNothing(t, h)
 	}
 }
@@ -279,9 +279,9 @@ func TestOnlyTheProtocolAnswerCountsAsServed(t *testing.T) {
 func TestAFailedReleaseWithdrawsNothing(t *testing.T) {
 	h := newRecordingHost()
 	s, fwd := testServer(h)
-	s.announce(fwd, "alice", "serve-name fpl-svc 80:41001 takeover", "dynamic")
+	s.announce(fwd, "alice", "serve-name orders-svc 80:41001 takeover", "dynamic")
 	waitServed(t, h)
-	s.announce(fwd, "alice", "unserve-name fpl-svc 41001",
-		`error: reading the Service "fpl-svc" to release it: timeout`)
+	s.announce(fwd, "alice", "unserve-name orders-svc 41001",
+		`error: reading the Service "orders-svc" to release it: timeout`)
 	expectNothing(t, h)
 }

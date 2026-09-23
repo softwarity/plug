@@ -22,8 +22,8 @@ func sandboxHome(t *testing.T) {
 func TestMarkServedThenHolderNamesThisProcess(t *testing.T) {
 	sandboxHome(t)
 
-	forget := markServed("fpl-svc", "40001", []string{"-s", "fpl-svc:3000:PORT", "nest", "start", "--watch"})
-	h := servedHolder("fpl-svc")
+	forget := markServed("orders-svc", "40001", []string{"-s", "orders-svc:3000:PORT", "nest", "start", "--watch"})
+	h := servedHolder("orders-svc")
 	if h == nil {
 		t.Fatal("servedHolder found nothing right after markServed")
 	}
@@ -45,14 +45,14 @@ func TestMarkServedThenHolderNamesThisProcess(t *testing.T) {
 	}
 
 	// A name this session never served says nothing about anyone.
-	if other := servedHolder("fpl-ui"); other != nil {
+	if other := servedHolder("orders-ui"); other != nil {
 		t.Errorf("servedHolder(unserved name) = %+v, want nil", other)
 	}
 
 	// Teardown forgets it: the next session must not be told about a name that
 	// is now free.
 	forget()
-	if after := servedHolder("fpl-svc"); after != nil {
+	if after := servedHolder("orders-svc"); after != nil {
 		t.Errorf("record survived teardown: %+v", after)
 	}
 }
@@ -61,12 +61,12 @@ func TestMarkServedThenHolderNamesThisProcess(t *testing.T) {
 func TestMarkServedSurvivesAnUnwritableHome(t *testing.T) {
 	t.Setenv("HOME", "/nonexistent/plug-test/nowhere")
 	t.Setenv("USERPROFILE", "/nonexistent/plug-test/nowhere")
-	forget := markServed("fpl-svc", "40001", []string{"-s", "fpl-svc:3000:PORT", "true"})
+	forget := markServed("orders-svc", "40001", []string{"-s", "orders-svc:3000:PORT", "true"})
 	if forget == nil {
 		t.Fatal("markServed returned a nil cleanup")
 	}
 	forget() // must not panic
-	if h := servedHolder("fpl-svc"); h != nil {
+	if h := servedHolder("orders-svc"); h != nil {
 		t.Errorf("holder from an unwritable home = %+v, want nil", h)
 	}
 }

@@ -10,16 +10,16 @@ import (
 // database from the shell, whatever the cluster says; and the credentials the
 // cluster has must reach a process that does not carry them itself.
 func TestTheCallerWinsAndTheClusterFillsTheRest(t *testing.T) {
-	cluster := []string{"NEO_ODB_HOST=odb", "NEO_ODB_PASSWORD=from-cluster", "NEO_MONGODB_HOST=mongodb"}
-	caller := []string{"PATH=/usr/bin", "NEO_ODB_PASSWORD=from-shell"}
+	cluster := []string{"APP_DB_HOST=odb", "APP_DB_PASSWORD=from-cluster", "APP_MONGODB_HOST=mongodb"}
+	caller := []string{"PATH=/usr/bin", "APP_DB_PASSWORD=from-shell"}
 	set, kept := mergeWorkloadEnv(cluster, caller, envPolicy{})
-	if set["NEO_ODB_HOST"] != "odb" || set["NEO_MONGODB_HOST"] != "mongodb" {
+	if set["APP_DB_HOST"] != "odb" || set["APP_MONGODB_HOST"] != "mongodb" {
 		t.Fatalf("the cluster's variables did not come through: %v", set)
 	}
-	if _, overridden := set["NEO_ODB_PASSWORD"]; overridden {
+	if _, overridden := set["APP_DB_PASSWORD"]; overridden {
 		t.Fatal("the cluster's password overrode the shell's")
 	}
-	if !reflect.DeepEqual(kept, []string{"NEO_ODB_PASSWORD"}) {
+	if !reflect.DeepEqual(kept, []string{"APP_DB_PASSWORD"}) {
 		t.Fatalf("kept = %v, want the caller's own key named", kept)
 	}
 }
@@ -54,11 +54,11 @@ func TestWorkloadLinesAreReadVerbatim(t *testing.T) {
 // cluster without pods/exec a Secret-backed variable arrives as "" from the
 // pod spec, and the service fails on a missing password with no hint of RBAC.
 func TestEmptyValuesAreNamedBesideTheCount(t *testing.T) {
-	set, _, empty := mergeWorkloadEnvWithEmpty([]string{"NEO_ODB_HOST=odb", "NEO_ODB_PASSWORD=", "NEO_ODB_USER="}, nil, envPolicy{})
+	set, _, empty := mergeWorkloadEnvWithEmpty([]string{"APP_DB_HOST=odb", "APP_DB_PASSWORD=", "APP_DB_USER="}, nil, envPolicy{})
 	if len(set) != 3 {
 		t.Fatalf("set = %v", set)
 	}
-	if !reflect.DeepEqual(empty, []string{"NEO_ODB_PASSWORD", "NEO_ODB_USER"}) {
+	if !reflect.DeepEqual(empty, []string{"APP_DB_PASSWORD", "APP_DB_USER"}) {
 		t.Fatalf("empty = %v", empty)
 	}
 }

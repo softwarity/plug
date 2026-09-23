@@ -138,6 +138,64 @@ func TestAnswerDNSStripsSearchSuffix(t *testing.T) {
 	}
 }
 
+// A Service named the Kubernetes way, rabbitmq.shop.svc.cluster.local,
+// is ours like a bare name: a fake of its own, mapped back to the WHOLE name
+// (lower-case, no trailing dot) so the agent dials it with its namespace, the
+// existence check asked with the whole name, and the AAAA a NODATA rather than
+// a relayed NXDOMAIN, so the pair getaddrinfo waits on agrees. That is how a
+// pod's environment names its peers, and it is what a plugged process
+// inherits since 2.16.
+func TestAnswerDNSMintsKubernetesLongNamesWhole(t *testing.T) {
+	tab := newFaketab(fakeBase)
+	var asked []string
+	check := func(name string) bool { asked = append(asked, name); return strings.HasPrefix(name, "rabbitmq") }
+	for _, c := range []struct{ asked, want string }{
+		{"rabbitmq.shop.svc.cluster.local", "rabbitmq.shop.svc.cluster.local"},
+		{"rabbitmq.shop.svc", "rabbitmq.shop.svc"},
+		{"RabbitMQ.Other-NS.SVC.cluster.local", "rabbitmq.other-ns.svc.cluster.local"},
+	} {
+		resp := answerDNS(query(c.asked, 1), tab, newUpstream(nil), check)
+		ip, ok := answerIPv4(resp)
+		if !ok {
+			t.Fatalf("%s: no A answer, want a fake", c.asked)
+		}
+		if ip&mask24 != fakeBase {
+			t.Fatalf("%s: answer %s is not a fake in the instance /24", c.asked, ipStr(ip))
+		}
+		if name, ok := tab.lookup(ip); !ok || name != c.want {
+			t.Fatalf("%s: faketab must map back to the whole name %q, got %q,%v", c.asked, c.want, name, ok)
+		}
+		if asked[len(asked)-1] != c.want {
+			t.Fatalf("%s: the existence check was asked %q, want the whole name %q", c.asked, asked[len(asked)-1], c.want)
+		}
+		if aaaa := answerDNS(query(c.asked, 28), tab, newUpstream(nil), check); aaaa == nil || aaaa[3]&0x0f != 0 {
+			t.Fatalf("%s: AAAA must be NODATA (rcode 0), got %v", c.asked, aaaa)
+		}
+	}
+	// Two namespaces, two names, two fakes: the connect must tell them apart.
+	a, _ := answerIPv4(answerDNS(query("rabbitmq.shop.svc.cluster.local", 1), tab, newUpstream(nil), check))
+	b, _ := answerIPv4(answerDNS(query("rabbitmq.other-ns.svc.cluster.local", 1), tab, newUpstream(nil), check))
+	if a == b {
+		t.Fatalf("the same Service name in two namespaces shares a fake %s", ipStr(a))
+	}
+	// A name the cluster does not hold stays an honest NXDOMAIN under its long
+	// spelling too.
+	if resp := answerDNS(query("gone.shop.svc.cluster.local", 1), tab, newUpstream(nil), check); resp == nil || resp[3]&0x0f != 3 {
+		t.Fatalf("an absent Service under its long name must be NXDOMAIN, got %v", resp)
+	}
+	// Two labels are somebody's domain until proven otherwise, and stay
+	// relayed. Asserted on relayable alone: answerDNS would ask the public
+	// fallback resolver for real, which a unit test does not do.
+	for _, n := range []string{"rabbitmq.shop.svc.cluster.local", "rabbitmq.shop.svc"} {
+		if relayable(n, tab) {
+			t.Fatalf("%s is ours, it must not be asked upstream", n)
+		}
+	}
+	if !relayable("rabbitmq.shop", tab) || !relayable("www.example.com", tab) {
+		t.Fatal("a name that is not a Kubernetes long name stays relayable")
+	}
+}
+
 // Negative answers must carry a SOA bounding the client's negative cache (RFC
 // 2308): without one, macOS's mDNSResponder held an NXDOMAIN from the few
 // seconds a -s name was gone (agent restart, signpost re-provisioned) long

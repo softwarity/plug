@@ -2,6 +2,37 @@
 
 ## NEXT RELEASE
 
+### A Service under its Kubernetes long name resolves through plug
+
+`rabbitmq.shop.svc.cluster.local` is how a pod's environment tends to name a
+peer, because that is how a Helm chart writes it, and it is what a plugged
+process inherits since 2.16.0. plug resolved the bare name only: the long
+one, dotted like any name of the outside world, went to the machine's
+resolver, which has never heard of `cluster.local`, and the service started
+with its secrets in hand and `ENOTFOUND` on its broker.
+
+The shape is Kubernetes' own, `<service>.<namespace>.svc[.<cluster domain>]`,
+so the client now recognises it and treats it as it treats a bare name: asked
+of the connected clusters before it is minted, an honest NXDOMAIN when none
+holds it, its AAAA a NODATA beside the A. The name is kept whole, never cut
+down to its first label: the agent dials exactly what was asked, so the
+namespace and the cluster domain are the pod's resolver's business, and a
+Service in another namespace is reached the way the pod would reach it. The
+agent's `resolve` verb takes the long form for that check; an older agent
+answers it with an error, which the client reads as "mint as before", and the
+connect still lands, only the NXDOMAIN of an absent name is less honest until
+the agent is updated. The two-label form, `rabbitmq.shop`, stays relayed
+upstream: nothing tells it from a name in somebody's real domain, and on macOS
+this resolver answers the whole machine.
+
+### Customer names are gone from the tests and the prose
+
+Test fixtures, comments, a documentation example and two release notes named
+real deployments: a namespace, service names, a company domain, a LAN. None of
+it was needed to say what the tests say. They now use `shop`, `orders-svc`,
+`corp.example` and the documentation ranges, and a sweep of the tree finds no
+more. A public repository is not the place for anybody's inventory.
+
 ---
 
 ## 2.16.0
@@ -13,8 +44,8 @@ This changes what every `-s` that takes over a deployed service does, by
 default, and that is why it is a minor.
 
 "Your process behaves as it would inside the cluster" was the promise, and the
-configuration is part of it. A service that takes `fpl-svc`'s place needs
-`fpl-svc`'s variables, and until now the developer retyped them: the database
+configuration is part of it. A service that takes `orders-svc`'s place needs
+`orders-svc`'s variables, and until now the developer retyped them: the database
 host, the queue credentials, the password, in a `.env` or on the command line,
 in the clear, out of date the day someone rotated them. mirrord and Telepresence
 both hand the remote environment over; plug did not.
@@ -485,7 +516,7 @@ startup and on every tick of the watcher - a VPN that comes up or goes away
 mid-session is followed either way - and routes each name to the resolver whose
 domain is its longest suffix, or to the ordinary servers when none claims it.
 Proven on the exact layout read off a laptop on OpenVPN Connect, boundary cases
-included: `notfint.vn` is not inside `fint.vn`, nor is `fint.vn.example.com`.
+included: `notcorp.example` is not inside `corp.example`, nor is `corp.example.org`.
 And verified live, inside a session: the VPN's names answer through the VPN and
 public names through the box, exactly as they do with no session running.
 
@@ -2741,7 +2772,7 @@ taken" but not the question you actually have — by whom. The agent now records
 where the session reached it from, and says so:
 
 ```
-"fpl-ui" is already exposed by another live session (agent port 41943, from 10.1.2.3)
+"orders-ui" is already exposed by another live session (agent port 41943, from 10.1.2.3)
 ```
 
 Enough to tell your own forgotten session apart from a colleague's, which is the
@@ -3158,7 +3189,7 @@ ports fell through to nothing.
 
 ### Fixed: two `-s` names can share a cluster port
 
-`plug -s neodps-mail:3000:PORT` bounced with `tcpip-forward request denied by
+`plug -s mail-svc:3000:PORT` bounced with `tcpip-forward request denied by
 peer` whenever another session already exposed ANY name on `:3000`. Inside the
 cluster that port is not unique — every service has its own IP, and a NestJS
 fleet all on `:3000` is the normal world — but every `-s` converges on the one

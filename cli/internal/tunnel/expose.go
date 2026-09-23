@@ -25,7 +25,7 @@ import (
 //
 // The agent-side port is ALLOCATED, never the cluster port itself, because the
 // cluster port is not unique on the agent: inside the cluster every service
-// has its own IP, so fpl-svc:3000 and neodps-mail:3000 coexist naturally — but
+// has its own IP, so orders-svc:3000 and mail-svc:3000 coexist naturally, but
 // through plug all the names converge on ONE agent container, where a fixed
 // :3000 could bind only once and the second session bounced with "tcpip-forward
 // request denied". The port is plumbing between the signpost and this session;

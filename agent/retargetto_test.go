@@ -106,10 +106,10 @@ func TestSignpostRelay(t *testing.T) {
 		cmd            []string
 		want, wantPort string
 	}{
-		{[]string{"/usr/local/bin/plug-agent", "signpost", "3000", "neo_plug:41234"}, "neo_plug:41234", "41234"},
+		{[]string{"/usr/local/bin/plug-agent", "signpost", "3000", "shop_plug:41234"}, "shop_plug:41234", "41234"},
 		{[]string{"/usr/local/bin/plug-agent", "signpost", "3000", "10.0.1.5:52801"}, "10.0.1.5:52801", "52801"},
 		// multi-port signpost (HTTP+SMTP+POP3 on one name): first pair decides
-		{[]string{"/usr/local/bin/plug-agent", "signpost", "80", "neo_plug:41001", "25", "neo_plug:41002", "425", "neo_plug:41003"}, "neo_plug:41001", "41001"},
+		{[]string{"/usr/local/bin/plug-agent", "signpost", "80", "shop_plug:41001", "25", "shop_plug:41002", "425", "shop_plug:41003"}, "shop_plug:41001", "41001"},
 		{[]string{"sleep", "60"}, "", ""},
 		{nil, "", ""},
 		{[]string{"signpost"}, "", ""},
@@ -129,11 +129,11 @@ func TestSignpostRelay(t *testing.T) {
 // ownerless just because the label is missing (every running session would look
 // like a leftover the first time an upgraded agent boots).
 func TestSignpostOwnerPrefersTheLabelAndFallsBackToTheCommand(t *testing.T) {
-	cmd := []string{"/usr/local/bin/plug-agent", "signpost", "3000", "neo_plug.1.abc:41234"}
-	if got := signpostOwner(map[string]string{sessionOwnerLabel: "neo_plug.2.def:52801"}, cmd); got != "neo_plug.2.def:52801" {
+	cmd := []string{"/usr/local/bin/plug-agent", "signpost", "3000", "shop_plug.1.abc:41234"}
+	if got := signpostOwner(map[string]string{sessionOwnerLabel: "shop_plug.2.def:52801"}, cmd); got != "shop_plug.2.def:52801" {
 		t.Errorf("the label is the owner when it is there, got %q", got)
 	}
-	if got := signpostOwner(nil, cmd); got != "neo_plug.1.abc:41234" {
+	if got := signpostOwner(nil, cmd); got != "shop_plug.1.abc:41234" {
 		t.Errorf("an older signpost's owner is its relay address, got %q", got)
 	}
 	if got := signpostOwner(nil, []string{"sleep", "60"}); got != "" {

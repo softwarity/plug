@@ -28,7 +28,7 @@ func TestAPlugLeftoverIsNeverKeptAsTheStateToRestore(t *testing.T) {
 func TestTheMachinesOwnResolversAreKept(t *testing.T) {
 	for _, servers := range [][]string{
 		{"192.168.1.254", "2001:861:8ac4:d650:ba8c:2bff:fe14:ac84"},
-		{"172.16.1.254", "172.16.1.253"}, // a VPN's
+		{"192.0.2.254", "192.0.2.253"}, // a VPN's
 		{"1.1.1.1"},
 		{},
 		nil,

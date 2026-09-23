@@ -159,17 +159,17 @@ func TestAVerdictNeverOutlivesCheckTTL(t *testing.T) {
 	if testing.Short() {
 		t.Skip("sleeps past checkTTL")
 	}
-	fr := &fakeResolver{names: map[string]bool{"fpl-svc": true}, ok: true}
+	fr := &fakeResolver{names: map[string]bool{"orders-svc": true}, ok: true}
 	check := newNameChecker(func() []Dialer { return []Dialer{fr} }, logfn(func(string, ...any) {}))
 
-	if !check("fpl-svc") {
+	if !check("orders-svc") {
 		t.Fatal("served name must mint")
 	}
 	// The Ctrl-C: the name vanishes from the cluster.
-	fr.names["fpl-svc"] = false
+	fr.names["orders-svc"] = false
 
 	time.Sleep(checkTTL + 500*time.Millisecond)
-	if check("fpl-svc") {
+	if check("orders-svc") {
 		t.Fatal("the stub still said a killed session's name existed after checkTTL — this is the gateway-poisoning bug")
 	}
 

@@ -70,7 +70,7 @@ func TestDNSBackupRoundTrip(t *testing.T) {
 	// A real dict → its restore script round-trips verbatim.
 	path := filepath.Join(dir, "a.dns.bak")
 	key := "State:/Network/Service/gpd.pan/DNS"
-	restore := "d.init\nd.add ServerAddresses * 10.10.83.253 172.16.1.225\nd.add SearchDomains * corp.example\n"
+	restore := "d.init\nd.add ServerAddresses * 10.10.83.253 192.0.2.225\nd.add SearchDomains * corp.example\n"
 	if err := persistDNSBackup(path, key, restore); err != nil {
 		t.Fatalf("persist: %v", err)
 	}

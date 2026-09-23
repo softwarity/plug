@@ -9,22 +9,22 @@ import (
 // it SupplementalMatchDomains, Windows the NRPT. The machine's ordinary servers
 // keep answering for the rest of the world. plug took the ordinary servers alone
 // and routed everything through them, so the VPN's own names were the first
-// thing a session broke: a resolver that has never heard of odb.fint.vn says so,
+// thing a session broke: a resolver that has never heard of db.corp.example says so,
 // confidently, and that answer won the race.
 //
 // This is the exact layout read off a laptop on OpenVPN Connect.
 func TestAScopedResolverAnswersForItsDomainAndNothingElse(t *testing.T) {
 	box := []string{"192.168.1.254:53"}
-	vpn := []scopedUpstream{{domain: "fint.vn", addrs: []string{"172.16.1.254:53", "172.16.1.253:53"}}}
+	vpn := []scopedUpstream{{domain: "corp.example", addrs: []string{"192.0.2.254:53", "192.0.2.253:53"}}}
 
 	for name, want := range map[string][]string{
-		"odb.fint.vn":          vpn[0].addrs,
-		"gitlab.fint.vn.":      vpn[0].addrs, // trailing dot, as on the wire
-		"ODB.FINT.VN":          vpn[0].addrs, // case is not a different name
-		"fint.vn":              vpn[0].addrs, // the apex itself
+		"db.corp.example":      vpn[0].addrs,
+		"gitlab.corp.example.": vpn[0].addrs, // trailing dot, as on the wire
+		"DB.CORP.EXAMPLE":      vpn[0].addrs, // case is not a different name
+		"corp.example":         vpn[0].addrs, // the apex itself
 		"github.com":           box,
-		"fint.vn.example.com":  box, // a name that merely CONTAINS the domain
-		"notfint.vn":           box, // a suffix that is not on a label boundary
+		"corp.example.org":     box, // a name that merely CONTAINS the domain
+		"notcorp.example":      box, // a suffix that is not on a label boundary
 		"registry-1.docker.io": box,
 	} {
 		if got := pickScoped(name, vpn, box); !reflect.DeepEqual(got, want) {
@@ -53,11 +53,11 @@ func TestTheLongestMatchingScopeWins(t *testing.T) {
 func TestScopesAreNormalisedOnTheWayIn(t *testing.T) {
 	u := newUpstream([]string{"192.168.1.254"})
 	u.setScoped([]scopedUpstream{
-		{domain: " .Fint.VN. ", addrs: []string{"172.16.1.254"}},
+		{domain: " .Corp.Example. ", addrs: []string{"192.0.2.254"}},
 		{domain: "empty.example", addrs: nil}, // nothing answers: must not match
 	})
-	if got := u.serversFor("odb.fint.vn"); len(got) != 1 || got[0] != "172.16.1.254:53" {
-		t.Fatalf("odb.fint.vn -> %v", got)
+	if got := u.serversFor("db.corp.example"); len(got) != 1 || got[0] != "192.0.2.254:53" {
+		t.Fatalf("db.corp.example -> %v", got)
 	}
 	if got := u.serversFor("x.empty.example"); got[0] != "192.168.1.254:53" {
 		t.Fatalf("a scope with no server captured the name: %v", got)

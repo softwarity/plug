@@ -486,7 +486,7 @@ func readDNSDict(key string) (restore string, servers, search []string) {
 // session started.
 //
 // OpenVPN Connect publishes under State:/Network/Service/OpenVPNConnect/DNS with
-// SupplementalMatchDomains [fint.vn]; other clients use their own service name,
+// SupplementalMatchDomains [corp.example]; other clients use their own service name,
 // which is why this lists the pattern rather than a known key. A service whose
 // ServerAddresses are plug's own is skipped: that is the one we overwrote.
 func scopedResolvers(own string) []scopedUpstream {

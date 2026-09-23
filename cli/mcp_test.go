@@ -6,12 +6,12 @@ import "testing"
 // an agent reading a workload's environment must not be handed credentials it
 // did not ask to see. Ordinary configuration comes through.
 func TestSecretLookingKeysAreMaskedByDefault(t *testing.T) {
-	for _, k := range []string{"NEO_ODB_PASSWORD", "AMQP_PASSWORD", "MONGODB_PWD", "GITHUB_TOKEN", "API_KEY", "AWS_SECRET_ACCESS_KEY", "OAUTH_CLIENT_SECRET", "BASIC_AUTH"} {
+	for _, k := range []string{"APP_DB_PASSWORD", "AMQP_PASSWORD", "MONGODB_PWD", "GITHUB_TOKEN", "API_KEY", "AWS_SECRET_ACCESS_KEY", "OAUTH_CLIENT_SECRET", "BASIC_AUTH"} {
 		if !looksSecret(k) {
 			t.Errorf("%s should be masked", k)
 		}
 	}
-	for _, k := range []string{"NEO_ODB_HOST", "PORT", "LOG_LEVEL", "FPL_DISPLAY_TIMEZONE", "NEO_MONGODB_LOGIN"} {
+	for _, k := range []string{"APP_DB_HOST", "PORT", "LOG_LEVEL", "DISPLAY_TIMEZONE", "APP_MONGODB_LOGIN"} {
 		if looksSecret(k) {
 			t.Errorf("%s is plain configuration and must come through", k)
 		}

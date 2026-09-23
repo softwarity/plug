@@ -93,10 +93,10 @@ import { CodeComponent } from '../code/code.component';
     </p>
 
     <h3>What it looks like from the agent</h3>
-    <p>Ask "why does fpl-svc not reach odb when I plug it on fint?" and the agent can read, in order:</p>
+    <p>Ask "why does orders-svc not reach odb when I plug it on prod?" and the agent can read, in order:</p>
     <ul>
-      <li><code>doctor</code> on <code>fint</code>: <code>exec grant: warn</code>, "the agent may not exec into pods: a plugged service gets its variables from the pod spec, and those that come from a Secret arrive empty", with the <code>kubectl patch</code> to run;</li>
-      <li><code>env_of fpl-svc</code>: <code>NEO_ODB_PASSWORD</code> is in the notes as "empty because it comes from a Secret";</li>
+      <li><code>doctor</code> on <code>prod</code>: <code>exec grant: warn</code>, "the agent may not exec into pods: a plugged service gets its variables from the pod spec, and those that come from a Secret arrive empty", with the <code>kubectl patch</code> to run;</li>
+      <li><code>env_of orders-svc</code>: <code>DB_PASSWORD</code> is in the notes as "empty because it comes from a Secret";</li>
       <li>and conclude, and fix the role, without having been told how plug works.</li>
     </ul>
 

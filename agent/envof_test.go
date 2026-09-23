@@ -12,13 +12,13 @@ import (
 // outside it they are the first thing to break.
 func TestEnvOfKeepsTheApplicationAndDropsThePlumbing(t *testing.T) {
 	got := envLines([]string{
-		"NEO_ODB_HOST=odb", "NEO_ODB_PASSWORD=s3cret", "PORT=8080",
-		"PATH=/usr/bin", "HOME=/root", "HOSTNAME=fpl-svc-7d9f", "TERM=xterm",
+		"APP_DB_HOST=odb", "APP_DB_PASSWORD=s3cret", "PORT=8080",
+		"PATH=/usr/bin", "HOME=/root", "HOSTNAME=orders-svc-7d9f", "TERM=xterm",
 		"KUBERNETES_SERVICE_HOST=10.96.0.1", "KUBERNETES_PORT=tcp://10.96.0.1:443",
 		"ODB_SERVICE_HOST=10.96.12.3", "ODB_SERVICE_PORT=5432", "ODB_SERVICE_PORT_PG=5432",
 		"PLUG_CORE=1", "JAVA_HOME=/opt/jdk", "NODE_PATH=/app/node_modules",
 	})
-	want := []string{"NEO_ODB_HOST=odb", "NEO_ODB_PASSWORD=s3cret", "PORT=8080"}
+	want := []string{"APP_DB_HOST=odb", "APP_DB_PASSWORD=s3cret", "PORT=8080"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
@@ -53,9 +53,9 @@ func TestKubeServiceLinksAreDroppedAndTheAppsOwnPortStays(t *testing.T) {
 		"AERO_CLIM_SVC_PORT_3134_TCP_ADDR=86.32.143.45", "AERO_CLIM_SVC_PORT_3134_TCP_PORT=3134",
 		"AERO_CLIM_SVC_PORT_3134_TCP_PROTO=tcp", "AERO_CLIM_SVC_SERVICE_HOST=86.32.143.45",
 		"RABBITMQ_PORT_5672_UDP=udp://1.2.3.4:5672",
-		"PORT=3000", "NEO_FLIGHT_FOLDER_SRV_PORT=3017", "NEO_ODB_PASSWORD=s3cret",
+		"PORT=3000", "APP_SCHEDULER_PORT=3017", "APP_DB_PASSWORD=s3cret",
 	})
-	want := []string{"NEO_FLIGHT_FOLDER_SRV_PORT=3017", "NEO_ODB_PASSWORD=s3cret", "PORT=3000"}
+	want := []string{"APP_DB_PASSWORD=s3cret", "APP_SCHEDULER_PORT=3017", "PORT=3000"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}

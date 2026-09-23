@@ -143,6 +143,18 @@ var answer = func(format string, a ...any) {
 // won't, and -s must behave the same whichever backend answers.
 var nameRe = regexp.MustCompile(`^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
+// hostRe is nameRe with dots: labels of the same shape, joined. `resolve` takes
+// it, because a plugged process asks about its peers the way its pod's
+// environment names them, rabbitmq.shop.svc.cluster.local, and the CLI
+// asks the cluster about exactly that name before minting it (2.16.1). The
+// verbs that create or repoint a Service keep nameRe: a Service has one label.
+var hostRe = regexp.MustCompile(`^[a-z]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z]([a-z0-9-]{0,61}[a-z0-9])?)*$`)
+
+// resolveArgOK is the shape `resolve` accepts: one argument, a hostname.
+func resolveArgOK(cmd []string) bool {
+	return len(cmd) == 2 && hostRe.MatchString(cmd[1])
+}
+
 // dispatch is the entry point for every command arriving over SSH. It validates
 // and routes; the work of each verb lives in its own function below.
 //
@@ -347,7 +359,7 @@ func doResolve(cmd []string) {
 	// resolver — the only place that truth lives. Both outcomes answer on
 	// stdout ("found"/"nxdomain"): an error would be indistinguishable from
 	// a pre-2.2 agent's "unknown command", which means "mint as before".
-	if len(cmd) != 2 || !nameRe.MatchString(cmd[1]) {
+	if !resolveArgOK(cmd) {
 		answer("error: usage: resolve <name>")
 	}
 	// The witness starts NOW, beside the lookup, not after it.
