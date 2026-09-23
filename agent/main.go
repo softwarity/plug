@@ -591,7 +591,15 @@ const (
 
 // portPair is one of a name's exposures: the port workloads dial, and the
 // sshd-allocated agent port the signpost relays it to.
-type portPair struct{ cluster, agent string }
+// portPair is one exposure: the cluster port a caller dials, the agent port the
+// session's forward answers on, and, when a deployed Service is being taken
+// over, the NAME that Service already gave the port. That name has to be kept:
+// an Ingress and the ingress controller's own endpoint matching refer to a
+// Service port by its name, and renaming it to plug's own "p<port>" left them
+// with no backend (the parked Service reachable through kube-proxy, which routes
+// by number, but not through an Ingress). Empty for a plug-created name, which
+// owns both sides and names them itself.
+type portPair struct{ cluster, agent, name string }
 
 // One name, one live session — and the proof of that must not depend on a
 // signpost existing.

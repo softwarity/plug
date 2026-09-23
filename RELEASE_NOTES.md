@@ -2,6 +2,24 @@
 
 ## NEXT RELEASE
 
+### A taken-over Kubernetes Service keeps its port names, so an Ingress still reaches it
+
+Parking a deployed Service drops its selector and writes the Endpoints by hand,
+and it also rewrote the Service's ports, renaming each to plug's own `p<port>`.
+kube-proxy routes by number and never noticed, so a name served this way
+answered perfectly from inside the cluster. An Ingress does not: it, and the
+ingress controller's own endpoint-to-port matching, refer to a Service port by
+its NAME. Renamed out from under them, they found no backend and the request
+hung, a WebSocket left forever "pending" in the browser while `curl` to the
+same name inside the cluster returned 101. It surfaced the moment a plugged
+service was reached through the ingress rather than by its cluster name.
+
+A takeover now keeps the name each port already had (`http` stays `http`), on
+both the Service and the Endpoints plug writes, so whatever named it still
+resolves a backend. A plug-CREATED name has no prior name and keeps `p<port>`
+as before. The parking receipt already saved the original ports, so the restore
+was always correct; only the live parked state was renamed.
+
 ### `--env-of <name>`: a workload's environment without taking its place
 
 Since 2.16.0 a `-s` that parks a deployed service hands its environment to

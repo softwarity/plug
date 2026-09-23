@@ -347,7 +347,46 @@ func k8sPorts(pairs []portPair) []map[string]any {
 // k8sPortName is that name, in one place because the Endpoints must repeat it
 // verbatim: k8s matches a Service port to an endpoint port BY NAME, and a
 // mismatch is a name with no route rather than a rejected object.
-func k8sPortName(pp portPair) string { return "p" + pp.cluster }
+//
+// A taken-over Service keeps the name it already had (pp.name): an Ingress that
+// names this port, and the ingress controller's own endpoint-to-port matching,
+// both look it up by that name, so renaming it to "p<port>" left them with no
+// backend while kube-proxy, which routes by number, still worked. That is the
+// exact shape of a WebSocket that hangs in the browser while the name answers
+// inside the cluster. A plug-created name has no prior name and gets "p<port>".
+func k8sPortName(pp portPair) string {
+	if pp.name != "" {
+		return pp.name
+	}
+	return "p" + pp.cluster
+}
+
+// k8sNamedPairs fills each pair's port name from the Service being taken over,
+// matching by port number, so k8sPorts and k8sEndpointsFor reproduce the name
+// the Service already published rather than inventing "p<port>". A port the
+// Service does not carry (or an unnamed one) keeps the fallback. rawPorts is the
+// Service's spec.ports as read before the patch.
+func k8sNamedPairs(pairs []portPair, rawPorts json.RawMessage) []portPair {
+	var sp []struct {
+		Name string `json:"name"`
+		Port int    `json:"port"`
+	}
+	if len(rawPorts) == 0 || json.Unmarshal(rawPorts, &sp) != nil {
+		return pairs
+	}
+	byPort := map[string]string{}
+	for _, p := range sp {
+		if p.Name != "" {
+			byPort[strconv.Itoa(p.Port)] = p.Name
+		}
+	}
+	out := make([]portPair, len(pairs))
+	for i, pp := range pairs {
+		pp.name = byPort[pp.cluster]
+		out[i] = pp
+	}
+	return out
+}
 
 // k8sSelfIP is THIS pod's address: what a served name must resolve to, and half
 // of the identity its parking receipt is signed with.
@@ -577,11 +616,14 @@ func k8sServe(name string, pairs []portPair) {
 				if rerr != nil {
 					answer("error: recording %q's original spec: %v", name, rerr)
 				}
-				patch := k8sRepointPatch(pairs, map[string]any{k8sParkedAnn: receipt, sessionOwnerLabel: owner})
+				// Keep the Service's own port names so an Ingress that references
+				// them still resolves a backend (see k8sPortName).
+				named := k8sNamedPairs(pairs, existing.Spec.Ports)
+				patch := k8sRepointPatch(named, map[string]any{k8sParkedAnn: receipt, sessionOwnerLabel: owner})
 				if _, perr := k8sMergePatch("/api/v1/namespaces/"+ns+"/services/"+name, patch); perr != nil {
 					answer("error: parking the Service %q (repointing it at the agent): %v", name, perr)
 				}
-				k8sPointAtSelf(ns, name, podIP, pairs)
+				k8sPointAtSelf(ns, name, podIP, named)
 				answer("dynamic parked")
 			}
 			answer("error: the Service %q exists but plug cannot read it — remove it, or grant the agent access: kubectl delete service %s", name, name)
@@ -609,14 +651,18 @@ func k8sServe(name string, pairs []portPair) {
 		// this Service was left lingering by a clean unserve or orphaned by a
 		// crash. Only if the patch itself fails do we fall back to the old
 		// replace, reporting the real cause.
-		patch := k8sRepointPatch(pairs, map[string]any{lingerLabel: nil, sessionOwnerLabel: owner})
+		// Keep whatever names the Service already carries (a plug Service's own
+		// "p<port>", or an original name if this reclaims a takeover): same rule
+		// as the park above, one Ingress-safe path for both.
+		named := k8sNamedPairs(pairs, existing.Spec.Ports)
+		patch := k8sRepointPatch(named, map[string]any{lingerLabel: nil, sessionOwnerLabel: owner})
 		if _, perr := k8sMergePatch("/api/v1/namespaces/"+ns+"/services/"+name, patch); perr != nil {
 			k8sDropName(ns, name)
 			if _, rerr := k8sAPI("POST", "/api/v1/namespaces/"+ns+"/services", svc, nil); rerr != nil {
 				answer("error: re-provisioning the Service %q failed (a stale plug Service was removed): %v", name, rerr)
 			}
 		}
-		k8sPointAtSelf(ns, name, podIP, pairs)
+		k8sPointAtSelf(ns, name, podIP, named)
 		answer("dynamic")
 	default:
 		answer("error: %v", err)
