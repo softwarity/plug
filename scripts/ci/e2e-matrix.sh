@@ -416,11 +416,18 @@ do_env() {
   # workload's variable reaches the command; a variable the caller set with
   # the same key WINS; --no-env hands over nothing. Each session is bounded
   # and ends by itself.
-  local tname
-  case "$(uname -s)" in
-    Darwin)               tname=tko-mac ;;
-    MINGW*|MSYS*|CYGWIN*) tname=tko-win ;;
-    *)                    tname=tko-linux ;;
+  # One target and one agent port PER LEG, not per OS: the arm64 leg is Linux
+  # and runs on the same compose cluster as the ubuntu leg, concurrently. Keyed
+  # by OS alone, both took tko-linux on agent port 18099 within the same
+  # minute, the second takeover queued behind the first until its alarm killed
+  # it, and the cell went red on both legs, with nothing to say. That cost the
+  # publication run of 2.16.1.
+  local tname sport=18099
+  case "$(uname -s)/$(uname -m)" in
+    Darwin/*)               tname=tko-mac ;;
+    MINGW*|MSYS*|CYGWIN*)   tname=tko-win ;;
+    Linux/aarch64|Linux/arm64) tname=tko-arm sport=18097 ;;
+    *)                      tname=tko-linux ;;
   esac
   # Three takeovers of the same name, back to back. Each one parks tko-<os>
   # and its teardown restores it, and the next must not start until that
@@ -428,7 +435,7 @@ do_env() {
   # sessions answer nothing at all, on the arm64 leg, because they hit the
   # previous session's teardown still in flight. takeover waits the same way.
   local tport
-  case "$tname" in tko-mac) tport=8086 ;; tko-win) tport=8087 ;; *) tport=8085 ;; esac
+  case "$tname" in tko-mac) tport=8086 ;; tko-win) tport=8087 ;; tko-arm) tport=8088 ;; *) tport=8085 ;; esac
   restored() { # until the deployed service answers again, or give up after 30s
     local r=""
     for _ in 1 2 3 4 5 6 7 8 9 10; do
@@ -444,25 +451,31 @@ do_env() {
     # plug's own lines (took over, the agent's notes, N variable(s) given) go
     # to a file, printed only when the cell fails: three k8s legs answered
     # "unset" for every variable and the log held nothing to say why.
-    env $2 perl -e 'alarm 60; exec @ARGV or exit 127' "$PLUG" --host "$ip" --port "$port" $1 -s "$tname:18099:18099" \
+    env $2 perl -e 'alarm 60; exec @ARGV or exit 127' "$PLUG" --host "$ip" --port "$port" $1 -s "$tname:$sport:$sport" \
       bash -c 'echo "${E2E_DEPLOYED:-unset}/${SHARED_KEY:-unset}/${FROM_SECRET:-unset}"' 2>>/tmp/wenv.err | tr -d '\r' | tail -1
   }
   : > /tmp/wenv.err
-  local r1 r2 r3
+  local r1 r2 r3 r4
   r1="$(wenv "" "")"
   r2="$(wenv "" "SHARED_KEY=from-the-caller")"
   r3="$(wenv "--no-env" "")"
+  # And without parking anything: a -c with --env-of reads the environment of
+  # a workload that is RUNNING, found by its name rather than by a receipt.
+  # The same three canaries, from the same service, with nothing taken over.
+  restored || true
+  r4="$(perl -e 'alarm 60; exec @ARGV or exit 127' "$PLUG" --host "$ip" --port "$port" -c --env-of "$tname" \
+    bash -c 'echo "${E2E_DEPLOYED:-unset}/${SHARED_KEY:-unset}/${FROM_SECRET:-unset}"' 2>>/tmp/wenv.err | tr -d '\r' | tail -1)"
   # FROM_SECRET is the one that proves the read is of the RUNNING process: on
   # Kubernetes it is a secretKeyRef, which the pod spec cannot answer, so a
   # collector that fell back to the spec (no pods/exec, or a handshake the API
   # server maps to the wrong verb) hands it over empty and this cell goes red.
-  if [ "$r1" = "from-the-cluster/cluster-value/from-a-secret" ] && [ "$r2" = "from-the-cluster/from-the-caller/from-a-secret" ] && [ "$r3" = "unset/unset/unset" ]; then
-    echo "workload env OK: projected ($r1), the caller wins ($r2), --no-env hands over nothing ($r3)"
-    sum "**workload env (projected, caller wins, --no-env)** ✅"
+  if [ "$r1" = "from-the-cluster/cluster-value/from-a-secret" ] && [ "$r2" = "from-the-cluster/from-the-caller/from-a-secret" ] && [ "$r3" = "unset/unset/unset" ] && [ "$r4" = "from-the-cluster/cluster-value/from-a-secret" ]; then
+    echo "workload env OK: projected ($r1), the caller wins ($r2), --no-env hands over nothing ($r3), -c --env-of reads a running one ($r4)"
+    sum "**workload env (projected, caller wins, --no-env, -c --env-of)** ✅"
   else
-    echo "--- workload env FAIL: projected='$r1' (want from-the-cluster/cluster-value/from-a-secret) caller-wins='$r2' (want from-the-cluster/from-the-caller/from-a-secret) no-env='$r3' (want unset/unset/unset)"
-    echo "    --- what plug said across the three sessions ---"; grep -E "^\[plug\]" /tmp/wenv.err | grep -vE "using cluster version|serving |path verified|proving the path" | head -20 | sed "s/^/    /"
-    sum "**workload env (projected, caller wins, --no-env)** ❌: \`$r1\` · \`$r2\` · \`$r3\`"; return 1
+    echo "--- workload env FAIL: projected='$r1' (want from-the-cluster/cluster-value/from-a-secret) caller-wins='$r2' (want from-the-cluster/from-the-caller/from-a-secret) no-env='$r3' (want unset/unset/unset) env-of='$r4' (want from-the-cluster/cluster-value/from-a-secret)"
+    echo "    --- what plug said across the four sessions ---"; grep -E "^\[plug\]" /tmp/wenv.err | grep -vE "using cluster version|serving |path verified|proving the path" | head -24 | sed "s/^/    /"
+    sum "**workload env (projected, caller wins, --no-env, -c --env-of)** ❌: \`$r1\` · \`$r2\` · \`$r3\` · \`$r4\`"; return 1
   fi
 
   # The privilege the child does NOT get. plug holds root on macOS (setuid) or

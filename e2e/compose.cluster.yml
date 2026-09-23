@@ -88,6 +88,20 @@ services:
       FROM_SECRET: from-a-secret
     command: ["-listen=:8087", "-text=deployed-tko-win"]
     networks: [internal]
+  # The arm64 leg runs on THIS cluster too, and it is Linux: with a target
+  # chosen by OS alone it took tko-linux at the same moment as the ubuntu leg,
+  # the second takeover queued behind the first, its 60s alarm killed it, and
+  # the workload-env cell went red on both legs with nothing to say. The run
+  # that published 2.16.1 was lost to that. One target per leg, like every
+  # other name in this file.
+  tko-arm:
+    image: hashicorp/http-echo:1.0.0
+    environment:
+      E2E_DEPLOYED: from-the-cluster
+      SHARED_KEY: cluster-value
+      FROM_SECRET: from-a-secret
+    command: ["-listen=:8088", "-text=deployed-tko-arm"]
+    networks: [internal]
 
   # Agent-crash simulator: GET chaos:8095/restart-agent?svc=<service> restarts
   # that compose service's container (docker.sock, by label) — the resilience

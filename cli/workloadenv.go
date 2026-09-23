@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"strings"
 )
@@ -22,10 +23,34 @@ import (
 // os.Environ() as it always did, PATH handling and privilege drop included.
 
 // envPolicy is what --no-env said: nothing (project everything), everything
-// (a bare --no-env), or a list of keys to leave out.
+// (a bare --no-env), or a list of keys to leave out; and what --env-of said,
+// which workload's environment to take when it is not the one -s parks.
 type envPolicy struct {
 	off  bool
 	drop map[string]bool
+	// from is the --env-of name: the workload whose environment the command
+	// gets, whatever -s does. Empty means the parked one, the default. With it,
+	// a -c gets an environment too (a one-off script run with a service's
+	// credentials), and a -s can borrow another service's (the credentials of
+	// the one it talks to rather than of the one it replaces).
+	from string
+}
+
+// envPolicyOf builds the policy from the three flags as the launcher saw them,
+// and refuses the one combination that says two things at once: a bare
+// --no-env asks for no environment, --env-of asks for one.
+func envPolicyOf(noEnv bool, noEnvList, envOf string) (envPolicy, error) {
+	p := envPolicy{}
+	if noEnv {
+		p = parseNoEnv(noEnvList)
+	}
+	if envOf != "" {
+		if p.off {
+			return envPolicy{}, errors.New("--env-of and a bare --no-env contradict each other: one asks for a workload's environment, the other for none (--no-env A,B still leaves keys out of it)")
+		}
+		p.from = envOf
+	}
+	return p, nil
 }
 
 // parseNoEnv reads the value that followed --no-env. A bare flag has no value

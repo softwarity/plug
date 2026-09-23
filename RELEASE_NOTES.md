@@ -2,9 +2,24 @@
 
 ## NEXT RELEASE
 
----
+### `--env-of <name>`: a workload's environment without taking its place
 
-## 2.16.1
+Since 2.16.0 a `-s` that parks a deployed service hands its environment to
+the command. That left two things out. A `-c` has no name and parks nothing,
+so a one-off script that needs a service's credentials retyped them; and a
+`-s` got the variables of the service it replaces, never of the one it talks
+to. `--env-of <name>` covers both: `plug -c --env-of orders-svc python job.py`
+runs the script with `orders-svc`'s variables, secrets included as the pod has
+them, and `plug -s api:8080:PORT --env-of orders-svc npm run dev` serves `api`
+with `orders-svc`'s environment instead of `api`'s own. Nothing is parked for
+it: the agent reads the running workload, found by its name. The rules are
+the default's, your own variables winning and `--no-env A,B` still leaving
+keys out; a bare `--no-env` beside it is refused, it would say two things at
+once. An agent older than 2.16 answers the request with "unknown command" and
+the session says so and runs with your environment alone.
+
+Also fixed on the way: `--no-env=A,B`, the glued spelling the help promised,
+fell through as an unknown flag and reached the command.
 
 ### A Service under its Kubernetes long name resolves through plug
 

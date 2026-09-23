@@ -18,12 +18,14 @@ import (
 	"time"
 )
 
-// doEnvOf answers the environment of the workload parked under <name>, as
-// "KEY=VALUE" lines. Nothing parked, or nothing readable, answers an empty
-// body: the client then runs the command with the caller's environment alone,
-// which is what every version before this one did. A refusal that names the
-// missing right goes on stderr through envNote, so the session prints it once
-// and goes on.
+// doEnvOf answers the environment of the workload under <name>, as "KEY=VALUE"
+// lines: the one this session parked, or, for --env-of, any deployed one, read
+// where it runs (the collectors below find a running workload by its name and
+// a parked one by its receipt). Nothing there, or nothing readable, answers an
+// empty body: the client then runs the command with the caller's environment
+// alone, which is what every version before this one did. A refusal that
+// names the missing right goes on stdout through envNote, so the session
+// prints it once and goes on.
 func doEnvOf(cmd []string) {
 	if len(cmd) != 2 || !nameRe.MatchString(cmd[1]) {
 		answer("error: usage: env-of <name>")

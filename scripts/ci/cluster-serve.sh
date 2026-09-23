@@ -35,7 +35,7 @@ compose="docker compose -f compose.yml -f compose.cluster.yml"
 # (compose build); the rest are pulled images. --wait blocks on the healthchecks.
 $compose up -d --build --wait \
   agent httpbin postgres redis mongo rabbitmq mosquitto grpc wsserver ident \
-  flaky-linux flaky-mac flaky-win tko-linux tko-mac tko-win prober gateway \
+  flaky-linux flaky-mac flaky-win tko-linux tko-mac tko-win tko-arm prober gateway \
   chaos res-tko-linux res-tko-mac res-tko-win \
   res-agent-linux res-agent-mac res-agent-win \
   prev-agent-linux prev-agent-mac prev-agent-win

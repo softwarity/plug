@@ -100,6 +100,12 @@ Options:
                          service hands its variables to your command, secrets
                          included, your own variables winning; --no-env alone
                          turns that off, --no-env A,B leaves out those keys.
+      --env-of <name>    give the command the environment of THAT deployed
+                         workload instead: a -c one-off script run with a
+                         service's own credentials, or a -s that borrows the
+                         variables of the service it talks to rather than of
+                         the one it replaces. Same rules: secrets included,
+                         yours winning, --no-env A,B still leaving keys out.
       --dockerrun        put a CONTAINER in the cluster, not a process:
                            plug -p prod -c --dockerrun docker run my-image
                          Prefixing docker with plug alone cannot work: the
@@ -269,12 +275,17 @@ func stripLeadingFlags(args []string) ([]tunnel.ExposeSpec, bool, envPolicy, []s
 		switch {
 		case len(args) >= 1 && args[0] == "--no-env":
 			args = args[1:]
+			from := policy.from // --env-of may have come first; keep it
 			if len(args) >= 1 && looksLikeKeyList(args[0]) {
 				policy = parseNoEnv(args[0])
 				args = args[1:]
 			} else {
 				policy = parseNoEnv("")
 			}
+			policy.from = from
+		case len(args) >= 2 && args[0] == "--env-of":
+			policy.from = args[1]
+			args = args[2:]
 		case len(args) >= 2 && (args[0] == "-s" || args[0] == "--serve"):
 			spec, err := parseExpose(args[1])
 			if err != nil {
@@ -286,6 +297,12 @@ func stripLeadingFlags(args []string) ([]tunnel.ExposeSpec, bool, envPolicy, []s
 			client = true
 			args = args[1:]
 		default:
+			if policy.off && policy.from != "" {
+				// The launcher refuses this before connecting; the core says it
+				// too, for an argv that reached it from an older launcher.
+				_, err := envPolicyOf(true, "", policy.from)
+				return nil, false, envPolicy{}, nil, err
+			}
 			return specs, client, policy, args, nil
 		}
 	}
@@ -322,6 +339,19 @@ type options struct {
 	// noEnv: --no-env was given; noEnvList is what followed it ("" = all).
 	noEnv     bool
 	noEnvList string
+	// envOf: the --env-of name, the workload whose environment the command
+	// gets instead of the parked one's.
+	envOf string
+}
+
+// policy is the environment policy the three flags add up to. The one
+// contradiction they can express is refused here, before anything connects.
+func (o options) policy() envPolicy {
+	p, err := envPolicyOf(o.noEnv, o.noEnvList, o.envOf)
+	if err != nil {
+		fatal("%v", err)
+	}
+	return p
 }
 
 func main() {
@@ -563,9 +593,7 @@ func launcherRun(args []string) {
 	// Same version as this launcher (or the agent is unversioned): run in-process.
 	if remote == version || remote == "" {
 		attachExposes(&cfg, opts.exposes)
-		if opts.noEnv {
-			cfg.envPolicy = parseNoEnv(opts.noEnvList)
-		}
+		cfg.envPolicy = opts.policy()
 		runCore(cfg, cmdArgs)
 		return
 	}
@@ -612,9 +640,7 @@ func launcherRun(args []string) {
 			"      identity in your profile is the one presented. Upgrade the agent to line them up.",
 			shortVersion(remote), shortVersion(version))
 		attachExposes(&cfg, opts.exposes)
-		if opts.noEnv {
-			cfg.envPolicy = parseNoEnv(opts.noEnvList)
-		}
+		cfg.envPolicy = opts.policy()
 		runCore(cfg, cmdArgs)
 		return
 	}
@@ -623,9 +649,7 @@ func launcherRun(args []string) {
 	if err != nil {
 		info("cannot fetch v%s (%v) — falling back to this launcher (v%s)", remote, err, version)
 		attachExposes(&cfg, opts.exposes)
-		if opts.noEnv {
-			cfg.envPolicy = parseNoEnv(opts.noEnvList)
-		}
+		cfg.envPolicy = opts.policy()
 		runCore(cfg, cmdArgs)
 		return
 	}
@@ -660,6 +684,7 @@ func launcherRun(args []string) {
 	if opts.client {
 		cmdArgs = append([]string{"-c"}, cmdArgs...) // same wire format as -s: the core strips it back
 	}
+	opts.policy() // the contradiction is refused here, not by a core that may predate the flag
 	if opts.noEnv {
 		// Same wire format again. An old core fails loudly on an unknown flag
 		// rather than silently projecting what the person asked it not to.
@@ -668,6 +693,9 @@ func launcherRun(args []string) {
 		} else {
 			cmdArgs = append([]string{"--no-env"}, cmdArgs...)
 		}
+	}
+	if opts.envOf != "" {
+		cmdArgs = append([]string{"--env-of", opts.envOf}, cmdArgs...)
 	}
 	// Named through the descriptor we verified, not through its path — see
 	// execTarget. The descriptor stays open until the child is started; the child
@@ -1684,10 +1712,17 @@ func parseArgs(args []string) (options, []string) {
 		case "--no-env":
 			o.noEnv = true
 			// Optional value: `--no-env` alone, `--no-env A,B`, or `--no-env=A,B`.
-			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") && strings.Contains(args[i+1], "=") == false && looksLikeKeyList(args[i+1]) {
+			// The glued form used to fall through as an unknown flag (it was not
+			// a valueOption) and travel to the command, which then failed on an
+			// argument it had never asked for.
+			if glued {
+				o.noEnvList = inline
+			} else if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") && strings.Contains(args[i+1], "=") == false && looksLikeKeyList(args[i+1]) {
 				o.noEnvList = args[i+1]
 				i++
 			}
+		case "--env-of":
+			o.envOf = value()
 		default:
 			return o, args[i:]
 		}
@@ -1699,7 +1734,8 @@ func parseArgs(args []string) (options, []string) {
 // valueOptions are the long options that take one, which is all the equals form
 // has to know: everything else keeps travelling as it was written.
 var valueOptions = map[string]bool{
-	"--profile": true, "--host": true, "--port": true, "--serve": true,
+	"--profile": true, "--host": true, "--port": true, "--serve": true, "--env-of": true,
+	"--no-env": true, // optional value; the case above reads the glued form itself
 }
 
 func flagValue(args []string, i *int) string {

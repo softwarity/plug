@@ -226,6 +226,18 @@ func verifyExposed(ex pathVerifier, name string, stopped func() bool) error {
 // user is launching.
 // Returns the transport teardown (a no-op when nothing is exposed).
 func startExposes(cfg config) (func(), error) {
+	// --env-of: the environment of a workload the session does not park,
+	// asked for on its own connection before anything is served. This is how
+	// a -c gets an environment at all, and how a -s borrows another service's
+	// rather than the one it replaces; the parked branch below stays out of it.
+	if from := cfg.envPolicy.from; from != "" {
+		tr, err := dialTunnel(cfg)
+		if err != nil {
+			return nil, err
+		}
+		projectWorkloadEnv(tr, from, cfg.envPolicy)
+		tr.Close()
+	}
 	if len(cfg.exposes) == 0 {
 		return func() {}, nil
 	}
@@ -430,7 +442,9 @@ func startExposes(cfg config) (func(), error) {
 			// as the pod already had them, the caller's own winning. An agent
 			// older than the verb answers "unknown command" and the session
 			// runs with the caller's environment alone, as it always did.
-			if !cfg.envPolicy.off {
+			// --env-of named another workload: its environment was projected
+			// before the takeover, and the parked one's is not wanted.
+			if !cfg.envPolicy.off && cfg.envPolicy.from == "" {
 				projectWorkloadEnv(tr, name, cfg.envPolicy)
 			}
 		}

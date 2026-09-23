@@ -167,7 +167,9 @@ in its place, and **inherits its environment**: the variables the deployed
 workload runs with, secrets included as the pod already had them, are handed
 to your command - yours win over the cluster's, so a test database is one
 `export` away, and `--no-env` opts out. No `.env` to retype from the
-deployment. Afterwards the cluster is exactly as it was. A name held by
+deployment. `--env-of <name>` takes another workload's instead, without
+parking it: a `-c` one-off script run with a service's own credentials, or a
+`-s` that borrows the variables of the service it talks to. Afterwards the cluster is exactly as it was. A name held by
 another live plug session is still refused.
 
 ## Let plug pick the local port

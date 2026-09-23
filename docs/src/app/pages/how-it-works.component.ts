@@ -196,7 +196,9 @@ import { RouterLink } from '@angular/router';
       and <strong>inherits its environment</strong>: the parked workload's variables, secrets
       included as the pod already had them, are handed to your command, yours winning over the
       cluster's, the container's own plumbing (<code>PATH</code>, <code>KUBERNETES_*</code>) left
-      out, <code>--no-env</code> to opt out. The peers those variables name the Kubernetes way,
+      out, <code>--no-env</code> to opt out, <code>--env-of &lt;name&gt;</code> to take another
+      workload's instead (a <code>-c</code> script with a service's credentials, a <code>-s</code>
+      borrowing its neighbour's). The peers those variables name the Kubernetes way,
       <code>rabbitmq.shop.svc.cluster.local</code>, resolve through plug like the bare name does,
       whole, so a Service in another namespace is reached as the pod reaches it. A name held by another live plug session is refused, and the refusal
       <a routerLink="/troubleshooting">names the process holding it</a>. That claim is the agent's,

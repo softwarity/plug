@@ -163,6 +163,18 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
         </td>
       </tr>
       <tr>
+        <td><code>--env-of &lt;name&gt;</code></td>
+        <td>
+          hand your command the environment of <strong>that</strong> deployed workload instead,
+          without parking it: a <code>-c</code> one-off script run with a service's own
+          credentials (<code>plug -c --env-of orders-svc python job.py</code>), or a
+          <code>-s</code> that borrows the variables of the service it talks to rather than of
+          the one it replaces. Same rules as the default: secrets included, your own variables
+          winning, <code>--no-env A,B</code> still leaving keys out. A bare <code>--no-env</code>
+          beside it is refused, it would say two things at once.
+        </td>
+      </tr>
+      <tr>
         <td><code>--dockerrun</code></td>
         <td>
           run the <strong>container</strong> as the cluster member instead of the process:
