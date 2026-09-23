@@ -162,7 +162,7 @@ interface Hole {
       <strong>How this matrix is proven.</strong> Every CI run installs plug FROM the cluster on
       all three OSes (the real one-liners and privilege grants), runs the 4-language ×
       8-protocol grid natively over a mesh, and asserts simultaneous multicluster, outage
-      recovery, env passthrough both ways (your variables reach the command, and a parked workload's reach it too, yours winning), the reverse direction (a cluster workload - and an
+      recovery, env passthrough both ways (your variables reach the command, a parked workload's reach it too, yours winning, and <code>-c --env-of</code> reads a running workload's without taking it over), the reverse direction (a cluster workload - and an
       external caller through a published gateway - reaches a runner-served name) and
       launcher/core version compat. See
       <a routerLink="/how-it-works">How it works</a>
