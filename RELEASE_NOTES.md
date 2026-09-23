@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.17.0
+
 ### A taken-over Kubernetes Service keeps its port names, so an Ingress still reaches it
 
 Parking a deployed Service drops its selector and writes the Endpoints by hand,
