@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.16.1
+
 ### A Service under its Kubernetes long name resolves through plug
 
 `rabbitmq.shop.svc.cluster.local` is how a pod's environment tends to name a
