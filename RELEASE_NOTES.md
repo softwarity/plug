@@ -28,10 +28,14 @@ extracts them into a session temp directory, then repoints the variables that
 named their cluster path (NODE_EXTRA_CA_CERTS, sslrootcert, SSL_CERT_FILE and
 their kind) at the local copy. Nothing is written to the host's real paths. A
 value the app reads by a hard-coded path rather than through a variable is not
-redirected. This covers `-s` and `-c --env-of` on Kubernetes; `--dockerrun`
-(mounting the files into the container) and Swarm are still to come, and an
-agent that predates the verb simply projects no files. A live mount for large
-or changing volumes (a PVC) is a separate, opt-in idea, not this.
+redirected. `--dockerrun` mounts the files into the container at their exact
+path instead (a Linux container expects them there). On Compose the agent reads
+the parked container's `/run/secrets` through the archive API (which works on a
+stopped container); on Swarm it reads the service's CONFIG contents through the
+API - a Swarm SECRET is not readable outside a running container and the
+takeover has scaled the service to zero, so that case waits for a read at park
+time. An agent that predates the verb simply projects no files. A live mount for
+large or changing volumes (a PVC) is a separate, opt-in idea, not this.
 
 ### A projected environment value may now contain newlines (a PEM in a variable)
 

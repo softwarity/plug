@@ -114,6 +114,29 @@ func dockerAvailable() bool {
 	return err == nil
 }
 
+// dockerArchive GETs the tar of a path inside a container - the Engine's
+// /containers/{id}/archive, which reads the container's filesystem whether it
+// runs or not, so it works on the STOPPED container a takeover parks. The tar's
+// members are rooted at the path's basename; rerootTar puts them back on their
+// absolute path for the client. Raw bytes, not JSON, so it cannot go through
+// dockerAPI.
+func dockerArchive(id, path string) ([]byte, int, error) {
+	req, err := http.NewRequest("GET", "http://docker/containers/"+id+"/archive?path="+url.QueryEscape(path), nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	resp, err := dockerClient.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		return nil, resp.StatusCode, fmt.Errorf("archive %s: %s", path, strings.TrimSpace(string(data)))
+	}
+	return data, 200, nil
+}
+
 func dockerAPI(method, path string, body any, out any) (int, error) {
 	var rd io.Reader
 	if body != nil {

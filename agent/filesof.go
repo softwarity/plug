@@ -1,9 +1,13 @@
 package agent
 
 import (
+	"archive/tar"
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/url"
+	"path"
 	"strings"
 )
 
@@ -83,10 +87,156 @@ func doFilesOf(cmd []string) {
 	if len(cmd) != 2 || !nameRe.MatchString(cmd[1]) {
 		answer("error: usage: files-of <name>")
 	}
-	if !k8sAvailable() {
-		answer("%s", filesReplyJSON(nil, nil))
+	name := cmd[1]
+	var paths []string
+	var tarball []byte
+	switch {
+	case k8sAvailable():
+		paths, tarball = k8sFilesOf(k8sNamespace(), name)
+	case dockerAvailable():
+		paths, tarball = dockerFilesOf(name)
 	}
-	answer("%s", filesReplyJSON(k8sFilesOf(k8sNamespace(), cmd[1])))
+	answer("%s", filesReplyJSON(paths, tarball))
+}
+
+// secretsMount is where both Compose (its `secrets:`) and Swarm mount a secret,
+// and the one place the Docker side projects from: a bounded, conventional
+// location, never a whole data volume.
+const secretsMount = "/run/secrets"
+
+// dockerFilesOf reads the parked container's mounted secret files. The parked
+// container is stopped, but /containers/{id}/archive reads a stopped
+// filesystem, so its /run/secrets tars out all the same. The container is found
+// by the parking receipt the signpost carries, as dockerEnvOf finds it.
+func dockerFilesOf(name string) ([]string, []byte) {
+	self, err := dockerSelf()
+	if err != nil {
+		return nil, nil
+	}
+	if self.service != "" && swarmManager() {
+		return swarmFilesOf(name, self)
+	}
+	var sp struct {
+		Config struct {
+			Labels map[string]string `json:"Labels"`
+		} `json:"Config"`
+	}
+	if code, err := dockerAPI("GET", "/containers/"+signpostName(name)+"/json", nil, &sp); err != nil || code != 200 {
+		return nil, nil
+	}
+	for _, id := range strings.Split(sp.Config.Labels[parkedContainersLabel], ",") {
+		if id = strings.TrimSpace(id); id == "" {
+			continue
+		}
+		raw, code, err := dockerArchive(id, secretsMount)
+		if err != nil || code != 200 {
+			return nil, nil // no /run/secrets in this image, or none mounted
+		}
+		return []string{secretsMount}, rerootTar(raw, secretsMount)
+	}
+	return nil, nil
+}
+
+// swarmFilesOf builds the tar from the service's CONFIG contents, which Swarm
+// keeps readable through the API (docker config inspect returns the data). A
+// Swarm SECRET is deliberately NOT readable outside a running container, and the
+// takeover has scaled the service to zero, so a secret mounted as a file is out
+// of reach here - reading it would have to happen at park time, before the
+// scale-down, which is a separate change. Configs cover the common case (a CA
+// bundle, a config file) and are what the e2e exercises on Swarm.
+func swarmFilesOf(name string, self selfInfo) ([]string, []byte) {
+	own := swarmNameOwner(name, self)
+	if own == nil {
+		return nil, nil
+	}
+	var s struct {
+		Spec struct {
+			TaskTemplate struct {
+				ContainerSpec struct {
+					Configs []struct {
+						ConfigID string `json:"ConfigID"`
+						File     struct {
+							Name string `json:"Name"`
+						} `json:"File"`
+					} `json:"Configs"`
+				} `json:"ContainerSpec"`
+			} `json:"TaskTemplate"`
+		} `json:"Spec"`
+	}
+	if code, err := dockerAPI("GET", "/services/"+own.id, nil, &s); err != nil || code != 200 {
+		return nil, nil
+	}
+	files := map[string][]byte{}
+	var paths []string
+	for _, c := range s.Spec.TaskTemplate.ContainerSpec.Configs {
+		target := c.File.Name
+		if target == "" {
+			continue
+		}
+		if !strings.HasPrefix(target, "/") {
+			target = "/" + target // Swarm's default mount root when the target is bare
+		}
+		var ci []struct {
+			Spec struct {
+				Data string `json:"Data"`
+			} `json:"Spec"`
+		}
+		if code, err := dockerAPI("GET", "/configs/"+c.ConfigID, nil, &ci); err != nil || code != 200 || len(ci) == 0 {
+			continue
+		}
+		data, err := base64.StdEncoding.DecodeString(ci[0].Spec.Data)
+		if err != nil {
+			continue
+		}
+		files[target] = data
+		paths = append(paths, target)
+	}
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	return paths, tarFromFiles(files)
+}
+
+// rerootTar rewrites a tar produced for a single path (its members rooted at the
+// path's basename, as the Docker archive API returns them) so each member sits
+// on its ABSOLUTE path minus the leading slash - the shape `tar cf - /p` gives
+// and the client's untar expects (it re-anchors under the temp dir). So archive
+// of /run/secrets, whose members read "secrets/foo", comes back "run/secrets/foo".
+func rerootTar(in []byte, dest string) []byte {
+	prefix := strings.TrimPrefix(path.Dir(dest), "/") // "/run/secrets" -> "run"
+	tr := tar.NewReader(bytes.NewReader(in))
+	var out bytes.Buffer
+	tw := tar.NewWriter(&out)
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return in // unreadable: hand it back untouched rather than lose it
+		}
+		h.Name = path.Join(prefix, h.Name)
+		if h.Typeflag == tar.TypeReg || h.Typeflag == tar.TypeDir {
+			tw.WriteHeader(h)
+			io.Copy(tw, tr)
+		}
+	}
+	tw.Close()
+	return out.Bytes()
+}
+
+// tarFromFiles builds a tar whose members are the given absolute paths (leading
+// slash dropped, as tar stores them) with the given contents - the Swarm path,
+// where the agent has the bytes in hand rather than a tar to re-root.
+func tarFromFiles(files map[string][]byte) []byte {
+	var out bytes.Buffer
+	tw := tar.NewWriter(&out)
+	for p, data := range files {
+		tw.WriteHeader(&tar.Header{Name: strings.TrimPrefix(p, "/"), Mode: 0o600, Size: int64(len(data)), Typeflag: tar.TypeReg})
+		tw.Write(data)
+	}
+	tw.Close()
+	return out.Bytes()
 }
 
 // k8sFilesOf finds the running pod behind the parked Service, selects its

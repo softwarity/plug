@@ -1,8 +1,11 @@
 package agent
 
 import (
+	"archive/tar"
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"reflect"
 	"testing"
 )
@@ -62,4 +65,53 @@ func TestFilesReplyJSONRoundTrips(t *testing.T) {
 	if empty.Paths == nil || len(empty.Paths) != 0 || empty.Tar != "" {
 		t.Fatalf("empty reply = %+v", empty)
 	}
+}
+
+// rerootTar puts a Docker archive's members (rooted at the path's basename) back
+// on their absolute path minus the leading slash - the shape the client's untar
+// re-anchors under its temp dir, matching what `tar cf - /p` produces on k8s.
+func TestRerootTarPutsMembersOnTheAbsolutePath(t *testing.T) {
+	var in bytes.Buffer
+	tw := tar.NewWriter(&in)
+	// docker archive of /run/secrets names members "secrets/…"
+	tw.WriteHeader(&tar.Header{Name: "secrets/tls.crt", Mode: 0o600, Size: 3, Typeflag: tar.TypeReg})
+	tw.Write([]byte("PEM"))
+	tw.Close()
+
+	got := namesIn(t, rerootTar(in.Bytes(), "/run/secrets"))
+	if !reflect.DeepEqual(got, []string{"run/secrets/tls.crt"}) {
+		t.Fatalf("rerooted names = %v, want run/secrets/tls.crt", got)
+	}
+}
+
+// tarFromFiles builds a tar whose members are the absolute paths (leading slash
+// dropped), the Swarm path where the agent holds the bytes directly.
+func TestTarFromFilesUsesAbsolutePaths(t *testing.T) {
+	tb := tarFromFiles(map[string][]byte{"/certs/ca.crt": []byte("PEM")})
+	got := namesIn(t, tb)
+	if !reflect.DeepEqual(got, []string{"certs/ca.crt"}) {
+		t.Fatalf("names = %v, want certs/ca.crt", got)
+	}
+	// And the content round-trips.
+	tr := tar.NewReader(bytes.NewReader(tb))
+	h, _ := tr.Next()
+	b := make([]byte, h.Size)
+	io.ReadFull(tr, b)
+	if string(b) != "PEM" {
+		t.Fatalf("content = %q", b)
+	}
+}
+
+func namesIn(t *testing.T, tb []byte) []string {
+	t.Helper()
+	var out []string
+	tr := tar.NewReader(bytes.NewReader(tb))
+	for {
+		h, err := tr.Next()
+		if err != nil {
+			break
+		}
+		out = append(out, h.Name)
+	}
+	return out
 }

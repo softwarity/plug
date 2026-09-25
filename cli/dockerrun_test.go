@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -206,11 +207,14 @@ func TestExitCodeMirrorsTheContainer(t *testing.T) {
 // a -e the user repeats wins by docker's last-flag rule.
 func TestDockerProjectionFlagsAndPlacement(t *testing.T) {
 	set := map[string]string{"PGPASSWORD": "s3cret", "APP_DB_HOST": "odb"}
-	flags := dockerProjectionFlags(set, "/tmp/plug-files-x", []string{"/certificates"})
+	dir := filepath.Join(string(filepath.Separator)+"tmp", "plug-files-x")
+	flags := dockerProjectionFlags(set, dir, []string{"/certificates"})
 	want := []string{
 		"-e", "APP_DB_HOST=odb",
 		"-e", "PGPASSWORD=s3cret",
-		"-v", "/tmp/plug-files-x/certificates:/certificates:ro",
+		// the host side of the -v is an OS-native path (backslashes on Windows);
+		// the container side stays the POSIX cluster path.
+		"-v", filepath.Join(dir, "/certificates") + ":/certificates:ro",
 	}
 	if !reflect.DeepEqual(flags, want) {
 		t.Fatalf("flags = %v\nwant %v", flags, want)
