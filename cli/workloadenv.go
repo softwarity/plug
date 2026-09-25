@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -158,6 +159,37 @@ func readWorkloadEnv(tr envExecer, name string) (workloadEnvReply, error) {
 		}
 	}
 	return r, nil
+}
+
+// localizeFileEnv repoints the variables whose value names a projected mount
+// path (a CA at /certificates/ca.crt, a keystore) at the local copy fetched
+// under dir - this is option B: the files land in a session temp rather than at
+// their absolute cluster path, so NODE_EXTRA_CA_CERTS, sslrootcert, SSL_CERT_FILE
+// and their kind resolve without writing to the host's real /certificates. A
+// value the app reads by a hard-coded path rather than through a variable is not
+// redirected, and cannot be by this mechanism.
+func localizeFileEnv(vars, mountPaths []string, dir string) []string {
+	if dir == "" || len(mountPaths) == 0 {
+		return vars
+	}
+	out := make([]string, len(vars))
+	for i, kv := range vars {
+		if k, v, ok := strings.Cut(kv, "="); ok && underAnyPath(v, mountPaths) {
+			out[i] = k + "=" + filepath.Join(dir, v)
+		} else {
+			out[i] = kv
+		}
+	}
+	return out
+}
+
+func underAnyPath(v string, paths []string) bool {
+	for _, p := range paths {
+		if v == p || strings.HasPrefix(v, p+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // applyWorkloadEnv sets the merged variables on this process.

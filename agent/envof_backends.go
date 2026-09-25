@@ -294,6 +294,18 @@ func labelSelector(sel map[string]string) string {
 // with none. Kubernetes' own `edit` role grants both verbs on pods/exec; so
 // does the manifest now, and this stays a GET.
 func k8sExecEnviron(ns, pod, container string) ([]string, int, error) {
+	out, code, err := k8sExec(ns, pod, container, "cat", "/proc/1/environ")
+	if err != nil {
+		return nil, code, err
+	}
+	return procEnviron(out), 0, nil
+}
+
+// k8sExec runs argv in the container over the exec subresource and returns its
+// stdout bytes (binary-safe: a tar stream comes back through here too). One
+// place, because reading a process's environment and reading its mounted files
+// are the same handshake with a different command.
+func k8sExec(ns, pod, container string, argv ...string) ([]byte, int, error) {
 	token, err := os.ReadFile(k8sSA + "/token")
 	if err != nil {
 		return nil, 0, err
@@ -306,8 +318,9 @@ func k8sExecEnviron(ns, pod, container string) ([]string, int, error) {
 	q.Set("container", container)
 	q.Set("stdout", "true")
 	q.Set("stderr", "true")
-	q.Add("command", "cat")
-	q.Add("command", "/proc/1/environ")
+	for _, a := range argv {
+		q.Add("command", a)
+	}
 	host := "kubernetes.default.svc"
 	path := "/api/v1/namespaces/" + ns + "/pods/" + pod + "/exec?" + q.Encode()
 
@@ -317,7 +330,7 @@ func k8sExecEnviron(ns, pod, container string) ([]string, int, error) {
 		return nil, 0, err
 	}
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
 
 	key := make([]byte, 16)
 	_, _ = rand.Read(key)
@@ -353,7 +366,7 @@ func k8sExecEnviron(ns, pod, container string) ([]string, int, error) {
 		// environment is not a thing a running container has.
 		return nil, 0, fmt.Errorf("exec opened but stdout carried nothing (read error: %v)", err)
 	}
-	return procEnviron(stdout), 0, nil
+	return stdout, 0, nil
 }
 
 // readChannelFrames reads WebSocket frames from a server (never masked) until

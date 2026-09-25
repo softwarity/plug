@@ -21,6 +21,50 @@ qui est publié est donc, au digest près, ce qui a été testé. **Un seul buil
 clients e2e** aussi (`build-clients`), et les clusters **tirent l'image du
 registre** au lieu de se la faire livrer en artefact.
 
+## 🟢 Projection des fichiers montés (secrets/configMap) - en cours
+
+Suite de la projection d'env (2.16). Un cert (ou tout secret monté en FICHIER,
+pas en variable) n'est pas projeté aujourd'hui : `env-of` ne lit que les valeurs
+d'env. Décidé avec François le 26/09. Matérialisation one-shot au démarrage de
+session (le contenu ne bouge pas pendant une session), via l'`exec` que l'agent a
+déjà, sans nouveau droit RBAC.
+
+- [x] **Prérequis - transport multi-ligne** (verbe `env-ofz`, NUL-délimité) :
+      fait, `3198c96`. Un fichier / une valeur PEM peut désormais transiter.
+- [ ] **Agent k8s** : verbe `files-of <name>` → pod derrière le sélecteur parké
+      (réutiliser la recherche de pod de `k8sEnvOf`), énumérer les `volumeMounts`
+      issus de volumes `secret`/`configMap`/`projected`, **exclure le mount du
+      ServiceAccount** (`/var/run/secrets/kubernetes.io/...`) comme on exclut
+      `KUBERNETES_*` en env, `exec tar cf - <paths>`, répondre en **base64(tar)**
+      (protocole texte + convention `error:` + nego de version conservées).
+      Distroless (pas de `tar`) → note, comme pour l'env.
+- [ ] **Client - process local (`-s` / `-c --env-of`), option B** : dé-tar dans
+      un temp de session, puis **réécrire les variables qui pointent un chemin
+      monté** (`NODE_EXTRA_CA_CERTS`, `sslrootcert`, `SSL_CERT_FILE`, …) vers le
+      temp. Limite assumée : un chemin en dur dans le code (pas via variable)
+      n'est pas redirigé.
+- [ ] **Client - `--dockerrun`** : dé-tar dans un temp, ajouter `-v
+      tmp/<path>:<path>:ro` (chemins exacts, aucune pollution de l'hôte) + les
+      `-e` de l'env projeté sur le `docker run` interne.
+- [ ] **Swarm - traité à part** : un secret Swarm (`/run/secrets/<name>`) n'est
+      lisible que DANS un conteneur en cours ; or le takeover scale le service à
+      0. Donc lire les fichiers **au moment du park**, depuis le conteneur encore
+      vivant, avant le scale-down, et les mettre en réserve (temp/reçu). Sinon
+      note « non lisible sur Swarm ».
+- [ ] **Tests en face** : round-trip base64(tar) → dé-tar (client, pur) ;
+      sélection des mounts + exclusion SA (agent, pur) ; réécriture option B
+      (pur) ; cellule e2e k8s qui monte un secret en fichier et vérifie qu'un
+      process local le lit au bon chemin. MàJ coverage + comparatif.
+- [ ] **Option « live mount » (plus tard, opt-in)** : pour un volume VIVANT ou
+      GROS (typiquement un **geoserver lancé en local** voulant les ressources du
+      cluster - data d'un PVC), la matérialisation one-shot ne suffit pas. Modèle
+      NFS-like : montage FUSE côté client dont les lectures sont relayées dans le
+      tunnel (l'agent fait `exec cat`/stream à la demande), idéalement **sshfs sur
+      le transport SSH déjà là** (exposer un sous-système SFTP *scopé* côté agent,
+      qui refuse `subsystem` aujourd'hui). Coût assumé : dépendance **FUSE**
+      (macFUSE/WinFSP/libfuse) + privilège de montage + différences d'OS. À garder
+      hors du chemin par défaut.
+
 ## 🔴 Sécurité - suivi en privé
 
 - [ ] **Contexte de l'avis** - suivi en PRIVÉ

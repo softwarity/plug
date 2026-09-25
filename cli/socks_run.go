@@ -567,7 +567,19 @@ func projectWorkloadEnv(tr *tunnel.Transport, name string, p envPolicy) {
 	for _, n := range reply.notes {
 		info("%s: %s", name, n) // the agent explaining itself
 	}
-	set, kept, empty := mergeWorkloadEnvWithEmpty(reply.vars, os.Environ(), p)
+	// The mounted secret/configMap files too (a CA in PEM, a keystore): fetched
+	// into a session temp, and the variables that name their cluster path
+	// repointed there so they resolve locally. A miss here does not fail the
+	// session - the variables come through either way, they just may point at a
+	// path that is not on this machine.
+	vars := reply.vars
+	if dir, paths, ferr := fetchWorkloadFiles(tr, name); ferr != nil {
+		info("%s: could not read the workload's mounted files (%v); a variable that names one may not resolve locally", name, ferr)
+	} else if dir != "" {
+		vars = localizeFileEnv(reply.vars, paths, dir)
+		info("%s: %d mounted file path(s) materialised under %s and repointed", name, len(paths), dir)
+	}
+	set, kept, empty := mergeWorkloadEnvWithEmpty(vars, os.Environ(), p)
 	applyWorkloadEnv(set)
 	if len(set) == 0 && len(kept) == 0 {
 		// Not silence. An empty answer with no note is an agent that found

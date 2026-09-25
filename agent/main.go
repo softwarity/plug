@@ -183,6 +183,8 @@ func dispatch(cmd []string) {
 		doEnvOf(cmd, false)
 	case "env-ofz":
 		doEnvOf(cmd, true)
+	case "files-of":
+		doFilesOf(cmd)
 	case "self-update":
 		doSelfUpdate(cmd)
 	default:

@@ -2,6 +2,24 @@
 
 ## NEXT RELEASE
 
+### A plugged process inherits the workload's mounted files too (a CA, a keystore)
+
+env-of handed over a workload's variables; a secret or configMap mounted as a
+FILE - a CA in PEM at /certificates/ca.crt, a keystore, a config - stayed
+behind, so a variable like NODE_EXTRA_CA_CERTS pointed at a path that did not
+exist on the dev machine. The agent now also reads those mounts (verb files-of),
+with the same exec it uses for the environment and no `get secrets`: it tars the
+secret/configMap/projected mounts of the running pod - dropping the
+ServiceAccount token mount, the cluster's own credentials - and the client
+extracts them into a session temp directory, then repoints the variables that
+named their cluster path (NODE_EXTRA_CA_CERTS, sslrootcert, SSL_CERT_FILE and
+their kind) at the local copy. Nothing is written to the host's real paths. A
+value the app reads by a hard-coded path rather than through a variable is not
+redirected. This covers `-s` and `-c --env-of` on Kubernetes; `--dockerrun`
+(mounting the files into the container) and Swarm are still to come, and an
+agent that predates the verb simply projects no files. A live mount for large
+or changing volumes (a PVC) is a separate, opt-in idea, not this.
+
 ### A projected environment value may now contain newlines (a PEM in a variable)
 
 env-of framed its reply one variable per line, and the client split it back on
