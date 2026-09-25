@@ -86,28 +86,21 @@ func cmdMCP(args []string) {
 				return nil, mcpEnvOut{}, fmt.Errorf("reach the agent for profile %q: %w", in.Profile, err)
 			}
 			defer tr.Close()
-			raw, err := tr.ExecAll("env-of " + in.Name)
+			reply, err := readWorkloadEnv(tr, in.Name)
 			if err != nil {
 				return nil, mcpEnvOut{}, err
 			}
-			if strings.HasPrefix(raw, "error:") {
-				return nil, mcpEnvOut{}, fmt.Errorf("agent: %s", strings.TrimSpace(strings.TrimPrefix(raw, "error:")))
+			if reply.agentErr != "" {
+				return nil, mcpEnvOut{}, fmt.Errorf("agent: %s", reply.agentErr)
 			}
-			out := mcpEnvOut{Name: in.Name, Vars: map[string]string{}}
-			for _, l := range strings.Split(raw, "\n") {
-				l = strings.TrimRight(l, "\r")
-				switch {
-				case l == "":
-				case strings.HasPrefix(l, "# "):
-					out.Notes = append(out.Notes, strings.TrimPrefix(l, "# "))
-				default:
-					if k, v, ok := strings.Cut(l, "="); ok {
-						if !in.Reveal && looksSecret(k) {
-							v = "***"
-							out.Masked = append(out.Masked, k)
-						}
-						out.Vars[k] = v
+			out := mcpEnvOut{Name: in.Name, Vars: map[string]string{}, Notes: reply.notes}
+			for _, kv := range reply.vars {
+				if k, v, ok := strings.Cut(kv, "="); ok {
+					if !in.Reveal && looksSecret(k) {
+						v = "***"
+						out.Masked = append(out.Masked, k)
 					}
+					out.Vars[k] = v
 				}
 			}
 			return nil, out, nil

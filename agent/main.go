@@ -180,7 +180,9 @@ func dispatch(cmd []string) {
 	case "resolve":
 		doResolve(cmd)
 	case "env-of":
-		doEnvOf(cmd)
+		doEnvOf(cmd, false)
+	case "env-ofz":
+		doEnvOf(cmd, true)
 	case "self-update":
 		doSelfUpdate(cmd)
 	default:

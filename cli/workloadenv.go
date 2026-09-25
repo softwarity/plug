@@ -111,6 +111,55 @@ func mergeWorkloadEnvWithEmpty(lines []string, callerEnv []string, p envPolicy) 
 	return set, kept, empty
 }
 
+// envExecer is the one method readWorkloadEnv needs of a transport, so a test
+// can stand in a fake and prove the negotiation on bytes.
+type envExecer interface {
+	ExecAll(cmd string) (string, error)
+}
+
+// workloadEnvReply is what the agent answered for one env-of: the KEY=VALUE
+// lines and the "# " notes, already split, or agentErr when the agent could
+// answer but refused ("error: …", e.g. a right it lacks).
+type workloadEnvReply struct {
+	vars     []string
+	notes    []string
+	agentErr string
+}
+
+// readWorkloadEnv asks the agent for name's environment, PREFERRING env-ofz,
+// whose NUL-delimited reply carries a multi-line value (a PEM, a config blob)
+// whole. An agent before that verb answers "unknown command"; the newline form
+// (env-of) is the fallback, and it truncates any value that contains a newline
+// at the first one - all an old agent could ever give. The records are the same
+// either way: a "# " prefix is a note, everything else a KEY=VALUE line whose
+// value may now itself contain newlines.
+func readWorkloadEnv(tr envExecer, name string) (workloadEnvReply, error) {
+	out, err := tr.ExecAll("env-ofz " + name)
+	sep := "\x00"
+	if err == nil && strings.HasPrefix(out, "error:") && strings.Contains(out, "unknown command") {
+		out, err = tr.ExecAll("env-of " + name)
+		sep = "\n"
+	}
+	if err != nil {
+		return workloadEnvReply{}, err
+	}
+	if strings.HasPrefix(out, "error:") {
+		return workloadEnvReply{agentErr: strings.TrimSpace(strings.TrimPrefix(out, "error:"))}, nil
+	}
+	var r workloadEnvReply
+	for _, rec := range strings.Split(out, sep) {
+		rec = strings.TrimRight(rec, "\r") // a legacy CRLF line; a NUL record has none
+		switch {
+		case rec == "":
+		case strings.HasPrefix(rec, "# "):
+			r.notes = append(r.notes, strings.TrimPrefix(rec, "# "))
+		default:
+			r.vars = append(r.vars, rec)
+		}
+	}
+	return r, nil
+}
+
 // applyWorkloadEnv sets the merged variables on this process.
 func applyWorkloadEnv(set map[string]string) {
 	for k, v := range set {

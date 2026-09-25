@@ -26,7 +26,15 @@ import (
 // alone, which is what every version before this one did. A refusal that
 // names the missing right goes on stdout through envNote, so the session
 // prints it once and goes on.
-func doEnvOf(cmd []string) {
+// doEnvOf answers as KEY=VALUE records plus "# " notes. nul picks the wire
+// format: the newline-delimited legacy form (env-of), and the NUL-delimited
+// form (env-ofz) that carries a MULTI-LINE value whole - a CA in PEM, a config
+// blob - where the legacy form truncated it at the first newline, because the
+// record separator and a value's own newline were the same byte. NUL cannot
+// occur in an environment value (it terminates the C string) nor in a note, so
+// it separates records unambiguously. A client too old to know env-ofz gets
+// "unknown command" and falls back to env-of, its multi-line limitation intact.
+func doEnvOf(cmd []string, nul bool) {
 	if len(cmd) != 2 || !nameRe.MatchString(cmd[1]) {
 		answer("error: usage: env-of <name>")
 	}
@@ -38,14 +46,41 @@ func doEnvOf(cmd []string) {
 	case dockerAvailable():
 		raw = dockerEnvOf(name)
 	}
-	answer("%s", strings.Join(envLines(raw), "\n"))
+	answer("%s", formatEnvReply(envLines(raw), envNotes, nul))
 }
 
-// envNote is how a collector explains itself: a "# " line among the answer.
-// stdout, not stderr - the client reads the verb over an SSH session whose two
-// streams are merged, so a note on stderr would land inside the variables and
-// be read as one. The client relays "# " lines as info and merges the rest.
-func envNote(format string, a ...any) { fmt.Printf("# "+format+"\n", a...) }
+// formatEnvReply frames the entries and notes for the wire. env-ofz: records
+// separated by NUL, the notes as "# " records first, then KEY=VALUE - a byte a
+// value can never contain, so a value with a newline survives. env-of: the
+// legacy newline form, notes each on their own "# " line then the entries, and
+// the reason a multi-line value is cut at its first newline there.
+func formatEnvReply(entries, notes []string, nul bool) string {
+	if nul {
+		recs := make([]string, 0, len(notes)+len(entries))
+		for _, n := range notes {
+			recs = append(recs, "# "+n)
+		}
+		recs = append(recs, entries...)
+		return strings.Join(recs, "\x00")
+	}
+	var b strings.Builder
+	for _, n := range notes {
+		b.WriteString("# " + n + "\n")
+	}
+	b.WriteString(strings.Join(entries, "\n"))
+	return b.String()
+}
+
+// envNote is how a collector explains itself: a "# " record among the answer.
+// COLLECTED, not printed, because the NUL form emits notes and entries in one
+// framed reply; the legacy form prints them just before the entries. Each verb
+// runs in its own process, so this package-level slice holds one command's
+// notes and no other's. stdout, never stderr - the client reads the verb over
+// an SSH session whose two streams are merged, so a note on stderr would land
+// inside the variables and be read as one.
+var envNotes []string
+
+func envNote(format string, a ...any) { envNotes = append(envNotes, fmt.Sprintf(format, a...)) }
 
 // dockerEnvOf reads Config.Env of the containers the name resolves to, which
 // docker hands back already resolved (Compose has substituted its ${VAR} and

@@ -551,31 +551,23 @@ func runCoreInProcess(cfg config, cmdArgs []string) int {
 // The agent's stderr notes (a missing right, keys that came through empty) are
 // relayed as info lines: they explain, they do not fail the session.
 func projectWorkloadEnv(tr *tunnel.Transport, name string, p envPolicy) {
-	out, err := tr.ExecAll("env-of " + name)
+	reply, err := readWorkloadEnv(tr, name)
 	if err != nil {
 		info("%s: could not read the deployed workload's environment (%v); your own applies", name, err)
 		return
 	}
-	if strings.HasPrefix(out, "error:") {
-		// An agent older than the verb says "unknown command"; a newer one says
-		// what it could not read. Either way the session says it, once: three
-		// takeovers on a CI leg answered nothing at all here and the cause was
-		// invisible for a whole evening.
-		info("%s: the agent did not hand over the environment: %s", name, strings.TrimSpace(strings.TrimPrefix(out, "error:")))
+	if reply.agentErr != "" {
+		// An agent older than the verb says "unknown command" (handled by the
+		// fallback in readWorkloadEnv); a newer one says what it could not read.
+		// Either way the session says it, once: three takeovers on a CI leg
+		// answered nothing at all here and the cause was invisible for an evening.
+		info("%s: the agent did not hand over the environment: %s", name, reply.agentErr)
 		return
 	}
-	var lines []string
-	for _, l := range strings.Split(out, "\n") {
-		l = strings.TrimRight(l, "\r")
-		switch {
-		case l == "":
-		case strings.HasPrefix(l, "# "):
-			info("%s: %s", name, strings.TrimPrefix(l, "# ")) // the agent explaining itself
-		default:
-			lines = append(lines, l)
-		}
+	for _, n := range reply.notes {
+		info("%s: %s", name, n) // the agent explaining itself
 	}
-	set, kept, empty := mergeWorkloadEnvWithEmpty(lines, os.Environ(), p)
+	set, kept, empty := mergeWorkloadEnvWithEmpty(reply.vars, os.Environ(), p)
 	applyWorkloadEnv(set)
 	if len(set) == 0 && len(kept) == 0 {
 		// Not silence. An empty answer with no note is an agent that found

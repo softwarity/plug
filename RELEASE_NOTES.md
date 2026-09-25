@@ -2,6 +2,18 @@
 
 ## NEXT RELEASE
 
+### A projected environment value may now contain newlines (a PEM in a variable)
+
+env-of framed its reply one variable per line, and the client split it back on
+the newline - so a value that itself contained a newline, a CA in PEM handed
+through a variable rather than a mounted file, was cut at its first line and the
+rest read as junk keys. The projection now speaks a NUL-delimited form (env-ofz):
+NUL cannot occur in an environment value nor in a note, so it separates records
+where a newline could not, and a multi-line value crosses whole. The client
+prefers it and falls back to the old newline form for an agent that predates it
+(its one-line limitation intact); `plug mcp` reads the same way. Single-line
+values are unaffected. Reported from a session passing POSTGRES_SSL_CA as a PEM.
+
 ---
 
 ## 2.17.0

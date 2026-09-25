@@ -2,6 +2,7 @@ package agent
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -58,5 +59,32 @@ func TestKubeServiceLinksAreDroppedAndTheAppsOwnPortStays(t *testing.T) {
 	want := []string{"APP_DB_PASSWORD=s3cret", "APP_SCHEDULER_PORT=3017", "PORT=3000"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+// The wire format the fix turns on: env-ofz frames records with NUL, so a
+// value that contains a newline (a PEM) crosses whole, notes and all; env-of
+// keeps the newline form, where that same value would be cut at its first line.
+func TestFormatEnvReplyNULCarriesNewlines(t *testing.T) {
+	pemVal := "-----BEGIN-----\nMIID\n-----END-----"
+	entries := []string{"PGPASSWORD=s3cret", "CA=" + pemVal}
+	notes := []string{"a note"}
+
+	z := formatEnvReply(entries, notes, true)
+	recs := strings.Split(z, "\x00")
+	want := []string{"# a note", "PGPASSWORD=s3cret", "CA=" + pemVal}
+	if !reflect.DeepEqual(recs, want) {
+		t.Fatalf("NUL frame:\n got %q\nwant %q", recs, want)
+	}
+	// The CA record still holds its two newlines - the whole point.
+	if got := recs[2]; got != "CA="+pemVal {
+		t.Fatalf("PEM record altered: %q", got)
+	}
+
+	// Legacy: newline-separated, notes first. The PEM's newlines are now
+	// indistinguishable from separators - the limitation the NUL form removes.
+	nl := formatEnvReply(entries, notes, false)
+	if nl != "# a note\nPGPASSWORD=s3cret\nCA="+pemVal {
+		t.Fatalf("legacy frame: %q", nl)
 	}
 }
