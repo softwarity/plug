@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -70,7 +71,7 @@ func dockerSidecarImage() string {
 // against a table instead of against a docker daemon. It refuses anything but
 // `docker run`: --dockerrun is scoped to that one form on purpose, and a refusal
 // naming what it accepts beats silently doing nothing to `docker compose up`.
-func dockerRunCmd(cmdArgs []string, sidecar, resolv string) ([]string, error) {
+func dockerRunCmd(cmdArgs []string, sidecar, resolv string, projected []string) ([]string, error) {
 	if len(cmdArgs) < 2 || cmdArgs[0] != "docker" || cmdArgs[1] != "run" {
 		return nil, fmt.Errorf("--dockerrun runs `docker run`, and got %q.\n"+
 			"      It is scoped to that one form: `docker compose up`, `docker create` and\n"+
@@ -82,7 +83,100 @@ func dockerRunCmd(cmdArgs []string, sidecar, resolv string) ([]string, error) {
 		"--network", "container:" + sidecar,
 		"-v", resolv + ":/etc/resolv.conf:ro",
 	}
+	// The workload's environment and mounted files, as -e and -v. They go BEFORE
+	// the user's own args so that a -e or -v the user writes wins - docker takes
+	// the last of a repeated flag, the same "caller wins" the -s/-c projection
+	// gives by skipping keys the shell already set.
+	out = append(out, projected...)
 	return append(out, cmdArgs[2:]...), nil
+}
+
+// dockerProjectionFlags turns a workload's projected environment and mounted
+// files into `docker run` flags. Env becomes -e (keys sorted, so the argv is
+// stable and testable); each mounted file path becomes a -v of the local copy
+// onto its EXACT cluster path - a --dockerrun container is Linux and expects
+// /certificates where the pod had it, so nothing is repointed here, unlike the
+// local-process case that cannot write the host's real paths.
+func dockerProjectionFlags(set map[string]string, filesDir string, paths []string) []string {
+	keys := make([]string, 0, len(set))
+	for k := range set {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var out []string
+	for _, k := range keys {
+		out = append(out, "-e", k+"="+set[k])
+	}
+	for _, p := range paths {
+		out = append(out, "-v", filepath.Join(filesDir, p)+":"+p+":ro")
+	}
+	return out
+}
+
+// dockerProjection fetches the workload's environment and mounted files from the
+// agent and turns them into `docker run` flags for the user's container, plus a
+// cleanup for the files temp (called once the container has exited). The source
+// is --env-of when given, else the single -s name; nothing when projection is
+// off, or when there is no one name to read from.
+func dockerProjection(cfg config, exposes []string) ([]string, func()) {
+	noop := func() {}
+	src := dockerEnvSource(cfg, exposes)
+	if src == "" {
+		return nil, noop
+	}
+	tr, err := dialTunnel(cfg)
+	if err != nil {
+		info("could not reach the agent to project %s's environment (%v); the container starts without it", src, err)
+		return nil, noop
+	}
+	defer tr.Close()
+	reply, err := readWorkloadEnv(tr, src)
+	if err != nil {
+		info("%s: could not read the workload's environment (%v); the container starts without it", src, err)
+		return nil, noop
+	}
+	if reply.agentErr != "" {
+		info("%s: the agent did not hand over the environment: %s", src, reply.agentErr)
+		return nil, noop
+	}
+	for _, n := range reply.notes {
+		info("%s: %s", src, n)
+	}
+	// No caller env to merge against - a container inherits none of this host's
+	// shell - so only the policy's drops apply; a -e the user writes wins by
+	// docker's last-flag rule (dockerRunCmd puts ours first).
+	set, _, _ := mergeWorkloadEnvWithEmpty(reply.vars, nil, cfg.envPolicy)
+	dir, paths, ferr := fetchWorkloadFiles(tr, src)
+	if ferr != nil {
+		info("%s: could not read the workload's mounted files (%v); the container starts without them", src, ferr)
+	}
+	cleanup := noop
+	if dir != "" {
+		cleanup = func() { os.RemoveAll(dir) }
+	}
+	flags := dockerProjectionFlags(set, dir, paths)
+	if len(flags) > 0 {
+		info("%s: projected %d variable(s) and %d mounted path(s) into the container", src, len(set), len(paths))
+	}
+	return flags, cleanup
+}
+
+// dockerEnvSource is the workload whose environment --dockerrun projects: the
+// --env-of name if given, otherwise the single -s name. Nothing when projection
+// is off or when there is no one name to point at.
+func dockerEnvSource(cfg config, exposes []string) string {
+	if cfg.envPolicy.off {
+		return ""
+	}
+	if cfg.envPolicy.from != "" {
+		return cfg.envPolicy.from
+	}
+	if len(exposes) == 1 {
+		if spec, err := parseExpose(exposes[0]); err == nil {
+			return spec.Name
+		}
+	}
+	return ""
 }
 
 // explainDockerRefusal turns docker's own complaint into the sentence plug owes
@@ -259,7 +353,14 @@ func runDockerRun(cfg config, cmdArgs []string, exposes []string, client bool) i
 	}
 	defer stop()
 
-	full, err := dockerRunCmd(cmdArgs, name, resolv)
+	// The workload's environment and mounted files, projected into the user's
+	// container as -e and -v. Built on THIS host: the sidecar holds only the
+	// datapath, so its own env never reaches the container. The files temp lives
+	// until the container exits, which is when this function returns.
+	projected, cleanup := dockerProjection(cfg, exposes)
+	defer cleanup()
+
+	full, err := dockerRunCmd(cmdArgs, name, resolv, projected)
 	if err != nil {
 		info("%v", err)
 		return 1

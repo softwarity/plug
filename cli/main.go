@@ -578,8 +578,11 @@ func launcherRun(args []string) {
 
 	// --dockerrun leaves before everything below. It starts no datapath on this
 	// machine and runs no child here: the tunnel lives in a container, and the
-	// version dance below is about the core THIS host would have run.
+	// version dance below is about the core THIS host would have run. The env
+	// policy is resolved here too, since this host is where the projection into
+	// the container is built (the sidecar only holds the datapath).
 	if opts.dockerRun {
+		cfg.envPolicy = opts.policy()
 		os.Exit(runDockerRun(cfg, cmdArgs, opts.exposes, opts.client))
 	}
 

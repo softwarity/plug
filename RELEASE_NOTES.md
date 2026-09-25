@@ -2,6 +2,19 @@
 
 ## NEXT RELEASE
 
+### --dockerrun projects the workload's environment and files into the container
+
+A `--dockerrun` container is created by the docker daemon, not as a child of
+plug, so the projection that sets variables on a local process could never reach
+it. plug now builds the projection on the host and splices it into the inner
+`docker run`: the workload's environment as `-e` (from --env-of, or the single
+-s name), and its mounted files as `-v` of a local copy onto their exact cluster
+path - a container is Linux and expects /certificates where the pod had it, so
+nothing is repointed, unlike the local-process case. Our flags go before the
+user's, so a `-e` or `-v` they write still wins. Files come from the same
+files-of as the local process (Kubernetes today); the environment works on every
+backend. The files copy is removed when the container exits.
+
 ### A plugged process inherits the workload's mounted files too (a CA, a keystore)
 
 env-of handed over a workload's variables; a secret or configMap mounted as a

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -15,7 +16,7 @@ import (
 // would be plug editing a command it does not understand.
 func TestDockerRunCmdSplicesWithoutTouchingTheUsersLine(t *testing.T) {
 	user := []string{"docker", "run", "--rm", "-e", "A=1", "my-image", "sh", "-c", "echo run --network hi"}
-	got, err := dockerRunCmd(user, "plug-net-abc", "/tmp/x/resolv.conf")
+	got, err := dockerRunCmd(user, "plug-net-abc", "/tmp/x/resolv.conf", nil)
 	if err != nil {
 		t.Fatalf("a plain `docker run` was refused: %v", err)
 	}
@@ -51,7 +52,7 @@ func TestDockerRunCmdRefusesEverythingItCannotHonour(t *testing.T) {
 		{"nothing at all", nil},
 		{"a bare command, which is what plug runs WITHOUT this flag", []string{"npm", "run", "dev"}},
 	} {
-		if _, err := dockerRunCmd(c.args, "side", "/tmp/r"); err == nil {
+		if _, err := dockerRunCmd(c.args, "side", "/tmp/r", nil); err == nil {
 			t.Errorf("%q was accepted; it must be refused: %s", c.args, c.why)
 		} else if !strings.Contains(err.Error(), "docker run") {
 			t.Errorf("the refusal for %q does not say what IS accepted: %v", c.args, err)
@@ -196,5 +197,35 @@ func TestExitCodeMirrorsTheContainer(t *testing.T) {
 	// and not the container's: 1, and never 0, which would read as success.
 	if got := exitCodeOf(errors.New("docker is not installed")); got != 1 {
 		t.Errorf("a failure to start reported %d, want 1", got)
+	}
+}
+
+// The projection into the user's container: the workload's env as -e (sorted,
+// so the line is stable), each mounted file as a -v of its local copy onto the
+// EXACT cluster path. dockerRunCmd then places them before the user's args, so
+// a -e the user repeats wins by docker's last-flag rule.
+func TestDockerProjectionFlagsAndPlacement(t *testing.T) {
+	set := map[string]string{"PGPASSWORD": "s3cret", "APP_DB_HOST": "odb"}
+	flags := dockerProjectionFlags(set, "/tmp/plug-files-x", []string{"/certificates"})
+	want := []string{
+		"-e", "APP_DB_HOST=odb",
+		"-e", "PGPASSWORD=s3cret",
+		"-v", "/tmp/plug-files-x/certificates:/certificates:ro",
+	}
+	if !reflect.DeepEqual(flags, want) {
+		t.Fatalf("flags = %v\nwant %v", flags, want)
+	}
+	full, err := dockerRunCmd([]string{"docker", "run", "-e", "PGPASSWORD=mine", "img"}, "side", "/r", flags)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Ours are spliced right after `run` and before the user's args: docker takes
+	// the LAST -e, so the user's PGPASSWORD=mine wins.
+	joined := strings.Join(full, " ")
+	if !strings.Contains(joined, "-e PGPASSWORD=s3cret") || !strings.Contains(joined, "-e PGPASSWORD=mine") {
+		t.Fatalf("both PGPASSWORD flags must be present: %s", joined)
+	}
+	if strings.Index(joined, "PGPASSWORD=s3cret") > strings.Index(joined, "PGPASSWORD=mine") {
+		t.Fatalf("ours must come before the user's so the user wins: %s", joined)
 	}
 }
