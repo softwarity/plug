@@ -19,19 +19,22 @@ func TestLocalizeFileEnvRepointsMountPaths(t *testing.T) {
 		"PORT=8080",
 		"CERT_DIR=/certificates",
 	}
-	got := localizeFileEnv(vars, []string{"/certificates"}, "/tmp/plug-files-x")
+	// The local paths are OS-native (a Windows dev machine gets backslashes),
+	// so the expectations are built with filepath.Join, not hard-coded slashes.
+	dir := filepath.Join(string(filepath.Separator)+"tmp", "plug-files-x")
+	got := localizeFileEnv(vars, []string{"/certificates"}, dir)
 	want := []string{
-		"NODE_EXTRA_CA_CERTS=/tmp/plug-files-x/certificates/ca.crt",
-		"PGSSLROOTCERT=/tmp/plug-files-x/certificates/ca.crt",
+		"NODE_EXTRA_CA_CERTS=" + filepath.Join(dir, "/certificates/ca.crt"),
+		"PGSSLROOTCERT=" + filepath.Join(dir, "/certificates/ca.crt"),
 		"PORT=8080",
-		"CERT_DIR=/tmp/plug-files-x/certificates",
+		"CERT_DIR=" + filepath.Join(dir, "/certificates"),
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v\nwant %v", got, want)
 	}
 	// A prefix that is not a path boundary must NOT match (/certificates-backup
-	// is not under /certificates).
-	got = localizeFileEnv([]string{"X=/certificates-backup/x"}, []string{"/certificates"}, "/tmp/d")
+	// is not under /certificates): the value is left exactly as it was.
+	got = localizeFileEnv([]string{"X=/certificates-backup/x"}, []string{"/certificates"}, dir)
 	if got[0] != "X=/certificates-backup/x" {
 		t.Fatalf("a non-boundary prefix must not be rewritten, got %v", got)
 	}
