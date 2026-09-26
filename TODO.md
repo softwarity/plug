@@ -43,11 +43,14 @@ déjà, sans nouveau droit RBAC.
       conteneur arrêté. `rerootTar` remet les membres sur leur chemin absolu.
 - [x] **Swarm - configs** : lues via l'API (`config inspect` rend la donnée),
       tar construit côté agent (`tarFromFiles`).
-- [x] **Swarm - SECRETS montés en fichier** : lus **au park** (swarmStashSecrets,
-      via l'archive d'une tâche encore vivante) avant le scale-down, mis en
-      réserve sur disque par nom, fusionnés aux configs par files-of, nettoyés à
-      la restauration. Limite : swarm multi-nœuds, la tâche peut être sur un
-      autre nœud que l'agent (best-effort). e2e : secret Swarm + config, la
+- [x] **Swarm - SECRETS montés en fichier** : lus **au park** (swarmStashSecrets)
+      par **`docker exec tar` DANS la tâche vivante** avant le scale-down - un
+      secret Swarm est un tmpfs, invisible à l'API archive (qui lit la couche),
+      d'où l'exec. Mis en réserve sur disque par nom, fusionné aux configs par
+      files-of, nettoyé à la restauration. Limites : (1) swarm multi-nœuds, la
+      tâche peut être sur un autre nœud que l'agent (best-effort) ; (2) l'image
+      de la tâche doit avoir `tar` (distroless → rien, comme le `cat` de l'env).
+      e2e : le tko Swarm est en busybox et monte un secret + un config, la
       cellule asserte le secret.
 - [x] **Tests en face** : purs (rerootTar, tarFromFiles, projectableMounts,
       option B, flags dockerrun, untar clamp) + cellule e2e ×3 familles (secret

@@ -227,8 +227,14 @@ func swarmStashSecrets(name, service string) {
 		if id == "" {
 			continue
 		}
-		if raw, code, err := dockerArchive(id, secretsMount); err == nil && code == 200 {
-			_ = os.WriteFile(swarmSecretStash(name), rerootTar(raw, secretsMount), 0o600)
+		// A Swarm secret is a tmpfs mount, invisible to the archive API (which
+		// reads the layer), so it is tarred from INSIDE the running task. -C /
+		// makes the members "run/secrets/..." - absolute minus the leading slash,
+		// the shape the client's untar expects, so no reroot. Needs `tar` in the
+		// image; a distroless task yields nothing and files-of falls back to the
+		// configs (same limit as env's `cat` on a distroless image).
+		if tarball, err := dockerExec(id, []string{"tar", "-c", "-C", "/", strings.TrimPrefix(secretsMount, "/")}); err == nil && len(tarball) > 0 {
+			_ = os.WriteFile(swarmSecretStash(name), tarball, 0o600)
 			return
 		}
 	}

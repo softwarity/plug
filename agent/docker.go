@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -135,6 +136,59 @@ func dockerArchive(id, path string) ([]byte, int, error) {
 		return nil, resp.StatusCode, fmt.Errorf("archive %s: %s", path, strings.TrimSpace(string(data)))
 	}
 	return data, 200, nil
+}
+
+// dockerExec runs cmd in a RUNNING container and returns its stdout. It reaches
+// what the archive API cannot: a tmpfs mount (a Swarm secret lives in one) is
+// not in the container's filesystem layer, so it must be read from INSIDE the
+// running container. The attach stream is multiplexed - 8-byte frame headers,
+// stream 1 stdout - since no TTY is asked (the payload is a binary tar).
+func dockerExec(id string, cmd []string) ([]byte, error) {
+	var created struct {
+		ID string `json:"Id"`
+	}
+	body := map[string]any{"AttachStdout": true, "AttachStderr": false, "Cmd": cmd}
+	if code, err := dockerAPI("POST", "/containers/"+id+"/exec", body, &created); err != nil || code != 201 || created.ID == "" {
+		return nil, fmt.Errorf("exec create (code %d): %v", code, err)
+	}
+	req, err := http.NewRequest("POST", "http://docker/exec/"+created.ID+"/start", strings.NewReader(`{"Detach":false,"Tty":false}`))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := dockerClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return demuxDockerStdout(resp.Body)
+}
+
+// demuxDockerStdout returns the stdout bytes of Docker's multiplexed attach
+// stream: each frame is [stream, 0,0,0, size(4, big-endian)] then size bytes,
+// stream 1 is stdout and 2 is stderr.
+func demuxDockerStdout(r io.Reader) ([]byte, error) {
+	var out []byte
+	var h [8]byte
+	for {
+		if _, err := io.ReadFull(r, h[:]); err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				return out, nil
+			}
+			return out, err
+		}
+		n := binary.BigEndian.Uint32(h[4:])
+		if n == 0 {
+			continue
+		}
+		buf := make([]byte, n)
+		if _, err := io.ReadFull(r, buf); err != nil {
+			return out, err
+		}
+		if h[0] == 1 { // stdout
+			out = append(out, buf...)
+		}
+	}
 }
 
 func dockerAPI(method, path string, body any, out any) (int, error) {

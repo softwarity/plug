@@ -235,7 +235,7 @@ services:
   # Takeover targets — 2 replicas each: the restore must come back to the
   # ORIGINAL count, and 2 proves restore-to-N (the bench only proved it live).
   tko-linux:
-    image: hashicorp/http-echo:1.0.0
+    image: busybox:1.37
     environment:
       E2E_DEPLOYED: from-the-cluster
       SHARED_KEY: cluster-value
@@ -245,11 +245,11 @@ services:
       - source: tkofile
         target: /run/plug-test/ca
     secrets: [tkosecret]
-    command: ["-listen=:8085", "-text=deployed-tko-linux"]
+    command: ["sh", "-c", "mkdir -p /www && printf deployed-tko-linux > /www/index.html && exec httpd -f -p 8085 -h /www"]
     networks: [internal]
     deploy: { replicas: 2 }
   tko-mac:
-    image: hashicorp/http-echo:1.0.0
+    image: busybox:1.37
     environment:
       E2E_DEPLOYED: from-the-cluster
       SHARED_KEY: cluster-value
@@ -259,11 +259,11 @@ services:
       - source: tkofile
         target: /run/plug-test/ca
     secrets: [tkosecret]
-    command: ["-listen=:8086", "-text=deployed-tko-mac"]
+    command: ["sh", "-c", "mkdir -p /www && printf deployed-tko-mac > /www/index.html && exec httpd -f -p 8086 -h /www"]
     networks: [internal]
     deploy: { replicas: 2 }
   tko-win:
-    image: hashicorp/http-echo:1.0.0
+    image: busybox:1.37
     environment:
       E2E_DEPLOYED: from-the-cluster
       SHARED_KEY: cluster-value
@@ -273,7 +273,7 @@ services:
       - source: tkofile
         target: /run/plug-test/ca
     secrets: [tkosecret]
-    command: ["-listen=:8087", "-text=deployed-tko-win"]
+    command: ["sh", "-c", "mkdir -p /www && printf deployed-tko-win > /www/index.html && exec httpd -f -p 8087 -h /www"]
     networks: [internal]
     deploy: { replicas: 2 }
 
