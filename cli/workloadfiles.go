@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,6 +49,17 @@ func fetchWorkloadFiles(tr envExecer, name string) (dir string, paths []string, 
 		os.RemoveAll(dir)
 		return "", nil, err
 	}
+	// On the setuid path (macOS) plug runs as euid 0, so the temp dir and its
+	// files were created OWNED BY ROOT; the command then runs as the real user
+	// and could not read its own projected files (materialised, but cat found
+	// nothing). Hand the whole tree to that user - a no-op where euid == ruid
+	// (Linux capabilities, Windows). The e2e's macOS legs caught this.
+	_ = filepath.WalkDir(dir, func(p string, _ fs.DirEntry, err error) error {
+		if err == nil {
+			chownToUser(p)
+		}
+		return nil
+	})
 	return dir, r.Paths, nil
 }
 
