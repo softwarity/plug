@@ -186,10 +186,17 @@ func swarmFilesOf(name string, self selfInfo) ([]string, []byte) {
 		paths = append(paths, target)
 	}
 	tarball := tarFromFiles(files)
-	// The secrets read at park time, if any: merge them in and add their mount
-	// root to the paths so the client repoints the variables that name it.
-	if stash, err := os.ReadFile(swarmSecretStash(name)); err == nil && len(stash) > 0 {
-		tarball = mergeTars(tarball, stash)
+	// The secrets. A takeover parked (scaled to 0) the service, so they were
+	// read at park time and stashed; --env-of parks nothing, so the service is
+	// still running and they are read LIVE from a task now. Either way, merge
+	// them in and add their mount root to the paths so the client repoints the
+	// variables that name it.
+	secrets, err := os.ReadFile(swarmSecretStash(name))
+	if err != nil || len(secrets) == 0 {
+		secrets = swarmReadSecrets(own.name)
+	}
+	if len(secrets) > 0 {
+		tarball = mergeTars(tarball, secrets)
 		paths = append(paths, secretsMount)
 	}
 	if len(paths) == 0 {
@@ -204,13 +211,15 @@ func swarmFilesOf(name string, self selfInfo) ([]string, []byte) {
 // name, on the agent's own filesystem, removed when the service is restored.
 func swarmSecretStash(name string) string { return "/tmp/plug-secrets-" + name + ".tar" }
 
-// swarmStashSecrets reads /run/secrets from a RUNNING task of the service about
-// to be parked and writes it (rerooted onto its absolute path) to the stash.
-// Best-effort by design: no running task reachable from this node (a multi-node
-// swarm may schedule it elsewhere), no /run/secrets, or any error simply leaves
-// no stash, and files-of hands over the configs alone. Called at park, before
-// the scale-down, while a task is still up to read.
-func swarmStashSecrets(name, service string) {
+// swarmReadSecrets tars /run/secrets from a RUNNING task of the service and
+// returns it. A Swarm secret is a tmpfs mount, invisible to the archive API
+// (which reads the layer), so it is read from INSIDE the task; -C / makes the
+// members "run/secrets/..." - absolute minus the leading slash, the shape the
+// client's untar expects, so no reroot. Best-effort: no running task reachable
+// from this node (a multi-node swarm may schedule it elsewhere), no /run/secrets,
+// or no `tar` in the image (distroless) yields nothing, and files-of falls back
+// to the configs - the same limit as env's `cat` on a distroless image.
+func swarmReadSecrets(service string) []byte {
 	filter := `{"service":["` + service + `"],"desired-state":["running"]}`
 	var tasks []struct {
 		Status struct {
@@ -220,23 +229,27 @@ func swarmStashSecrets(name, service string) {
 		} `json:"Status"`
 	}
 	if code, err := dockerAPI("GET", "/tasks?filters="+url.QueryEscape(filter), nil, &tasks); err != nil || code != 200 {
-		return
+		return nil
 	}
 	for _, t := range tasks {
 		id := t.Status.ContainerStatus.ContainerID
 		if id == "" {
 			continue
 		}
-		// A Swarm secret is a tmpfs mount, invisible to the archive API (which
-		// reads the layer), so it is tarred from INSIDE the running task. -C /
-		// makes the members "run/secrets/..." - absolute minus the leading slash,
-		// the shape the client's untar expects, so no reroot. Needs `tar` in the
-		// image; a distroless task yields nothing and files-of falls back to the
-		// configs (same limit as env's `cat` on a distroless image).
 		if tarball, err := dockerExec(id, []string{"tar", "-c", "-C", "/", strings.TrimPrefix(secretsMount, "/")}); err == nil && len(tarball) > 0 {
-			_ = os.WriteFile(swarmSecretStash(name), tarball, 0o600)
-			return
+			return tarball
 		}
+	}
+	return nil
+}
+
+// swarmStashSecrets reads the secrets while a task still runs and keeps them for
+// files-of - called at PARK, before the scale-down, because a takeover leaves no
+// running task to read from afterwards. (--env-of parks nothing, so files-of
+// reads them live instead.)
+func swarmStashSecrets(name, service string) {
+	if tb := swarmReadSecrets(service); len(tb) > 0 {
+		_ = os.WriteFile(swarmSecretStash(name), tb, 0o600)
 	}
 }
 
