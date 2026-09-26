@@ -166,15 +166,18 @@ func swarmFilesOf(name string, self selfInfo) ([]string, []byte) {
 		if !strings.HasPrefix(target, "/") {
 			target = "/" + target // Swarm's default mount root when the target is bare
 		}
-		var ci []struct {
+		// GET /configs/{id} returns ONE Config object, not a list (that is
+		// GET /configs). Decoding it into a slice failed silently and the file
+		// never came through - the e2e's Swarm leg caught it.
+		var ci struct {
 			Spec struct {
 				Data string `json:"Data"`
 			} `json:"Spec"`
 		}
-		if code, err := dockerAPI("GET", "/configs/"+c.ConfigID, nil, &ci); err != nil || code != 200 || len(ci) == 0 {
+		if code, err := dockerAPI("GET", "/configs/"+c.ConfigID, nil, &ci); err != nil || code != 200 {
 			continue
 		}
-		data, err := base64.StdEncoding.DecodeString(ci[0].Spec.Data)
+		data, err := base64.StdEncoding.DecodeString(ci.Spec.Data)
 		if err != nil {
 			continue
 		}
@@ -284,7 +287,14 @@ func k8sFilesOf(ns, name string) ([]string, []byte) {
 		if len(paths) == 0 {
 			return nil, nil
 		}
-		tar, _, err := k8sExec(ns, p.Metadata.Name, p.Spec.Containers[0].Name, append([]string{"tar", "cf", "-"}, paths...)...)
+		// -h DEREFERENCES symlinks: a Secret (and a projected ConfigMap) is
+		// mounted through the kubelet's atomic-writer, so /run/plug-test/ca is a
+		// symlink into a ..data/ directory, not a regular file. Without -h tar
+		// stored the link, the client's untar skipped it (a link is the one
+		// member that could escape the temp dir), and the file never landed - the
+		// projection looked done and the value pointed at nothing. -h makes the
+		// leaf a regular file with its content.
+		tar, _, err := k8sExec(ns, p.Metadata.Name, p.Spec.Containers[0].Name, append([]string{"tar", "-c", "-h", "-f", "-"}, paths...)...)
 		if err != nil {
 			return nil, nil // no exec, or no tar (distroless): env-of already noted it
 		}
