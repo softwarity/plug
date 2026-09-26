@@ -56,6 +56,12 @@ func coreRunViaService(cfg config, cmdArgs []string) int {
 		return 1
 	}
 	defer stopExposes()
+	stopMounts, err := startMounts(cfg)
+	if err != nil {
+		info("mount: %v", err)
+		return 1
+	}
+	defer stopMounts()
 	return runChildEnv(cmdArgs, nil)
 }
 

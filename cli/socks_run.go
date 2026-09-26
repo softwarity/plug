@@ -537,6 +537,15 @@ func runCoreInProcess(cfg config, cmdArgs []string) int {
 		return 1
 	}
 	defer stopExposes()
+	// The mounts, before the child exists: on Linux it clones its mount
+	// namespace from this one (tun.Run's shim), so what is mounted here is
+	// what it sees.
+	stopMounts, err := startMounts(cfg)
+	if err != nil {
+		info("mount: %v", err)
+		return 1
+	}
+	defer stopMounts()
 
 	info("tunnel ready - running your command")
 	code, rerr := tun.Run(tr, cmdArgs, info)

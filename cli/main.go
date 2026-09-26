@@ -106,6 +106,14 @@ Options:
                          variables of the service it talks to rather than of
                          the one it replaces. Same rules: secrets included,
                          yours winning, --no-env A,B still leaving keys out.
+      --mount <spec>     mount one of the workload's VOLUMES here, live, read-write,
+                         for the session - a Docker volume, a bind, a PVC - through
+                         the SMB client your OS already has (nothing to install):
+                           --mount /data                its /data, at /data here
+                           --mount data:/srv/data       its volume "data", at /srv/data
+                           --mount api:data:/srv/data   the volume "data" of "api"
+                         Unnamed, the workload is the -s one or the --env-of one.
+                         Repeatable. macOS and Linux (Windows: not yet).
       --dockerrun        put a CONTAINER in the cluster, not a process:
                            plug -p prod -c --dockerrun docker run my-image
                          Prefixing docker with plug alone cannot work: the
@@ -153,6 +161,9 @@ type config struct {
 	envPolicy envPolicy
 	port      string
 	exposes   []tunnel.ExposeSpec
+	// mounts are the --mount volumes, resolved: mounted before the command
+	// runs, unmounted after it (mount.go).
+	mounts []mountSpec
 	// updateMode is the cluster's update policy (none|notify|auto). It belongs
 	// to the profile because `auto` updates the AGENT, which is shared: you may
 	// govern your own cluster and have no say over the shared one.
@@ -256,6 +267,28 @@ func attachExposes(cfg *config, raw []string) {
 	}
 }
 
+// attachMounts parses the raw --mount values and resolves the workload each
+// one belongs to against what is already known: the -s names and --env-of.
+// After attachExposes and the policy, since both are what "implied" means.
+func attachMounts(cfg *config, raw []string) {
+	if len(raw) == 0 {
+		return
+	}
+	var specs []mountSpec
+	for _, r := range raw {
+		spec, err := parseMount(r)
+		if err != nil {
+			fatal("%v", err)
+		}
+		specs = append(specs, spec)
+	}
+	specs, err := resolveMountNames(specs, cfg.exposes, cfg.envPolicy.from)
+	if err != nil {
+		fatal("%v", err)
+	}
+	cfg.mounts = specs
+}
+
 // stripLeadingExposes pops the -s/--serve pairs (and a -c/--client flag) a
 // launcher left at the head of the core's argv (see launcherRun) and parses
 // them — an old launcher forwards them there without understanding them.
@@ -268,11 +301,30 @@ func stripLeadingExposes(args []string) ([]tunnel.ExposeSpec, bool, []string, er
 // travels the same way: at the head of the core's argv, put there by the
 // launcher, stripped back here.
 func stripLeadingFlags(args []string) ([]tunnel.ExposeSpec, bool, envPolicy, []string, error) {
+	lead, rest, err := stripLeadingAll(args)
+	return lead.specs, lead.client, lead.policy, rest, err
+}
+
+// leadingFlags is everything a launcher puts at the head of the core's argv.
+type leadingFlags struct {
+	specs  []tunnel.ExposeSpec
+	client bool
+	policy envPolicy
+	mounts []string // raw --mount values, resolved by attachMounts once exposes are known
+}
+
+// stripLeadingAll is the one parser; stripLeadingFlags keeps the tuple its
+// callers read.
+func stripLeadingAll(args []string) (leadingFlags, []string, error) {
+	var lead leadingFlags
 	var specs []tunnel.ExposeSpec
 	client := false
 	policy := envPolicy{}
 	for {
 		switch {
+		case len(args) >= 2 && args[0] == "--mount":
+			lead.mounts = append(lead.mounts, args[1])
+			args = args[2:]
 		case len(args) >= 1 && args[0] == "--no-env":
 			args = args[1:]
 			from := policy.from // --env-of may have come first; keep it
@@ -289,7 +341,7 @@ func stripLeadingFlags(args []string) ([]tunnel.ExposeSpec, bool, envPolicy, []s
 		case len(args) >= 2 && (args[0] == "-s" || args[0] == "--serve"):
 			spec, err := parseExpose(args[1])
 			if err != nil {
-				return nil, false, envPolicy{}, nil, err
+				return leadingFlags{}, nil, err
 			}
 			specs = append(specs, spec)
 			args = args[2:]
@@ -301,9 +353,10 @@ func stripLeadingFlags(args []string) ([]tunnel.ExposeSpec, bool, envPolicy, []s
 				// The launcher refuses this before connecting; the core says it
 				// too, for an argv that reached it from an older launcher.
 				_, err := envPolicyOf(true, "", policy.from)
-				return nil, false, envPolicy{}, nil, err
+				return leadingFlags{}, nil, err
 			}
-			return specs, client, policy, args, nil
+			lead.specs, lead.client, lead.policy = specs, client, policy
+			return lead, args, nil
 		}
 	}
 }
@@ -342,6 +395,9 @@ type options struct {
 	// envOf: the --env-of name, the workload whose environment the command
 	// gets instead of the parked one's.
 	envOf string
+	// mounts: raw --mount values; validated once, re-prefixed on the core exec
+	// like -s (mount.go has the grammar).
+	mounts []string
 }
 
 // policy is the environment policy the three flags add up to. The one
@@ -582,6 +638,9 @@ func launcherRun(args []string) {
 	// policy is resolved here too, since this host is where the projection into
 	// the container is built (the sidecar only holds the datapath).
 	if opts.dockerRun {
+		if len(opts.mounts) > 0 {
+			fatal("--mount is not available with --dockerrun yet: the container would need the share mounted on this host first")
+		}
 		cfg.envPolicy = opts.policy()
 		os.Exit(runDockerRun(cfg, cmdArgs, opts.exposes, opts.client))
 	}
@@ -597,6 +656,7 @@ func launcherRun(args []string) {
 	if remote == version || remote == "" {
 		attachExposes(&cfg, opts.exposes)
 		cfg.envPolicy = opts.policy()
+		attachMounts(&cfg, opts.mounts)
 		runCore(cfg, cmdArgs)
 		return
 	}
@@ -611,6 +671,12 @@ func launcherRun(args []string) {
 	// -c is a 2.2 feature — an older released core would exec "-c" as the command.
 	if opts.client && versionBefore(remote, 2, 2) {
 		fatal("the cluster agent reports v%s, which predates -c (needs plug ≥ 2.2).\n"+
+			"Upgrade the agent (redeploy the softwarity/plug image), then run again.", remote)
+	}
+	// --mount is a 2.20 feature: the agent's mount-volume verb AND the core's
+	// flag. An older core would exec "--mount" as the command.
+	if len(opts.mounts) > 0 && versionBefore(remote, 2, 20) {
+		fatal("the cluster agent reports v%s, which predates --mount (needs plug ≥ 2.20).\n"+
 			"Upgrade the agent (redeploy the softwarity/plug image), then run again.", remote)
 	}
 	// A NAMED local port (-s web:8080:PORT) is a 2.4 feature. The mapping crosses
@@ -644,6 +710,7 @@ func launcherRun(args []string) {
 			shortVersion(remote), shortVersion(version))
 		attachExposes(&cfg, opts.exposes)
 		cfg.envPolicy = opts.policy()
+		attachMounts(&cfg, opts.mounts)
 		runCore(cfg, cmdArgs)
 		return
 	}
@@ -653,6 +720,7 @@ func launcherRun(args []string) {
 		info("cannot fetch v%s (%v) — falling back to this launcher (v%s)", remote, err, version)
 		attachExposes(&cfg, opts.exposes)
 		cfg.envPolicy = opts.policy()
+		attachMounts(&cfg, opts.mounts)
 		runCore(cfg, cmdArgs)
 		return
 	}
@@ -699,6 +767,16 @@ func launcherRun(args []string) {
 	}
 	if opts.envOf != "" {
 		cmdArgs = append([]string{"--env-of", opts.envOf}, cmdArgs...)
+	}
+	// --mount crosses raw too, its grammar checked here first so a bad spec is
+	// refused before anything connects, and stripped back by coreMain.
+	for _, r := range opts.mounts {
+		if _, err := parseMount(r); err != nil {
+			fatal("%v", err)
+		}
+	}
+	for i := len(opts.mounts) - 1; i >= 0; i-- {
+		cmdArgs = append([]string{"--mount", opts.mounts[i]}, cmdArgs...)
 	}
 	// Named through the descriptor we verified, not through its path — see
 	// execTarget. The descriptor stays open until the child is started; the child
@@ -1726,6 +1804,8 @@ func parseArgs(args []string) (options, []string) {
 			}
 		case "--env-of":
 			o.envOf = value()
+		case "--mount":
+			o.mounts = append(o.mounts, value())
 		default:
 			return o, args[i:]
 		}
@@ -1737,7 +1817,7 @@ func parseArgs(args []string) (options, []string) {
 // valueOptions are the long options that take one, which is all the equals form
 // has to know: everything else keeps travelling as it was written.
 var valueOptions = map[string]bool{
-	"--profile": true, "--host": true, "--port": true, "--serve": true, "--env-of": true,
+	"--profile": true, "--host": true, "--port": true, "--serve": true, "--env-of": true, "--mount": true,
 	"--no-env": true, // optional value; the case above reads the glued form itself
 }
 
@@ -1973,12 +2053,13 @@ func coreConfigFromEnv() config {
 
 func coreMain() {
 	cfg := coreConfigFromEnv()
-	specs, _, policy, cmdArgs, err := stripLeadingFlags(os.Args[1:]) // -c strips to an empty exposes list: exactly the pure-outbound datapath
+	lead, cmdArgs, err := stripLeadingAll(os.Args[1:]) // -c strips to an empty exposes list: exactly the pure-outbound datapath
 	if err != nil {
 		fatal("%v", err)
 	}
-	cfg.exposes = specs
-	cfg.envPolicy = policy
+	cfg.exposes = lead.specs
+	cfg.envPolicy = lead.policy
+	attachMounts(&cfg, lead.mounts)
 	if len(cmdArgs) == 0 {
 		fatal("core: no command")
 	}

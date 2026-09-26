@@ -239,6 +239,9 @@ func doctorLocal(add func(check)) {
 
 	// Sessions currently registered (the graft/registry view).
 	doctorSessions(add)
+
+	// Live mounts left behind by a session that died (mount.go).
+	doctorMounts(add)
 }
 
 // resolveProbeHost is a name plug itself needs — the registry it asks about
