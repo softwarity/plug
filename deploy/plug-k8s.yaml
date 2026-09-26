@@ -153,9 +153,19 @@ rules:
   # falls back to the pod SPEC and says which variables came through empty.
   # exec is the widest right here: it amounts to running code in this
   # namespace's pods, and it is what makes the feature true to the cluster.
+  # create/delete: the live mount (--mount) starts a HELPER POD beside the
+  # workload - the agent's own image, with the workload's PersistentVolumeClaim
+  # mounted, serving it over SMB for the session - and removes it when the
+  # session ends (or the sweep does, when the session died). Pinned to the
+  # workload's node, so a ReadWriteOnce claim is shared the way the mode allows.
+  # `persistentvolumeclaims` get: to refuse a ReadWriteOncePod claim with a
+  # reason instead of a helper that stays Pending.
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get"]
   # Both verbs, as Kubernetes' own `edit` role grants them: the API server
   # evaluates a WebSocket upgrade (a GET) as `get` and a SPDY exec (a POST) as
   # `create`. `create` alone was tried and answered 403 on a real cluster.

@@ -99,6 +99,26 @@ RUN for i in 1 2 3; do apk add --no-cache curl unzip && break; \
 
 FROM alpine:3.24
 
+# Samba, and it is the one package this stage installs. It serves a live mount
+# (--mount): the agent starts a HELPER beside the workload - this very image,
+# running `plug-agent mount-serve` with the workload's volume or PVC mounted -
+# and the developer's process reads and writes the real data at the real path
+# through the SMB client every OS already has (mount_smbfs, the cifs module,
+# the Windows redirector). Nothing to install on the workstation, and no
+# second image to pull or to mirror: the helper is the agent, as the signpost is.
+#
+# The note below says this stage ran no `apk add`, and why: one TLS error on
+# dl-cdn killed 2.7.3. That risk is taken here, deliberately, with the same
+# three-attempt retry the build stage already uses for curl, because the only
+# SMB2 server written in Go is AGPL and has no authentication, and a separate
+# image would have to be pulled on demand and mirrored by every private
+# registry. A failed install fails THIS build, loudly, and never an image that
+# is published: the e2e legs pull what this produced, and only a green run is
+# promoted.
+RUN for i in 1 2 3; do apk add --no-cache samba-server && break; \
+      echo "apk failed (attempt $i/3) — retrying"; sleep $((i * 5)); \
+    done && [ -x /usr/sbin/smbd ]
+
 # No sshd. The SSH server is `plug-agent serve` (agent/sshserver.go),
 # which speaks the same protocol to the same CLI and replaces the whole of what
 # OpenSSH did here: two Unix accounts, two ForceCommands, and nineteen lines of
@@ -108,9 +128,10 @@ FROM alpine:3.24
 #   * plug-agent is no longer setuid root. It was, ONLY because sshd ran it as
 #     the unprivileged `plug` user while it needed the docker socket or the
 #     pod's SA token. The server process holds those directly now.
-#   * no `apk add` in this stage at all, so the failure that killed 2.7.3 (one
-#     TLS error on dl-cdn, "no such package", three e2e legs timed out) cannot
-#     happen here any more. The retry loop it needed is gone with it.
+#   * one `apk add` in this stage, Samba above, and none for the server itself:
+#     the failure that killed 2.7.3 (one TLS error on dl-cdn, "no such
+#     package", three e2e legs timed out) was an install this stage no longer
+#     needs for sshd. What remains is retried, and fails the build, not a run.
 #   * the host key is kept rather than regenerated. On its own that changes
 #     nothing, since the CLI re-pins whatever answers; it only puts the key
 #     where it will have to be the day identity is actually verified. See

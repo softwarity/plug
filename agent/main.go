@@ -73,6 +73,11 @@ func Main() {
 		case "gc":
 			gc()
 			return
+		case "mount-serve":
+			// The live-mount helper's process: this image, with a workload's
+			// volume at /mnt/vol, serving it over SMB for one session.
+			mountServe()
+			return
 		case "preflight":
 			preflight()
 			return
@@ -185,6 +190,10 @@ func dispatch(cmd []string) {
 		doEnvOf(cmd, true)
 	case "files-of":
 		doFilesOf(cmd)
+	case "mount-volume":
+		doMountVolume(cmd)
+	case "unmount-volume":
+		doUnmountVolume(cmd)
 	case "self-update":
 		doSelfUpdate(cmd)
 	default:
@@ -805,6 +814,9 @@ func sweepOrchestrators() {
 	if dockerAvailable() {
 		dockerGC()
 	}
+	// The live-mount helpers, on whichever backend: a mount parks nothing, so
+	// there is nothing to restore, only leftovers to remove (mount.go).
+	sweepMountHelpers()
 }
 
 // ---- self-update: refresh THIS agent from its registry, per backend ----
