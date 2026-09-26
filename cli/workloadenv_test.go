@@ -6,21 +6,33 @@ import (
 	"testing"
 )
 
-// The caller's variables win. A plugged service must be pointable at a test
-// database from the shell, whatever the cluster says; and the credentials the
-// cluster has must reach a process that does not carry them itself.
-func TestTheCallerWinsAndTheClusterFillsTheRest(t *testing.T) {
+// The cluster wins by default, overwriting an inherited value: a plugged process
+// behaves as it does inside the cluster, not as the shell left it. --no-env=KEY
+// is the escape - it holds a key back to the caller's own value (a test db).
+func TestTheClusterWinsUnlessNoEnvHoldsAKeyBack(t *testing.T) {
 	cluster := []string{"APP_DB_HOST=odb", "APP_DB_PASSWORD=from-cluster", "APP_MONGODB_HOST=mongodb"}
 	caller := []string{"PATH=/usr/bin", "APP_DB_PASSWORD=from-shell"}
+
+	// Default: the cluster's password overwrites the shell's; nothing is kept.
 	set, kept := mergeWorkloadEnv(cluster, caller, envPolicy{})
-	if set["APP_DB_HOST"] != "odb" || set["APP_MONGODB_HOST"] != "mongodb" {
-		t.Fatalf("the cluster's variables did not come through: %v", set)
+	if set["APP_DB_PASSWORD"] != "from-cluster" {
+		t.Fatalf("the cluster's value must win, got %q", set["APP_DB_PASSWORD"])
 	}
-	if _, overridden := set["APP_DB_PASSWORD"]; overridden {
-		t.Fatal("the cluster's password overrode the shell's")
+	if set["APP_DB_HOST"] != "odb" || set["APP_MONGODB_HOST"] != "mongodb" || len(kept) != 0 {
+		t.Fatalf("set=%v kept=%v", set, kept)
+	}
+
+	// --no-env=APP_DB_PASSWORD: the cluster holds that key back, the shell's value
+	// stands, and the key is named in kept.
+	set, kept = mergeWorkloadEnv(cluster, caller, parseNoEnv("APP_DB_PASSWORD"))
+	if _, overwritten := set["APP_DB_PASSWORD"]; overwritten {
+		t.Fatal("--no-env=APP_DB_PASSWORD must NOT take the cluster's value")
 	}
 	if !reflect.DeepEqual(kept, []string{"APP_DB_PASSWORD"}) {
-		t.Fatalf("kept = %v, want the caller's own key named", kept)
+		t.Fatalf("kept = %v, want the held-back key named", kept)
+	}
+	if set["APP_DB_HOST"] != "odb" {
+		t.Fatalf("the other keys must still come from the cluster: %v", set)
 	}
 }
 

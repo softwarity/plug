@@ -2,6 +2,21 @@
 
 ## NEXT RELEASE
 
+### The cluster's environment now WINS by default; --no-env=KEY keeps yours
+
+The projection introduced in 2.16 let the caller's environment win: a variable
+already set - in the shell, by cross-env, in a .env - beat the cluster's. That
+made the result depend on whatever the launched process happened to carry, which
+is the opposite of "behaves as it does in the cluster". It is inverted now: a
+projected value OVERWRITES the inherited one, so the cluster is the source of
+truth. `--no-env` still turns projection off entirely, and `--no-env A,B` now
+holds A and B back to YOUR local value - the explicit escape for pointing a key
+at, say, a test database. One structural limit stands: plug sets the environment
+before it execs the command, so a value the command sets ITSELF afterwards (a
+`cross-env VAR=…` on its own line, a `.env` loaded with override) is beyond
+plug's reach; the cluster wins over everything INHERITED, a runtime assignment
+the process makes is its own. This changes the 2.16/2.17 default deliberately.
+
 ### --dockerrun projects the workload's environment and files into the container
 
 A `--dockerrun` container is created by the docker daemon, not as a child of

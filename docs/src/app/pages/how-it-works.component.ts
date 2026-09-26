@@ -194,9 +194,11 @@ import { RouterLink } from '@angular/router';
       name is <strong>parked</strong> for the session (containers stopped / Swarm scaled to 0 / k8s
       Service repointed) and <strong>restored on exit</strong> - your process substitutes for it,
       and <strong>inherits its environment</strong>: the parked workload's variables, secrets
-      included as the pod already had them, are handed to your command, yours winning over the
-      cluster's, the container's own plumbing (<code>PATH</code>, <code>KUBERNETES_*</code>) left
-      out, <code>--no-env</code> to opt out, <code>--env-of &lt;name&gt;</code> to take another
+      included as the pod already had them, are handed to your command, <strong>the cluster's value
+      winning</strong> over whatever the shell or a <code>.env</code> left inherited (so the process
+      behaves as in the cluster), the container's own plumbing (<code>PATH</code>,
+      <code>KUBERNETES_*</code>) left out, <code>--no-env</code> to opt out (or <code>--no-env A,B</code>
+      to keep YOUR value for a key), <code>--env-of &lt;name&gt;</code> to take another
       workload's instead (a <code>-c</code> script with a service's credentials, a <code>-s</code>
       borrowing its neighbour's). Its <strong>mounted secret and config files</strong> come too - a
       CA in PEM, a keystore - read through the same exec, materialised for the session and the

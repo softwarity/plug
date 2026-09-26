@@ -165,8 +165,10 @@ every minute whether the session holding a parked workload still answers, and
 puts the workload back when it does not. Your local process answers the name
 in its place, and **inherits its environment**: the variables the deployed
 workload runs with, secrets included as the pod already had them, are handed
-to your command - yours win over the cluster's, so a test database is one
-`export` away, and `--no-env` opts out. No `.env` to retype from the
+to your command - **the cluster's value wins** over whatever the shell or a
+`.env` left inherited, so the process behaves as it does in the cluster;
+`--no-env=KEY` holds a key back to your own value (a test database), and a bare
+`--no-env` opts out entirely. No `.env` to retype from the
 deployment. `--env-of <name>` takes another workload's instead, without
 parking it: a `-c` one-off script run with a service's own credentials, or a
 `-s` that borrows the variables of the service it talks to. Afterwards the cluster is exactly as it was. A name held by

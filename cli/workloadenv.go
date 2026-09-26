@@ -11,17 +11,29 @@ import (
 // that replaces it. The agent answers `env-of <name>` with the workload's
 // variables; this side decides what the command finally sees.
 //
-// Three layers, in this order, and the order is the whole rule:
+// The rule, and the order is the whole of it:
 //
-//  1. the workload's variables, as the agent read them;
-//  2. minus what --no-env names (or all of them, with a bare --no-env);
-//  3. the caller's own environment on top, untouched: a variable the person
-//     set in the shell or in cross-env WINS over the cluster's. Otherwise
-//     there would be no way to point a plugged service at a test database.
+//  1. the workload's variables, as the agent read them, WIN. The cluster is the
+//     source of truth: a process joining the cluster should behave as it does
+//     inside it, not drift with whatever the shell, a .env or a CI runner left
+//     in the environment. So a projected value OVERWRITES an inherited one.
+//  2. except what --no-env names: a bare --no-env projects nothing, and
+//     --no-env A,B keeps YOUR value for A and B (the explicit escape when you
+//     do want to point a key at, say, a test database).
+//
+// This inverts the earlier rule where the caller won by default: that made the
+// result depend on the launched process (a cross-env, a .env, a stray export),
+// which is exactly what "behaves as in the cluster" must not do.
+//
+// One honest limit, structural: plug sets the environment BEFORE it execs the
+// command, so a value the command sets ITSELF afterwards - `cross-env VAR=…` in
+// the command line, a .env loaded with override - is beyond plug's reach. The
+// cluster wins over everything INHERITED; a runtime assignment the process makes
+// is its own.
 //
 // Pure, so the rule is proven rather than reasoned about, and applied with
 // os.Setenv on this process before the command starts: the child inherits
-// os.Environ() as it always did, PATH handling and privilege drop included.
+// os.Environ(), PATH handling and privilege drop included.
 
 // envPolicy is what --no-env said: nothing (project everything), everything
 // (a bare --no-env), or a list of keys to leave out; and what --env-of said,
@@ -69,10 +81,10 @@ func parseNoEnv(value string) envPolicy {
 	return p
 }
 
-// mergeWorkloadEnv returns the variables to SET on this process: the workload's
-// lines that survive the policy and that the caller's environment does not
-// already define. Keys the caller has are returned in `kept` so the session can
-// say which of the cluster's values it left alone.
+// mergeWorkloadEnv returns the variables to SET on this process: every workload
+// line the cluster wins on (all of them but the --no-env ones), overwriting an
+// inherited value. `kept` names the keys --no-env held back to the caller's own
+// value, so the session can say which the cluster did NOT touch.
 func mergeWorkloadEnv(lines []string, callerEnv []string, p envPolicy) (set map[string]string, kept []string) {
 	set, kept, _ = mergeWorkloadEnvWithEmpty(lines, callerEnv, p)
 	return set, kept
@@ -97,14 +109,19 @@ func mergeWorkloadEnvWithEmpty(lines []string, callerEnv []string, p envPolicy) 
 	set = map[string]string{}
 	for _, kv := range lines {
 		k, v, ok := strings.Cut(kv, "=")
-		if !ok || k == "" || p.drop[k] {
+		if !ok || k == "" {
 			continue
 		}
-		if have[k] {
-			kept = append(kept, k)
+		if p.drop[k] {
+			// --no-env=k: the cluster's value is held back; the caller's own
+			// value (if it has one) stands, and is named in kept so the session
+			// can say so.
+			if have[k] {
+				kept = append(kept, k)
+			}
 			continue
 		}
-		set[k] = v
+		set[k] = v // the cluster wins, overwriting whatever was inherited
 		if v == "" {
 			empty = append(empty, k)
 		}
