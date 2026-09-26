@@ -177,6 +177,26 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
         </td>
       </tr>
       <tr>
+        <td><code>--mount &lt;spec&gt;</code></td>
+        <td>
+          put one of the workload's <strong>volumes</strong> at a path here, <strong>live, read-write</strong>,
+          for the session - a Docker volume, a bind, a PersistentVolumeClaim.
+          <code>--mount /data</code> is its <code>/data</code> at <code>/data</code>;
+          <code>--mount data:/srv/data</code> its volume "data" at <code>/srv/data</code>;
+          <code>--mount api:/data:/srv/data</code> names the workload. Unnamed, it is the
+          <code>-s</code> one or the <code>--env-of</code> one. Repeatable. Nothing is installed:
+          the agent starts a helper beside the workload (its own image, Samba, the volume mounted)
+          and plug mounts it through the tunnel with the SMB client your OS ships with -
+          <code>mount_smbfs</code> on macOS as you, the cifs module on Linux through mount(2).
+          Files are written as the volume's owner. A session that dies has its helper reaped by
+          the agent within the minute and its mount cleaned by the next run or
+          <code>plug doctor --fix</code>. Kubernetes: the helper pod is pinned to the workload's
+          node (ReadWriteOnce is one node, not one pod); the RBAC needs <code>pods</code>
+          create/delete, re-apply <code>plug-k8s.yaml</code>. Not yet: Windows, and with
+          <code>--dockerrun</code>. SQLite/GeoPackage files over SMB are risky (range locks).
+        </td>
+      </tr>
+      <tr>
         <td><code>--dockerrun</code></td>
         <td>
           run the <strong>container</strong> as the cluster member instead of the process:

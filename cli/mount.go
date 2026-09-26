@@ -319,7 +319,7 @@ func startMounts(cfg config) (func(), error) {
 			if m.fw != nil {
 				m.fw.Close()
 			}
-			if out, err := tr.Exec("unmount-volume " + m.spec.name + " " + m.spec.volume); err != nil || strings.HasPrefix(out, "error:") {
+			if out, err := tr.Exec("unmount-volume " + m.spec.name + " " + m.spec.volume + " " + live.AgentPort()); err != nil || strings.HasPrefix(out, "error:") {
 				info("could not release the mount helper for %s: %s%v", m.spec, out, err)
 			}
 			if m.unmark != nil {

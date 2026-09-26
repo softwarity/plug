@@ -56,77 +56,33 @@ déjà, sans nouveau droit RBAC.
       option B, flags dockerrun, untar clamp) + cellule e2e ×3 familles (secret
       k8s / secret Compose / config Swarm montés au même chemin, lus par un
       process local). MàJ coverage + comparatif faites.
-- [ ] **Montage VIVANT d'un volume / PVC (PLAN, session dédiée)** : lire ET
-      écrire un vrai volume derrière un `-s` (takeover), un `-c --env-of`, ou
-      `--dockerrun`, en process natif, sur macOS/Windows/Linux. Aujourd'hui : rien.
-      La matérialisation one-shot (2.16-2.19) ne couvre que les fichiers de
-      secret/config, pas un volume de données.
-
-      **Architecture retenue (FUSE client + réciproque SFTP dans un helper) :**
-      ```
-      process (poste) → FUSE (attrape open/read/write) → tunnel SSH plug
-                      → agent → helper (SFTP sur le volume monté) → exécute → répond
-      ```
-      - **Client** : plug monte un FS FUSE au chemin exact AVANT de lancer la
-        commande (donc tous modes). Motif sshfs = FUSE ↔ SFTP, réutilise le SSH
-        de plug. Montage **sans privilège** : fuse-t (macOS, PAS de kext, pas de
-        reboot, pas de sudo), fusermount (Linux), WinFsp (Windows).
-      - **Helper** : conteneur (Docker, via le socket) / pod (k8s) / sur le bon
-        nœud (Swarm), qui **monte le volume normalement** et sert le SFTP. Aucun
-        FUSE côté helper. Monter le PVC = ce que fait le workload, donc NORMAL,
-        pas un défaut. k8s : workload à 0 pour libérer un RWO, helper créé avec le
-        nom du PVC lu dans le spec.
-      - Rappel : donnée dans **SeaweedFS/S3/WebDAV** = store réseau, PAS ce
-        chantier (plug la tunnelise déjà comme un service).
-
-      **Chantiers :** (1) agent : créer/détruire le helper + montage volume +
-      sous-système SFTP scopé ; (2) client : monter/démonter le FUSE (fuse-t/
-      fusermount/WinFsp) au chemin exact, par mode ; (3) cycle de vie + reaping ;
-      (4) `doctor` : détecter et réparer un état resté sale.
-
-      **Défauts et solutions à tester pendant l'implémentation :**
-      - D1 **Latence par op** : ACCEPTÉ (outil de dev, un peu plus lent = OK). À
-        appliquer quand même : cache d'attributs + readahead FUSE/sshfs.
-      - D2 **Débit gros fichiers** (tunnel) : ACCEPTÉ. Régler buffers, pas de
-        compression. Pas un bloquant.
-      - D3 **Mount qui pend sur coupure** (sleep/blip) : à tester : sshfs
-        `-o reconnect` + `ServerAliveInterval`, timeouts soft (erreur plutôt que
-        hang), reconnexion du tunnel plug qui rétablit la session SFTP. Critère :
-        aucun hang permanent ; coupure en pleine écriture = erreur remontée, pas
-        de corruption silencieuse.
-      - D4 **Orphelin qui bloque le PVC** (INACCEPTABLE de laisser le cluster
-        instable) : le helper est lié à la session comme le signpost/park.
-        Solutions à tester, dans l'ordre : (a) reaping par le **sweep périodique**
-        existant (le lease du holder ne répond plus → l'agent détruit le helper
-        ET restaure le workload / réattache le PVC) ; (b) **TTL/heartbeat** sur le
-        helper (auto-destruction s'il perd le contact) ; (c) **boot-gc** de l'agent
-        (au redémarrage, reaper les helpers labellisés plug + restaurer leurs
-        workloads). **Filet de sécurité obligatoire si l'auto ne suffit pas :
-        `plug doctor` détecte (helper orphelin + workload coincé à 0 + reçu plug)
-        et RÉPARE** (supprime le helper, restaure le workload). Test : kill -9 de
-        la session / poste fermé → le workload doit revenir seul, sinon doctor le
-        répare.
-      - D5 **Runtime FUSE par OS + maturité fuse-t** : `doctor` vérifie la présence
-        (fuse-t/WinFsp/libfuse) et donne la commande d'install si absent ; sans
-        runtime, la feature volume est indisponible (message clair), le reste de
-        plug marche. **Go/no-go n°1 : valider fuse-t sur macOS 26** (il est en
-        NFS-loopback dessous, or on a vu un EPERM NFS sur macOS 26).
-      - D6 **Point de montage fantôme après crash** : plug enregistre ses points de
-        montage (comme les served records) ; au prochain run / via `doctor`,
-        détecter un mount FUSE mort (« Transport endpoint is not connected ») et le
-        démonter. Test : kill -9 → le run suivant ou doctor nettoie.
-      - D7 **Sémantique SFTP (locking par plage, mmap écriture limités)** :
-        détecter/avertir si le volume contient du SQLite/GeoPackage (`.gpkg`,
-        `.sqlite`) - fichiers plats = OK, base-fichier = risqué. Documenter la
-        limite ; mode strict éventuel plus tard.
-
-      **`doctor` = le filet de sécurité (exigence)** : checks + remèdes pour
-      helper orphelin, workload coincé parké, mount FUSE fantôme local. Si une
-      récupération auto manque, doctor doit au moins savoir réparer.
-
-      **Go/no-go à lever tôt :** fuse-t sur macOS 26 (lecture/écriture d'un vrai
-      volume) ; reaping de l'orphelin (kill dur → workload restauré, ou doctor) ;
-      reconnexion sshfs sur sleep/wake.
+- [x] **Montage VIVANT d'un volume / PVC : `--mount`** (branche `feat/live-mount`,
+      27/09). Lire ET écrire un vrai volume derrière un `-s`, un `-c --env-of`
+      ou un workload nommé, en process natif. **Architecture retenue, différente
+      du plan du 26/09** : ni FUSE ni SFTP. Le helper (l'image agent, Samba, le
+      volume monté) sert le volume en **SMB** ; le client le monte **avec le
+      client SMB intégré de l'OS** (`mount_smbfs` sans privilège sur macOS,
+      `mount(2)` cifs sur Linux, sans `cifs-utils`) à travers un forward local
+      sur le tunnel. **Rien à installer côté poste**, pas de seconde image (Samba
+      dans l'image agent, +80 Mo, la seule `apk add` du stage final, avec retry).
+      Le pur Go SMB n'existe qu'en AGPL sans auth : écarté.
+      **Validé en local contre un vrai agent Docker** (`cli/mount_e2e_test.go`,
+      `PLUG_MOUNT_E2E=host:port`) : montage/démontage, **kill -9** → le run
+      suivant démonte, le sweep de l'agent réape le helper seul en < 1 min (D4,
+      D6) ; **redémarrage de l'agent** sous un montage tenu → helper
+      re-provisionné même clé, montage intact (D3, après avoir coupé le
+      multichannel SMB sur la loopback, `nsmb.conf` scopé) ; **Linux/cifs avec
+      lecture/écriture réelles** dans un conteneur privilégié (pas de TCC).
+      `doctor` : check « live mounts » + `--fix`. RBAC k8s : pods create/delete,
+      pvc get.
+      **Reste** : (1) **Windows** : le redirecteur SMB veut le 445 d'une adresse
+      dédiée (alias loopback ou IP TUN de plug) - `--mount` le dit ; (2)
+      `--mount` avec `--dockerrun` (monter sur l'hôte puis `-v`) ; (3) Swarm et
+      k8s **non exercés en vrai** (code écrit sur le modèle du signpost ; k8s
+      helper épinglé sur le nœud du workload, RWOP refusé) ; (4) le EPERM
+      macOS sur un montage réussi = **TCC « Volumes réseau »** de l'app
+      responsable du shell (vu sous Zed), à nommer dans doctor ; (5)
+      SQLite/GeoPackage sur SMB : avertir (D7).
 
 ## 🔴 Sécurité - suivi en privé
 

@@ -38,7 +38,7 @@ import (
 //	    client reconnects on its own - which only works if the credential is
 //	    the same one. Hex, 32 to 64 chars, inside the SSH session.
 //	    Answers: mounted host=<addr> port=445 share=<s> user=<u>
-//	unmount-volume <name> <volume>
+//	unmount-volume <name> <volume> <agent-port>
 //	    stop it. "ok" | "error: …"
 //
 // Lifecycle: the helper carries the same ownership the signpost does
@@ -61,12 +61,15 @@ const (
 	mountShare       = "vol"
 )
 
-// mountHelperName is the helper's cluster name: one per (workload, volume),
-// deterministic so a re-run finds its predecessor. The volume half is hashed:
-// a volume name can be sixty characters and a bind is a path, neither of which
-// fits a DNS label or a container name beside the workload's.
-func mountHelperName(name, volume string) string {
-	sum := sha256.Sum256([]byte(volume))
+// mountHelperName is the helper's cluster name: one per (workload, volume,
+// SESSION), the session being its liveness port. Per session, not per volume:
+// two developers may mount one volume at once (serving several clients is
+// what Samba is for), and a re-provision after a reconnect - a new port - is
+// a new helper beside the old one, which the sweep reaps as the old port no
+// longer answers. Hashed: a volume name can be sixty characters and a bind is
+// a path, neither of which fits a DNS label beside the workload's name.
+func mountHelperName(name, volume, agentPort string) string {
+	sum := sha256.Sum256([]byte(volume + ":" + agentPort))
 	return "plug-mnt-" + name + "-" + hex.EncodeToString(sum[:])[:8]
 }
 
@@ -134,10 +137,13 @@ func doMountVolume(cmd []string) {
 }
 
 func doUnmountVolume(cmd []string) {
-	if len(cmd) != 3 || !nameRe.MatchString(cmd[1]) || !volumeArgOK(cmd[2]) {
-		answer("error: usage: unmount-volume <name> <volume-or-path>")
+	if len(cmd) != 4 || !nameRe.MatchString(cmd[1]) || !volumeArgOK(cmd[2]) {
+		answer("error: usage: unmount-volume <name> <volume-or-path> <agent-port>")
 	}
-	unmountVolume(cmd[1], cmd[2])
+	if n, err := strconv.Atoi(cmd[3]); err != nil || n < 1 || n > 65535 {
+		answer("error: %q is not a valid port", cmd[3])
+	}
+	unmountVolume(cmd[1], cmd[2], cmd[3])
 }
 
 func mountVolume(name, volume, agentPort, pass string) {
@@ -157,14 +163,15 @@ func mountVolume(name, volume, agentPort, pass string) {
 	answer("error: this agent has no orchestrator access, so it cannot start a mount helper")
 }
 
-func unmountVolume(name, volume string) {
+func unmountVolume(name, volume, agentPort string) {
+	helper := mountHelperName(name, volume, agentPort)
 	switch {
 	case k8sAvailable():
-		if err := k8sUnmountVolume(k8sNamespace(), name, volume); err != nil {
+		if err := k8sUnmountVolume(k8sNamespace(), helper); err != nil {
 			answer("error: %v", err)
 		}
 	case dockerAvailable():
-		if err := dockerUnmountVolume(name, volume); err != nil {
+		if err := dockerUnmountVolume(helper); err != nil {
 			answer("error: %v", err)
 		}
 	}
@@ -250,21 +257,11 @@ func dockerMountVolume(name, volume, agentPort, pass string, self selfInfo) {
 	if m == nil {
 		answer("error: %q has no volume %q — %s", name, volume, why)
 	}
-	helper := mountHelperName(name, volume)
-	// A helper already there is a previous session's: a live one keeps its
-	// volume (one session per volume, as one session per name), a dead one is
-	// swept and replaced, credential and all.
-	var insp struct {
-		Id     string `json:"Id"`
-		Config struct {
-			Labels map[string]string `json:"Labels"`
-		} `json:"Config"`
-	}
-	if code, err := dockerAPI("GET", "/containers/"+helper+"/json", nil, &insp); err == nil && code == 200 {
-		if sessionLive(insp.Config.Labels[sessionOwnerLabel]) {
-			answer("error: %s of %q is already mounted by a live session (%s)", volume, name, insp.Config.Labels[sessionOwnerLabel])
-		}
-		_, _ = dockerAPI("DELETE", "/containers/"+insp.Id+"?force=1", nil, nil)
+	helper := mountHelperName(name, volume, agentPort)
+	// A helper already under this name is this same session's earlier try
+	// (the name carries the port): replace it, credential and all.
+	if code, err := dockerAPI("GET", "/containers/"+helper+"/json", nil, nil); err == nil && code == 200 {
+		_, _ = dockerAPI("DELETE", "/containers/"+helper+"?force=1", nil, nil)
 	}
 	endpoints := map[string]any{}
 	for _, n := range nets {
@@ -330,8 +327,7 @@ func mountEnv(pass string) []string {
 // dockerUnmountVolume removes the helper in whichever shape it has: a container
 // (Compose, plain) or, on a manager, a service (Swarm). Absent is fine: the
 // sweep may have been first, or the session never got as far as creating it.
-func dockerUnmountVolume(name, volume string) error {
-	helper := mountHelperName(name, volume)
+func dockerUnmountVolume(helper string) error {
 	if code, err := dockerAPI("DELETE", "/containers/"+helper+"?force=1", nil, nil); err != nil && code != 404 {
 		return fmt.Errorf("removing the mount helper %s: %v", helper, err)
 	}
@@ -406,18 +402,12 @@ func swarmMountVolume(name, volume, agentPort, pass string, self selfInfo) {
 	if m == nil {
 		answer("error: %q has no volume %q — %s", name, volume, why)
 	}
-	helper := mountHelperName(name, volume)
+	helper := mountHelperName(name, volume, agentPort)
 	var sp struct {
-		ID   string `json:"ID"`
-		Spec struct {
-			Labels map[string]string `json:"Labels"`
-		} `json:"Spec"`
+		ID string `json:"ID"`
 	}
 	if code, err := dockerAPI("GET", "/services/"+helper, nil, &sp); err == nil && code == 200 {
-		if sessionLive(sp.Spec.Labels[sessionOwnerLabel]) {
-			answer("error: %s of %q is already mounted by a live session (%s)", volume, name, sp.Spec.Labels[sessionOwnerLabel])
-		}
-		_, _ = dockerAPI("DELETE", "/services/"+sp.ID, nil, nil)
+		_, _ = dockerAPI("DELETE", "/services/"+sp.ID, nil, nil) // this session's earlier try
 	}
 	var attach []map[string]any
 	for _, n := range nets {
@@ -641,17 +631,10 @@ func k8sMountVolume(ns, name, volume, agentPort, pass string) {
 	if err != nil || image == "" {
 		answer("error: cannot tell this agent's image, which the mount helper runs: %v", err)
 	}
-	helper := mountHelperName(name, volume)
+	helper := mountHelperName(name, volume, agentPort)
 	owner := sessionOwner(k8sSelfIP(), []portPair{{agent: agentPort}})
-	var existing struct {
-		Metadata struct {
-			Annotations map[string]string `json:"annotations"`
-		} `json:"metadata"`
-	}
-	if code, err := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/pods/"+helper, nil, &existing); err == nil && code == 200 {
-		if sessionLive(existing.Metadata.Annotations[sessionOwnerLabel]) {
-			answer("error: %s of %q is already mounted by a live session (%s)", volume, name, existing.Metadata.Annotations[sessionOwnerLabel])
-		}
+	if code, _ := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/pods/"+helper, nil, nil); code == 200 {
+		// This session's earlier try (the name carries the port): replace it.
 		if err := k8sDeletePodAndWait(ns, helper, 30*time.Second); err != nil {
 			answer("error: replacing the previous mount helper: %v", err)
 		}
@@ -691,8 +674,7 @@ func k8sMountVolume(ns, name, volume, agentPort, pass string) {
 	answer("%s", mountReply(ip))
 }
 
-func k8sUnmountVolume(ns, name, volume string) error {
-	helper := mountHelperName(name, volume)
+func k8sUnmountVolume(ns, helper string) error {
 	code, err := k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/pods/"+helper, nil, nil)
 	if err != nil && code != 404 {
 		return fmt.Errorf("removing the mount helper pod %s: %v", helper, err)

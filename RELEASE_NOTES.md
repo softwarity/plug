@@ -2,6 +2,43 @@
 
 ## NEXT RELEASE
 
+### `--mount`: a workload's volume or PVC, live and read-write, at a path on your machine
+
+The projection of 2.16-2.19 copied a workload's secrets and configs once at
+session start. Its DATA - a Docker volume, a bind, a PersistentVolumeClaim - was
+out of reach: a process replacing GeoServer could not touch its data directory.
+`--mount` puts that volume at a path here, for the length of the session, read
+and written live, in every mode:
+
+    plug -s geo:8080:8080 --mount /data npm start          # the parked workload's /data, at /data
+    plug -c --env-of geo --mount data:/srv/data python job.py   # its volume "data", at /srv/data
+    plug -c --mount api:/data:/srv/data …                  # the volume of a named workload
+
+Nothing to install on the workstation. The agent starts a helper beside the
+workload - its own image, running Samba with the volume mounted - and plug
+reaches it through the tunnel it already has, then mounts it with the SMB client
+the OS ships with: `mount_smbfs` on macOS (as you, no privilege), the kernel's
+cifs module on Linux (through mount(2), no cifs-utils). Files are written as the
+volume's owner, so the workload reads them back when it returns. The helper is
+tied to the session like a signpost: a session killed with -9 has its helper
+reaped by the agent's sweep within the minute, and its mount unmounted by the
+next run, or by `plug doctor` (`--fix`), which now checks for mounts left by a
+dead session. A tunnel blip or an agent restart re-provisions the helper under
+the same credential; the OS's SMB client reconnects and the mount never moves.
+
+Kubernetes: the helper pod is pinned to the workload's node - ReadWriteOnce is
+one node, not one pod - so it attaches beside a running workload without
+scaling anything; a ReadWriteOncePod claim is refused with the reason. The RBAC
+gains `pods` create/delete and `persistentvolumeclaims` get: re-apply
+`deploy/plug-k8s.yaml`. The agent image carries Samba now (+80 MB, the one
+package it installs; the only SMB2 server written in Go is AGPL and has no
+authentication).
+
+Not yet: Windows (the SMB redirector wants port 445 of a dedicated address,
+which is the half not written; `--mount` says so), and `--mount` with
+`--dockerrun`. Known limit: SQLite/GeoPackage files on an SMB mount are risky
+(range locks); flat files are fine.
+
 ### CI: a failed e2e leg now shows RED instead of being lost among cancelled jobs
 
 When one e2e leg failed it cancelled the whole run itself, which turned its OWN

@@ -56,8 +56,10 @@ func TestMountVerbsValidateBeforeActing(t *testing.T) {
 		{"mount-volume", "web", "data", "40000", strings.Repeat("g", 40)},
 		{"mount-volume", "web", "data", "40000", hexPass, "extra"},
 		{"unmount-volume"},
-		{"unmount-volume", "web", "data", "extra"},
-		{"unmount-volume", "web", "/a/../b"},
+		{"unmount-volume", "web", "data"},
+		{"unmount-volume", "web", "data", "40000", "extra"},
+		{"unmount-volume", "web", "/a/../b", "40000"},
+		{"unmount-volume", "web", "data", "x"},
 	} {
 		if r := try(c...); !strings.HasPrefix(r, "error: ") {
 			t.Errorf("%v: expected a refusal, got %q", c, r)
@@ -65,16 +67,16 @@ func TestMountVerbsValidateBeforeActing(t *testing.T) {
 	}
 }
 
-// Helper names are deterministic per (workload, volume), a valid container and
-// DNS name, and distinct across volumes of one workload - a path and a volume
-// name that differ must not collide.
+// Helper names are deterministic per (workload, volume, session), a valid
+// container and DNS name, and distinct across volumes of one workload and
+// across sessions on one volume.
 func TestMountHelperName(t *testing.T) {
-	a := mountHelperName("web", "data")
-	if a != mountHelperName("web", "data") {
+	a := mountHelperName("web", "data", "40001")
+	if a != mountHelperName("web", "data", "40001") {
 		t.Fatal("the helper name must be deterministic")
 	}
-	if a == mountHelperName("web", "/data") || a == mountHelperName("api", "data") {
-		t.Fatal("distinct (workload, volume) pairs must not share a helper")
+	if a == mountHelperName("web", "/data", "40001") || a == mountHelperName("api", "data", "40001") || a == mountHelperName("web", "data", "40002") {
+		t.Fatal("distinct (workload, volume, session) triples must not share a helper")
 	}
 	if !strings.HasPrefix(a, "plug-mnt-web-") || len(a) != len("plug-mnt-web-")+8 {
 		t.Fatalf("unexpected shape %q", a)
