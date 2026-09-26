@@ -116,23 +116,13 @@ func dockerFilesOf(name string) ([]string, []byte) {
 	if self.service != "" && swarmManager() {
 		return swarmFilesOf(name, self)
 	}
-	var sp struct {
-		Config struct {
-			Labels map[string]string `json:"Labels"`
-		} `json:"Config"`
-	}
-	if code, err := dockerAPI("GET", "/containers/"+signpostName(name)+"/json", nil, &sp); err != nil || code != 200 {
-		return nil, nil
-	}
-	for _, id := range strings.Split(sp.Config.Labels[parkedContainersLabel], ",") {
-		if id = strings.TrimSpace(id); id == "" {
-			continue
+	// The parked (stopped) container first, then the running one a --env-of
+	// names but no one parked - the same candidates env-of reads, so a mounted
+	// file is found whether the workload was taken over or only borrowed.
+	for _, id := range dockerNameCandidates(name, self) {
+		if raw, code, err := dockerArchive(id, secretsMount); err == nil && code == 200 {
+			return []string{secretsMount}, rerootTar(raw, secretsMount)
 		}
-		raw, code, err := dockerArchive(id, secretsMount)
-		if err != nil || code != 200 {
-			return nil, nil // no /run/secrets in this image, or none mounted
-		}
-		return []string{secretsMount}, rerootTar(raw, secretsMount)
 	}
 	return nil, nil
 }

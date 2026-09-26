@@ -115,24 +115,7 @@ func dockerEnvOf(name string) []string {
 	// the name itself finds nothing; the receipt is what finds it.
 	var out []string
 	seen := map[string]bool{}
-	ids := []string{}
-	var sp struct {
-		Config struct {
-			Labels map[string]string `json:"Labels"`
-		} `json:"Config"`
-	}
-	if code, err := dockerAPI("GET", "/containers/"+signpostName(name)+"/json", nil, &sp); err == nil && code == 200 {
-		for _, id := range strings.Split(sp.Config.Labels[parkedContainersLabel], ",") {
-			if id = strings.TrimSpace(id); id != "" {
-				ids = append(ids, id)
-			}
-		}
-	}
-	for _, o := range nameOwners(name, self.attachableNets()) {
-		ids = append(ids, o.id)
-	}
-	ids = append(ids, name)
-	for _, id := range ids {
+	for _, id := range dockerNameCandidates(name, self) {
 		var insp struct {
 			ID     string `json:"Id"`
 			Config struct {
@@ -150,6 +133,33 @@ func dockerEnvOf(name string) []string {
 		out = append(out, insp.Config.Env...)
 	}
 	return out
+}
+
+// dockerNameCandidates lists the container ids a name resolves to, best first:
+// the ones the receipt on the signpost records (a PARKED, stopped container),
+// then the RUNNING containers the name owns, then the name itself. env-of and
+// files-of both need this - a takeover parks a container and reads it stopped,
+// while --env-of names a workload nobody parked and must find it RUNNING, which
+// the receipt-only lookup missed (the mounted file came back empty for -c
+// --env-of on Compose while -s got it).
+func dockerNameCandidates(name string, self selfInfo) []string {
+	var ids []string
+	var sp struct {
+		Config struct {
+			Labels map[string]string `json:"Labels"`
+		} `json:"Config"`
+	}
+	if code, err := dockerAPI("GET", "/containers/"+signpostName(name)+"/json", nil, &sp); err == nil && code == 200 {
+		for _, id := range strings.Split(sp.Config.Labels[parkedContainersLabel], ",") {
+			if id = strings.TrimSpace(id); id != "" {
+				ids = append(ids, id)
+			}
+		}
+	}
+	for _, o := range nameOwners(name, self.attachableNets()) {
+		ids = append(ids, o.id)
+	}
+	return append(ids, name)
 }
 
 // k8sEnvOf reads the environment of the pods behind the parked Service: the
