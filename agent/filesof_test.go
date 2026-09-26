@@ -115,3 +115,19 @@ func namesIn(t *testing.T, tb []byte) []string {
 	}
 	return out
 }
+
+// mergeTars combines a Swarm reply's configs (built in-agent) with its secrets
+// (stashed at park), each a tar, into the one tar files-of returns.
+func TestMergeTarsCombinesBoth(t *testing.T) {
+	a := tarFromFiles(map[string][]byte{"/etc/cfg/app.conf": []byte("CFG")})
+	b := tarFromFiles(map[string][]byte{"/run/secrets/tls": []byte("SECRET")})
+	got := namesIn(t, mergeTars(a, b))
+	want := map[string]bool{"etc/cfg/app.conf": true, "run/secrets/tls": true}
+	if len(got) != 2 || !want[got[0]] || !want[got[1]] {
+		t.Fatalf("merged names = %v, want both members", got)
+	}
+	// Either side empty is a no-op that returns the other's entries.
+	if n := namesIn(t, mergeTars(a, nil)); len(n) != 1 || n[0] != "etc/cfg/app.conf" {
+		t.Fatalf("merge with empty = %v", n)
+	}
+}

@@ -240,10 +240,11 @@ services:
       E2E_DEPLOYED: from-the-cluster
       SHARED_KEY: cluster-value
       FROM_SECRET: from-a-secret
-      CERT_FILE: /run/plug-test/ca
+      CERT_FILE: /run/secrets/tkosecret
     configs:
       - source: tkofile
         target: /run/plug-test/ca
+    secrets: [tkosecret]
     command: ["-listen=:8085", "-text=deployed-tko-linux"]
     networks: [internal]
     deploy: { replicas: 2 }
@@ -253,10 +254,11 @@ services:
       E2E_DEPLOYED: from-the-cluster
       SHARED_KEY: cluster-value
       FROM_SECRET: from-a-secret
-      CERT_FILE: /run/plug-test/ca
+      CERT_FILE: /run/secrets/tkosecret
     configs:
       - source: tkofile
         target: /run/plug-test/ca
+    secrets: [tkosecret]
     command: ["-listen=:8086", "-text=deployed-tko-mac"]
     networks: [internal]
     deploy: { replicas: 2 }
@@ -266,10 +268,11 @@ services:
       E2E_DEPLOYED: from-the-cluster
       SHARED_KEY: cluster-value
       FROM_SECRET: from-a-secret
-      CERT_FILE: /run/plug-test/ca
+      CERT_FILE: /run/secrets/tkosecret
     configs:
       - source: tkofile
         target: /run/plug-test/ca
+    secrets: [tkosecret]
     command: ["-listen=:8087", "-text=deployed-tko-win"]
     networks: [internal]
     deploy: { replicas: 2 }
@@ -281,13 +284,19 @@ configs:
     file: ./services/rabbitmq/definitions.json
   mosquitto_conf:
     file: ./services/mosquitto/mosquitto.conf
-  # The mounted-file canary for the file-projection cell. On Swarm the takeover
-  # scales the service to zero, so a running container's /run/secrets is out of
-  # reach; a CONFIG the agent reads through the API (docker config inspect
-  # returns its data), so the canary is a config, mounted at the same path the
-  # k8s secret and the compose secret use. A Swarm SECRET mounted as a file needs
-  # a read at park time - a TODO.
+  # A config canary alongside the secret one below: the agent reads a Swarm
+  # config through the API (docker config inspect), so files-of carries configs
+  # AND secrets, merged. Mounted, projected, part of the reply - the asserted
+  # file is the secret, which is the harder path.
   tkofile:
+    file: ./tkofile.txt
+
+secrets:
+  # The SECRET canary: a Swarm secret is a file only inside a running task, so
+  # the agent reads it at PARK time (swarmStashSecrets) before the scale-down and
+  # stashes it for files-of. This is what the e2e's CERT_FILE points at, so the
+  # cell proves the read-at-park path, not just the config one.
+  tkosecret:
     file: ./tkofile.txt
 
 networks:

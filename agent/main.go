@@ -1480,6 +1480,7 @@ func restoreServiceParked(name string) error {
 	if code, err := dockerAPI("DELETE", "/services/"+signpostName(name), nil, nil); err != nil && code != 404 {
 		return err
 	}
+	_ = os.Remove(swarmSecretStash(name)) // the parked secrets, no longer needed once restored
 	return nil
 }
 

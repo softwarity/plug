@@ -308,6 +308,10 @@ func swarmServe(name string, pairs []portPair, self selfInfo) {
 		answer("error: creating the %s signpost service: %v", name, err)
 	}
 	if own != nil {
+		// Read the service's mounted SECRETS now, while a task still runs: once
+		// scaled to 0 a Swarm secret is unreadable, so files-of relies on this
+		// stash. Best-effort, before the scale-down.
+		swarmStashSecrets(name, own.name)
 		// Park AFTER the signpost exists: a brief both-in-DNS overlap is benign
 		// round-robin, whereas a no-record gap forwards the lookup to the upstream
 		// resolver (bench-proven on the embedded DNS).

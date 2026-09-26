@@ -2,6 +2,19 @@
 
 ## NEXT RELEASE
 
+### A Swarm service's mounted secrets are projected too, read at park time
+
+The mounted-file projection covered Kubernetes and Compose secrets and Swarm
+configs; a Swarm SECRET was the one gap, because it is a file only inside a
+running task and the takeover scales the service to zero. It is now read at PARK
+time, before the scale-down, from a still-running task, and stashed for files-of
+to hand over merged with the configs; the stash is removed when the service is
+restored. Best-effort on a multi-node swarm, where the task may run on a node
+other than the agent. With this the projection matrix is complete: environment
+everywhere, and mounted files/folders on Kubernetes, Compose and Swarm (secrets
+and configs alike). A data volume (a PVC) is still out - that is the separate,
+opt-in live-mount idea, not this.
+
 ---
 
 ## 2.18.0

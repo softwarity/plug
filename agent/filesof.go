@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/url"
+	"os"
 	"path"
 	"strings"
 )
@@ -127,13 +128,13 @@ func dockerFilesOf(name string) ([]string, []byte) {
 	return nil, nil
 }
 
-// swarmFilesOf builds the tar from the service's CONFIG contents, which Swarm
-// keeps readable through the API (docker config inspect returns the data). A
-// Swarm SECRET is deliberately NOT readable outside a running container, and the
-// takeover has scaled the service to zero, so a secret mounted as a file is out
-// of reach here - reading it would have to happen at park time, before the
-// scale-down, which is a separate change. Configs cover the common case (a CA
-// bundle, a config file) and are what the e2e exercises on Swarm.
+// swarmFilesOf hands over both a Swarm service's CONFIGS and its SECRETS. A
+// config is readable through the API (docker config inspect returns the data),
+// so it is read here and now. A SECRET is only a file inside a RUNNING task, and
+// the takeover scaled the service to zero, so it cannot be read here - it was
+// read at PARK time (swarmStashSecrets, while a task still ran) and kept in a
+// stash on disk, which this merges in. Between them a Swarm service's mounted
+// files come through whichever way they were mounted.
 func swarmFilesOf(name string, self selfInfo) ([]string, []byte) {
 	own := swarmNameOwner(name, self)
 	if own == nil {
@@ -184,10 +185,82 @@ func swarmFilesOf(name string, self selfInfo) ([]string, []byte) {
 		files[target] = data
 		paths = append(paths, target)
 	}
+	tarball := tarFromFiles(files)
+	// The secrets read at park time, if any: merge them in and add their mount
+	// root to the paths so the client repoints the variables that name it.
+	if stash, err := os.ReadFile(swarmSecretStash(name)); err == nil && len(stash) > 0 {
+		tarball = mergeTars(tarball, stash)
+		paths = append(paths, secretsMount)
+	}
 	if len(paths) == 0 {
 		return nil, nil
 	}
-	return paths, tarFromFiles(files)
+	return paths, tarball
+}
+
+// swarmSecretStash is where a parked Swarm service's /run/secrets is kept. A
+// Swarm secret is a file only inside a RUNNING task, and the takeover scales the
+// service to zero, so it is read at park time and stashed here for files-of. Per
+// name, on the agent's own filesystem, removed when the service is restored.
+func swarmSecretStash(name string) string { return "/tmp/plug-secrets-" + name + ".tar" }
+
+// swarmStashSecrets reads /run/secrets from a RUNNING task of the service about
+// to be parked and writes it (rerooted onto its absolute path) to the stash.
+// Best-effort by design: no running task reachable from this node (a multi-node
+// swarm may schedule it elsewhere), no /run/secrets, or any error simply leaves
+// no stash, and files-of hands over the configs alone. Called at park, before
+// the scale-down, while a task is still up to read.
+func swarmStashSecrets(name, service string) {
+	filter := `{"service":["` + service + `"],"desired-state":["running"]}`
+	var tasks []struct {
+		Status struct {
+			ContainerStatus struct {
+				ContainerID string `json:"ContainerID"`
+			} `json:"ContainerStatus"`
+		} `json:"Status"`
+	}
+	if code, err := dockerAPI("GET", "/tasks?filters="+url.QueryEscape(filter), nil, &tasks); err != nil || code != 200 {
+		return
+	}
+	for _, t := range tasks {
+		id := t.Status.ContainerStatus.ContainerID
+		if id == "" {
+			continue
+		}
+		if raw, code, err := dockerArchive(id, secretsMount); err == nil && code == 200 {
+			_ = os.WriteFile(swarmSecretStash(name), rerootTar(raw, secretsMount), 0o600)
+			return
+		}
+	}
+}
+
+// mergeTars concatenates the entries of two tars into one. Either may be empty;
+// the result carries every regular file and directory of both, which is how a
+// Swarm reply combines its configs (built here) with its secrets (stashed at
+// park) into the single tar files-of returns.
+func mergeTars(a, b []byte) []byte {
+	var out bytes.Buffer
+	tw := tar.NewWriter(&out)
+	for _, in := range [][]byte{a, b} {
+		if len(in) == 0 {
+			continue
+		}
+		tr := tar.NewReader(bytes.NewReader(in))
+		for {
+			h, err := tr.Next()
+			if err != nil {
+				break
+			}
+			if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeDir {
+				continue
+			}
+			if tw.WriteHeader(h) == nil {
+				io.Copy(tw, tr)
+			}
+		}
+	}
+	tw.Close()
+	return out.Bytes()
 }
 
 // rerootTar rewrites a tar produced for a single path (its members rooted at the

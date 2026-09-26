@@ -43,10 +43,12 @@ déjà, sans nouveau droit RBAC.
       conteneur arrêté. `rerootTar` remet les membres sur leur chemin absolu.
 - [x] **Swarm - configs** : lues via l'API (`config inspect` rend la donnée),
       tar construit côté agent (`tarFromFiles`).
-- [ ] **Swarm - SECRETS montés en fichier** : non lisibles hors d'un conteneur
-      vivant, et le takeover scale à 0. Reste à **lire au park**, avant le
-      scale-down, et mettre en réserve. (Compose, lui, est couvert : l'archive
-      lit le conteneur arrêté.)
+- [x] **Swarm - SECRETS montés en fichier** : lus **au park** (swarmStashSecrets,
+      via l'archive d'une tâche encore vivante) avant le scale-down, mis en
+      réserve sur disque par nom, fusionnés aux configs par files-of, nettoyés à
+      la restauration. Limite : swarm multi-nœuds, la tâche peut être sur un
+      autre nœud que l'agent (best-effort). e2e : secret Swarm + config, la
+      cellule asserte le secret.
 - [x] **Tests en face** : purs (rerootTar, tarFromFiles, projectableMounts,
       option B, flags dockerrun, untar clamp) + cellule e2e ×3 familles (secret
       k8s / secret Compose / config Swarm montés au même chemin, lus par un
