@@ -2,6 +2,16 @@
 
 ## NEXT RELEASE
 
+### CI: a failed e2e leg now shows RED instead of being lost among cancelled jobs
+
+When one e2e leg failed it cancelled the whole run itself, which turned its OWN
+status from failure to cancelled - every job showed "cancelled" and finding what
+actually broke meant digging into step logs. The per-leg self-cancel is gone; a
+leg now simply fails (stays red), and a separate abort-on-fail job cancels the
+run the moment any leg fails, so the others and their clusters still stop within
+the minute. The kill-cluster cleanup jobs run as before. Developer-facing only;
+no change to plug itself.
+
 ---
 
 ## 2.19.0

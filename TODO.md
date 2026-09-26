@@ -56,15 +56,37 @@ déjà, sans nouveau droit RBAC.
       option B, flags dockerrun, untar clamp) + cellule e2e ×3 familles (secret
       k8s / secret Compose / config Swarm montés au même chemin, lus par un
       process local). MàJ coverage + comparatif faites.
-- [ ] **Option « live mount » (plus tard, opt-in)** : pour un volume VIVANT ou
-      GROS (typiquement un **geoserver lancé en local** voulant les ressources du
-      cluster - data d'un PVC), la matérialisation one-shot ne suffit pas. Modèle
-      NFS-like : montage FUSE côté client dont les lectures sont relayées dans le
-      tunnel (l'agent fait `exec cat`/stream à la demande), idéalement **sshfs sur
-      le transport SSH déjà là** (exposer un sous-système SFTP *scopé* côté agent,
-      qui refuse `subsystem` aujourd'hui). Coût assumé : dépendance **FUSE**
-      (macFUSE/WinFSP/libfuse) + privilège de montage + différences d'OS. À garder
-      hors du chemin par défaut.
+- [ ] **Montage VIVANT d'un volume de données / PVC (R&D, prototype 26/09)** :
+      lire ET écrire un vrai volume (data-dir d'un **geoserver lancé en local**),
+      pas juste un fichier de secret/config. **Aujourd'hui : rien, ni lecture ni
+      écriture.** La matérialisation one-shot (2.16-2.19) ne couvre PAS ce cas.
+
+      **Ce qui a été dé-risqué (prototypé sur le Mac, scratchpad, non commité) :**
+      - La **tuyauterie NFS-loopback marche** : plug embarque un serveur NFS
+        userspace (go-nfs, ~5 Mo) sur 127.0.0.1 ; le **noyau** monte via son
+        client NFS **natif** et route les IO dessus (pas d'interception de
+        syscalls). Read-write validé contre un dossier local.
+      - **Client Linux (VM Docker) OK** ; **client macOS 26 → EPERM en lecture**
+        (ACCESS de go-nfs mal géré, ou durcissement macOS 26) - à élucider.
+      - **`--dockerrun`-côté-Linux = la voie tout-OS** : le montage se fait dans
+        le conteneur Linux (client NFS Linux, tolérant) via un volume Docker NFS
+        (`docker volume create --driver local -o type=nfs`), donc l'OS hôte et
+        l'EPERM macOS 26 sont hors sujet. Read-write prouvé depuis un conteneur.
+
+      **Le verrou dur restant (indépendant de la techno de montage) :** la donnée
+      d'un PVC n'est atteignable qu'à travers un pod qui le monte. Pour un accès
+      **exclusif propre** (écrivain unique), il faut scaler le workload à 0 (libère
+      le PVC RWO) et monter le volume **ailleurs** → un **pod helper** (l'agent ne
+      peut pas monter un PVC à chaud, spec de pod immuable). Le pod en plus est le
+      **prix de l'exclusivité**. Sinon (workload maintenu vivant + exec) : lecture
+      partagée OK mais **double-écrivain** (le process du pod écrit aussi) et
+      distroless exclu (pas de shell à exec).
+
+      **Reco quand on y reviendra :** back-end **serveur NFS près de la donnée**
+      (pod helper montant le PVC), workload à 0, `--dockerrun` côté Linux ; mesurer
+      la latence par op avant d'industrialiser. Alternatives écartées : recopie
+      totale (coût de copie sur gros volume), cache/read-ahead (complexité), sync
+      (read-mostly seulement). C'est une **session dédiée**, pas un patch.
 
 ## 🔴 Sécurité - suivi en privé
 
