@@ -198,7 +198,10 @@ import { RouterLink } from '@angular/router';
       cluster's, the container's own plumbing (<code>PATH</code>, <code>KUBERNETES_*</code>) left
       out, <code>--no-env</code> to opt out, <code>--env-of &lt;name&gt;</code> to take another
       workload's instead (a <code>-c</code> script with a service's credentials, a <code>-s</code>
-      borrowing its neighbour's). The peers those variables name the Kubernetes way,
+      borrowing its neighbour's). Its <strong>mounted secret and config files</strong> come too - a
+      CA in PEM, a keystore - read through the same exec, materialised for the session and the
+      variables that name their path repointed, with no FUSE mount (or mounted at their exact
+      path under <code>--dockerrun</code>). The peers those variables name the Kubernetes way,
       <code>rabbitmq.shop.svc.cluster.local</code>, resolve through plug like the bare name does,
       whole, so a Service in another namespace is reached as the pod reaches it. A name held by another live plug session is refused, and the refusal
       <a routerLink="/troubleshooting">names the process holding it</a>. That claim is the agent's,

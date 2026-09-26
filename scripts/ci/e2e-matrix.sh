@@ -452,7 +452,7 @@ do_env() {
     # to a file, printed only when the cell fails: three k8s legs answered
     # "unset" for every variable and the log held nothing to say why.
     env $2 perl -e 'alarm 60; exec @ARGV or exit 127' "$PLUG" --host "$ip" --port "$port" $1 -s "$tname:$sport:$sport" \
-      bash -c 'echo "${E2E_DEPLOYED:-unset}/${SHARED_KEY:-unset}/${FROM_SECRET:-unset}"' 2>>/tmp/wenv.err | tr -d '\r' | tail -1
+      bash -c 'echo "${E2E_DEPLOYED:-unset}/${SHARED_KEY:-unset}/${FROM_SECRET:-unset}/$(cat "${CERT_FILE:-/none}" 2>/dev/null || echo unset)"' 2>>/tmp/wenv.err | tr -d '\r' | tail -1
   }
   : > /tmp/wenv.err
   local r1 r2 r3 r4
@@ -464,18 +464,18 @@ do_env() {
   # The same three canaries, from the same service, with nothing taken over.
   restored || true
   r4="$(perl -e 'alarm 60; exec @ARGV or exit 127' "$PLUG" --host "$ip" --port "$port" -c --env-of "$tname" \
-    bash -c 'echo "${E2E_DEPLOYED:-unset}/${SHARED_KEY:-unset}/${FROM_SECRET:-unset}"' 2>>/tmp/wenv.err | tr -d '\r' | tail -1)"
+    bash -c 'echo "${E2E_DEPLOYED:-unset}/${SHARED_KEY:-unset}/${FROM_SECRET:-unset}/$(cat "${CERT_FILE:-/none}" 2>/dev/null || echo unset)"' 2>>/tmp/wenv.err | tr -d '\r' | tail -1)"
   # FROM_SECRET is the one that proves the read is of the RUNNING process: on
   # Kubernetes it is a secretKeyRef, which the pod spec cannot answer, so a
   # collector that fell back to the spec (no pods/exec, or a handshake the API
   # server maps to the wrong verb) hands it over empty and this cell goes red.
-  if [ "$r1" = "from-the-cluster/cluster-value/from-a-secret" ] && [ "$r2" = "from-the-cluster/from-the-caller/from-a-secret" ] && [ "$r3" = "unset/unset/unset" ] && [ "$r4" = "from-the-cluster/cluster-value/from-a-secret" ]; then
-    echo "workload env OK: projected ($r1), the caller wins ($r2), --no-env hands over nothing ($r3), -c --env-of reads a running one ($r4)"
-    sum "**workload env (projected, caller wins, --no-env, -c --env-of)** ✅"
+  if [ "$r1" = "from-the-cluster/cluster-value/from-a-secret/from-a-file" ] && [ "$r2" = "from-the-cluster/from-the-caller/from-a-secret/from-a-file" ] && [ "$r3" = "unset/unset/unset/unset" ] && [ "$r4" = "from-the-cluster/cluster-value/from-a-secret/from-a-file" ]; then
+    echo "workload env OK: projected ($r1), the caller wins ($r2), --no-env hands over nothing ($r3), -c --env-of reads a running one ($r4); the 4th field is a MOUNTED FILE, projected and read at its path"
+    sum "**workload env (projected+file, caller wins, --no-env, -c --env-of)** ✅"
   else
-    echo "--- workload env FAIL: projected='$r1' (want from-the-cluster/cluster-value/from-a-secret) caller-wins='$r2' (want from-the-cluster/from-the-caller/from-a-secret) no-env='$r3' (want unset/unset/unset) env-of='$r4' (want from-the-cluster/cluster-value/from-a-secret)"
+    echo "--- workload env FAIL: projected='$r1' (want from-the-cluster/cluster-value/from-a-secret/from-a-file) caller-wins='$r2' (want from-the-cluster/from-the-caller/from-a-secret/from-a-file) no-env='$r3' (want unset/unset/unset/unset) env-of='$r4' (want from-the-cluster/cluster-value/from-a-secret/from-a-file)"
     echo "    --- what plug said across the four sessions ---"; grep -E "^\[plug\]" /tmp/wenv.err | grep -vE "using cluster version|serving |path verified|proving the path" | head -24 | sed "s/^/    /"
-    sum "**workload env (projected, caller wins, --no-env, -c --env-of)** ❌: \`$r1\` · \`$r2\` · \`$r3\` · \`$r4\`"; return 1
+    sum "**workload env (projected+file, caller wins, --no-env, -c --env-of)** ❌: \`$r1\` · \`$r2\` · \`$r3\` · \`$r4\`"; return 1
   fi
 
   # The privilege the child does NOT get. plug holds root on macOS (setuid) or

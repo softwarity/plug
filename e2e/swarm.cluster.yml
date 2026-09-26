@@ -240,6 +240,10 @@ services:
       E2E_DEPLOYED: from-the-cluster
       SHARED_KEY: cluster-value
       FROM_SECRET: from-a-secret
+      CERT_FILE: /run/plug-test/ca
+    configs:
+      - source: tkofile
+        target: /run/plug-test/ca
     command: ["-listen=:8085", "-text=deployed-tko-linux"]
     networks: [internal]
     deploy: { replicas: 2 }
@@ -249,6 +253,10 @@ services:
       E2E_DEPLOYED: from-the-cluster
       SHARED_KEY: cluster-value
       FROM_SECRET: from-a-secret
+      CERT_FILE: /run/plug-test/ca
+    configs:
+      - source: tkofile
+        target: /run/plug-test/ca
     command: ["-listen=:8086", "-text=deployed-tko-mac"]
     networks: [internal]
     deploy: { replicas: 2 }
@@ -258,6 +266,10 @@ services:
       E2E_DEPLOYED: from-the-cluster
       SHARED_KEY: cluster-value
       FROM_SECRET: from-a-secret
+      CERT_FILE: /run/plug-test/ca
+    configs:
+      - source: tkofile
+        target: /run/plug-test/ca
     command: ["-listen=:8087", "-text=deployed-tko-win"]
     networks: [internal]
     deploy: { replicas: 2 }
@@ -269,6 +281,14 @@ configs:
     file: ./services/rabbitmq/definitions.json
   mosquitto_conf:
     file: ./services/mosquitto/mosquitto.conf
+  # The mounted-file canary for the file-projection cell. On Swarm the takeover
+  # scales the service to zero, so a running container's /run/secrets is out of
+  # reach; a CONFIG the agent reads through the API (docker config inspect
+  # returns its data), so the canary is a config, mounted at the same path the
+  # k8s secret and the compose secret use. A Swarm SECRET mounted as a file needs
+  # a read at park time - a TODO.
+  tkofile:
+    file: ./tkofile.txt
 
 networks:
   internal:

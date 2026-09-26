@@ -31,30 +31,26 @@ déjà, sans nouveau droit RBAC.
 
 - [x] **Prérequis - transport multi-ligne** (verbe `env-ofz`, NUL-délimité) :
       fait, `3198c96`. Un fichier / une valeur PEM peut désormais transiter.
-- [ ] **Agent k8s** : verbe `files-of <name>` → pod derrière le sélecteur parké
-      (réutiliser la recherche de pod de `k8sEnvOf`), énumérer les `volumeMounts`
-      issus de volumes `secret`/`configMap`/`projected`, **exclure le mount du
-      ServiceAccount** (`/var/run/secrets/kubernetes.io/...`) comme on exclut
-      `KUBERNETES_*` en env, `exec tar cf - <paths>`, répondre en **base64(tar)**
-      (protocole texte + convention `error:` + nego de version conservées).
-      Distroless (pas de `tar`) → note, comme pour l'env.
-- [ ] **Client - process local (`-s` / `-c --env-of`), option B** : dé-tar dans
-      un temp de session, puis **réécrire les variables qui pointent un chemin
-      monté** (`NODE_EXTRA_CA_CERTS`, `sslrootcert`, `SSL_CERT_FILE`, …) vers le
-      temp. Limite assumée : un chemin en dur dans le code (pas via variable)
-      n'est pas redirigé.
-- [ ] **Client - `--dockerrun`** : dé-tar dans un temp, ajouter `-v
-      tmp/<path>:<path>:ro` (chemins exacts, aucune pollution de l'hôte) + les
-      `-e` de l'env projeté sur le `docker run` interne.
-- [ ] **Swarm - traité à part** : un secret Swarm (`/run/secrets/<name>`) n'est
-      lisible que DANS un conteneur en cours ; or le takeover scale le service à
-      0. Donc lire les fichiers **au moment du park**, depuis le conteneur encore
-      vivant, avant le scale-down, et les mettre en réserve (temp/reçu). Sinon
-      note « non lisible sur Swarm ».
-- [ ] **Tests en face** : round-trip base64(tar) → dé-tar (client, pur) ;
-      sélection des mounts + exclusion SA (agent, pur) ; réécriture option B
-      (pur) ; cellule e2e k8s qui monte un secret en fichier et vérifie qu'un
-      process local le lit au bon chemin. MàJ coverage + comparatif.
+- [x] **Agent k8s** : verbe `files-of <name>` → pod derrière le sélecteur parké,
+      `volumeMounts` de volumes secret/configMap/projected, exclusion du mount SA,
+      `exec tar`, base64(tar). Fait.
+- [x] **Client - process local (`-s` / `-c --env-of`), option B** : dé-tar +
+      réécriture des variables de chemin. Fait.
+- [x] **Client - `--dockerrun`** : `-v tmp/<path>:<path>:ro` (chemins exacts) +
+      `-e` de l'env projeté sur le `docker run` interne. Fait.
+- [x] **Docker/Compose** : lecture du `/run/secrets` du conteneur parké (arrêté)
+      via l'API archive - vérifié : l'archive lit un secret bind-monté sur un
+      conteneur arrêté. `rerootTar` remet les membres sur leur chemin absolu.
+- [x] **Swarm - configs** : lues via l'API (`config inspect` rend la donnée),
+      tar construit côté agent (`tarFromFiles`).
+- [ ] **Swarm - SECRETS montés en fichier** : non lisibles hors d'un conteneur
+      vivant, et le takeover scale à 0. Reste à **lire au park**, avant le
+      scale-down, et mettre en réserve. (Compose, lui, est couvert : l'archive
+      lit le conteneur arrêté.)
+- [x] **Tests en face** : purs (rerootTar, tarFromFiles, projectableMounts,
+      option B, flags dockerrun, untar clamp) + cellule e2e ×3 familles (secret
+      k8s / secret Compose / config Swarm montés au même chemin, lus par un
+      process local). MàJ coverage + comparatif faites.
 - [ ] **Option « live mount » (plus tard, opt-in)** : pour un volume VIVANT ou
       GROS (typiquement un **geoserver lancé en local** voulant les ressources du
       cluster - data d'un PVC), la matérialisation one-shot ne suffit pas. Modèle

@@ -70,6 +70,8 @@ services:
       E2E_DEPLOYED: from-the-cluster
       SHARED_KEY: cluster-value
       FROM_SECRET: from-a-secret
+      CERT_FILE: /run/secrets/tkofile
+    secrets: [tkofile]
     command: ["-listen=:8085", "-text=deployed-tko-linux"]
     networks: [internal]
   tko-mac:
@@ -78,6 +80,8 @@ services:
       E2E_DEPLOYED: from-the-cluster
       SHARED_KEY: cluster-value
       FROM_SECRET: from-a-secret
+      CERT_FILE: /run/secrets/tkofile
+    secrets: [tkofile]
     command: ["-listen=:8086", "-text=deployed-tko-mac"]
     networks: [internal]
   tko-win:
@@ -86,6 +90,8 @@ services:
       E2E_DEPLOYED: from-the-cluster
       SHARED_KEY: cluster-value
       FROM_SECRET: from-a-secret
+      CERT_FILE: /run/secrets/tkofile
+    secrets: [tkofile]
     command: ["-listen=:8087", "-text=deployed-tko-win"]
     networks: [internal]
   # The arm64 leg runs on THIS cluster too, and it is Linux: with a target
@@ -100,6 +106,8 @@ services:
       E2E_DEPLOYED: from-the-cluster
       SHARED_KEY: cluster-value
       FROM_SECRET: from-a-secret
+      CERT_FILE: /run/secrets/tkofile
+    secrets: [tkofile]
     command: ["-listen=:8088", "-text=deployed-tko-arm"]
     networks: [internal]
 
@@ -203,3 +211,12 @@ services:
     image: hashicorp/http-echo:1.0.0
     command: ["-listen=:8117", "-text=deployed-res-win"]
     networks: [internal]
+
+# The mounted-secret canary for the file-projection cell: a compose secret,
+# mounted by docker at /run/secrets/tkofile in every tko-* takeover target. The
+# agent reads it from the PARKED (stopped) container through the archive API -
+# which reads a bind-mounted secret on a stopped container, verified - and the
+# plugged process gets it repointed under its session temp.
+secrets:
+  tkofile:
+    file: ./tkofile.txt

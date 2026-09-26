@@ -24,6 +24,15 @@ kind: Secret
 metadata: { name: tko-secret }
 stringData: { password: from-a-secret }
 ---
+# The mounted-FILE canary for the file-projection cell: a secret mounted as a
+# file (a CA in PEM is the real case) rather than fed through a variable. The
+# takeover repoints the Service but leaves the pod running, so the agent reads
+# it with `exec tar` and the plugged process gets it under its session temp.
+apiVersion: v1
+kind: Secret
+metadata: { name: tko-file }
+stringData: { ca: from-a-file }
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -454,7 +463,12 @@ spec:
             - { name: SHARED_KEY, value: cluster-value }
             - name: FROM_SECRET
               valueFrom: { secretKeyRef: { name: tko-secret, key: password } }
+            - { name: CERT_FILE, value: /run/plug-test/ca }
           ports: [{ containerPort: 8085 }]
+          volumeMounts:
+            - { name: tkofile, mountPath: /run/plug-test, readOnly: true }
+      volumes:
+        - { name: tkofile, secret: { secretName: tko-file, items: [{ key: ca, path: ca }] } }
 ---
 apiVersion: v1
 kind: Service
@@ -490,7 +504,12 @@ spec:
             - { name: SHARED_KEY, value: cluster-value }
             - name: FROM_SECRET
               valueFrom: { secretKeyRef: { name: tko-secret, key: password } }
+            - { name: CERT_FILE, value: /run/plug-test/ca }
           ports: [{ containerPort: 8086 }]
+          volumeMounts:
+            - { name: tkofile, mountPath: /run/plug-test, readOnly: true }
+      volumes:
+        - { name: tkofile, secret: { secretName: tko-file, items: [{ key: ca, path: ca }] } }
 ---
 apiVersion: v1
 kind: Service
@@ -526,7 +545,12 @@ spec:
             - { name: SHARED_KEY, value: cluster-value }
             - name: FROM_SECRET
               valueFrom: { secretKeyRef: { name: tko-secret, key: password } }
+            - { name: CERT_FILE, value: /run/plug-test/ca }
           ports: [{ containerPort: 8087 }]
+          volumeMounts:
+            - { name: tkofile, mountPath: /run/plug-test, readOnly: true }
+      volumes:
+        - { name: tkofile, secret: { secretName: tko-file, items: [{ key: ca, path: ca }] } }
 ---
 apiVersion: v1
 kind: Service
