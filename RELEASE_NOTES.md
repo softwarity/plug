@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.18.0
+
 ### The cluster's environment now WINS by default; --no-env=KEY keeps yours
 
 The projection introduced in 2.16 let the caller's environment win: a variable
