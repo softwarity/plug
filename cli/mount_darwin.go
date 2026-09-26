@@ -52,6 +52,15 @@ func mountSMB(local, share, user, pass, path string) error {
 		}
 		return errors.New(msg)
 	}
+	// Mounted; can this process, and so the command (same responsible app),
+	// look inside? TCC decides that per APP, not per user, and answers EPERM
+	// on a mount that is otherwise perfect. Say what it is and where the
+	// switch lives, once, rather than let the command fail on every file.
+	if _, err := os.ReadDir(path); err != nil && errors.Is(err, syscall.EPERM) {
+		info("macOS refuses this process access to network volumes (%s: %v).", path, err)
+		info("      Allow the app you run plug from (Terminal, iTerm, your editor) under System Settings >")
+		info("      Privacy & Security > Files and Folders > Network Volumes, or run plug from Terminal.")
+	}
 	return nil
 }
 
