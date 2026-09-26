@@ -752,7 +752,7 @@ jobs:
           seen=0
           while :; do
             legs=$(gh api "repos/$repo/actions/runs/$run/jobs?per_page=100" \
-              --jq '[.jobs[] | select(.name|test("e2e"))]')
+              --jq '[.jobs[] | select(.name|test("^e2e-"))]')
             failed=$(printf '%s' "$legs" | jq '[.[] | select(.conclusion=="failure")] | length')
             if [ "${failed:-0}" -gt 0 ]; then
               echo "an e2e leg failed -> cancelling the run (the failed leg keeps its red)"
