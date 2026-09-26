@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.19.0
+
 ### A Swarm service's mounted secrets are projected too, read at park time
 
 The mounted-file projection covered Kubernetes and Compose secrets and Swarm
