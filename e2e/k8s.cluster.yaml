@@ -558,3 +558,114 @@ metadata: { name: tko-win }
 spec:
   selector: { app: tko-win }
   ports: [{ port: 8087, targetPort: 8087 }]
+---
+# The live-mount target (--mount) for the linux leg: busybox serving its
+# PersistentVolumeClaim over http, so what the leg writes through the mount is
+# read back through the cluster. kind's default StorageClass binds the claim
+# when the pod is scheduled; the helper pod is pinned to that node (RWO).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: vol-linux }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 64Mi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: vol-linux }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: vol-linux } }
+  template:
+    metadata: { labels: { app: vol-linux } }
+    spec:
+      containers:
+        - name: vol
+          image: busybox:1.37
+          command: ["sh", "-c", "mkdir -p /data && printf seed-from-vol-linux > /data/seed.txt && exec httpd -f -p 8120 -h /data"]
+          ports: [{ containerPort: 8120 }]
+          volumeMounts:
+            - { name: data, mountPath: /data }
+      volumes:
+        - { name: data, persistentVolumeClaim: { claimName: vol-linux } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: vol-linux }
+spec:
+  selector: { app: vol-linux }
+  ports: [{ port: 8120, targetPort: 8120 }]
+---
+# The live-mount target (--mount) for the mac leg: busybox serving its
+# PersistentVolumeClaim over http, so what the leg writes through the mount is
+# read back through the cluster. kind's default StorageClass binds the claim
+# when the pod is scheduled; the helper pod is pinned to that node (RWO).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: vol-mac }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 64Mi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: vol-mac }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: vol-mac } }
+  template:
+    metadata: { labels: { app: vol-mac } }
+    spec:
+      containers:
+        - name: vol
+          image: busybox:1.37
+          command: ["sh", "-c", "mkdir -p /data && printf seed-from-vol-mac > /data/seed.txt && exec httpd -f -p 8121 -h /data"]
+          ports: [{ containerPort: 8121 }]
+          volumeMounts:
+            - { name: data, mountPath: /data }
+      volumes:
+        - { name: data, persistentVolumeClaim: { claimName: vol-mac } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: vol-mac }
+spec:
+  selector: { app: vol-mac }
+  ports: [{ port: 8121, targetPort: 8121 }]
+---
+# The live-mount target (--mount) for the win leg: busybox serving its
+# PersistentVolumeClaim over http, so what the leg writes through the mount is
+# read back through the cluster. kind's default StorageClass binds the claim
+# when the pod is scheduled; the helper pod is pinned to that node (RWO).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: vol-win }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 64Mi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: vol-win }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: vol-win } }
+  template:
+    metadata: { labels: { app: vol-win } }
+    spec:
+      containers:
+        - name: vol
+          image: busybox:1.37
+          command: ["sh", "-c", "mkdir -p /data && printf seed-from-vol-win > /data/seed.txt && exec httpd -f -p 8122 -h /data"]
+          ports: [{ containerPort: 8122 }]
+          volumeMounts:
+            - { name: data, mountPath: /data }
+      volumes:
+        - { name: data, persistentVolumeClaim: { claimName: vol-win } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: vol-win }
+spec:
+  selector: { app: vol-win }
+  ports: [{ port: 8122, targetPort: 8122 }]

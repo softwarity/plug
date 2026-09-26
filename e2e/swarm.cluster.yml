@@ -232,6 +232,28 @@ services:
     image: plug-e2e/flaky:e2e
     networks: [internal]
 
+  # The live-mount targets (--mount), one per leg: busybox serving its VOLUME
+  # over http, so what a leg writes through the mount is read back through the
+  # cluster. One replica: a local volume lives on one node.
+  vol-linux:
+    image: busybox:1.37
+    command: ["sh", "-c", "mkdir -p /data && printf seed-from-vol-linux > /data/seed.txt && exec httpd -f -p 8120 -h /data"]
+    volumes: [vol-linux:/data]
+    networks: [internal]
+    deploy: { replicas: 1 }
+  vol-mac:
+    image: busybox:1.37
+    command: ["sh", "-c", "mkdir -p /data && printf seed-from-vol-mac > /data/seed.txt && exec httpd -f -p 8121 -h /data"]
+    volumes: [vol-mac:/data]
+    networks: [internal]
+    deploy: { replicas: 1 }
+  vol-win:
+    image: busybox:1.37
+    command: ["sh", "-c", "mkdir -p /data && printf seed-from-vol-win > /data/seed.txt && exec httpd -f -p 8122 -h /data"]
+    volumes: [vol-win:/data]
+    networks: [internal]
+    deploy: { replicas: 1 }
+
   # Takeover targets — 2 replicas each: the restore must come back to the
   # ORIGINAL count, and 2 proves restore-to-N (the bench only proved it live).
   tko-linux:
@@ -302,3 +324,8 @@ secrets:
 networks:
   internal:
     driver: overlay # NOT attachable — the shape the -s signpost must handle
+
+volumes:
+  vol-linux: {}
+  vol-mac: {}
+  vol-win: {}

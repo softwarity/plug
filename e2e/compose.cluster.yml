@@ -212,6 +212,26 @@ services:
     command: ["-listen=:8117", "-text=deployed-res-win"]
     networks: [internal]
 
+  # The live-mount targets (--mount), one per leg so three legs mount three
+  # volumes at once: busybox serving its VOLUME over http, so what a leg writes
+  # through the mount is read back through the cluster (plug curl), which
+  # holds on every OS whatever the local shell may read (macOS TCC).
+  vol-linux:
+    image: busybox:1.37
+    command: ["sh", "-c", "mkdir -p /data && printf seed-from-vol-linux > /data/seed.txt && exec httpd -f -p 8120 -h /data"]
+    volumes: [vol-linux:/data]
+    networks: [internal]
+  vol-mac:
+    image: busybox:1.37
+    command: ["sh", "-c", "mkdir -p /data && printf seed-from-vol-mac > /data/seed.txt && exec httpd -f -p 8121 -h /data"]
+    volumes: [vol-mac:/data]
+    networks: [internal]
+  vol-win:
+    image: busybox:1.37
+    command: ["sh", "-c", "mkdir -p /data && printf seed-from-vol-win > /data/seed.txt && exec httpd -f -p 8122 -h /data"]
+    volumes: [vol-win:/data]
+    networks: [internal]
+
 # The mounted-secret canary for the file-projection cell: a compose secret,
 # mounted by docker at /run/secrets/tkofile in every tko-* takeover target. The
 # agent reads it from the PARKED (stopped) container through the archive API -
@@ -220,3 +240,8 @@ services:
 secrets:
   tkofile:
     file: ./tkofile.txt
+
+volumes:
+  vol-linux: {}
+  vol-mac: {}
+  vol-win: {}

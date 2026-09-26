@@ -921,6 +921,10 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh env "$A" "$B" 2222
+      - name: Live mount — a workload's volume at a local path, read and written (--mount)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh mount "$A" "$B" 2222
       - name: Protocol matrix (4 langs × 8 protocols)
         if: always()
         shell: bash
@@ -1243,6 +1247,10 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh env "$A" "$B" 2222
+      - name: Live mount — a workload's volume at a local path, read and written (--mount)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh mount "$A" "$B" 2222
       - name: Protocol matrix (4 langs × 8 protocols)
         if: always()
         shell: bash
@@ -1450,6 +1458,10 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh env "$A" "$B" 2222
+      - name: Live mount — a workload's volume at a local path, read and written (--mount)
+        if: always()
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh mount "$A" "$B" 2222
       - name: Protocol matrix (4 langs × 8 protocols)
         if: always()
         shell: bash
