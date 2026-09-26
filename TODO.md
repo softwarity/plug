@@ -56,37 +56,77 @@ déjà, sans nouveau droit RBAC.
       option B, flags dockerrun, untar clamp) + cellule e2e ×3 familles (secret
       k8s / secret Compose / config Swarm montés au même chemin, lus par un
       process local). MàJ coverage + comparatif faites.
-- [ ] **Montage VIVANT d'un volume de données / PVC (R&D, prototype 26/09)** :
-      lire ET écrire un vrai volume (data-dir d'un **geoserver lancé en local**),
-      pas juste un fichier de secret/config. **Aujourd'hui : rien, ni lecture ni
-      écriture.** La matérialisation one-shot (2.16-2.19) ne couvre PAS ce cas.
+- [ ] **Montage VIVANT d'un volume / PVC (PLAN, session dédiée)** : lire ET
+      écrire un vrai volume derrière un `-s` (takeover), un `-c --env-of`, ou
+      `--dockerrun`, en process natif, sur macOS/Windows/Linux. Aujourd'hui : rien.
+      La matérialisation one-shot (2.16-2.19) ne couvre que les fichiers de
+      secret/config, pas un volume de données.
 
-      **Ce qui a été dé-risqué (prototypé sur le Mac, scratchpad, non commité) :**
-      - La **tuyauterie NFS-loopback marche** : plug embarque un serveur NFS
-        userspace (go-nfs, ~5 Mo) sur 127.0.0.1 ; le **noyau** monte via son
-        client NFS **natif** et route les IO dessus (pas d'interception de
-        syscalls). Read-write validé contre un dossier local.
-      - **Client Linux (VM Docker) OK** ; **client macOS 26 → EPERM en lecture**
-        (ACCESS de go-nfs mal géré, ou durcissement macOS 26) - à élucider.
-      - **`--dockerrun`-côté-Linux = la voie tout-OS** : le montage se fait dans
-        le conteneur Linux (client NFS Linux, tolérant) via un volume Docker NFS
-        (`docker volume create --driver local -o type=nfs`), donc l'OS hôte et
-        l'EPERM macOS 26 sont hors sujet. Read-write prouvé depuis un conteneur.
+      **Architecture retenue (FUSE client + réciproque SFTP dans un helper) :**
+      ```
+      process (poste) → FUSE (attrape open/read/write) → tunnel SSH plug
+                      → agent → helper (SFTP sur le volume monté) → exécute → répond
+      ```
+      - **Client** : plug monte un FS FUSE au chemin exact AVANT de lancer la
+        commande (donc tous modes). Motif sshfs = FUSE ↔ SFTP, réutilise le SSH
+        de plug. Montage **sans privilège** : fuse-t (macOS, PAS de kext, pas de
+        reboot, pas de sudo), fusermount (Linux), WinFsp (Windows).
+      - **Helper** : conteneur (Docker, via le socket) / pod (k8s) / sur le bon
+        nœud (Swarm), qui **monte le volume normalement** et sert le SFTP. Aucun
+        FUSE côté helper. Monter le PVC = ce que fait le workload, donc NORMAL,
+        pas un défaut. k8s : workload à 0 pour libérer un RWO, helper créé avec le
+        nom du PVC lu dans le spec.
+      - Rappel : donnée dans **SeaweedFS/S3/WebDAV** = store réseau, PAS ce
+        chantier (plug la tunnelise déjà comme un service).
 
-      **Le verrou dur restant (indépendant de la techno de montage) :** la donnée
-      d'un PVC n'est atteignable qu'à travers un pod qui le monte. Pour un accès
-      **exclusif propre** (écrivain unique), il faut scaler le workload à 0 (libère
-      le PVC RWO) et monter le volume **ailleurs** → un **pod helper** (l'agent ne
-      peut pas monter un PVC à chaud, spec de pod immuable). Le pod en plus est le
-      **prix de l'exclusivité**. Sinon (workload maintenu vivant + exec) : lecture
-      partagée OK mais **double-écrivain** (le process du pod écrit aussi) et
-      distroless exclu (pas de shell à exec).
+      **Chantiers :** (1) agent : créer/détruire le helper + montage volume +
+      sous-système SFTP scopé ; (2) client : monter/démonter le FUSE (fuse-t/
+      fusermount/WinFsp) au chemin exact, par mode ; (3) cycle de vie + reaping ;
+      (4) `doctor` : détecter et réparer un état resté sale.
 
-      **Reco quand on y reviendra :** back-end **serveur NFS près de la donnée**
-      (pod helper montant le PVC), workload à 0, `--dockerrun` côté Linux ; mesurer
-      la latence par op avant d'industrialiser. Alternatives écartées : recopie
-      totale (coût de copie sur gros volume), cache/read-ahead (complexité), sync
-      (read-mostly seulement). C'est une **session dédiée**, pas un patch.
+      **Défauts et solutions à tester pendant l'implémentation :**
+      - D1 **Latence par op** : ACCEPTÉ (outil de dev, un peu plus lent = OK). À
+        appliquer quand même : cache d'attributs + readahead FUSE/sshfs.
+      - D2 **Débit gros fichiers** (tunnel) : ACCEPTÉ. Régler buffers, pas de
+        compression. Pas un bloquant.
+      - D3 **Mount qui pend sur coupure** (sleep/blip) : à tester : sshfs
+        `-o reconnect` + `ServerAliveInterval`, timeouts soft (erreur plutôt que
+        hang), reconnexion du tunnel plug qui rétablit la session SFTP. Critère :
+        aucun hang permanent ; coupure en pleine écriture = erreur remontée, pas
+        de corruption silencieuse.
+      - D4 **Orphelin qui bloque le PVC** (INACCEPTABLE de laisser le cluster
+        instable) : le helper est lié à la session comme le signpost/park.
+        Solutions à tester, dans l'ordre : (a) reaping par le **sweep périodique**
+        existant (le lease du holder ne répond plus → l'agent détruit le helper
+        ET restaure le workload / réattache le PVC) ; (b) **TTL/heartbeat** sur le
+        helper (auto-destruction s'il perd le contact) ; (c) **boot-gc** de l'agent
+        (au redémarrage, reaper les helpers labellisés plug + restaurer leurs
+        workloads). **Filet de sécurité obligatoire si l'auto ne suffit pas :
+        `plug doctor` détecte (helper orphelin + workload coincé à 0 + reçu plug)
+        et RÉPARE** (supprime le helper, restaure le workload). Test : kill -9 de
+        la session / poste fermé → le workload doit revenir seul, sinon doctor le
+        répare.
+      - D5 **Runtime FUSE par OS + maturité fuse-t** : `doctor` vérifie la présence
+        (fuse-t/WinFsp/libfuse) et donne la commande d'install si absent ; sans
+        runtime, la feature volume est indisponible (message clair), le reste de
+        plug marche. **Go/no-go n°1 : valider fuse-t sur macOS 26** (il est en
+        NFS-loopback dessous, or on a vu un EPERM NFS sur macOS 26).
+      - D6 **Point de montage fantôme après crash** : plug enregistre ses points de
+        montage (comme les served records) ; au prochain run / via `doctor`,
+        détecter un mount FUSE mort (« Transport endpoint is not connected ») et le
+        démonter. Test : kill -9 → le run suivant ou doctor nettoie.
+      - D7 **Sémantique SFTP (locking par plage, mmap écriture limités)** :
+        détecter/avertir si le volume contient du SQLite/GeoPackage (`.gpkg`,
+        `.sqlite`) - fichiers plats = OK, base-fichier = risqué. Documenter la
+        limite ; mode strict éventuel plus tard.
+
+      **`doctor` = le filet de sécurité (exigence)** : checks + remèdes pour
+      helper orphelin, workload coincé parké, mount FUSE fantôme local. Si une
+      récupération auto manque, doctor doit au moins savoir réparer.
+
+      **Go/no-go à lever tôt :** fuse-t sur macOS 26 (lecture/écriture d'un vrai
+      volume) ; reaping de l'orphelin (kill dur → workload restauré, ou doctor) ;
+      reconnexion sshfs sur sleep/wake.
 
 ## 🔴 Sécurité - suivi en privé
 
