@@ -726,6 +726,48 @@ jobs:
           path: latest-launchers/*
           retention-days: 1
 
+  # Cancels the run the moment an e2e leg FAILS, so the other legs and their
+  # clusters stop within the minute instead of burning their full twenty. It is
+  # a SEPARATE job on purpose: the failing leg used to cancel the run itself,
+  # which turned ITS OWN conclusion from "failure" to "cancelled" - the culprit
+  # vanished into a sea of cancelled jobs, and finding what broke meant digging
+  # into step logs. Here the leg just fails (stays RED), and this watcher - whose
+  # own colour nobody reads - issues the cancel. The kill-cluster jobs still run
+  # (they complete during the cancellation grace, unchanged). It polls, because a
+  # job cannot `needs:` a sibling that is still running; it exits on its own once
+  # every e2e leg it has seen running has finished, so a green run is not held up.
+  abort-on-fail:
+    needs: [start-cluster]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write # cancel the run when a leg fails
+    timeout-minutes: 30
+    steps:
+      - name: Cancel the run when an e2e leg fails
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run="${{ github.run_id }}"; repo="${{ github.repository }}"
+          seen=0
+          while :; do
+            legs=$(gh api "repos/$repo/actions/runs/$run/jobs?per_page=100" \
+              --jq '[.jobs[] | select(.name|test("e2e"))]')
+            failed=$(printf '%s' "$legs" | jq '[.[] | select(.conclusion=="failure")] | length')
+            if [ "${failed:-0}" -gt 0 ]; then
+              echo "an e2e leg failed -> cancelling the run (the failed leg keeps its red)"
+              gh run cancel "$run" --repo "$repo" || true
+              exit 0
+            fi
+            pending=$(printf '%s' "$legs" | jq '[.[] | select(.conclusion==null)] | length')
+            [ "${pending:-0}" -gt 0 ] && seen=1
+            if [ "$seen" -eq 1 ] && [ "${pending:-0}" -eq 0 ]; then
+              echo "all e2e legs finished, none failed"
+              exit 0
+            fi
+            sleep 15
+          done
+
   e2e-compose:
     name: e2e-compose (${{ matrix.os }}, by name over the mesh)
     needs: [test, start-cluster, build-clients]
@@ -975,19 +1017,6 @@ jobs:
   # prev-agent-<leg> — which exist for linux/mac/win only. A fourth set would
   # double the Linux load on a shared cluster to re-prove AGENT behaviour, and
   # the agent is the same amd64 container whatever the client's architecture.
-      # A red cell condemns the run: the image is never published. Until now
-      # the other eight legs and six clusters ran their twenty minutes anyway,
-      # for a result already known. fail-fast stays off inside the matrices so
-      # a failing OS does not hide what the others do, but a leg that has
-      # ALREADY failed has nothing left to show: it cancels the run, the
-      # clusters see their caller complete and leave within the minute, and
-      # the legs that finished keep their logs.
-      - name: Abort the run, this leg failed
-        if: failure()
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh run cancel "${{ github.run_id }}" --repo "${{ github.repository }}" || true
   e2e-arm64:
     name: e2e-arm64 (a native arm64 client, on the compose cluster)
     needs: [test, start-cluster, build-clients]
@@ -1086,19 +1115,6 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh multiport "$A" "$B" 2222
-      # A red cell condemns the run: the image is never published. Until now
-      # the other eight legs and six clusters ran their twenty minutes anyway,
-      # for a result already known. fail-fast stays off inside the matrices so
-      # a failing OS does not hide what the others do, but a leg that has
-      # ALREADY failed has nothing left to show: it cancels the run, the
-      # clusters see their caller complete and leave within the minute, and
-      # the legs that finished keep their logs.
-      - name: Abort the run, this leg failed
-        if: failure()
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh run cancel "${{ github.run_id }}" --repo "${{ github.repository }}" || true
 
   e2e-k8s:
     name: e2e-k8s (${{ matrix.os }}, same chain on kind)
@@ -1307,19 +1323,6 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh updatejump "$A" "$B" 2222
-      # A red cell condemns the run: the image is never published. Until now
-      # the other eight legs and six clusters ran their twenty minutes anyway,
-      # for a result already known. fail-fast stays off inside the matrices so
-      # a failing OS does not hide what the others do, but a leg that has
-      # ALREADY failed has nothing left to show: it cancels the run, the
-      # clusters see their caller complete and leave within the minute, and
-      # the legs that finished keep their logs.
-      - name: Abort the run, this leg failed
-        if: failure()
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh run cancel "${{ github.run_id }}" --repo "${{ github.repository }}" || true
   e2e-swarm:
     name: e2e-swarm (${{ matrix.os }}, same chain on swarm)
     needs: [test, start-cluster, build-clients]
@@ -1527,19 +1530,6 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh updatejump "$A" "$B" 2222
-      # A red cell condemns the run: the image is never published. Until now
-      # the other eight legs and six clusters ran their twenty minutes anyway,
-      # for a result already known. fail-fast stays off inside the matrices so
-      # a failing OS does not hide what the others do, but a leg that has
-      # ALREADY failed has nothing left to show: it cancels the run, the
-      # clusters see their caller complete and leave within the minute, and
-      # the legs that finished keep their logs.
-      - name: Abort the run, this leg failed
-        if: failure()
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh run cancel "${{ github.run_id }}" --repo "${{ github.repository }}" || true
   kill-compose:
     name: kill compose clusters
     # e2e-arm64 runs on the SAME compose clusters and starts later, because the
