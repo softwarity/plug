@@ -122,6 +122,20 @@ func autoMountsFor(name string) []volumeMount {
 	return autoMounts[name].mounts
 }
 
+// dockerMount is one mount made for a --dockerrun: nothing is mounted on
+// this host - Docker Desktop cannot bind a network mount into its VM, it
+// hangs on it - so the CONTAINER gets a docker volume of type cifs that the
+// daemon's own kernel mounts, through the forward this process keeps open
+// (host.docker.internal on Desktop, the host itself on Linux).
+type dockerMount struct {
+	spec   mountSpec
+	target mountTarget
+}
+
+// dockerMounts is what startMounts collected for the --dockerrun in progress,
+// read by dockerMountFlags.
+var dockerMounts []dockerMount
+
 // localizeVolumeEnv repoints the variables whose value names a mounted
 // cluster path (or something under it) at the mount. The longest cluster
 // path wins, so /data/logs mounted apart from /data goes to its own mount.
@@ -407,7 +421,7 @@ func startMounts(cfg config) (func(), error) {
 	if len(explicit) == 0 && len(autoNames) == 0 {
 		return func() {}, nil
 	}
-	if err := mountSupported(); err != nil {
+	if err := mountSupported(); err != nil && !cfg.dockerRun {
 		if len(explicit) > 0 {
 			return nil, err
 		}
@@ -416,6 +430,7 @@ func startMounts(cfg config) (func(), error) {
 		info("the workload's volumes are not mounted: %v", err)
 		return func() {}, nil
 	}
+	dockerMounts = nil
 	sweepOrphanMounts()
 	tr, err := dialTunnel(cfg)
 	if err != nil {
@@ -442,7 +457,11 @@ func startMounts(cfg config) (func(), error) {
 				if cfg.mountPolicy.drop[p] {
 					continue
 				}
-				specs = append(specs, mountSpec{name: name, volume: p, path: autoMountPath(dir, p), auto: true})
+				at := autoMountPath(dir, p)
+				if cfg.dockerRun {
+					at = p // the container's, at the cluster path
+				}
+				specs = append(specs, mountSpec{name: name, volume: p, path: at, auto: true})
 			}
 			if len(specs) > 0 {
 				a := autoMounts[name]
@@ -519,13 +538,20 @@ func startMounts(cfg config) (func(), error) {
 			return fail(err)
 		}
 		t := mountTarget{mountReply: reply, pass: m.pass}
-		if mountUsesForward() {
-			fw, err := newMountForward(mountBindAddr(), target, tr.DialCluster)
+		if mountUsesForward() || cfg.dockerRun {
+			fw, err := newMountForward("127.0.0.1:0", target, tr.DialCluster)
 			if err != nil {
 				return fail(err)
 			}
 			m.fw = fw
 			t.local = fw.Addr()
+		}
+		if cfg.dockerRun {
+			// Not mounted here: handed to the container as a cifs volume the
+			// daemon mounts through the forward (dockerMountFlags).
+			dockerMounts = append(dockerMounts, dockerMount{spec: spec, target: t})
+			info("volume %s of %s is served for the container through %s", spec.volume, spec.name, t.local)
+			continue
 		}
 		at, err := mountSMB(t, spec.path)
 		if err != nil {

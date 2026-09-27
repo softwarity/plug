@@ -677,8 +677,29 @@ do_dockerrun() {
 
   if [ "$dr_code" = "200" ]; then
     echo "container OK - an unmodified image reached httpbin by name, through the sidecar's tunnel"
-    sum "**container member (--dockerrun)** ✅"
-    return 0
+    # And the workload's VOLUME, in the container at its exact cluster path:
+    # mounted on this host as for a process, handed over with -v. The file the
+    # container writes is served back by the workload, by name.
+    local vtag="container-by-$leg-$$" vout
+    vout="$(PLUG_DOCKER_IMAGE="$AGENT_IMAGE" perl -e 'alarm 180; exec @ARGV or exit 127' \
+      "$PLUG" --host "$ip" --port "$port" -c --env-of vol-linux --dockerrun \
+      docker run --rm busybox:1.37 sh -c "cat /data/seed.txt && echo && printf '%s' '$vtag' > /data/from-container.txt && echo WROTE" \
+      2>>"$dr_err" | tr -d '\r')"
+    local vgot=""
+    for _ in 1 2 3 4 5 6; do
+      vgot="$(plug curl -s --max-time 10 http://vol-linux:8120/from-container.txt 2>/dev/null | tr -d '\r')"
+      [ "$vgot" = "$vtag" ] && break
+      sleep 2
+    done
+    if echo "$vout" | grep -q "seed-from-vol-linux" && echo "$vout" | grep -q WROTE && [ "$vgot" = "$vtag" ]; then
+      echo "container OK - the workload's volume was at /data in the container, read and written, served back by the workload"
+      sum "**container member (--dockerrun)** ✅"
+      return 0
+    fi
+    echo "--- container FAIL - the volume did not reach the container (container said: ${vout:-nothing}; workload serves '${vgot:-nothing}')"
+    echo "    plug said: $(tr -d '\r' < "$dr_err" | tail -8 | tr '\n' ' ')"
+    sum "**container member (--dockerrun)** ❌"
+    return 1
   fi
   echo "--- container FAIL - got '${dr_code:-nothing}' (want 200)"
   echo "    plug said: $(tr -d '\r' < "$dr_err" | tail -5 | tr '\n' ' ')"

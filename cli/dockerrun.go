@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -359,6 +360,18 @@ func runDockerRun(cfg config, cmdArgs []string, exposes []string, client bool) i
 	// until the container exits, which is when this function returns.
 	projected, cleanup := dockerProjection(cfg, exposes)
 	defer cleanup()
+	// Its volumes too, mounted on THIS host as for a process (startMounts)
+	// and handed to the container at their exact cluster path with -v: the
+	// container is Linux and expects the real path, so no repointing here.
+	stopMounts, err := startMounts(dockerMountConfig(cfg, exposes))
+	if err != nil {
+		info("mount: %v", err)
+		return 1
+	}
+	defer stopMounts()
+	volFlags, volCleanup := dockerMountFlags()
+	defer volCleanup()
+	projected = append(projected, volFlags...)
 
 	full, err := dockerRunCmd(cmdArgs, name, resolv, projected)
 	if err != nil {
@@ -400,4 +413,53 @@ func exitCodeOf(err error) int {
 		return ee.ExitCode()
 	}
 	return 1
+}
+
+// dockerMountConfig is the config startMounts reads for a --dockerrun: the
+// automatic mounts belong to the workload whose environment the container
+// gets (dockerEnvSource), which the raw -s values do not name in cfg.exposes.
+func dockerMountConfig(cfg config, exposes []string) config {
+	if src := dockerEnvSource(cfg, exposes); src != "" && cfg.envPolicy.from == "" && len(cfg.exposes) == 0 {
+		cfg.envPolicy.from = src
+	}
+	return cfg
+}
+
+// dockerMountFlags turns what startMounts collected into docker volumes of
+// type cifs - one per mount, created now, mounted by the daemon's kernel when
+// the container starts, through the forward this process keeps open - and
+// the -v flags that put each at its cluster path in the container. The
+// cleanup removes the volumes once the container has exited. Read-write:
+// that is the point.
+func dockerMountFlags() ([]string, func()) {
+	var flags, made []string
+	for _, m := range dockerMounts {
+		host, port, err := net.SplitHostPort(m.target.local)
+		if err != nil {
+			info("mount %s: %v", m.spec, err)
+			continue
+		}
+		_ = host // the forward is on this host's loopback; the daemon reaches it as dockerHostAddr
+		name := "plug-vol-" + recordName(m.spec.name + ":" + m.spec.volume + ":" + port)[:16]
+		opts := fmt.Sprintf("port=%s,username=%s,password=%s,vers=3.0,uid=0,gid=0,file_mode=0664,dir_mode=0775,noperm,nobrl",
+			port, m.target.user, m.target.pass)
+		cmd := exec.Command("docker", "volume", "create", "--driver", "local",
+			"--opt", "type=cifs", "--opt", "device=//"+dockerHostAddr()+"/"+m.target.share, "--opt", "o="+opts, name)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			info("mount %s: creating the cifs volume: %s", m.spec, strings.TrimSpace(string(out)))
+			continue
+		}
+		made = append(made, name)
+		in := m.spec.path
+		if in == "" {
+			in = m.spec.volume
+		}
+		flags = append(flags, "-v", name+":"+in)
+		info("mount %s: the container gets it at %s (cifs volume %s)", m.spec.volume, in, name)
+	}
+	return flags, func() {
+		for _, name := range made {
+			_ = exec.Command("docker", "volume", "rm", "-f", name).Run()
+		}
+	}
 }

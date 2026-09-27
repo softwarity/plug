@@ -174,6 +174,8 @@ type config struct {
 	// about the AUTOMATIC ones; the zero value mounts every data volume.
 	mounts      []mountSpec
 	mountPolicy mountPolicy
+	// dockerRun: the mounts go to a container (cifs volumes), not to this host.
+	dockerRun bool
 	// updateMode is the cluster's update policy (none|notify|auto). It belongs
 	// to the profile because `auto` updates the AGENT, which is shared: you may
 	// govern your own cluster and have no say over the shared one.
@@ -667,10 +669,11 @@ func launcherRun(args []string) {
 	// policy is resolved here too, since this host is where the projection into
 	// the container is built (the sidecar only holds the datapath).
 	if opts.dockerRun {
-		if len(opts.mounts) > 0 {
-			fatal("--mount is not available with --dockerrun yet: the container would need the share mounted on this host first")
-		}
+		cfg.dockerRun = true
 		cfg.envPolicy = opts.policy()
+		attachExposes(&cfg, opts.exposes)
+		attachMounts(&cfg, opts.mounts)
+		attachMountPolicy(&cfg, opts.noMount, opts.noMountList)
 		os.Exit(runDockerRun(cfg, cmdArgs, opts.exposes, opts.client))
 	}
 

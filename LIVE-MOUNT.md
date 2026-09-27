@@ -39,11 +39,20 @@ process ─ OS's own SMB client ─ 127.0.0.1:<port> (plug's forward) ─ tunnel
   mounts it with the SMB client the OS ships with: `mount_smbfs` on macOS,
   run as the user (no privilege; the mount is the user's), the kernel's cifs
   module on Linux through `mount(2)` with plug's `cap_sys_admin` (no
-  cifs-utils). Windows is not written yet: its redirector speaks to port 445
-  only, so the forward has to sit on 445 of an address plug owns - its TUN
-  address, or its own DNS name - rather than on a loopback port. The
-  automatic mounts step aside there with one line; an explicit `--mount` is
-  refused with the message.
+  cifs-utils). **Windows** has no forward: its redirector speaks to port 445
+  only and a UNC path carries no port, so the share is reached BY NAME
+  (`\\<helper>\vol`) through plug's own DNS - a fake address into the
+  datapath, the tunnel, the helper - and `net use` maps it to a DRIVE LETTER
+  (a free one from Z down for an automatic mount, `--mount /data:Y:` to name
+  one; a directory needs the symlink privilege and says so). The helper
+  answers a NAME on every backend for this: the container's alias, the Swarm
+  service, and on Kubernetes a Service plug creates in front of the pod.
+- **`--dockerrun`** mounts nothing on the host: Docker Desktop hangs on
+  binding a network mount into its VM (seen, on macOS). The container gets a
+  docker VOLUME of type cifs instead, created by plug, that the daemon's own
+  kernel mounts through the forward plug keeps open (`host.docker.internal`
+  on Desktop, the host's loopback on Linux), at the cluster path, read-write.
+  Removed with the container.
 - **Why SMB, why not FUSE, why not NFS.** FUSE means a runtime to install on
   the workstation (fuse-t or macFUSE on macOS, WinFsp on Windows). NFS has
   no first-class client on Windows. SMB is native on all three, and Samba is
@@ -68,7 +77,7 @@ Agent (`agent/mount.go`, `agent/mountserve.go`):
   behind the Service (or the receipt's selector when parked), PVC-backed
   mounts only.
 - `mount-volume <name> <volume-or-path> <agent-port> <password>` - starts the
-  helper, answers `mounted host=<addr> port=445 share=vol user=plug`. The
+  helper, answers `mounted host=<name> port=445 share=vol user=plug`. The
   helper's name carries (workload, volume, session port): one per session,
   so two developers may mount one volume, and a re-provision is a new helper
   beside the old one.
@@ -95,9 +104,15 @@ Client (`cli/mount.go`, `cli/mount_{darwin,linux,windows}.go`):
   asks `volumes-of` for the automatic names (`-s` names and `--env-of`), then
   for each mount: `mount-volume`, wait for the helper's port, start the local
   forward, mount, record. `autoMounts` is what the projection reads
-  (`autoMountsFor`) to repoint variables with `localizeFileEnv`.
+  (`autoMountsFor`, one cluster path → local path per mount) to repoint
+  variables with `localizeVolumeEnv`.
 - `OnRearm` of the liveness forward re-provisions every helper under the new
-  port and retargets the forwards.
+  port and retargets the forwards (and re-pins the new name on Windows).
+- Windows and the multicluster router: the kernel's SMB client is nobody's
+  child, so the ancestry walk would refuse its flow. A session PINS the
+  helper's name to its cluster (`tun.PinName`, a `.pins` sidecar beside its
+  registry marker), and the router (`multiDial`) attributes a pinned name
+  before any walk; the dialFunc carries the destination name for it.
 - Teardown: unmount, close the forward, `unmount-volume`, forget the record,
   remove the session directory once nothing is mounted under it.
 - Records (`~/.plug/mounts/`, `key = value` files like served names): pid,
@@ -177,13 +192,9 @@ version to upgrade to.
 Not defects in what ships; the points to weigh if the feature becomes a
 sensitive one.
 
-- Windows: the forward on 445 of a plug-owned address (TUN address or DNS
-  name), then `net use` and `mklink /D` to the path, variables repointed at
-  it. To check on the way: that the netstack accepts kernel-originated
-  traffic (the redirector is not a child of plug), and the redirector's
-  reconnection.
-- `--dockerrun`: the container would need the share mounted on the host
-  first, then `-v` at the exact path.
+- Windows: an explicit `--mount` at a DIRECTORY needs the symlink privilege
+  (Developer Mode or elevation); a drive letter needs nothing. The redirector's
+  own reconnection after a tunnel blip is Windows' to do (not exercised).
 - SQLite/GeoPackage files over SMB: range locks are weaker than local ones;
   flat files are fine.
 - Swarm on several nodes: the helper is placed on the node of the workload's

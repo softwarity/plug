@@ -42,7 +42,9 @@ authentication).
 
 On Windows the share is reached by name through plug's own DNS and lands on a
 drive letter (`Z:` downwards for an automatic mount; `--mount /data:Y:` to
-name one), the variables repointed at it the same way.
+name one), the variables repointed at it the same way. With `--dockerrun` the
+container gets the volume at its exact cluster path (a cifs volume the daemon
+mounts through plug).
 
 ### CI: a failed e2e leg now shows RED instead of being lost among cancelled jobs
 

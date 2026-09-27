@@ -198,7 +198,8 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
           node (ReadWriteOnce is one node, not one pod); the RBAC needs <code>pods</code>
           create/delete, re-apply <code>plug-k8s.yaml</code>. On Windows a mount lands on a drive
           letter (an automatic one takes a free letter from Z down; <code>--mount /data:Y:</code>
-          names one), the variables repointed at it the same way.
+          names one), the variables repointed at it the same way. With <code>--dockerrun</code>
+          the container gets the volume at its exact cluster path.
         </td>
       </tr>
       <tr>
