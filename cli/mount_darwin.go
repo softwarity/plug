@@ -126,9 +126,11 @@ const nsmbSection = "\n# Added by plug (--mount): multichannel has no second NIC
 	"# kills a reconnected mount. Scoped to plug's own server; remove freely.\n" +
 	"[%s]\nmc_on=no\n"
 
+// nsmbConfPath is the REAL user's file: under sudo, HOME may be root's, and
+// mount_smbfs runs as the user (applyPrivDrop), reading the user's own.
 func nsmbConfPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
+	home := realUserHome()
+	if home == "" {
 		return ""
 	}
 	return filepath.Join(home, "Library", "Preferences", "nsmb.conf")
