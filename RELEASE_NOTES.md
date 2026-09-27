@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.20.0
+
 ### The workload's volumes and PVCs are mounted live, read-write, by default
 
 The projection of 2.16-2.19 copied a workload's secrets and configs once at
