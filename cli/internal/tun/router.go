@@ -24,7 +24,17 @@ func multiDial(ct *ClusterTransports) dialFunc {
 		startOf:       procStart,
 		seen:          newPidCache(),
 	}
-	return func(srcPort uint16) (Dialer, string, bool) {
+	return func(srcPort uint16, name string) (Dialer, string, bool) {
+		// A name a session PINNED to its cluster is that cluster's, whoever
+		// connects: the live-mount helper's, which the OS's own SMB client dials
+		// from the kernel (Windows), where no ancestry leads to a launcher.
+		// The name is minted per session and per cluster, so there is nothing
+		// to disambiguate, and it comes before the account check because the
+		// kernel is nobody's account.
+		if key, ok := pinnedCluster(name); ok {
+			d, ok := ct.get(key)
+			return d, key, ok
+		}
 		if d, key, ok := ct.sole(); ok {
 			if !soleAllows(srcPort, r.pidForConn, uidOf, clientUIDs(key)) {
 				return nil, "", false

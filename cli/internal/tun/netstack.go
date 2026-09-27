@@ -29,12 +29,12 @@ import (
 // port, returning the transport and the cluster key it was attributed to (for
 // logs), or ok=false to refuse it (unattributable → RST). Single-cluster returns
 // a constant (constDial); multicluster resolves srcPort→PID→cluster→tunnel.
-type dialFunc func(srcPort uint16) (d Dialer, cluster string, ok bool)
+type dialFunc func(srcPort uint16, name string) (d Dialer, cluster string, ok bool)
 
 // constDial is the single-cluster case: every flow goes to the one transport, no
 // attribution. This keeps the proven single-cluster datapath behaviour exact.
 func constDial(tr Dialer) dialFunc {
-	return func(uint16) (Dialer, string, bool) { return tr, "", true }
+	return func(uint16, string) (Dialer, string, bool) { return tr, "", true }
 }
 
 // refusedLimiter throttles the "unattributable flow" log. While a cluster is
@@ -133,7 +133,7 @@ func handleTCP(r *tcp.ForwarderRequest, tab *faketab, df dialFunc, log logfn) {
 	// the key the multicluster router walks (srcPort→PID→ancestry→cluster). We
 	// refuse an unattributable flow rather than mis-route it. Single-cluster
 	// (constDial) always attributes, so this path is unchanged there.
-	dialer, cluster, ok := df(id.RemotePort)
+	dialer, cluster, ok := df(id.RemotePort, name)
 	if !ok {
 		if refusedLimiter.allow(name) {
 			log.f("tun: → %s: refused (unattributable flow; repeats hidden)", name)

@@ -60,7 +60,8 @@ import (
 type mountSpec struct {
 	name   string // workload name; "" until resolved against -s / --env-of
 	volume string // volume/PVC name, or the absolute path it has in the workload
-	path   string // absolute path on this machine
+	path   string // absolute path on this machine ("" for an automatic one the OS places itself)
+	auto   bool   // mounted by default, not asked for: reported to the projection
 }
 
 func (m mountSpec) String() string { return m.name + ":" + m.volume + ":" + m.path }
@@ -99,24 +100,60 @@ func looksLikePathList(s string) bool {
 	return true
 }
 
+// volumeMount is one automatic mount as the projection sees it: the cluster
+// path, and where it is here. Under the session directory at the same path
+// on macOS and Linux; a drive letter on Windows, where a directory cannot
+// point at a share without a privilege.
+type volumeMount struct {
+	cluster, local string
+}
+
 // autoMounts is what the automatic mounts did for each workload, read by the
-// environment projection to repoint the variables naming a volume path: the
-// cluster paths mounted, and the directory they sit under (option B).
+// environment projection to repoint the variables naming a volume path, and
+// the session directory they sit under (option B).
 var autoMounts = map[string]struct {
-	dir   string
-	paths []string
+	dir    string
+	mounts []volumeMount
 }{}
 
-// autoMountsFor is the projection's view: the paths and the directory, or
-// nothing when the workload had no volume mounted.
-func autoMountsFor(name string) (paths []string, dir string) {
-	a := autoMounts[name]
-	return a.paths, a.dir
+// autoMountsFor is the projection's view, or nothing when the workload had
+// no volume mounted.
+func autoMountsFor(name string) []volumeMount {
+	return autoMounts[name].mounts
+}
+
+// localizeVolumeEnv repoints the variables whose value names a mounted
+// cluster path (or something under it) at the mount. The longest cluster
+// path wins, so /data/logs mounted apart from /data goes to its own mount.
+func localizeVolumeEnv(vars []string, mounts []volumeMount) []string {
+	if len(mounts) == 0 {
+		return vars
+	}
+	out := make([]string, len(vars))
+	for i, kv := range vars {
+		out[i] = kv
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || !strings.HasPrefix(v, "/") {
+			continue
+		}
+		best := volumeMount{}
+		for _, m := range mounts {
+			if (v == m.cluster || strings.HasPrefix(v, m.cluster+"/")) && len(m.cluster) > len(best.cluster) {
+				best = m
+			}
+		}
+		if best.cluster == "" {
+			continue
+		}
+		rest := strings.TrimPrefix(v, best.cluster)
+		out[i] = k + "=" + filepath.Join(best.local, filepath.FromSlash(rest))
+	}
+	return out
 }
 
 // winDrivePath catches a trailing Windows path (C:\data) before the colon
 // split, since its drive letter carries the very separator the grammar uses.
-var winDrivePath = regexp.MustCompile(`^(.*?):([A-Za-z]:[\\/].*)$`)
+var winDrivePath = regexp.MustCompile(`^(.*?):([A-Za-z]:(?:[\\/].*)?)$`)
 
 func parseMount(raw string) (mountSpec, error) {
 	if raw == "" {
@@ -151,12 +188,21 @@ func parseMount(raw string) (mountSpec, error) {
 	if !isAbsPath(spec.path) {
 		return mountSpec{}, fmt.Errorf("--mount %s: the local path must be absolute, got %q", raw, spec.path)
 	}
-	spec.path = filepath.Clean(spec.path)
+	if isBareDrive(spec.path) {
+		spec.path = strings.ToUpper(spec.path) + `\` // "Z:" is a drive; alone it would mean its current directory
+	} else {
+		spec.path = filepath.Clean(spec.path)
+	}
 	return spec, nil
 }
 
 func isAbsPath(p string) bool {
-	return strings.HasPrefix(p, "/") || winDrivePath.MatchString("x:"+p)
+	return strings.HasPrefix(p, "/") || isBareDrive(p) || winDrivePath.MatchString("x:"+p)
+}
+
+// isBareDrive: "Z:" - a Windows drive letter, the local path a mount may take there.
+func isBareDrive(p string) bool {
+	return len(p) == 2 && p[1] == ':' && (p[0] >= 'A' && p[0] <= 'Z' || p[0] >= 'a' && p[0] <= 'z')
 }
 
 var dnsLabelRe = regexp.MustCompile(`^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$`)
@@ -207,9 +253,18 @@ func mintMountPass() string {
 	return hex.EncodeToString(b)
 }
 
-// mountReply is what mount-volume answers: where the helper is.
+// mountReply is what mount-volume answers: where the helper is, by NAME.
 type mountReply struct {
 	host, port, share, user string
+}
+
+// mountTarget is everything the OS needs to mount one share: the helper by
+// name (what Windows dials, through plug's own DNS), the local forward to it
+// (what macOS and Linux dial), and the credential.
+type mountTarget struct {
+	mountReply
+	pass  string
+	local string // the forward's address, "" where the OS reaches the name itself
 }
 
 func parseMountReply(line string) (mountReply, error) {
@@ -383,19 +438,16 @@ func startMounts(cfg config) (func(), error) {
 				info("%s: could not list the workload's volumes (%v); none mounted", name, aerr)
 				continue
 			}
-			var kept []string
 			for _, p := range paths {
 				if cfg.mountPolicy.drop[p] {
 					continue
 				}
-				kept = append(kept, p)
-				specs = append(specs, mountSpec{name: name, volume: p, path: filepath.Join(dir, filepath.FromSlash(p))})
+				specs = append(specs, mountSpec{name: name, volume: p, path: autoMountPath(dir, p), auto: true})
 			}
-			if len(kept) > 0 {
-				autoMounts[name] = struct {
-					dir   string
-					paths []string
-				}{dir, kept}
+			if len(specs) > 0 {
+				a := autoMounts[name]
+				a.dir = dir
+				autoMounts[name] = a
 			}
 		}
 	}
@@ -434,15 +486,16 @@ func startMounts(cfg config) (func(), error) {
 		for name, a := range autoMounts {
 			delete(autoMounts, name)
 			busy := false
-			for _, p := range a.paths {
-				if mountedAt(filepath.Join(a.dir, filepath.FromSlash(p))) {
+			for _, m := range a.mounts {
+				if mountedAt(m.local) {
 					busy = true
 				}
 			}
-			if !busy {
+			if !busy && a.dir != "" {
 				_ = os.RemoveAll(a.dir)
 			}
 		}
+		unpinMountNames(cfg)
 		tr.Close()
 	}
 	fail := func(err error) (func(), error) {
@@ -459,22 +512,34 @@ func startMounts(cfg config) (func(), error) {
 		if err != nil {
 			return fail(err)
 		}
+		pinMountName(cfg, reply.host)
 		target := net.JoinHostPort(reply.host, reply.port)
 		info("mount helper for %s of %s is up at %s", spec.volume, spec.name, target)
 		if err := mountHelperReady(tr, target, 90*time.Second); err != nil {
 			return fail(err)
 		}
-		fw, err := newMountForward(mountBindAddr(), target, tr.DialCluster)
-		if err != nil {
-			return fail(err)
+		t := mountTarget{mountReply: reply, pass: m.pass}
+		if mountUsesForward() {
+			fw, err := newMountForward(mountBindAddr(), target, tr.DialCluster)
+			if err != nil {
+				return fail(err)
+			}
+			m.fw = fw
+			t.local = fw.Addr()
 		}
-		m.fw = fw
-		if err := mountSMB(fw.Addr(), reply.share, reply.user, m.pass, spec.path); err != nil {
+		at, err := mountSMB(t, spec.path)
+		if err != nil {
 			return fail(fmt.Errorf("mounting %s of %s at %s: %w", spec.volume, spec.name, spec.path, err))
 		}
+		m.spec.path = at
 		m.mounted = true
-		m.unmark = markMounted(spec, fw.Addr())
-		info("mounted %s of %s at %s (read-write, live)", spec.volume, spec.name, spec.path)
+		m.unmark = markMounted(m.spec, t.local)
+		if spec.auto {
+			a := autoMounts[spec.name]
+			a.mounts = append(a.mounts, volumeMount{cluster: spec.volume, local: at})
+			autoMounts[spec.name] = a
+		}
+		info("mounted %s of %s at %s (read-write, live)", spec.volume, spec.name, at)
 	}
 	if len(mounts) == 0 {
 		tr.Close()
@@ -501,7 +566,10 @@ func startMounts(cfg config) (func(), error) {
 					info("re-provisioning the mount helper for %s after a reconnect: %v", m.spec, err)
 					continue
 				}
-				m.fw.Retarget(net.JoinHostPort(reply.host, reply.port))
+				pinMountName(cfg, reply.host)
+				if m.fw != nil {
+					m.fw.Retarget(net.JoinHostPort(reply.host, reply.port))
+				}
 			}
 		}
 	}()

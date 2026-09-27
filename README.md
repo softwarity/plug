@@ -182,8 +182,8 @@ where its environment says. `--no-mount` opts out; `--mount /data` puts one at
 the exact path instead (`--mount api:/data:/srv/data` names the workload).
 Nothing to install: the agent starts a helper beside the workload that serves
 the volume over SMB, and plug mounts it through the tunnel with the client your
-OS already has (`mount_smbfs` on macOS, the cifs module on Linux; Windows not
-yet). Files land as the volume's owner. A session that dies has its helper
+OS already has (`mount_smbfs` on macOS, the cifs module on Linux, the SMB
+redirector on Windows, where it lands on a drive letter). Files land as the volume's owner. A session that dies has its helper
 reaped by the agent within the minute and its mount cleaned by the next run or
 `plug doctor --fix`.
 

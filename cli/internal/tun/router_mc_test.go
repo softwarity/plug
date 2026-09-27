@@ -40,7 +40,7 @@ func TestMultiDialSelf(t *testing.T) {
 	srcPort, done := localSocket(t)
 	defer done()
 
-	d, key, ok := multiDial(ct)(srcPort)
+	d, key, ok := multiDial(ct)(srcPort, "svc")
 	if !ok {
 		mustWorkInCI(t, ok, "the connect-time attribution")
 		return
@@ -64,7 +64,7 @@ func TestMultiDialRefuses(t *testing.T) {
 	srcPort, done := localSocket(t)
 	defer done()
 
-	if _, _, ok := multiDial(ct)(srcPort); ok {
+	if _, _, ok := multiDial(ct)(srcPort, "svc"); ok {
 		t.Fatalf("an unattributable flow must be refused when >1 cluster is active")
 	}
 }
@@ -76,7 +76,7 @@ func TestMultiDialSoleTransparent(t *testing.T) {
 	ct := NewClusterTransports()
 	ct.Set("only:2222", loopbackDialer{addr: "only"})
 
-	d, key, ok := multiDial(ct)(40000) // arbitrary port, no attribution needed
+	d, key, ok := multiDial(ct)(40000, "svc") // arbitrary port, no attribution needed
 	if !ok {
 		t.Fatal("a single active cluster must route transparently")
 	}
@@ -85,5 +85,40 @@ func TestMultiDialSoleTransparent(t *testing.T) {
 	}
 	if lb, _ := d.(loopbackDialer); lb.addr != "only" {
 		t.Fatalf("routed to %q, want only", lb.addr)
+	}
+}
+
+// A name pinned by a live client goes to that client's cluster before any
+// attribution - the live-mount helper's, dialled by the kernel's SMB client on
+// Windows, where no ancestry leads to a launcher. Unpinned, the flow takes the
+// ordinary route; a dead pinner's pin is not read.
+func TestPinnedNameRoutesToItsCluster(t *testing.T) {
+	old := graftDir
+	graftDir = t.TempDir()
+	defer func() { graftDir = old }()
+	ct := NewClusterTransports()
+	a, b := loopbackDialer{addr: "A"}, loopbackDialer{addr: "B"}
+	ct.Set("cluster-a", a)
+	ct.Set("cluster-b", b)
+	unreg := RegisterClient("cluster-b", os.Getpid(), "")
+	defer unreg()
+	PinName("cluster-b", os.Getpid(), "Plug-Mnt-Web-1234abcd")
+	defer UnpinNames("cluster-b", os.Getpid())
+	pinCache = map[string]pinEntry{}
+	d, key, ok := multiDial(ct)(40000, "plug-mnt-web-1234abcd")
+	if !ok || key != "cluster-b" || d.(loopbackDialer).addr != "B" {
+		t.Fatalf("pinned name: %v %q %v", ok, key, d)
+	}
+	// Not pinned: two clusters, an unattributable port → refused as before.
+	pinCache = map[string]pinEntry{}
+	if _, _, ok := multiDial(ct)(40000, "other"); ok {
+		t.Fatal("an unpinned name with two clusters must still be attributed")
+	}
+	// A dead pinner: its pin is nobody's.
+	UnpinNames("cluster-b", os.Getpid())
+	PinName("cluster-b", 999999, "plug-mnt-web-1234abcd")
+	pinCache = map[string]pinEntry{}
+	if k, ok := pinnedCluster("plug-mnt-web-1234abcd"); ok {
+		t.Fatalf("a dead client's pin was honoured: %q", k)
 	}
 }

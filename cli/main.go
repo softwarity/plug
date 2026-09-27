@@ -113,7 +113,7 @@ Options:
                            --mount data:/srv/data       its volume "data", at /srv/data
                            --mount api:data:/srv/data   the volume "data" of "api"
                          Unnamed, the workload is the -s one or the --env-of one.
-                         Repeatable. macOS and Linux (Windows: not yet).
+                         Repeatable. On Windows: a drive letter (--mount /data:Y:).
                          BY DEFAULT every data volume of the workload a -s takes
                          over (or --env-of names) is mounted without being told:
                          under the session's temp dir, at its cluster path, the

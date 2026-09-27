@@ -208,7 +208,7 @@ import { RouterLink } from '@angular/router';
       read-write</strong>, for the session, by default: the agent starts a helper beside the
       workload (its own image, with the volume mounted, serving it over SMB), plug reaches it
       through the tunnel like any service and mounts it with the SMB client the OS already has -
-      nothing to install. Each volume lands under the session's directory at its cluster path,
+      nothing to install, on macOS, Linux and Windows (a drive letter there). Each volume lands under the session's directory at its cluster path,
       the variables naming it repointed, so the process finds its data where its environment
       says; <code>--no-mount</code> opts out, <code>--mount /data</code> puts one at the exact path.
       The helper is tied to the session as the name is: reaped by the agent when the session

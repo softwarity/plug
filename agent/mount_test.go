@@ -320,3 +320,26 @@ func TestDataVolumePathsAndReply(t *testing.T) {
 		t.Fatalf("a bad name must be refused: %q", answered)
 	}
 }
+
+// The Service in front of a Kubernetes helper: plug's own (the Service sweep
+// reaps it with a dead session's names), a mount's, selecting the one pod by
+// the helper label the pod carries.
+func TestK8sMountServiceShape(t *testing.T) {
+	svc := k8sMountService("shop", "plug-mnt-web-abcd1234", "10.1.2.3:40001")
+	meta := svc["metadata"].(map[string]any)
+	labels := meta["labels"].(map[string]string)
+	if labels[k8sManaged] != "plug" || labels[mountLabel] != "1" {
+		t.Fatalf("labels %v", labels)
+	}
+	if meta["annotations"].(map[string]string)[sessionOwnerLabel] != "10.1.2.3:40001" {
+		t.Fatal("the owner annotation")
+	}
+	spec := svc["spec"].(map[string]any)
+	if spec["selector"].(map[string]string)[mountHelperLabel] != "plug-mnt-web-abcd1234" {
+		t.Fatalf("selector %v", spec["selector"])
+	}
+	pod := k8sMountPod("shop", "plug-mnt-web-abcd1234", "web", "/data", "c", "", "img", "o", "p")
+	if pod["metadata"].(map[string]any)["labels"].(map[string]string)[mountHelperLabel] != "plug-mnt-web-abcd1234" {
+		t.Fatal("the pod must carry the label the Service selects")
+	}
+}

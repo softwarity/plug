@@ -38,7 +38,11 @@ import (
 //	    (its label is immutable, as the signpost's is), and the OS's SMB
 //	    client reconnects on its own - which only works if the credential is
 //	    the same one. Hex, 32 to 64 chars, inside the SSH session.
-//	    Answers: mounted host=<addr> port=445 share=<s> user=<u>
+//	    Answers: mounted host=<name> port=445 share=<s> user=<u> - a NAME the
+//	    cluster resolves (the helper's alias, the Swarm service, a Service in
+//	    front of the pod), never an address: the client may reach it through
+//	    the agent's resolver (macOS, Linux) or through plug's own DNS by name
+//	    (Windows, whose SMB client wants port 445 of a name it resolves).
 //	unmount-volume <name> <volume> <agent-port>
 //	    stop it. "ok" | "error: …"
 //	volumes-of <name>
@@ -363,22 +367,9 @@ func dockerMountVolume(name, volume, agentPort, pass string, self selfInfo) {
 		_, _ = dockerAPI("DELETE", "/containers/"+created.Id+"?force=1", nil, nil)
 		answer("error: starting the mount helper: %v", err)
 	}
-	// Its address on the first network, rather than its name: an address needs
-	// no embedded DNS to be reached, and the default bridge has none.
-	var started struct {
-		NetworkSettings struct {
-			Networks map[string]struct {
-				IPAddress string `json:"IPAddress"`
-			} `json:"Networks"`
-		} `json:"NetworkSettings"`
-	}
-	host := helper
-	if code, err := dockerAPI("GET", "/containers/"+created.Id+"/json", nil, &started); err == nil && code == 200 {
-		if ip := started.NetworkSettings.Networks[nets[0]].IPAddress; ip != "" {
-			host = ip
-		}
-	}
-	answer("%s", mountReply(host))
+	// Its name: an alias on every network the agent is on, which the embedded
+	// DNS answers - the same footing as a signpost's alias.
+	answer("%s", mountReply(helper))
 }
 
 func mountEnv(pass string) []string {
@@ -693,6 +684,7 @@ func k8sMountPod(ns, helper, name, volume, claim, node, image, owner, pass strin
 				mountLabel:       "1",
 				mountOfLabel:     name,
 				mountVolumeLabel: labelSafe(volume),
+				mountHelperLabel: helper,
 			},
 			"annotations": map[string]string{
 				sessionOwnerLabel: owner,
@@ -700,6 +692,30 @@ func k8sMountPod(ns, helper, name, volume, claim, node, image, owner, pass strin
 			},
 		},
 		"spec": spec,
+	}
+}
+
+// mountHelperLabel is the pod label the helper's Service selects on: the
+// helper's own name, one pod behind one name.
+const mountHelperLabel = "plug.mount.helper"
+
+// k8sMountService is the Service that gives the helper pod a NAME the cluster
+// resolves: plug's own (k8sManaged, so the Service sweep reaps it with a dead
+// session's names) and a mount's (mountLabel), selecting the one pod.
+func k8sMountService(ns, helper, owner string) map[string]any {
+	return map[string]any{
+		"apiVersion": "v1",
+		"kind":       "Service",
+		"metadata": map[string]any{
+			"name":        helper,
+			"namespace":   ns,
+			"labels":      map[string]string{k8sManaged: "plug", mountLabel: "1"},
+			"annotations": map[string]string{sessionOwnerLabel: owner},
+		},
+		"spec": map[string]any{
+			"selector": map[string]string{mountHelperLabel: helper},
+			"ports":    []map[string]any{{"name": "smb", "port": 445, "targetPort": 445}},
+		},
 	}
 }
 
@@ -742,6 +758,13 @@ func k8sMountVolume(ns, name, volume, agentPort, pass string) {
 	if err != nil {
 		answer("error: creating the mount helper pod: %v", err)
 	}
+	// The name in front of it. A leftover Service of this name is this
+	// session's earlier try: replaced.
+	_, _ = k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/services/"+helper, nil, nil)
+	if _, err := k8sAPI("POST", "/api/v1/namespaces/"+ns+"/services", k8sMountService(ns, helper, owner), nil); err != nil {
+		_, _ = k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/pods/"+helper, nil, nil)
+		answer("error: creating the mount helper's Service: %v", err)
+	}
 	// Its address, once it has one. Scheduling is seconds; the client keeps
 	// probing the port after this, so only the address is waited for here.
 	ip := ""
@@ -764,12 +787,16 @@ func k8sMountVolume(ns, name, volume, agentPort, pass string) {
 	}
 	if ip == "" {
 		_, _ = k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/pods/"+helper, nil, nil)
+		_, _ = k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/services/"+helper, nil, nil)
 		answer("error: the mount helper pod got no address in 30s — is the claim %q bindable on node %q?", claim, node)
 	}
-	answer("%s", mountReply(ip))
+	answer("%s", mountReply(helper))
 }
 
 func k8sUnmountVolume(ns, helper string) error {
+	if code, err := k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/services/"+helper, nil, nil); err != nil && code != 404 {
+		return fmt.Errorf("removing the mount helper's Service %s: %v", helper, err)
+	}
 	code, err := k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/pods/"+helper, nil, nil)
 	if err != nil && code != 404 {
 		return fmt.Errorf("removing the mount helper pod %s: %v", helper, err)
@@ -853,6 +880,7 @@ func k8sSweepMountHelpers(ns string) {
 	}
 	for _, p := range list.Items {
 		if !sessionLive(p.Metadata.Annotations[sessionOwnerLabel]) {
+			_, _ = k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/services/"+p.Metadata.Name, nil, nil)
 			_, _ = k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/pods/"+p.Metadata.Name, nil, nil)
 		}
 	}

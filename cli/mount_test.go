@@ -275,3 +275,30 @@ func TestWorkloadVolumesReply(t *testing.T) {
 		t.Fatal("an off-protocol answer is refused")
 	}
 }
+
+// The projection's repointing of variables at the automatic mounts: the
+// longest cluster path wins, a value under it keeps its tail, anything else
+// is left alone. Windows-shaped locals (a drive letter) join the same way.
+func TestLocalizeVolumeEnv(t *testing.T) {
+	mounts := []volumeMount{
+		{cluster: "/data", local: filepath.Join("/tmp", "plug-vol-1", "data")},
+		{cluster: "/data/logs", local: filepath.Join("/tmp", "plug-vol-1", "data", "logs")},
+	}
+	got := localizeVolumeEnv([]string{
+		"A=/data", "B=/data/x/y", "C=/data/logs/today", "D=/database", "E=relative", "F=/other", "NOEQ",
+	}, mounts)
+	want := []string{
+		"A=" + mounts[0].local,
+		"B=" + filepath.Join(mounts[0].local, "x", "y"),
+		"C=" + filepath.Join(mounts[1].local, "today"),
+		"D=/database", "E=relative", "F=/other", "NOEQ",
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("%d: got %q, want %q", i, got[i], want[i])
+		}
+	}
+	if r := localizeVolumeEnv([]string{"A=/data"}, nil); r[0] != "A=/data" {
+		t.Error("no mounts, no change")
+	}
+}

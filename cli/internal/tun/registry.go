@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 // The client registry, shared by the macOS daemon and the Windows service (the
@@ -354,3 +356,80 @@ func markerStillItsProcess(dir string, pid int) bool {
 	start, ok := procStart(pid)
 	return !ok || start == want
 }
+
+// pinsFileSuffix names the sidecar listing the cluster names a client PINNED
+// to its cluster, one per line: names only that client's session can have
+// minted (a live-mount helper's), which the router then attributes to the
+// cluster without an ancestry walk. Its own suffix, like the others, so an
+// older daemon never reads it as a pid.
+const pinsFileSuffix = ".pins"
+
+// PinName records name as belonging to pid's cluster (key) for as long as the
+// client is registered; the sidecar goes with the marker. Appends, so a
+// session with several mounts lists them all.
+func PinName(key string, pid int, name string) {
+	file := filepath.Join(clientsDir(key), strconv.Itoa(pid)+pinsFileSuffix)
+	f, err := os.OpenFile(file, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return
+	}
+	_, _ = f.WriteString(strings.ToLower(name) + "\n")
+	f.Close()
+}
+
+// UnpinNames forgets every name pid pinned.
+func UnpinNames(key string, pid int) {
+	_ = os.Remove(filepath.Join(clientsDir(key), strconv.Itoa(pid)+pinsFileSuffix))
+}
+
+// pinnedCluster answers the cluster a name is pinned to by a LIVE client, or
+// nothing. Scans the registry (a directory per cluster, a small file per
+// pinning client); a per-name verdict is kept for a few seconds, since a
+// mount opens many flows in a row.
+func pinnedCluster(name string) (string, bool) {
+	name = strings.ToLower(name)
+	pinMu.Lock()
+	if e, ok := pinCache[name]; ok && time.Since(e.at) < 5*time.Second {
+		pinMu.Unlock()
+		return e.key, e.key != ""
+	}
+	pinMu.Unlock()
+	key := ""
+	dirs, _ := filepath.Glob(filepath.Join(graftDir, "*.clients"))
+scan:
+	for _, dir := range dirs {
+		pins, _ := filepath.Glob(filepath.Join(dir, "*"+pinsFileSuffix))
+		for _, file := range pins {
+			pid, err := strconv.Atoi(strings.TrimSuffix(filepath.Base(file), pinsFileSuffix))
+			if err != nil || !processAlive(pid) {
+				continue
+			}
+			b, err := os.ReadFile(file)
+			if err != nil {
+				continue
+			}
+			for _, line := range strings.Split(string(b), "\n") {
+				if strings.TrimSpace(line) == name {
+					if k, err := os.ReadFile(filepath.Join(dir, strconv.Itoa(pid))); err == nil {
+						key = strings.TrimSpace(string(k))
+						break scan
+					}
+				}
+			}
+		}
+	}
+	pinMu.Lock()
+	pinCache[name] = pinEntry{key: key, at: time.Now()}
+	pinMu.Unlock()
+	return key, key != ""
+}
+
+type pinEntry struct {
+	key string
+	at  time.Time
+}
+
+var (
+	pinMu    sync.Mutex
+	pinCache = map[string]pinEntry{}
+)

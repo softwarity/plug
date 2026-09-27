@@ -308,25 +308,34 @@ func TestLiveMountAutomatic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("startMounts: %v", err)
 	}
-	paths, dir := autoMountsFor(name)
-	if dir == "" || len(paths) == 0 {
+	mounts := autoMountsFor(name)
+	if len(mounts) == 0 {
 		stop()
 		t.Fatalf("nothing was mounted automatically for %s", name)
 	}
-	local := filepath.Join(dir, filepath.FromSlash(paths[0]))
+	local := mounts[0].local
+	dir := autoMounts[name].dir
 	if !mountedAt(local) {
 		stop()
-		t.Fatalf("%s (for %s) is not a mountpoint", local, paths[0])
+		t.Fatalf("%s (for %s) is not a mountpoint", local, mounts[0].cluster)
 	}
-	t.Logf("%s mounted at %s", paths[0], local)
+	t.Logf("%s mounted at %s", mounts[0].cluster, local)
+	// The projection's repointing, on a variable naming the volume and one
+	// naming a file under it.
+	got := localizeVolumeEnv([]string{"VOL_DIR=" + mounts[0].cluster, "F=" + mounts[0].cluster + "/seed.txt", "OTHER=/elsewhere"}, mounts)
+	if got[0] != "VOL_DIR="+local || got[1] != "F="+filepath.Join(local, "seed.txt") || got[2] != "OTHER=/elsewhere" {
+		t.Errorf("repointed: %v", got)
+	}
 	stop()
 	if mountedAt(local) {
 		t.Errorf("still mounted after the teardown")
 	}
-	if _, err := os.Stat(dir); err == nil {
-		t.Errorf("the session directory %s survived the teardown", dir)
+	if dir != "" {
+		if _, err := os.Stat(dir); err == nil {
+			t.Errorf("the session directory %s survived the teardown", dir)
+		}
 	}
-	if p, d := autoMountsFor(name); d != "" || p != nil {
+	if autoMountsFor(name) != nil {
 		t.Errorf("autoMountsFor still answers after the teardown")
 	}
 	// --no-mount: nothing happens, no transport is even dialled.
@@ -336,7 +345,7 @@ func TestLiveMountAutomatic(t *testing.T) {
 		t.Fatal(err)
 	}
 	stop()
-	if _, d := autoMountsFor(name); d != "" {
+	if autoMountsFor(name) != nil {
 		t.Errorf("--no-mount mounted something")
 	}
 }

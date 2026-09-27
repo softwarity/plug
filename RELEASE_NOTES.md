@@ -40,8 +40,9 @@ gains `pods` create/delete and `persistentvolumeclaims` get: re-apply
 package it installs; the only SMB2 server written in Go is AGPL and has no
 authentication).
 
-Windows: not yet - the automatic mounts step aside with one line, an explicit
-`--mount` says so.
+On Windows the share is reached by name through plug's own DNS and lands on a
+drive letter (`Z:` downwards for an automatic mount; `--mount /data:Y:` to
+name one), the variables repointed at it the same way.
 
 ### CI: a failed e2e leg now shows RED instead of being lost among cancelled jobs
 

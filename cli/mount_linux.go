@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -23,14 +24,23 @@ func mountSupported() error { return nil }
 
 func mountBindAddr() string { return "127.0.0.1:0" }
 
-func mountSMB(local, share, user, pass, path string) error {
+func mountUsesForward() bool { return true }
+
+// autoMountPath is where an automatic mount goes: under the session
+// directory, at its cluster path.
+func autoMountPath(dir, clusterPath string) string {
+	return filepath.Join(dir, filepath.FromSlash(clusterPath))
+}
+
+func mountSMB(t mountTarget, path string) (string, error) {
 	if err := ensureMountpoint(path); err != nil {
-		return err
+		return "", err
 	}
-	host, port, err := net.SplitHostPort(local)
+	host, port, err := net.SplitHostPort(t.local)
 	if err != nil {
-		return err
+		return "", err
 	}
+	share, user, pass := t.share, t.user, t.pass
 	uid, gid := os.Getuid(), os.Getgid()
 	if u, g, ok := resolveDropTarget(os.Geteuid(), uid, gid, os.Getenv("SUDO_UID"), os.Getenv("SUDO_GID")); ok {
 		uid, gid = u, g
@@ -39,14 +49,14 @@ func mountSMB(local, share, user, pass, path string) error {
 		host, port, user, pass, uid, gid)
 	if err := unix.Mount("//"+host+"/"+share, path, "cifs", 0, opts); err != nil {
 		if errors.Is(err, unix.ENODEV) {
-			return errors.New("the cifs filesystem is not available in this kernel (modprobe cifs, or install the kernel's extra modules)")
+			return "", errors.New("the cifs filesystem is not available in this kernel (modprobe cifs, or install the kernel's extra modules)")
 		}
 		if errors.Is(err, unix.EPERM) {
-			return errors.New("mount(2) refused: plug needs cap_sys_admin (re-run the install one-liner)")
+			return "", errors.New("mount(2) refused: plug needs cap_sys_admin (re-run the install one-liner)")
 		}
-		return err
+		return "", err
 	}
-	return nil
+	return path, nil
 }
 
 func unmountSMB(path string) error {
@@ -91,3 +101,10 @@ func ensureMountpoint(path string) error {
 	chownToUser(path)
 	return nil
 }
+
+// pinMountName / unpinMountNames: nothing to pin here. The helper's name is
+// dialled by this process through its own forward, never by the kernel
+// through the machine's datapath (see mount_windows.go).
+func pinMountName(config, string) {}
+
+func unpinMountNames(config) {}

@@ -28,16 +28,25 @@ func mountSupported() error { return nil }
 
 func mountBindAddr() string { return "127.0.0.1:0" }
 
-func mountSMB(local, share, user, pass, path string) error {
+func mountUsesForward() bool { return true }
+
+// autoMountPath is where an automatic mount goes: under the session
+// directory, at its cluster path.
+func autoMountPath(dir, clusterPath string) string {
+	return filepath.Join(dir, filepath.FromSlash(clusterPath))
+}
+
+func mountSMB(t mountTarget, path string) (string, error) {
 	if err := ensureMountpoint(path); err != nil {
-		return err
+		return "", err
 	}
-	host, port, err := net.SplitHostPort(local)
+	host, port, err := net.SplitHostPort(t.local)
 	if err != nil {
-		return err
+		return "", err
 	}
+	share, user, pass := t.share, t.user, t.pass
 	if err := ensureLoopbackSMBConfig(host); err != nil {
-		return err
+		return "", err
 	}
 	// //user:pass@host:port/share - the password is hex, so it needs no
 	// escaping, and it lives on this one short-lived command line only.
@@ -50,7 +59,7 @@ func mountSMB(local, share, user, pass, path string) error {
 		if msg == "" {
 			msg = err.Error()
 		}
-		return errors.New(msg)
+		return "", errors.New(msg)
 	}
 	// Mounted; can this process, and so the command (same responsible app),
 	// look inside? TCC decides that per APP, not per user, and answers EPERM
@@ -61,7 +70,7 @@ func mountSMB(local, share, user, pass, path string) error {
 		info("      Allow the app you run plug from (Terminal, iTerm, your editor) under System Settings >")
 		info("      Privacy & Security > Files and Folders > Network Volumes, or run plug from Terminal.")
 	}
-	return nil
+	return path, nil
 }
 
 // unmountSMB unmounts, trying umount first and diskutil after it: umount runs
@@ -170,3 +179,10 @@ func hasNsmbSection(conf []byte, server string) bool {
 	}
 	return false
 }
+
+// pinMountName / unpinMountNames: nothing to pin here. The helper's name is
+// dialled by this process through its own forward, never by the kernel
+// through the machine's datapath (see mount_windows.go).
+func pinMountName(config, string) {}
+
+func unpinMountNames(config) {}

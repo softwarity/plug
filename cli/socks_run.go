@@ -592,9 +592,13 @@ func projectWorkloadEnv(tr *tunnel.Transport, name string, p envPolicy) {
 	// And its data VOLUMES, mounted live by startMounts before this ran
 	// (option B, the same shape): the variables naming a volume's cluster
 	// path now name the mount.
-	if paths, dir := autoMountsFor(name); dir != "" {
-		vars = localizeFileEnv(vars, paths, dir)
-		info("%s: %d volume(s) mounted live under %s and repointed", name, len(paths), dir)
+	if mounts := autoMountsFor(name); len(mounts) > 0 {
+		vars = localizeVolumeEnv(vars, mounts)
+		var where []string
+		for _, m := range mounts {
+			where = append(where, m.cluster+" → "+m.local)
+		}
+		info("%s: %d volume(s) mounted live and repointed: %s", name, len(mounts), strings.Join(where, ", "))
 	}
 	set, kept, empty := mergeWorkloadEnvWithEmpty(vars, os.Environ(), p)
 	applyWorkloadEnv(set)
