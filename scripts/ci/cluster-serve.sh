@@ -38,7 +38,8 @@ $compose up -d --build --wait \
   flaky-linux flaky-mac flaky-win tko-linux tko-mac tko-win tko-arm prober gateway \
   chaos res-tko-linux res-tko-mac res-tko-win \
   res-agent-linux res-agent-mac res-agent-win \
-  prev-agent-linux prev-agent-mac prev-agent-win
+  prev-agent-linux prev-agent-mac prev-agent-win \
+  vol-linux vol-mac vol-win
 $compose ps
 
 bash "$root/scripts/ci/idle-until-caller-done.sh"
