@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"time"
 )
 
 // files-of hands a plugged process the SECRET and CONFIGMAP files a workload
@@ -220,27 +221,57 @@ func swarmSecretStash(name string) string { return "/tmp/plug-secrets-" + name +
 // or no `tar` in the image (distroless) yields nothing, and files-of falls back
 // to the configs - the same limit as env's `cat` on a distroless image.
 func swarmReadSecrets(service string) []byte {
+	// Patience, because of WHEN this runs: at park, and a park often follows
+	// a restore by seconds (the e2e's back-to-back takeovers; a developer's
+	// re-run). The service was just scaled back up, its tasks are "running"
+	// by desire and still starting in fact, and an exec into a container that
+	// has not started fails - so the read found nothing and the secret was
+	// silently not projected, on one session in four, on two legs at once.
+	// Only a task whose container actually runs is asked, and the moment none
+	// does yet is waited out rather than taken as the answer.
+	// Only that moment: a task that runs and has nothing to give (a service
+	// with no secret, the common case) is the answer at once, not 15 seconds
+	// of a takeover spent asking again.
+	deadline := time.Now().Add(swarmSecretsPatience)
+	for {
+		tb, sawRunning := swarmReadSecretsOnce(service)
+		if len(tb) > 0 || sawRunning || time.Now().After(deadline) {
+			return tb
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// swarmSecretsPatience bounds the wait above. A var so a test can zero it.
+var swarmSecretsPatience = 15 * time.Second
+
+// swarmReadSecretsOnce is one attempt: the tarball, and whether any task of
+// the service was actually running (then a nil tarball means "nothing to
+// read", not "not yet").
+func swarmReadSecretsOnce(service string) (tarball []byte, sawRunning bool) {
 	filter := `{"service":["` + service + `"],"desired-state":["running"]}`
 	var tasks []struct {
 		Status struct {
+			State           string `json:"State"`
 			ContainerStatus struct {
 				ContainerID string `json:"ContainerID"`
 			} `json:"ContainerStatus"`
 		} `json:"Status"`
 	}
 	if code, err := dockerAPI("GET", "/tasks?filters="+url.QueryEscape(filter), nil, &tasks); err != nil || code != 200 {
-		return nil
+		return nil, true // an API that cannot answer is not a task that is starting
 	}
 	for _, t := range tasks {
 		id := t.Status.ContainerStatus.ContainerID
-		if id == "" {
+		if id == "" || t.Status.State != "running" {
 			continue
 		}
-		if tarball, err := dockerExec(id, []string{"tar", "-c", "-C", "/", strings.TrimPrefix(secretsMount, "/")}); err == nil && len(tarball) > 0 {
-			return tarball
+		sawRunning = true
+		if tb, err := dockerExec(id, []string{"tar", "-c", "-C", "/", strings.TrimPrefix(secretsMount, "/")}); err == nil && len(tb) > 0 {
+			return tb, true
 		}
 	}
-	return nil
+	return nil, sawRunning
 }
 
 // swarmStashSecrets reads the secrets while a task still runs and keeps them for
