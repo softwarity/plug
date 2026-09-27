@@ -45,6 +45,11 @@ import (
 //	    (Windows, whose SMB client wants port 445 of a name it resolves).
 //	unmount-volume <name> <volume> <agent-port>
 //	    stop it. "ok" | "error: …"
+//	mount-status <name> <volume> <agent-port>
+//	    where the helper stands, for the client's progress line and for the
+//	    reason when it never answers: "status <state>: <what the orchestrator
+//	    says>" - a Swarm task pending on a constrained node, a pod that cannot
+//	    pull its image, a container that exited.
 //	volumes-of <name>
 //	    the paths the workload mounts a DATA volume at (a Docker volume, a
 //	    bind, a PVC; never a tmpfs, never /run/secrets, which files-of owns):
@@ -144,6 +149,130 @@ func doMountVolume(cmd []string) {
 		answer("error: %q is not a valid port", cmd[3])
 	}
 	mountVolume(cmd[1], cmd[2], cmd[3], cmd[4])
+}
+
+func doMountStatus(cmd []string) {
+	if len(cmd) != 4 || !nameRe.MatchString(cmd[1]) || !volumeArgOK(cmd[2]) {
+		answer("error: usage: mount-status <name> <volume-or-path> <agent-port>")
+	}
+	if n, err := strconv.Atoi(cmd[3]); err != nil || n < 1 || n > 65535 {
+		answer("error: %q is not a valid port", cmd[3])
+	}
+	answer("%s", mountStatus(mountHelperName(cmd[1], cmd[2], cmd[3])))
+}
+
+// mountStatus is the helper's state as its orchestrator reports it, one
+// line: "status <state>: <message>". The message is the orchestrator's own
+// words - "no suitable node (scheduling constraints not satisfied on 2
+// nodes)", "ImagePullBackOff" - which is what a developer needs to read when
+// a mount is slow or never comes.
+func mountStatus(helper string) string {
+	switch {
+	case k8sAvailable():
+		return statusLine(k8sMountStatus(k8sNamespace(), helper))
+	case dockerAvailable():
+		if swarmManager() {
+			if code, _ := dockerAPI("GET", "/services/"+helper, nil, nil); code == 200 {
+				return statusLine(swarmMountStatus(helper))
+			}
+		}
+		return statusLine(dockerMountStatus(helper))
+	}
+	return "status unknown: no orchestrator"
+}
+
+func statusLine(state, msg string) string {
+	if msg == "" {
+		return "status " + state
+	}
+	return "status " + state + ": " + msg
+}
+
+func dockerMountStatus(helper string) (string, string) {
+	var insp struct {
+		State struct {
+			Status   string `json:"Status"`
+			Error    string `json:"Error"`
+			ExitCode int    `json:"ExitCode"`
+		} `json:"State"`
+	}
+	if code, err := dockerAPI("GET", "/containers/"+helper+"/json", nil, &insp); err != nil || code != 200 {
+		return "absent", "no such container"
+	}
+	msg := insp.State.Error
+	if insp.State.Status == "exited" && msg == "" {
+		msg = fmt.Sprintf("exit code %d (docker logs %s)", insp.State.ExitCode, helper)
+	}
+	return insp.State.Status, msg
+}
+
+func swarmMountStatus(helper string) (string, string) {
+	var tasks []struct {
+		CreatedAt string `json:"CreatedAt"`
+		Status    struct {
+			State   string `json:"State"`
+			Message string `json:"Message"`
+			Err     string `json:"Err"`
+		} `json:"Status"`
+	}
+	f := `{"service":["` + helper + `"]}`
+	if _, err := dockerAPI("GET", "/tasks?filters="+urlEscape(f), nil, &tasks); err != nil || len(tasks) == 0 {
+		return "pending", "no task yet"
+	}
+	latest := tasks[0]
+	for _, t := range tasks[1:] {
+		if t.CreatedAt > latest.CreatedAt {
+			latest = t
+		}
+	}
+	msg := latest.Status.Err
+	if msg == "" && latest.Status.State != "running" {
+		msg = latest.Status.Message
+	}
+	return latest.Status.State, msg
+}
+
+func k8sMountStatus(ns, helper string) (string, string) {
+	var pod struct {
+		Status struct {
+			Phase      string `json:"phase"`
+			Conditions []struct {
+				Type    string `json:"type"`
+				Status  string `json:"status"`
+				Reason  string `json:"reason"`
+				Message string `json:"message"`
+			} `json:"conditions"`
+			ContainerStatuses []struct {
+				State struct {
+					Waiting *struct {
+						Reason  string `json:"reason"`
+						Message string `json:"message"`
+					} `json:"waiting"`
+					Terminated *struct {
+						Reason   string `json:"reason"`
+						ExitCode int    `json:"exitCode"`
+					} `json:"terminated"`
+				} `json:"state"`
+			} `json:"containerStatuses"`
+		} `json:"status"`
+	}
+	if code, err := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/pods/"+helper, nil, &pod); err != nil || code != 200 {
+		return "absent", "no such pod"
+	}
+	for _, c := range pod.Status.Conditions {
+		if c.Type == "PodScheduled" && c.Status != "True" {
+			return "pending", strings.TrimSpace(c.Reason + " " + c.Message)
+		}
+	}
+	for _, c := range pod.Status.ContainerStatuses {
+		if w := c.State.Waiting; w != nil {
+			return strings.ToLower(pod.Status.Phase), strings.TrimSpace(w.Reason + " " + w.Message)
+		}
+		if t := c.State.Terminated; t != nil {
+			return strings.ToLower(pod.Status.Phase), fmt.Sprintf("%s, exit code %d (kubectl logs %s)", t.Reason, t.ExitCode, helper)
+		}
+	}
+	return strings.ToLower(pod.Status.Phase), ""
 }
 
 func doVolumesOf(cmd []string) {

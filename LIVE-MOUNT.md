@@ -82,6 +82,11 @@ Agent (`agent/mount.go`, `agent/mountserve.go`):
   so two developers may mount one volume, and a re-provision is a new helper
   beside the old one.
 - `unmount-volume <name> <volume-or-path> <agent-port>` - removes it.
+- `mount-status <name> <volume-or-path> <agent-port>` - where the helper
+  stands, in the orchestrator's own words ("pending: no suitable node
+  (scheduling constraints not satisfied on 2 nodes)", "ImagePullBackOff",
+  "exited, exit code 1"): what the client's progress line shows while it
+  waits, and the error when the helper never answers.
 - The helper carries `plug.mount=1`, `plug.mount.of`, `plug.mount.volume`
   and the session owner (`plug.session.owner`, a label on Docker/Swarm, an
   annotation on Kubernetes since a label cannot hold `host:port`).
@@ -106,6 +111,9 @@ Client (`cli/mount.go`, `cli/mount_{darwin,linux,windows}.go`):
   forward, mount, record. `autoMounts` is what the projection reads
   (`autoMountsFor`, one cluster path → local path per mount) to repoint
   variables with `localizeVolumeEnv`.
+- Each mount is a progress line on stderr (`cli/progress.go`): redrawn in
+  place with a spinner, the step and the elapsed time on a terminal, plain
+  lines otherwise; the helper's state is asked every 3 s while waiting.
 - `OnRearm` of the liveness forward re-provisions every helper under the new
   port and retargets the forwards (and re-pins the new name on Windows).
 - Windows and the multicluster router: the kernel's SMB client is nobody's
@@ -197,8 +205,10 @@ sensitive one.
   own reconnection after a tunnel blip is Windows' to do (not exercised).
 - SQLite/GeoPackage files over SMB: range locks are weaker than local ones;
   flat files are fine.
-- Swarm on several nodes: the helper is placed on the node of the workload's
-  last task; a local volume elsewhere is not seen.
+- Swarm on several nodes: the helper follows the node of the workload's last
+  task (what Swarm itself would give the workload); a service that never ran
+  has no node to follow. A helper that cannot be placed says so through
+  mount-status ("no suitable node …") rather than timing out mute.
 - The agent image is +80 MB for Samba.
 - Throughput and per-operation latency are those of SMB over an SSH tunnel:
   fine for a development session, not a data pipeline.

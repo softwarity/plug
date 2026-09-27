@@ -382,20 +382,45 @@ func splice(a, b net.Conn) {
 
 // mountHelperReady waits for the helper to answer on its port: scheduling and
 // smbd's start are seconds, a pod pulling its image can be more. Short dials,
-// retried, as the exposes' verify does.
-func mountHelperReady(tr *tunnel.Transport, addr string, budget time.Duration) error {
+// retried, as the exposes' verify does. Every few seconds the agent is asked
+// where the helper stands (mount-status) and the progress line says it - a
+// task pending on a constrained node, a pod pulling its image - and when the
+// budget runs out that last word is the error, not a bare timeout.
+func mountHelperReady(tr *tunnel.Transport, addr string, budget time.Duration, status func() string, p *progress) error {
 	deadline := time.Now().Add(budget)
+	lastAsk := time.Time{}
+	last := ""
 	for {
 		c, err := tr.DialClusterTimeout(addr, 2*time.Second)
 		if err == nil {
 			c.Close()
 			return nil
 		}
+		if time.Since(lastAsk) > 3*time.Second {
+			lastAsk = time.Now()
+			if st := status(); st != "" {
+				last = st
+				p.step("helper " + st)
+			}
+		}
 		if time.Now().After(deadline) {
+			if last != "" {
+				return fmt.Errorf("the mount helper did not answer within %s; its state: %s", budget, last)
+			}
 			return fmt.Errorf("the mount helper at %s did not answer within %s: %v", addr, budget, err)
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
+}
+
+// helperStatus asks the agent where the helper stands; "" when it cannot say
+// (an agent too old for the verb answers "unknown command", which is no news).
+func helperStatus(tr *tunnel.Transport, m *liveMount, agentPort string) string {
+	out, err := tr.Exec("mount-status " + m.spec.name + " " + m.spec.volume + " " + agentPort)
+	if err != nil || !strings.HasPrefix(out, "status ") {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(out, "status "))
 }
 
 // liveMount is one mounted volume, everything its teardown needs.
@@ -527,16 +552,21 @@ func startMounts(cfg config) (func(), error) {
 			return fail(errors.New("no entropy to mint the mount credential"))
 		}
 		mounts = append(mounts, m)
+		p := startProgress("mounting " + spec.volume + " of " + spec.name)
+		p.step("asking the agent for a helper")
 		reply, err := provisionMount(tr, m, live.AgentPort())
 		if err != nil {
+			p.done("failed")
 			return fail(err)
 		}
 		pinMountName(cfg, reply.host)
 		target := net.JoinHostPort(reply.host, reply.port)
-		info("mount helper for %s of %s is up at %s", spec.volume, spec.name, target)
-		if err := mountHelperReady(tr, target, 90*time.Second); err != nil {
+		p.step("helper " + reply.host + " starting")
+		if err := mountHelperReady(tr, target, 90*time.Second, func() string { return helperStatus(tr, m, live.AgentPort()) }, p); err != nil {
+			p.done("failed")
 			return fail(err)
 		}
+		p.step("mounting")
 		t := mountTarget{mountReply: reply, pass: m.pass}
 		if mountUsesForward() || cfg.dockerRun {
 			fw, err := newMountForward("127.0.0.1:0", target, tr.DialCluster)
@@ -550,11 +580,12 @@ func startMounts(cfg config) (func(), error) {
 			// Not mounted here: handed to the container as a cifs volume the
 			// daemon mounts through the forward (dockerMountFlags).
 			dockerMounts = append(dockerMounts, dockerMount{spec: spec, target: t})
-			info("volume %s of %s is served for the container through %s", spec.volume, spec.name, t.local)
+			p.done("served for the container through " + t.local)
 			continue
 		}
 		at, err := mountSMB(t, spec.path)
 		if err != nil {
+			p.done("failed")
 			return fail(fmt.Errorf("mounting %s of %s at %s: %w", spec.volume, spec.name, spec.path, err))
 		}
 		m.spec.path = at
@@ -565,7 +596,7 @@ func startMounts(cfg config) (func(), error) {
 			a.mounts = append(a.mounts, volumeMount{cluster: spec.volume, local: at})
 			autoMounts[spec.name] = a
 		}
-		info("mounted %s of %s at %s (read-write, live)", spec.volume, spec.name, at)
+		p.done("mounted at " + at + ", read-write, live")
 	}
 	if len(mounts) == 0 {
 		tr.Close()

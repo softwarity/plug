@@ -343,3 +343,21 @@ func TestK8sMountServiceShape(t *testing.T) {
 		t.Fatal("the pod must carry the label the Service selects")
 	}
 }
+
+// mount-status: one line, the orchestrator's words after the state.
+func TestMountStatusLine(t *testing.T) {
+	if statusLine("running", "") != "status running" || statusLine("pending", "no suitable node") != "status pending: no suitable node" {
+		t.Fatal("statusLine")
+	}
+	var answered string
+	old := answer
+	answer = func(format string, a ...any) { answered = fmt.Sprintf(format, a...); panic("answered") }
+	defer func() { answer = old }()
+	for _, c := range [][]string{{"mount-status"}, {"mount-status", "web", "data"}, {"mount-status", "Web", "data", "40000"}, {"mount-status", "web", "data", "x"}} {
+		answered = ""
+		func() { defer func() { recover() }(); dispatch(c) }()
+		if !strings.HasPrefix(answered, "error: ") {
+			t.Errorf("%v: expected a refusal, got %q", c, answered)
+		}
+	}
+}
