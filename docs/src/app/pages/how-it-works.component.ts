@@ -203,7 +203,16 @@ import { RouterLink } from '@angular/router';
       borrowing its neighbour's). Its <strong>mounted secret and config files</strong> come too - a
       CA in PEM, a keystore - read through the same exec, materialised for the session and the
       variables that name their path repointed, with no FUSE mount (or mounted at their exact
-      path under <code>--dockerrun</code>). The peers those variables name the Kubernetes way,
+      path under <code>--dockerrun</code>). And its <strong>data volumes</strong> - a Docker volume,
+      a bind, a PersistentVolumeClaim - are <strong>mounted on your machine, live and
+      read-write</strong>, for the session, by default: the agent starts a helper beside the
+      workload (its own image, with the volume mounted, serving it over SMB), plug reaches it
+      through the tunnel like any service and mounts it with the SMB client the OS already has -
+      nothing to install. Each volume lands under the session's directory at its cluster path,
+      the variables naming it repointed, so the process finds its data where its environment
+      says; <code>--no-mount</code> opts out, <code>--mount /data</code> puts one at the exact path.
+      The helper is tied to the session as the name is: reaped by the agent when the session
+      dies, re-provisioned after a reconnect with the mount left untouched. The peers those variables name the Kubernetes way,
       <code>rabbitmq.shop.svc.cluster.local</code>, resolve through plug like the bare name does,
       whole, so a Service in another namespace is reached as the pod reaches it. A name held by another live plug session is refused, and the refusal
       <a routerLink="/troubleshooting">names the process holding it</a>. That claim is the agent's,

@@ -196,8 +196,7 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
           the agent within the minute and its mount cleaned by the next run or
           <code>plug doctor --fix</code>. Kubernetes: the helper pod is pinned to the workload's
           node (ReadWriteOnce is one node, not one pod); the RBAC needs <code>pods</code>
-          create/delete, re-apply <code>plug-k8s.yaml</code>. Not yet: Windows, and with
-          <code>--dockerrun</code>. SQLite/GeoPackage files over SMB are risky (range locks).
+          create/delete, re-apply <code>plug-k8s.yaml</code>. Windows: not yet.
         </td>
       </tr>
       <tr>

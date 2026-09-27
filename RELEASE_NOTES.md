@@ -40,10 +40,8 @@ gains `pods` create/delete and `persistentvolumeclaims` get: re-apply
 package it installs; the only SMB2 server written in Go is AGPL and has no
 authentication).
 
-Not yet: Windows (the SMB redirector wants port 445 of a dedicated address,
-which is the half not written; `--mount` says so), and `--mount` with
-`--dockerrun`. Known limit: SQLite/GeoPackage files on an SMB mount are risky
-(range locks); flat files are fine.
+Windows: not yet - the automatic mounts step aside with one line, an explicit
+`--mount` says so.
 
 ### CI: a failed e2e leg now shows RED instead of being lost among cancelled jobs
 
