@@ -2,15 +2,21 @@
 
 ## NEXT RELEASE
 
-### `--mount`: a workload's volume or PVC, live and read-write, at a path on your machine
+### The workload's volumes and PVCs are mounted live, read-write, by default
 
 The projection of 2.16-2.19 copied a workload's secrets and configs once at
 session start. Its DATA - a Docker volume, a bind, a PersistentVolumeClaim - was
 out of reach: a process replacing GeoServer could not touch its data directory.
-`--mount` puts that volume at a path here, for the length of the session, read
-and written live, in every mode:
+Now a takeover (`-s`) and `--env-of` mount every data volume of the workload,
+without being told: each lands under the session's temp directory at its
+cluster path, and the variables that name that path are repointed there - the
+same shape as the mounted secret files - so the process finds its data where
+its environment says and knows nothing. `--no-mount` turns that off,
+`--no-mount=/a,/b` leaves those out. `--mount` is the explicit form, at the
+exact path, for a process that hard-codes one:
 
-    plug -s geo:8080:8080 --mount /data npm start          # the parked workload's /data, at /data
+    plug -s geo:8080:8080 npm start                        # geo's volumes mounted, GEOSERVER_DATA_DIR repointed
+    plug -s geo:8080:8080 --mount /data npm start          # geo's /data, at /data here, exactly
     plug -c --env-of geo --mount data:/srv/data python job.py   # its volume "data", at /srv/data
     plug -c --mount api:/data:/srv/data …                  # the volume of a named workload
 

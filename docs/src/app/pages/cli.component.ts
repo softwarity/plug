@@ -180,8 +180,12 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
         <td><code>--mount &lt;spec&gt;</code></td>
         <td>
           put one of the workload's <strong>volumes</strong> at a path here, <strong>live, read-write</strong>,
-          for the session - a Docker volume, a bind, a PersistentVolumeClaim.
-          <code>--mount /data</code> is its <code>/data</code> at <code>/data</code>;
+          for the session - a Docker volume, a bind, a PersistentVolumeClaim. <strong>By default</strong> every
+          data volume of the workload a <code>-s</code> takes over (or <code>--env-of</code> names) is mounted
+          without this flag: under the session's temp directory, at its cluster path, the variables naming
+          it repointed - the process finds its data where its environment says. <code>--no-mount</code>
+          turns that off, <code>--no-mount=/a,/b</code> leaves those out. <code>--mount</code> is the
+          explicit form, at the exact path: <code>--mount /data</code> is its <code>/data</code> at <code>/data</code>;
           <code>--mount data:/srv/data</code> its volume "data" at <code>/srv/data</code>;
           <code>--mount api:/data:/srv/data</code> names the workload. Unnamed, it is the
           <code>-s</code> one or the <code>--env-of</code> one. Repeatable. Nothing is installed:

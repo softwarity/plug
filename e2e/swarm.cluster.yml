@@ -237,18 +237,24 @@ services:
   # cluster. One replica: a local volume lives on one node.
   vol-linux:
     image: busybox:1.37
+    environment:
+      VOL_DIR: /data
     command: ["sh", "-c", "mkdir -p /data && printf seed-from-vol-linux > /data/seed.txt && exec httpd -f -p 8120 -h /data"]
     volumes: [vol-linux:/data]
     networks: [internal]
     deploy: { replicas: 1 }
   vol-mac:
     image: busybox:1.37
+    environment:
+      VOL_DIR: /data
     command: ["sh", "-c", "mkdir -p /data && printf seed-from-vol-mac > /data/seed.txt && exec httpd -f -p 8121 -h /data"]
     volumes: [vol-mac:/data]
     networks: [internal]
     deploy: { replicas: 1 }
   vol-win:
     image: busybox:1.37
+    environment:
+      VOL_DIR: /data
     command: ["sh", "-c", "mkdir -p /data && printf seed-from-vol-win > /data/seed.txt && exec httpd -f -p 8122 -h /data"]
     volumes: [vol-win:/data]
     networks: [internal]

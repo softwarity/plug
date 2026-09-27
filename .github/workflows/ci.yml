@@ -921,7 +921,7 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh env "$A" "$B" 2222
-      - name: Live mount — a workload's volume at a local path, read and written (--mount)
+      - name: Live mount — the workload's volumes, automatic and explicit, read and written
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh mount "$A" "$B" 2222
@@ -1247,7 +1247,7 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh env "$A" "$B" 2222
-      - name: Live mount — a workload's volume at a local path, read and written (--mount)
+      - name: Live mount — the workload's volumes, automatic and explicit, read and written
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh mount "$A" "$B" 2222
@@ -1458,7 +1458,7 @@ jobs:
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh env "$A" "$B" 2222
-      - name: Live mount — a workload's volume at a local path, read and written (--mount)
+      - name: Live mount — the workload's volumes, automatic and explicit, read and written
         if: always()
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh mount "$A" "$B" 2222

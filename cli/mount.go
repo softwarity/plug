@@ -38,6 +38,17 @@ import (
 // names are, so the next run and `plug doctor` can unmount it, and the agent's
 // sweep reaps the helper whose session no longer answers.
 
+// By DEFAULT every data volume of the workload is mounted, without being
+// named: a takeover (-s) and --env-of ask the agent what the workload mounts
+// (volumes-of) and put each volume under the session's temp directory, at its
+// cluster path, then repoint the variables that name that path - the same
+// "option B" the mounted secret files take, and for the same reason: the
+// exact path is not always creatable here (macOS seals its root, Linux plug
+// is not root). The process finds its data where its environment names it,
+// and knows nothing. --no-mount turns that off, --no-mount=/a,/b leaves those
+// out; --mount is the explicit form, at the exact path, for the process that
+// hard-codes one.
+//
 // mountSpec is one --mount: the workload, what to mount of it, and where.
 //
 //	--mount /data                  the workload's /data, at /data here
@@ -53,6 +64,55 @@ type mountSpec struct {
 }
 
 func (m mountSpec) String() string { return m.name + ":" + m.volume + ":" + m.path }
+
+// mountPolicy is what --no-mount said: off entirely, or these cluster paths
+// left out of the automatic mounts. The zero value mounts everything.
+type mountPolicy struct {
+	off  bool
+	drop map[string]bool
+}
+
+func parseNoMount(list string) mountPolicy {
+	if list == "" {
+		return mountPolicy{off: true}
+	}
+	p := mountPolicy{drop: map[string]bool{}}
+	for _, v := range strings.Split(list, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			p.drop[filepath.ToSlash(v)] = true
+		}
+	}
+	return p
+}
+
+// looksLikePathList tells "/a,/b" (a --no-mount value) from the command that
+// follows the bare flag: absolute paths, commas, nothing else.
+func looksLikePathList(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, v := range strings.Split(s, ",") {
+		if !strings.HasPrefix(v, "/") {
+			return false
+		}
+	}
+	return true
+}
+
+// autoMounts is what the automatic mounts did for each workload, read by the
+// environment projection to repoint the variables naming a volume path: the
+// cluster paths mounted, and the directory they sit under (option B).
+var autoMounts = map[string]struct {
+	dir   string
+	paths []string
+}{}
+
+// autoMountsFor is the projection's view: the paths and the directory, or
+// nothing when the workload had no volume mounted.
+func autoMountsFor(name string) (paths []string, dir string) {
+	a := autoMounts[name]
+	return a.paths, a.dir
+}
 
 // winDrivePath catches a trailing Windows path (C:\data) before the colon
 // split, since its drive letter carries the very separator the grammar uses.
@@ -287,17 +347,59 @@ type liveMount struct {
 // with. Nothing ever connects to it from this side (its local port refuses),
 // the agent's sweep only asks whether it still answers.
 func startMounts(cfg config) (func(), error) {
-	if len(cfg.mounts) == 0 {
+	explicit := cfg.mounts
+	autoNames := autoMountNames(cfg)
+	if len(explicit) == 0 && len(autoNames) == 0 {
 		return func() {}, nil
 	}
 	if err := mountSupported(); err != nil {
-		return nil, err
+		if len(explicit) > 0 {
+			return nil, err
+		}
+		// The automatic mounts are a default, not a demand: where the OS
+		// cannot yet, the session runs without them and says so once.
+		info("the workload's volumes are not mounted: %v", err)
+		return func() {}, nil
 	}
 	sweepOrphanMounts()
 	tr, err := dialTunnel(cfg)
 	if err != nil {
 		return nil, err
 	}
+	// What the workloads mount, from the agent, each under the session dir at
+	// its own cluster path. A workload with no volume mounts nothing and
+	// costs one line; an agent too old for the verb, likewise.
+	var specs []mountSpec
+	if len(autoNames) > 0 {
+		dir, derr := os.MkdirTemp("", "plug-vol-")
+		if derr != nil {
+			tr.Close()
+			return nil, derr
+		}
+		chownToUser(dir)
+		for _, name := range autoNames {
+			paths, aerr := workloadVolumes(tr, name)
+			if aerr != nil {
+				info("%s: could not list the workload's volumes (%v); none mounted", name, aerr)
+				continue
+			}
+			var kept []string
+			for _, p := range paths {
+				if cfg.mountPolicy.drop[p] {
+					continue
+				}
+				kept = append(kept, p)
+				specs = append(specs, mountSpec{name: name, volume: p, path: filepath.Join(dir, filepath.FromSlash(p))})
+			}
+			if len(kept) > 0 {
+				autoMounts[name] = struct {
+					dir   string
+					paths []string
+				}{dir, kept}
+			}
+		}
+	}
+	specs = append(specs, explicit...)
 	live, err := tr.Expose(tunnel.ExposeSpec{Name: "plug-mount", ClusterPort: "0", LocalPort: "1"})
 	if err != nil {
 		tr.Close()
@@ -326,13 +428,28 @@ func startMounts(cfg config) (func(), error) {
 				m.unmark()
 			}
 		}
+		// The session directory the automatic mounts sat under: removed only
+		// once nothing is mounted there any more - a RemoveAll through a live
+		// mount would be the volume's files, not the directory.
+		for name, a := range autoMounts {
+			delete(autoMounts, name)
+			busy := false
+			for _, p := range a.paths {
+				if mountedAt(filepath.Join(a.dir, filepath.FromSlash(p))) {
+					busy = true
+				}
+			}
+			if !busy {
+				_ = os.RemoveAll(a.dir)
+			}
+		}
 		tr.Close()
 	}
 	fail := func(err error) (func(), error) {
 		stop()
 		return nil, err
 	}
-	for _, spec := range cfg.mounts {
+	for _, spec := range specs {
 		m := &liveMount{spec: spec, pass: mintMountPass()}
 		if m.pass == "" {
 			return fail(errors.New("no entropy to mint the mount credential"))
@@ -358,6 +475,10 @@ func startMounts(cfg config) (func(), error) {
 		m.mounted = true
 		m.unmark = markMounted(spec, fw.Addr())
 		info("mounted %s of %s at %s (read-write, live)", spec.volume, spec.name, spec.path)
+	}
+	if len(mounts) == 0 {
+		tr.Close()
+		return func() {}, nil
 	}
 	// A reconnect re-allocates the liveness port: re-provision every helper
 	// under the new one, or the sweep reaps them within the minute. The hook
@@ -385,6 +506,53 @@ func startMounts(cfg config) (func(), error) {
 		}
 	}()
 	return stop, nil
+}
+
+// autoMountNames are the workloads whose volumes are mounted by default: the
+// names -s takes over and the --env-of one, unless --no-mount said no.
+func autoMountNames(cfg config) []string {
+	if cfg.mountPolicy.off {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	add := func(n string) {
+		if n != "" && !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	for _, e := range cfg.exposes {
+		add(e.Name)
+	}
+	add(cfg.envPolicy.from)
+	return out
+}
+
+// workloadVolumes asks the agent what the workload mounts as data. An agent
+// that predates the verb answers "unknown command": nothing to mount, not
+// an error - the session is as it was before the feature.
+func workloadVolumes(tr *tunnel.Transport, name string) ([]string, error) {
+	out, err := tr.Exec("volumes-of " + name)
+	if err != nil {
+		return nil, err
+	}
+	return parseVolumesReply(out)
+}
+
+func parseVolumesReply(out string) ([]string, error) {
+	out = strings.TrimSpace(out)
+	if strings.Contains(out, "unknown command") {
+		return nil, nil
+	}
+	if strings.HasPrefix(out, "error: ") {
+		return nil, errors.New(strings.TrimPrefix(out, "error: "))
+	}
+	f := strings.Fields(out)
+	if len(f) == 0 || f[0] != "volumes" {
+		return nil, fmt.Errorf("unexpected answer from the agent: %q", out)
+	}
+	return f[1:], nil
 }
 
 // provisionMount asks the agent for the helper, under this session's current

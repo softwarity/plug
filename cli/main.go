@@ -114,6 +114,14 @@ Options:
                            --mount api:data:/srv/data   the volume "data" of "api"
                          Unnamed, the workload is the -s one or the --env-of one.
                          Repeatable. macOS and Linux (Windows: not yet).
+                         BY DEFAULT every data volume of the workload a -s takes
+                         over (or --env-of names) is mounted without being told:
+                         under the session's temp dir, at its cluster path, the
+                         variables naming it repointed - the process finds its
+                         data where its environment says. --mount is the explicit
+                         form, at the exact path, for a process that hard-codes one.
+      --no-mount [/a,/b] do NOT mount the workload's volumes; --no-mount /a,/b
+                         leaves out those cluster paths and mounts the rest.
       --dockerrun        put a CONTAINER in the cluster, not a process:
                            plug -p prod -c --dockerrun docker run my-image
                          Prefixing docker with plug alone cannot work: the
@@ -162,8 +170,10 @@ type config struct {
 	port      string
 	exposes   []tunnel.ExposeSpec
 	// mounts are the --mount volumes, resolved: mounted before the command
-	// runs, unmounted after it (mount.go).
-	mounts []mountSpec
+	// runs, unmounted after it (mount.go). mountPolicy is what --no-mount said
+	// about the AUTOMATIC ones; the zero value mounts every data volume.
+	mounts      []mountSpec
+	mountPolicy mountPolicy
 	// updateMode is the cluster's update policy (none|notify|auto). It belongs
 	// to the profile because `auto` updates the AGENT, which is shared: you may
 	// govern your own cluster and have no say over the shared one.
@@ -289,6 +299,13 @@ func attachMounts(cfg *config, raw []string) {
 	cfg.mounts = specs
 }
 
+// attachMountPolicy is --no-mount's half of the same.
+func attachMountPolicy(cfg *config, noMount bool, list string) {
+	if noMount {
+		cfg.mountPolicy = parseNoMount(list)
+	}
+}
+
 // stripLeadingExposes pops the -s/--serve pairs (and a -c/--client flag) a
 // launcher left at the head of the core's argv (see launcherRun) and parses
 // them — an old launcher forwards them there without understanding them.
@@ -307,10 +324,12 @@ func stripLeadingFlags(args []string) ([]tunnel.ExposeSpec, bool, envPolicy, []s
 
 // leadingFlags is everything a launcher puts at the head of the core's argv.
 type leadingFlags struct {
-	specs  []tunnel.ExposeSpec
-	client bool
-	policy envPolicy
-	mounts []string // raw --mount values, resolved by attachMounts once exposes are known
+	specs       []tunnel.ExposeSpec
+	client      bool
+	policy      envPolicy
+	mounts      []string // raw --mount values, resolved by attachMounts once exposes are known
+	noMount     bool
+	noMountList string
 }
 
 // stripLeadingAll is the one parser; stripLeadingFlags keeps the tuple its
@@ -325,6 +344,13 @@ func stripLeadingAll(args []string) (leadingFlags, []string, error) {
 		case len(args) >= 2 && args[0] == "--mount":
 			lead.mounts = append(lead.mounts, args[1])
 			args = args[2:]
+		case len(args) >= 1 && args[0] == "--no-mount":
+			lead.noMount = true
+			args = args[1:]
+			if len(args) >= 1 && looksLikePathList(args[0]) {
+				lead.noMountList = args[0]
+				args = args[1:]
+			}
 		case len(args) >= 1 && args[0] == "--no-env":
 			args = args[1:]
 			from := policy.from // --env-of may have come first; keep it
@@ -396,8 +422,11 @@ type options struct {
 	// gets instead of the parked one's.
 	envOf string
 	// mounts: raw --mount values; validated once, re-prefixed on the core exec
-	// like -s (mount.go has the grammar).
-	mounts []string
+	// like -s (mount.go has the grammar). noMount: --no-mount was given;
+	// noMountList is what followed it ("" = all).
+	mounts      []string
+	noMount     bool
+	noMountList string
 }
 
 // policy is the environment policy the three flags add up to. The one
@@ -657,6 +686,7 @@ func launcherRun(args []string) {
 		attachExposes(&cfg, opts.exposes)
 		cfg.envPolicy = opts.policy()
 		attachMounts(&cfg, opts.mounts)
+		attachMountPolicy(&cfg, opts.noMount, opts.noMountList)
 		runCore(cfg, cmdArgs)
 		return
 	}
@@ -711,6 +741,7 @@ func launcherRun(args []string) {
 		attachExposes(&cfg, opts.exposes)
 		cfg.envPolicy = opts.policy()
 		attachMounts(&cfg, opts.mounts)
+		attachMountPolicy(&cfg, opts.noMount, opts.noMountList)
 		runCore(cfg, cmdArgs)
 		return
 	}
@@ -721,6 +752,7 @@ func launcherRun(args []string) {
 		attachExposes(&cfg, opts.exposes)
 		cfg.envPolicy = opts.policy()
 		attachMounts(&cfg, opts.mounts)
+		attachMountPolicy(&cfg, opts.noMount, opts.noMountList)
 		runCore(cfg, cmdArgs)
 		return
 	}
@@ -777,6 +809,13 @@ func launcherRun(args []string) {
 	}
 	for i := len(opts.mounts) - 1; i >= 0; i-- {
 		cmdArgs = append([]string{"--mount", opts.mounts[i]}, cmdArgs...)
+	}
+	if opts.noMount {
+		if opts.noMountList != "" {
+			cmdArgs = append([]string{"--no-mount", opts.noMountList}, cmdArgs...)
+		} else {
+			cmdArgs = append([]string{"--no-mount"}, cmdArgs...)
+		}
 	}
 	// Named through the descriptor we verified, not through its path — see
 	// execTarget. The descriptor stays open until the child is started; the child
@@ -1806,6 +1845,14 @@ func parseArgs(args []string) (options, []string) {
 			o.envOf = value()
 		case "--mount":
 			o.mounts = append(o.mounts, value())
+		case "--no-mount":
+			o.noMount = true
+			if glued {
+				o.noMountList = inline
+			} else if i+1 < len(args) && looksLikePathList(args[i+1]) {
+				o.noMountList = args[i+1]
+				i++
+			}
 		default:
 			return o, args[i:]
 		}
@@ -1818,7 +1865,8 @@ func parseArgs(args []string) (options, []string) {
 // has to know: everything else keeps travelling as it was written.
 var valueOptions = map[string]bool{
 	"--profile": true, "--host": true, "--port": true, "--serve": true, "--env-of": true, "--mount": true,
-	"--no-env": true, // optional value; the case above reads the glued form itself
+	"--no-env":   true, // optional value; the case above reads the glued form itself
+	"--no-mount": true,
 }
 
 func flagValue(args []string, i *int) string {
@@ -2060,6 +2108,7 @@ func coreMain() {
 	cfg.exposes = lead.specs
 	cfg.envPolicy = lead.policy
 	attachMounts(&cfg, lead.mounts)
+	attachMountPolicy(&cfg, lead.noMount, lead.noMountList)
 	if len(cmdArgs) == 0 {
 		fatal("core: no command")
 	}

@@ -582,6 +582,7 @@ spec:
       containers:
         - name: vol
           image: busybox:1.37
+          env: [{ name: VOL_DIR, value: /data }]
           command: ["sh", "-c", "mkdir -p /data && printf seed-from-vol-linux > /data/seed.txt && exec httpd -f -p 8120 -h /data"]
           ports: [{ containerPort: 8120 }]
           volumeMounts:
@@ -619,6 +620,7 @@ spec:
       containers:
         - name: vol
           image: busybox:1.37
+          env: [{ name: VOL_DIR, value: /data }]
           command: ["sh", "-c", "mkdir -p /data && printf seed-from-vol-mac > /data/seed.txt && exec httpd -f -p 8121 -h /data"]
           ports: [{ containerPort: 8121 }]
           volumeMounts:
@@ -656,6 +658,7 @@ spec:
       containers:
         - name: vol
           image: busybox:1.37
+          env: [{ name: VOL_DIR, value: /data }]
           command: ["sh", "-c", "mkdir -p /data && printf seed-from-vol-win > /data/seed.txt && exec httpd -f -p 8122 -h /data"]
           ports: [{ containerPort: 8122 }]
           volumeMounts:

@@ -852,65 +852,77 @@ matrix_lang() {
 }
 
 # service BY NAME over the mesh. The 4×8 grid is rendered into the step summary.
-# The live mount (--mount): a workload's volume at a local path, read AND
-# written, with nothing installed on the runner. One workload per leg
-# (vol-<os>: busybox serving its volume over http), so three legs mount three
-# volumes at once. Two assertions through the mount - the workload's seed is
-# read, a file is written - and one through the CLUSTER: the workload serves
-# what was written, fetched by name through plug. That last one holds on
-# every OS whatever the local shell may read (macOS TCC on network volumes
-# gates the shell's own reads, never the kernel's write), and it is the one
-# that proves the bytes landed in the volume. After the session the path
-# must be unmounted. Windows has no --mount yet; what is asserted there is
-# the documented refusal, which is real behaviour, not a skip.
+# The live mount: a workload's volumes at a local path, read AND written,
+# with nothing installed on the runner. One workload per leg (vol-<os>:
+# busybox serving its volume over http, VOL_DIR=/data in its environment),
+# so three legs mount three volumes at once. Two scenarios:
+#   AUTOMATIC  -c --env-of vol-<os>, no flag: the volume is mounted on its
+#              own under the session dir and $VOL_DIR is repointed there -
+#              the process finds its data where its environment says.
+#   EXPLICIT   --mount vol-<os>:/data:<path>, at a path of our choosing.
+# Each reads the workload's seed through the mount and writes a file through
+# it; the assertion that proves the bytes are in the volume is the one made
+# through the CLUSTER: the workload serves what was written, fetched by name
+# through plug - which holds whatever the runner's shell may read. After each
+# session the path must be unmounted. Windows has no mount yet: automatic
+# mounts are a default, so the session must still run (and say why); an
+# explicit --mount is a demand, refused with the documented message. Both are
+# asserted, neither is a skip.
 do_mount() {
-  echo "=== live mount (--mount) ==="
-  local vname vport mp
+  echo "=== live mount ==="
+  local vname vport
   case "$(uname -s)" in
     Darwin)               vname=vol-mac vport=8121 ;;
     MINGW*|MSYS*|CYGWIN*) vname=vol-win vport=8122 ;;
     *)                    vname=vol-linux vport=8120 ;;
   esac
-  mp="${RUNNER_TEMP:-/tmp}/plug-vol-$leg"
+  local mp="${RUNNER_TEMP:-/tmp}/plug-vol-$leg" out ok=0
   case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*)
-    local out
-    out="$(perl -e 'alarm 60; exec @ARGV or exit 127' "$PLUG" --host "$ip" --port "$port" -c --mount "$vname:/data:$mp" true 2>&1 | tr -d '\r')"
-    if echo "$out" | grep -q "not available on Windows yet"; then
-      echo "mount OK — Windows refuses --mount with the documented message"; sum "**live mount** ✅ (Windows: refused as documented)"; return 0
+    out="$(perl -e 'alarm 90; exec @ARGV or exit 127' "$PLUG" --host "$ip" --port "$port" -c --env-of "$vname" bash -c 'echo "RAN VOL_DIR=$VOL_DIR"' 2>&1 | tr -d '\r')"
+    if ! echo "$out" | grep -q "RAN VOL_DIR=/data" || ! echo "$out" | grep -q "not mounted"; then
+      echo "--- mount FAIL — on Windows the automatic mount must step aside and the session run (got: $out)"; ok=1
     fi
-    echo "--- mount FAIL — Windows should refuse --mount with the documented message; got: $out"; sum "**live mount** ❌"; return 1 ;;
+    out="$(perl -e 'alarm 60; exec @ARGV or exit 127' "$PLUG" --host "$ip" --port "$port" -c --mount "$vname:/data:$mp" true 2>&1 | tr -d '\r')"
+    if ! echo "$out" | grep -q "not available on Windows yet"; then
+      echo "--- mount FAIL — Windows should refuse an explicit --mount with the documented message; got: $out"; ok=1
+    fi
+    if [ "$ok" -ne 0 ]; then sum "**live mount** ❌"; return 1; fi
+    echo "mount OK — Windows: the automatic mount steps aside, the explicit one is refused as documented"; sum "**live mount** ✅ (Windows: not yet, as documented)"; return 0 ;;
   esac
-  rm -rf "$mp"; mkdir -p "$mp"
-  local tag="written-by-$leg-$$" out
+  served() { # $1 = file, $2 = want: the workload serves the file written through the mount
+    local got=""
+    for _ in 1 2 3 4 5 6; do
+      got="$(plug curl -s --max-time 10 "http://$vname:$vport/$1" 2>/dev/null | tr -d '\r')"
+      [ "$got" = "$2" ] && return 0
+      sleep 2
+    done
+    echo "--- mount FAIL — the workload does not serve $1 written through the mount (got '${got:-nothing}', want '$2')"
+    return 1
+  }
   : > /tmp/mount.err
+  # AUTOMATIC: no flag; $VOL_DIR arrives repointed at the live mount.
+  local tag="auto-by-$leg-$$"
+  out="$(perl -e 'alarm 150; exec @ARGV or exit 127' "$PLUG" --host "$ip" --port "$port" -c --env-of "$vname" \
+    bash -c 'echo "VOL_DIR=$VOL_DIR"; cat "$VOL_DIR/seed.txt" && echo && printf "%s" "'"$tag"'" > "$VOL_DIR/from-auto.txt" && echo WROTE' 2>>/tmp/mount.err | tr -d '\r')"
+  echo "$out" | grep -q "^VOL_DIR=.*plug-vol-" || { echo "--- mount FAIL — VOL_DIR was not repointed at a live mount (got: $(echo "$out" | head -1))"; ok=1; }
+  echo "$out" | grep -q "seed-from-$vname" || { echo "--- mount FAIL — automatic: the seed was not read through \$VOL_DIR"; ok=1; }
+  echo "$out" | grep -q "WROTE" || { echo "--- mount FAIL — automatic: writing through \$VOL_DIR failed"; ok=1; }
+  served from-auto.txt "$tag" || ok=1
+  # EXPLICIT: at a path of our choosing.
+  rm -rf "$mp"; mkdir -p "$mp"
+  tag="explicit-by-$leg-$$"
   out="$(perl -e 'alarm 150; exec @ARGV or exit 127' "$PLUG" --host "$ip" --port "$port" -c --mount "$vname:/data:$mp" \
     bash -c "cat '$mp/seed.txt' && echo && printf '%s' '$tag' > '$mp/from-plug.txt' && echo WROTE" 2>>/tmp/mount.err | tr -d '\r')"
-  local ok=0
-  if ! echo "$out" | grep -q "seed-from-$vname"; then
-    echo "--- mount FAIL — the workload's seed was not read through the mount (got: ${out:-nothing})"; ok=1
-  fi
-  if ! echo "$out" | grep -q "WROTE"; then
-    echo "--- mount FAIL — writing through the mount failed"; ok=1
-  fi
-  # Through the cluster: the workload serves its volume, so the file written
-  # through the mount is fetched by name. Retried: httpd reads the disk, and
-  # the write may still be in flight in the SMB client's cache for a moment.
-  local got=""
-  for _ in 1 2 3 4 5 6; do
-    got="$(plug curl -s --max-time 10 "http://$vname:$vport/from-plug.txt" 2>/dev/null | tr -d '\r')"
-    [ "$got" = "$tag" ] && break
-    sleep 2
-  done
-  if [ "$got" != "$tag" ]; then
-    echo "--- mount FAIL — the workload does not serve what was written through the mount (got '${got:-nothing}', want '$tag')"; ok=1
-  fi
-  if mount | grep -q " $mp "; then
-    echo "--- mount FAIL — $mp is still mounted after the session"; ok=1
+  echo "$out" | grep -q "seed-from-$vname" || { echo "--- mount FAIL — explicit: the seed was not read through the mount (got: ${out:-nothing})"; ok=1; }
+  echo "$out" | grep -q "WROTE" || { echo "--- mount FAIL — explicit: writing through the mount failed"; ok=1; }
+  served from-plug.txt "$tag" || ok=1
+  if mount | grep -q "plug-vol-"; then
+    echo "--- mount FAIL — a plug volume is still mounted after the sessions: $(mount | grep plug-vol-)"; ok=1
   fi
   if [ "$ok" -ne 0 ]; then
     echo "--- plug said:"; cat /tmp/mount.err; sum "**live mount** ❌"; return 1
   fi
-  echo "mount OK — seed read, file written, served by the workload, unmounted after"; sum "**live mount** ✅"
+  echo "mount OK — automatic (\$VOL_DIR repointed) and explicit (--mount): seed read, file written, served by the workload, unmounted after"; sum "**live mount** ✅"
 }
 
 do_matrix() {

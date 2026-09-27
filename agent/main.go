@@ -194,6 +194,8 @@ func dispatch(cmd []string) {
 		doMountVolume(cmd)
 	case "unmount-volume":
 		doUnmountVolume(cmd)
+	case "volumes-of":
+		doVolumesOf(cmd)
 	case "self-update":
 		doSelfUpdate(cmd)
 	default:

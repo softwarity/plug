@@ -292,3 +292,31 @@ func TestMountImage(t *testing.T) {
 		t.Fatal("the override wins, trimmed")
 	}
 }
+
+// volumes-of: what a workload mounts as DATA, in one line - never a tmpfs,
+// never the secrets mount (files-of's), sorted; and the empty answer.
+func TestDataVolumePathsAndReply(t *testing.T) {
+	mounts := []dockerMount{
+		{Type: "volume", Name: "pg", Destination: "/var/lib/postgresql/data"},
+		{Type: "bind", Source: "/srv/x", Destination: "/data"},
+		{Type: "tmpfs", Destination: "/tmp"},
+		{Type: "bind", Source: "/run/secrets/x", Destination: "/run/secrets"},
+		{Type: "bind", Source: "/x", Destination: "/run/secrets/tkofile"},
+		{Type: "bind", Source: "/y", Destination: "/with space"},
+	}
+	got := dataVolumePaths(mounts)
+	if strings.Join(got, ",") != "/data,/var/lib/postgresql/data" {
+		t.Fatalf("paths = %v", got)
+	}
+	if volumesReply(got) != "volumes /data /var/lib/postgresql/data" || volumesReply(nil) != "volumes" {
+		t.Fatalf("reply = %q / %q", volumesReply(got), volumesReply(nil))
+	}
+	var answered string
+	old := answer
+	answer = func(format string, a ...any) { answered = fmt.Sprintf(format, a...); panic("answered") }
+	defer func() { answer = old }()
+	func() { defer func() { recover() }(); dispatch([]string{"volumes-of", "Bad Name"}) }()
+	if !strings.HasPrefix(answered, "error: ") {
+		t.Fatalf("a bad name must be refused: %q", answered)
+	}
+}

@@ -285,3 +285,58 @@ func dockerHelperID(t *testing.T, name string) string {
 	}
 	return strings.TrimSpace(string(out))
 }
+
+// TestLiveMountAutomatic is the default: no --mount, the workload named by
+// --env-of has its volumes mounted under a session directory, and the
+// projection's view (autoMountsFor) names them; the teardown unmounts and
+// removes the directory.
+func TestLiveMountAutomatic(t *testing.T) {
+	target := os.Getenv("PLUG_MOUNT_E2E")
+	if target == "" {
+		t.Skip("PLUG_MOUNT_E2E not set")
+	}
+	host, port, _ := strings.Cut(target, ":")
+	name := os.Getenv("PLUG_MOUNT_E2E_NAME")
+	if name == "" {
+		name = "geo"
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	cfg := config{host: host, port: port, envPolicy: envPolicy{from: name}}
+	stop, err := startMounts(cfg)
+	if err != nil {
+		t.Fatalf("startMounts: %v", err)
+	}
+	paths, dir := autoMountsFor(name)
+	if dir == "" || len(paths) == 0 {
+		stop()
+		t.Fatalf("nothing was mounted automatically for %s", name)
+	}
+	local := filepath.Join(dir, filepath.FromSlash(paths[0]))
+	if !mountedAt(local) {
+		stop()
+		t.Fatalf("%s (for %s) is not a mountpoint", local, paths[0])
+	}
+	t.Logf("%s mounted at %s", paths[0], local)
+	stop()
+	if mountedAt(local) {
+		t.Errorf("still mounted after the teardown")
+	}
+	if _, err := os.Stat(dir); err == nil {
+		t.Errorf("the session directory %s survived the teardown", dir)
+	}
+	if p, d := autoMountsFor(name); d != "" || p != nil {
+		t.Errorf("autoMountsFor still answers after the teardown")
+	}
+	// --no-mount: nothing happens, no transport is even dialled.
+	cfg.mountPolicy = parseNoMount("")
+	stop, err = startMounts(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop()
+	if _, d := autoMountsFor(name); d != "" {
+		t.Errorf("--no-mount mounted something")
+	}
+}

@@ -42,18 +42,20 @@ func coreRun(cfg config, cmdArgs []string) int {
 	waitClusterReady(key)
 	// The reverse direction is per-session, not per-cluster: it rides its own
 	// transport in THIS process, not the shared daemon — Ctrl-C closes the port.
-	stopExposes, err := startExposes(cfg)
-	if err != nil {
-		info("expose: %v", err)
-		return 1
-	}
-	defer stopExposes()
+	// Volumes first: the environment projection in startExposes repoints
+	// the variables that name them, so the mounts have to be there.
 	stopMounts, err := startMounts(cfg)
 	if err != nil {
 		info("mount: %v", err)
 		return 1
 	}
 	defer stopMounts()
+	stopExposes, err := startExposes(cfg)
+	if err != nil {
+		info("expose: %v", err)
+		return 1
+	}
+	defer stopExposes()
 	return runChildEnv(cmdArgs, goResolverEnv())
 }
 

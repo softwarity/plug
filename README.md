@@ -174,15 +174,18 @@ parking it: a `-c` one-off script run with a service's own credentials, or a
 `-s` that borrows the variables of the service it talks to. Afterwards the cluster is exactly as it was. A name held by
 another live plug session is still refused.
 
-Its **data** too: `--mount /data` puts the workload's volume - a Docker volume,
-a bind, a PersistentVolumeClaim - at that path on your machine, **live and
-read-write**, for the session, in every mode (`-s`, `-c --env-of`, or a named
-workload: `--mount api:/data:/srv/data`). Nothing to install: the agent starts a
-helper beside the workload that serves the volume over SMB, and plug mounts it
-through the tunnel with the client your OS already has (`mount_smbfs` on macOS,
-the cifs module on Linux; Windows not yet). Files land as the volume's owner. A
-session that dies has its helper reaped by the agent within the minute and its
-mount cleaned by the next run or `plug doctor --fix`.
+Its **data** too: the workload's volumes - a Docker volume, a bind, a
+PersistentVolumeClaim - are **mounted on your machine, live and read-write**,
+for the session, by default: each under the session's temp directory at its
+cluster path, the variables naming it repointed, so the process finds its data
+where its environment says. `--no-mount` opts out; `--mount /data` puts one at
+the exact path instead (`--mount api:/data:/srv/data` names the workload).
+Nothing to install: the agent starts a helper beside the workload that serves
+the volume over SMB, and plug mounts it through the tunnel with the client your
+OS already has (`mount_smbfs` on macOS, the cifs module on Linux; Windows not
+yet). Files land as the volume's owner. A session that dies has its helper
+reaped by the agent within the minute and its mount cleaned by the next run or
+`plug doctor --fix`.
 
 ## Let plug pick the local port
 

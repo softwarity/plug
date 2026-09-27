@@ -56,9 +56,12 @@ déjà, sans nouveau droit RBAC.
       option B, flags dockerrun, untar clamp) + cellule e2e ×3 familles (secret
       k8s / secret Compose / config Swarm montés au même chemin, lus par un
       process local). MàJ coverage + comparatif faites.
-- [x] **Montage VIVANT d'un volume / PVC : `--mount`** (branche `feat/live-mount`,
-      27/09). Lire ET écrire un vrai volume derrière un `-s`, un `-c --env-of`
-      ou un workload nommé, en process natif. **Architecture retenue, différente
+- [x] **Montage VIVANT des volumes / PVC, automatique par défaut** (branche
+      `feat/live-mount`, 27/09). Un takeover (`-s`) et `--env-of` montent TOUS
+      les volumes de données du workload sans rien savoir (verbe `volumes-of`),
+      sous le temp de session à leur chemin cluster, variables réécrites
+      (option B, comme les fichiers secrets) ; `--no-mount[=/a,/b]` ; `--mount`
+      = forme explicite au chemin exact. **Architecture retenue, différente
       du plan du 26/09** : ni FUSE ni SFTP. Le helper (l'image agent, Samba, le
       volume monté) sert le volume en **SMB** ; le client le monte **avec le
       client SMB intégré de l'OS** (`mount_smbfs` sans privilège sur macOS,

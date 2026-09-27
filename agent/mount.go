@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -40,6 +41,11 @@ import (
 //	    Answers: mounted host=<addr> port=445 share=<s> user=<u>
 //	unmount-volume <name> <volume> <agent-port>
 //	    stop it. "ok" | "error: …"
+//	volumes-of <name>
+//	    the paths the workload mounts a DATA volume at (a Docker volume, a
+//	    bind, a PVC; never a tmpfs, never /run/secrets, which files-of owns):
+//	    "volumes /data /var/lib/pg" - what the client mounts on its own, by
+//	    default, so a takeover finds its data without being told where.
 //
 // Lifecycle: the helper carries the same ownership the signpost does
 // (sessionOwnerLabel), so the sweep that reaps a crashed session's signpost
@@ -134,6 +140,61 @@ func doMountVolume(cmd []string) {
 		answer("error: %q is not a valid port", cmd[3])
 	}
 	mountVolume(cmd[1], cmd[2], cmd[3], cmd[4])
+}
+
+func doVolumesOf(cmd []string) {
+	if len(cmd) != 2 || !nameRe.MatchString(cmd[1]) {
+		answer("error: usage: volumes-of <name>")
+	}
+	answer("%s", volumesReply(volumesOf(cmd[1])))
+}
+
+// volumesReply is the one line: "volumes" then the paths, space-separated
+// (a path with a space in it is refused at mount time anyway, volumeArgOK).
+func volumesReply(paths []string) string {
+	if len(paths) == 0 {
+		return "volumes"
+	}
+	return "volumes " + strings.Join(paths, " ")
+}
+
+// volumesOf lists the workload's data-volume mount paths on whichever backend
+// answers here. Unknown workload or no orchestrator: nothing, and that is the
+// honest answer (the client says it mounted nothing).
+func volumesOf(name string) []string {
+	switch {
+	case k8sAvailable():
+		return k8sWorkloadVolumePaths(k8sNamespace(), name)
+	case dockerAvailable():
+		self, err := dockerSelf()
+		if err != nil {
+			return nil
+		}
+		var mounts []dockerMount
+		if self.service != "" && swarmManager() {
+			mounts, _, _ = swarmWorkloadMounts(name, self)
+		} else {
+			mounts, _ = dockerWorkloadMounts(name, self)
+		}
+		return dataVolumePaths(mounts)
+	}
+	return nil
+}
+
+// dataVolumePaths keeps what is a data volume: not a tmpfs, not the secrets
+// mount (files-of projects that, once, as files), sorted for a stable line.
+func dataVolumePaths(mounts []dockerMount) []string {
+	var out []string
+	for _, m := range mounts {
+		if m.Type == "tmpfs" || m.Destination == secretsMount || strings.HasPrefix(m.Destination, secretsMount+"/") {
+			continue
+		}
+		if volumeArgOK(m.Destination) {
+			out = append(out, m.Destination)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func doUnmountVolume(cmd []string) {
@@ -483,10 +544,48 @@ func pickClaim(want string, vols []k8sClaimVolume, mounts []k8sMount) (string, s
 	return "", "it mounts: " + strings.Join(have, ", ")
 }
 
-// k8sWorkloadClaim finds the workload pod behind <name> (the same route
-// files-of takes: the Service's selector, or the receipt's when parked) and
-// resolves the claim, along with the node the pod runs on.
-func k8sWorkloadClaim(ns, name, volume string) (claim, node, why string) {
+// k8sWorkloadVolumePaths lists the PVC-backed mount paths of the pod behind
+// <name>: the same lookup as k8sWorkloadClaim, keeping every claim.
+func k8sWorkloadVolumePaths(ns, name string) []string {
+	pods, _ := k8sWorkloadPods(ns, name)
+	var out []string
+	for _, p := range pods {
+		claimOf := map[string]bool{}
+		for _, v := range p.Spec.Volumes {
+			if v.PVC != nil && v.PVC.ClaimName != "" {
+				claimOf[v.Name] = true
+			}
+		}
+		for _, c := range p.Spec.Containers {
+			for _, m := range c.VolumeMounts {
+				if claimOf[m.Name] && volumeArgOK(m.MountPath) {
+					out = append(out, m.MountPath)
+				}
+			}
+		}
+		if len(out) > 0 {
+			break // one pod is the workload's shape; replicas repeat it
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// k8sWorkloadPod is the sliver of a pod the volume verbs read.
+type k8sWorkloadPod struct {
+	Spec struct {
+		NodeName   string           `json:"nodeName"`
+		Volumes    []k8sClaimVolume `json:"volumes"`
+		Containers []struct {
+			VolumeMounts []k8sMount `json:"volumeMounts"`
+		} `json:"containers"`
+	} `json:"spec"`
+}
+
+// k8sWorkloadPods finds the pods behind <name>, the route files-of takes: the
+// Service's selector, or the receipt's when the Service is parked. The
+// second value says why there are none.
+func k8sWorkloadPods(ns, name string) ([]k8sWorkloadPod, string) {
 	var svc struct {
 		Metadata struct {
 			Annotations map[string]string `json:"annotations"`
@@ -496,7 +595,7 @@ func k8sWorkloadClaim(ns, name, volume string) (claim, node, why string) {
 		} `json:"spec"`
 	}
 	if code, err := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/services/"+name, nil, &svc); err != nil || code != 200 {
-		return "", "", fmt.Sprintf("no Service %q in %s", name, ns)
+		return nil, fmt.Sprintf("no Service %q in %s", name, ns)
 	}
 	sel := svc.Spec.Selector
 	if raw := svc.Metadata.Annotations[k8sParkedAnn]; raw != "" {
@@ -506,29 +605,28 @@ func k8sWorkloadClaim(ns, name, volume string) (claim, node, why string) {
 		}
 	}
 	if len(sel) == 0 {
-		return "", "", fmt.Sprintf("Service %q selects no pod", name)
+		return nil, fmt.Sprintf("Service %q selects no pod", name)
 	}
 	var pods struct {
-		Items []struct {
-			Status struct {
-				Phase string `json:"phase"`
-			} `json:"status"`
-			Spec struct {
-				NodeName   string           `json:"nodeName"`
-				Volumes    []k8sClaimVolume `json:"volumes"`
-				Containers []struct {
-					VolumeMounts []k8sMount `json:"volumeMounts"`
-				} `json:"containers"`
-			} `json:"spec"`
-		} `json:"items"`
+		Items []k8sWorkloadPod `json:"items"`
 	}
 	if code, err := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/pods?labelSelector="+url.QueryEscape(labelSelector(sel)), nil, &pods); err != nil || code != 200 {
-		return "", "", fmt.Sprintf("cannot list the pods behind %q", name)
+		return nil, fmt.Sprintf("cannot list the pods behind %q", name)
 	}
-	for _, p := range pods.Items {
-		if len(p.Spec.Containers) == 0 {
-			continue
-		}
+	if len(pods.Items) == 0 {
+		return nil, fmt.Sprintf("no pod behind %q", name)
+	}
+	return pods.Items, ""
+}
+
+// k8sWorkloadClaim resolves <volume> against the pods behind <name>: the
+// claim to mount, and the node the pod runs on.
+func k8sWorkloadClaim(ns, name, volume string) (claim, node, why string) {
+	pods, why := k8sWorkloadPods(ns, name)
+	if why != "" {
+		return "", "", why
+	}
+	for _, p := range pods {
 		var mounts []k8sMount
 		for _, c := range p.Spec.Containers {
 			mounts = append(mounts, c.VolumeMounts...)
@@ -538,9 +636,6 @@ func k8sWorkloadClaim(ns, name, volume string) (claim, node, why string) {
 			return c, p.Spec.NodeName, ""
 		}
 		why = fmt.Sprintf("%q has no volume %q — %s", name, volume, w)
-	}
-	if why == "" {
-		why = fmt.Sprintf("no pod behind %q", name)
 	}
 	return "", "", why
 }

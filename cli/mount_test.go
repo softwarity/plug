@@ -222,3 +222,56 @@ func TestMountsVerdict(t *testing.T) {
 		t.Fatalf("partly fixed: %+v", c)
 	}
 }
+
+// The automatic mounts: which workloads (the -s names and --env-of, once
+// each), what --no-mount does to them, and the agent's volumes-of line.
+func TestAutoMountPolicyAndNames(t *testing.T) {
+	cfg := config{
+		exposes:   []tunnel.ExposeSpec{{Name: "web"}, {Name: "web"}, {Name: "api"}},
+		envPolicy: envPolicy{from: "orders"},
+	}
+	if got := strings.Join(autoMountNames(cfg), ","); got != "web,api,orders" {
+		t.Fatalf("names = %q", got)
+	}
+	cfg.mountPolicy = parseNoMount("")
+	if !cfg.mountPolicy.off || autoMountNames(cfg) != nil {
+		t.Fatal("a bare --no-mount mounts nothing")
+	}
+	p := parseNoMount("/data, /var/lib/pg")
+	if p.off || !p.drop["/data"] || !p.drop["/var/lib/pg"] || p.drop["/x"] {
+		t.Fatalf("--no-mount=/a,/b: %+v", p)
+	}
+	if !looksLikePathList("/data") || !looksLikePathList("/a,/b") || looksLikePathList("npm") || looksLikePathList("/a,b") || looksLikePathList("") {
+		t.Fatal("looksLikePathList")
+	}
+	o, cmd := parseArgs([]string{"-s", "web:80:3000", "--no-mount", "/data", "npm", "start"})
+	if !o.noMount || o.noMountList != "/data" || strings.Join(cmd, " ") != "npm start" {
+		t.Fatalf("parseArgs --no-mount /data: %+v %v", o, cmd)
+	}
+	o, cmd = parseArgs([]string{"-c", "--env-of", "orders", "--no-mount", "python", "job.py"})
+	if !o.noMount || o.noMountList != "" || strings.Join(cmd, " ") != "python job.py" {
+		t.Fatalf("parseArgs bare --no-mount: %+v %v", o, cmd)
+	}
+	lead, rest, err := stripLeadingAll([]string{"--no-mount", "/a,/b", "-c", "--no-mount", "make", "test"})
+	if err != nil || !lead.noMount || lead.noMountList != "/a,/b" || strings.Join(rest, " ") != "make test" {
+		t.Fatalf("strip: %+v %v %v", lead, rest, err)
+	}
+}
+
+func TestWorkloadVolumesReply(t *testing.T) {
+	if v, err := parseVolumesReply("volumes /data /var/lib/pg\n"); err != nil || strings.Join(v, ",") != "/data,/var/lib/pg" {
+		t.Fatal(v, err)
+	}
+	if v, err := parseVolumesReply("volumes"); err != nil || len(v) != 0 {
+		t.Fatal("no volumes")
+	}
+	if v, err := parseVolumesReply("error: unknown command \"volumes-of\""); err != nil || v != nil {
+		t.Fatal("an old agent has no volumes, and that is not an error")
+	}
+	if _, err := parseVolumesReply("error: no Service \"x\""); err == nil {
+		t.Fatal("an agent error is the error")
+	}
+	if _, err := parseVolumesReply("sh: volumes-of: not found"); err == nil {
+		t.Fatal("an off-protocol answer is refused")
+	}
+}

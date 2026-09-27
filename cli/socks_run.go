@@ -531,21 +531,22 @@ func runCoreInProcess(cfg config, cmdArgs []string) int {
 	}
 	defer tr.Close()
 
-	stopExposes, err := startExposes(cfg)
-	if err != nil {
-		info("expose: %v", err)
-		return 1
-	}
-	defer stopExposes()
-	// The mounts, before the child exists: on Linux it clones its mount
-	// namespace from this one (tun.Run's shim), so what is mounted here is
-	// what it sees.
+	// Volumes first: the environment projection in startExposes repoints
+	// the variables that name them, so the mounts have to be there. And
+	// before the child exists: on Linux it clones its mount namespace from
+	// this one (tun.Run's shim), so what is mounted here is what it sees.
 	stopMounts, err := startMounts(cfg)
 	if err != nil {
 		info("mount: %v", err)
 		return 1
 	}
 	defer stopMounts()
+	stopExposes, err := startExposes(cfg)
+	if err != nil {
+		info("expose: %v", err)
+		return 1
+	}
+	defer stopExposes()
 
 	info("tunnel ready - running your command")
 	code, rerr := tun.Run(tr, cmdArgs, info)
@@ -585,8 +586,15 @@ func projectWorkloadEnv(tr *tunnel.Transport, name string, p envPolicy) {
 	if dir, paths, ferr := fetchWorkloadFiles(tr, name); ferr != nil {
 		info("%s: could not read the workload's mounted files (%v); a variable that names one may not resolve locally", name, ferr)
 	} else if dir != "" {
-		vars = localizeFileEnv(reply.vars, paths, dir)
+		vars = localizeFileEnv(vars, paths, dir)
 		info("%s: %d mounted file path(s) materialised under %s and repointed", name, len(paths), dir)
+	}
+	// And its data VOLUMES, mounted live by startMounts before this ran
+	// (option B, the same shape): the variables naming a volume's cluster
+	// path now name the mount.
+	if paths, dir := autoMountsFor(name); dir != "" {
+		vars = localizeFileEnv(vars, paths, dir)
+		info("%s: %d volume(s) mounted live under %s and repointed", name, len(paths), dir)
 	}
 	set, kept, empty := mergeWorkloadEnvWithEmpty(vars, os.Environ(), p)
 	applyWorkloadEnv(set)
