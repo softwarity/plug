@@ -1442,18 +1442,41 @@ do_takeover() {
     "$root/echo-local$ext" -addr 127.0.0.1:18096 -text "local-$tname" -ttl 36s >/tmp/takeover.out 2>&1 &
   local tko_pid=$! during=""
   sleep 8 # arm + park + end-to-end verify
+  # EVERY answer, not the first one that fits. This loop used to stop at the
+  # first local answer, and a takeover that handed HALF the requests to the
+  # deployed pod - a Kubernetes Service whose old EndpointSlice survived the
+  # park, from 2.12.0 to 2.20.0 - passed it every time for four weeks. Once
+  # the name answers at all, ten reads in a row must all be ours; one that is
+  # not is the deployed workload still in the path, and the cell says which.
   for _ in 1 2 3; do during="$(probe)"; [ "$during" = "local-$tname" ] && break; sleep 3; done
+  local n_local=0 n_other=0 stray=""
+  if [ "$during" = "local-$tname" ]; then
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      r="$(probe)"
+      if [ "$r" = "local-$tname" ]; then n_local=$((n_local+1)); else n_other=$((n_other+1)); stray="$r"; fi
+    done
+    [ "$n_other" -gt 0 ] && during="$n_local/10 local, $n_other/10 '${stray:-nothing}'"
+  fi
   wait_bg "$tko_pid" "the takeover session (ends on its own -ttl)" 90
 
-  # Session over: the deployed service must be back (its container restarts).
+  # Session over: the deployed service must be back (its container restarts),
+  # and it alone: ten reads, all deployed, or the restore left our route in.
   local after=""
   for _ in 1 2 3 4 5; do after="$(probe)"; [ "$after" = "deployed-$tname" ] && break; sleep 3; done
+  if [ "$after" = "deployed-$tname" ]; then
+    n_local=0; n_other=0; stray=""
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      r="$(probe)"
+      if [ "$r" = "deployed-$tname" ]; then n_local=$((n_local+1)); else n_other=$((n_other+1)); stray="$r"; fi
+    done
+    [ "$n_other" -gt 0 ] && after="$n_local/10 deployed, $n_other/10 '${stray:-nothing}'"
+  fi
 
   if [ "$during" = "local-$tname" ] && [ "$after" = "deployed-$tname" ]; then
-    echo "takeover OK — parked (answers came to us), then restored (deployed answers again)"
+    echo "takeover OK — parked (10/10 answers came to us), then restored (10/10 deployed answers again)"
     sum "**takeover (park+restore)** ✅"; return 0
   fi
-  echo "--- takeover FAIL — during='$during' (want local-$tname) after='$after' (want deployed-$tname)"
+  echo "--- takeover FAIL — during='$during' (want local-$tname, every time) after='$after' (want deployed-$tname, every time)"
   echo "    --- takeover session output ---"; tail -12 /tmp/takeover.out 2>/dev/null | sed 's/^/    /'
   sum "**takeover (park+restore)** ❌ — during \`${during:-nothing}\` · after \`${after:-nothing}\`"; return 1
 }
