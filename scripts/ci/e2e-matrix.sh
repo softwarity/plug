@@ -1439,8 +1439,13 @@ do_takeover() {
   # TerminateProcess that would skip the teardown, and the restore is exactly
   # what this cell asserts.
   "$PLUG" --host "$ip" --port "$port" -s "$tname:$tport:18096" \
-    "$root/echo-local$ext" -addr 127.0.0.1:18096 -text "local-$tname" -ttl 36s >/tmp/takeover.out 2>&1 &
-  local tko_pid=$! during=""
+    "$root/echo-local$ext" -addr 127.0.0.1:18096 -text "local-$tname" -ttl 75s >/tmp/takeover.out 2>&1 &
+  local tko_pid=$! during="" t0=$(date +%s)
+  # 75s, not 36: the ten reads below are ten `plug curl` sessions of a second
+  # or two each, after the wait for the first local answer. At 36s the session
+  # ended UNDER the reads, the restore put the deployed workload back, and the
+  # tail of the ten read "deployed" - which looks exactly like a split route
+  # and is not one. Every answer is stamped with its second for that reason.
   sleep 8 # arm + park + end-to-end verify
   # EVERY answer, not the first one that fits. This loop used to stop at the
   # first local answer, and a takeover that handed HALF the requests to the
@@ -1449,15 +1454,15 @@ do_takeover() {
   # the name answers at all, ten reads in a row must all be ours; one that is
   # not is the deployed workload still in the path, and the cell says which.
   for _ in 1 2 3; do during="$(probe)"; [ "$during" = "local-$tname" ] && break; sleep 3; done
-  local n_local=0 n_other=0 stray=""
+  local n_local=0 n_other=0 stray="" seq=""
   if [ "$during" = "local-$tname" ]; then
     for _ in 1 2 3 4 5 6 7 8 9 10; do
-      r="$(probe)"
+      r="$(probe)"; seq="$seq $(( $(date +%s) - t0 ))s:${r:-nothing}"
       if [ "$r" = "local-$tname" ]; then n_local=$((n_local+1)); else n_other=$((n_other+1)); stray="$r"; fi
     done
-    [ "$n_other" -gt 0 ] && during="$n_local/10 local, $n_other/10 '${stray:-nothing}'"
+    [ "$n_other" -gt 0 ] && during="$n_local/10 local, $n_other/10 '${stray:-nothing}' (by second:$seq)"
   fi
-  wait_bg "$tko_pid" "the takeover session (ends on its own -ttl)" 90
+  wait_bg "$tko_pid" "the takeover session (ends on its own -ttl)" 120
 
   # Session over: the deployed service must be back (its container restarts),
   # and it alone: ten reads, all deployed, or the restore left our route in.
