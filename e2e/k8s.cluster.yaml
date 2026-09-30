@@ -475,7 +475,7 @@ kind: Service
 metadata: { name: tko-linux }
 spec:
   selector: { app: tko-linux }
-  ports: [{ port: 8085, targetPort: 8085 }]
+  ports: [{ name: http, port: 8085, targetPort: 8085 }] # NAMED, as a Helm chart's would be: see the takeover cell
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -516,7 +516,7 @@ kind: Service
 metadata: { name: tko-mac }
 spec:
   selector: { app: tko-mac }
-  ports: [{ port: 8086, targetPort: 8086 }]
+  ports: [{ name: http, port: 8086, targetPort: 8086 }] # NAMED, as a Helm chart's would be: see the takeover cell
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -557,7 +557,7 @@ kind: Service
 metadata: { name: tko-win }
 spec:
   selector: { app: tko-win }
-  ports: [{ port: 8087, targetPort: 8087 }]
+  ports: [{ name: http, port: 8087, targetPort: 8087 }] # NAMED, as a Helm chart's would be: see the takeover cell
 ---
 # The live-mount target (--mount) for the linux leg: busybox serving its
 # PersistentVolumeClaim over http, so what the leg writes through the mount is
