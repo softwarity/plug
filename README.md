@@ -62,7 +62,7 @@ services:
 The socket line is **required** on Docker, Compose and Swarm: it is how the
 agent creates your `-s` name. It is root on the host, so mount it only on a
 cluster you trust - the trust plug's no-auth transport already assumes.
-Kubernetes needs no socket: the bundled manifest grants a Services-only RBAC
+Kubernetes needs no socket: the bundled manifest grants a namespace-scoped RBAC
 role instead - see [below](#the-name-in-the-cluster).
 
 Standalone agent, or Kubernetes: see the [documentation](https://softwarity.github.io/plug/).
@@ -136,7 +136,12 @@ the fly, which it does per engine:
   stack's overlay whether or not it is `attachable`, so **no network change**.
   The agent just needs to run on a **manager** node (to create services).
 - **Kubernetes** - no socket: the bundled [manifest](deploy/plug-k8s.yaml) grants
-  a Services-only RBAC role, so `-s` creates and deletes the backing Service itself.
+  a namespace-scoped RBAC role (Services and their endpoints, the EndpointSlice a
+  takeover must clear, the agent's own Deployment for `plug update`, pods and
+  `pods/exec` for the environment and the live mount) - every rule with its reason
+  in the manifest and on the [Kubernetes page](https://softwarity.github.io/plug/kubernetes).
+  **Re-apply it when you upgrade the agent**: `plug update` moves the image, never
+  the manifest, and `plug doctor` names any rule a newer agent is missing.
 - **No socket, no RBAC** - the agent **refuses to start**, naming what is
   missing. Provisioning is the feature; an agent that cannot do it is a
   deployment mistake, not a degraded mode.

@@ -27,6 +27,27 @@ import { FileComponent } from '../file/file.component';
     <app-file src="assets/plug-k8s.yaml" download="plug-k8s.yaml" [preview]="14" [maxLines]="22" />
     <app-code lang="bash">kubectl -n my-namespace apply -f plug-k8s.yaml</app-code>
 
+    <h3>What the Role grants, rule by rule</h3>
+    <p>
+      One namespace-scoped Role, and every rule in it has a feature behind it. <strong>Apply the
+      manifest as a whole, and re-apply it when you upgrade the agent</strong>: <code>plug update</code>
+      moves the image and never the manifest, so a rule a newer agent needs is missing until you do -
+      the agent says which at boot, and <code>plug doctor -p &lt;profile&gt;</code> says it from your
+      terminal, with the one-line <code>kubectl patch</code> that grants that rule alone. If you deploy
+      the agent through your own chart, mirror these rules there.
+    </p>
+    <table class="rules">
+      <thead><tr><th>Rule</th><th>Why</th><th>Since</th><th>Without it, <code>doctor</code> says</th></tr></thead>
+      <tbody>
+        <tr><td><code>services</code> get, list, create, delete, update, patch</td><td><code>-s</code> creates the Service carrying the name and deletes it after; a takeover repoints an existing one and restores it.</td><td>always</td><td>the agent refuses to start</td></tr>
+        <tr><td><code>endpoints</code> get, create, update, delete</td><td>a served name points at the ONE agent pod holding the session, through Endpoints the agent writes (no selector).</td><td>2.12.0</td><td>"endpoints grant"</td></tr>
+        <tr><td><code>discovery.k8s.io/endpointslices</code> list, deletecollection</td><td>a taken-over Service keeps the EndpointSlice Kubernetes built for its pod; kube-proxy routes over every slice, so without this half the requests still reach the deployed pod. The agent deletes it at park.</td><td>2.20.1</td><td>"endpointslices grant", and "taken-over names" still doubled</td></tr>
+        <tr><td><code>apps/deployments</code> get, list, patch</td><td><code>plug update</code> rolls the agent's own Deployment so the node re-pulls the tag.</td><td>2.9</td><td>update by hand</td></tr>
+        <tr><td><code>pods</code> get, list · <code>pods/exec</code> get, create</td><td>a plugged process inherits the parked pod's environment (<code>exec cat /proc/1/environ</code>) and its mounted secret files.</td><td>2.16.0</td><td>"exec grant"</td></tr>
+        <tr><td><code>pods</code> create, delete · <code>persistentvolumeclaims</code> get</td><td>the live mount: a helper pod beside the workload serves its PersistentVolumeClaim over SMB for the session; the claim is read to refuse a ReadWriteOncePod one with the reason.</td><td>2.20.0</td><td>the mount answers "cannot create pods"</td></tr>
+      </tbody>
+    </table>
+
     <h3>Reaching it</h3>
     <ul>
       <li>
@@ -57,9 +78,8 @@ kubectl -n my-namespace port-forward svc/plug 2222:2222</app-code>
       creates and deletes it itself per session. It carries no selector: a selector would match
       every replica of the agent, while the session lives in exactly one pod, so the agent writes
       the Service's <strong>endpoints</strong> instead - one address, the right pod. The manifest
-      above already grants exactly what that needs - a small, namespace-scoped RBAC role (manage
-      Services and their endpoints, nothing else, and notably no access to pods); it is part of the
-      one deploy, so
+      above grants exactly what that needs (the rules are listed above, each with its reason); it is
+      part of the one deploy, so
       <code>-s</code> works out of the box. Apply the manifest as a whole: an agent that cannot
       manage Services <strong>refuses to start</strong>, rather than come up looking healthy and
       fail on the first <code>-s</code>.
