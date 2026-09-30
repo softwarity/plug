@@ -1454,13 +1454,20 @@ do_takeover() {
   # the name answers at all, ten reads in a row must all be ours; one that is
   # not is the deployed workload still in the path, and the cell says which.
   for _ in 1 2 3; do during="$(probe)"; [ "$during" = "local-$tname" ] && break; sleep 3; done
+  # Up to ten reads, but only while the session is certainly alive: a read
+  # costs 8s on a Windows runner, so ten of them outlive the 75s echo, and a
+  # read made after the restore says "deployed" and proves nothing. Reads stop
+  # at 60s; every one taken must be ours, and there must be at least five.
   local n_local=0 n_other=0 stray="" seq=""
   if [ "$during" = "local-$tname" ]; then
     for _ in 1 2 3 4 5 6 7 8 9 10; do
+      [ $(( $(date +%s) - t0 )) -gt 60 ] && break
       r="$(probe)"; seq="$seq $(( $(date +%s) - t0 ))s:${r:-nothing}"
       if [ "$r" = "local-$tname" ]; then n_local=$((n_local+1)); else n_other=$((n_other+1)); stray="$r"; fi
     done
-    [ "$n_other" -gt 0 ] && during="$n_local/10 local, $n_other/10 '${stray:-nothing}' (by second:$seq)"
+    if [ "$n_other" -gt 0 ]; then during="$n_local local, $n_other '${stray:-nothing}' (by second:$seq)"
+    elif [ "$n_local" -lt 5 ]; then during="only $n_local read(s) fitted in the session (by second:$seq)"
+    fi
   fi
   wait_bg "$tko_pid" "the takeover session (ends on its own -ttl)" 120
 
@@ -1478,7 +1485,7 @@ do_takeover() {
   fi
 
   if [ "$during" = "local-$tname" ] && [ "$after" = "deployed-$tname" ]; then
-    echo "takeover OK — parked (10/10 answers came to us), then restored (10/10 deployed answers again)"
+    echo "takeover OK — parked (every read while it lived came to us:$seq), then restored (10/10 deployed answers again)"
     sum "**takeover (park+restore)** ✅"; return 0
   fi
   echo "--- takeover FAIL — during='$during' (want local-$tname, every time) after='$after' (want deployed-$tname, every time)"
