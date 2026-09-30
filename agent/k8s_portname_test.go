@@ -62,3 +62,17 @@ func TestControllerSlicesSelector(t *testing.T) {
 		t.Fatalf("selector = %q", sel)
 	}
 }
+
+// The split note is for a Service with a NAMED port: unnamed, plug renames
+// the port and the stale slice no longer matches, so nothing splits.
+func TestHasNamedPort(t *testing.T) {
+	if k8sHasNamedPort(json.RawMessage(`[{"port":8081}]`)) {
+		t.Fatal("unnamed")
+	}
+	if !k8sHasNamedPort(json.RawMessage(`[{"port":8081},{"name":"angular","port":8082}]`)) {
+		t.Fatal("named")
+	}
+	if k8sHasNamedPort(nil) {
+		t.Fatal("nothing")
+	}
+}

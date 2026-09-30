@@ -20,6 +20,9 @@
 //	serve-name <name> <port> takeover
 //	                           provision name:port → this agent. One line out:
 //	                           "dynamic" | "dynamic parked" | "error: …"
+//	                           ("dynamic parked split": parked, but the agent's
+//	                           RBAC cannot clear the stale EndpointSlice, so
+//	                           half the requests still reach the workload)
 //	                           A REAL workload owning the name is
 //	                           parked for the session (containers stopped, Swarm
 //	                           service scaled to 0, k8s Service repointed) — the

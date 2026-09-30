@@ -2,6 +2,22 @@
 
 ## NEXT RELEASE
 
+### `plug doctor` fails, loudly, when the agent's RBAC is older than the agent
+
+Two grants in a row (endpoints in 2.12.0, endpointslices in 2.20.1) were
+missing on a real cluster after an upgrade - `plug update` moves the image and
+never the manifest - and doctor answered "no problems, 1 warning" while half
+the traffic went to the wrong pod. On Kubernetes it now reports one line first,
+"kubernetes RBAC", a FAILURE naming every rule the agent's version needs and
+does not have, with the version behind each, and the two ways out: re-apply
+`deploy/plug-k8s.yaml` for this version, or update the chart that deploys the
+agent. The exit code says it too. And a takeover that cannot clear the stale
+EndpointSlice (the endpointslices grant missing, on a Service with named ports)
+says so at the moment it happens, in the session, instead of leaving a
+one-request-in-two mystery for later. The Kubernetes page of the docs lists the
+Role rule by rule, with its reason, its version and the doctor line that names
+it.
+
 ---
 
 ## 2.20.1

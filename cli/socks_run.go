@@ -431,12 +431,21 @@ func startExposes(cfg config) (func(), error) {
 			return fail(fmt.Errorf("%s: agent answered %q, expected \"dynamic\"", name, strings.TrimSpace(reply)))
 		}
 		parked := len(fields) > 1 && fields[1] == "parked"
+		split := len(fields) > 2 && fields[2] == "split"
 		// Provisioned — register for cleanup BEFORE the check, so a failure
 		// below still tears the name down.
 		dynamic = append(dynamic, name)
 		unmark = append(unmark, markServed(name, group[0].AgentPort(), os.Args[1:]))
 		if parked {
 			info("took over %s — the deployed workload is parked for this session (restored on exit)", name)
+			if split {
+				// Said at the moment it bites, not left for doctor: a session
+				// where every second request reaches the old pod looks like a
+				// flaky app, not like a missing RBAC rule.
+				info("WARNING %s: HALF of its requests still reach the deployed pod - the agent's RBAC cannot delete", name)
+				info("        the EndpointSlice Kubernetes built for it (endpointslices, needed since 2.20.1).")
+				info("        Re-apply deploy/plug-k8s.yaml or update the chart that deploys the agent; plug doctor -p <profile> has the one-line patch.")
+			}
 			// Its environment too, by default: the process that takes a
 			// service's place gets the service's variables, secrets included
 			// as the pod already had them, the caller's own winning. An agent

@@ -356,6 +356,33 @@ func doctorProfile(name string, add func(check)) {
 		} else {
 			add(check{area: name, name: "-s names", status: stOK, detail: backend})
 		}
+		// The one line to read first on Kubernetes: is the RBAC the agent was
+		// deployed with as new as the agent? `plug update` moves the image and
+		// never the manifest, so every grant a newer agent needs is missing until
+		// someone re-applies it - and "no problems, 1 warning" is not what half
+		// the traffic going to the wrong pod should read as. A FAIL, naming each
+		// missing rule with the version that needs it, and the two ways to fix it.
+		if backend == "kubernetes" {
+			var missing []string
+			if grant == "missing" {
+				missing = append(missing, "endpoints (2.12.0: a served name points at the one agent pod holding the session)")
+			}
+			if execGrant == "missing" {
+				missing = append(missing, "pods + pods/exec (2.16.0: the parked workload's environment and secrets)")
+			}
+			if sliceGrant == "missing" {
+				missing = append(missing, "discovery.k8s.io/endpointslices (2.20.1: a taken-over name answers from your process ALONE, not half the time)")
+			}
+			if len(missing) > 0 {
+				add(check{area: name, name: "kubernetes RBAC", status: stFail,
+					detail: fmt.Sprintf("the Role the agent runs with is OLDER than the agent (v%s): %d rule(s) missing - %s",
+						shortVersion(agentVersionOf(out)), len(missing), strings.Join(missing, "; ")),
+					remedy: "re-apply deploy/plug-k8s.yaml for this version, or update the chart that deploys the agent " +
+						"(plug update moves the image, never the manifest); each rule alone is given below"})
+			} else if grant == "granted" {
+				add(check{area: name, name: "kubernetes RBAC", status: stOK, detail: "every rule this agent's version needs is granted"})
+			}
+		}
 		// The RBAC a Kubernetes agent was DEPLOYED with, which `plug update` never
 		// touches: it moves the image and never the manifest. Without the
 		// endpoints grant a served name still works, by the old shape - the agent
@@ -400,7 +427,7 @@ func doctorProfile(name string, add func(check)) {
 		// that slice at park, and repairs a parked name it finds doubled at
 		// every sweep, when it has the right.
 		if sliceGrant == "missing" {
-			add(check{area: name, name: "endpointslices grant", status: stWarn,
+			add(check{area: name, name: "endpointslices grant", status: stFail,
 				detail: "the agent may not delete the EndpointSlice Kubernetes built for a taken-over Service's pod: " +
 					"half of that name's requests still reach the deployed workload",
 				remedy: "re-apply deploy/plug-k8s.yaml, or grant it alone: kubectl -n <ns> patch role " +
@@ -644,4 +671,14 @@ func doctorCaptivePortal(add func(check)) {
 			") - which it will not route until you sign in, so the portal page never loads. " +
 			"plug does not set these servers; it hands them back untouched at teardown",
 		remedy: captiveRemedy(f)})
+}
+
+// agentVersionOf reads the version= field of an `info` line.
+func agentVersionOf(info string) string {
+	for _, f := range strings.Fields(info) {
+		if v, ok := strings.CutPrefix(f, "version="); ok {
+			return v
+		}
+	}
+	return "?"
 }

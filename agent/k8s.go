@@ -389,6 +389,24 @@ func k8sNamedPairs(pairs []portPair, rawPorts json.RawMessage) []portPair {
 	return out
 }
 
+// k8sHasNamedPort reports whether any of a Service's ports carries a name -
+// the shape the stale-slice split needs to bite (unnamed, plug names the port
+// p<port> and the stale slice no longer matches).
+func k8sHasNamedPort(rawPorts json.RawMessage) bool {
+	var sp []struct {
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(rawPorts, &sp) != nil {
+		return false
+	}
+	for _, p := range sp {
+		if p.Name != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // k8sSelfIP is THIS pod's address: what a served name must resolve to, and half
 // of the identity its parking receipt is signed with.
 //
@@ -706,6 +724,15 @@ func k8sServe(name string, pairs []portPair) {
 					answer("error: parking the Service %q (repointing it at the agent): %v", name, perr)
 				}
 				k8sPointAtSelf(ns, name, podIP, named)
+				// The one thing this agent cannot fix by itself, said where it
+				// bites: without the endpointslices grant the slice Kubernetes
+				// built for the deployed pod stays, and a Service with NAMED
+				// ports then splits its requests (see k8sDropControllerSlices).
+				// A third word on the line; a client that does not know it
+				// reads the first two as before.
+				if k8sHasNamedPort(existing.Spec.Ports) && podIP != "" && !k8sEndpointSlicesGranted(ns) {
+					answer("dynamic parked split")
+				}
 				answer("dynamic parked")
 			}
 			answer("error: the Service %q exists but plug cannot read it — remove it, or grant the agent access: kubectl delete service %s", name, name)
