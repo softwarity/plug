@@ -2,53 +2,40 @@
 
 ## NEXT RELEASE
 
----
+### A taken-over Kubernetes Service answered from your process one time in two - since 2.17.0
 
-## 2.20.0
+A regression, and the tests let it through. Since 2.12.0 a takeover on
+Kubernetes parks the deployed Service by dropping its selector and writing the
+Endpoints by hand, so the name points at the one agent holding the session.
+Kubernetes' EndpointSlice controller stops touching a Service without a
+selector and never removes the slice it had built for the deployed pod, which
+keeps running; kube-proxy routes over every slice of the Service. That stale
+slice stayed harmless until 2.17.0 by accident: plug renamed the Service's
+ports to `p<port>`, the stale slice kept the original names, and kube-proxy,
+which matches endpoint ports to Service ports by NAME, ignored it. 2.17.0 made
+a takeover keep the port names (so an Ingress still finds its backend), and
+from then on the stale slice matched: a taken-over name whose Service has a
+named port - a Helm chart's, typically - split its requests between your
+process and the deployed pod, still serving its older version. "My change is
+there one time in two." A name plug creates was never affected (no prior
+slice), nor Docker or Swarm (the workload is stopped there), nor a Service
+with unnamed ports, nor a cluster whose RBAC predates the endpoints grant.
 
-### The workload's volumes and PVCs are mounted live, read-write, by default
+The takeover now deletes the controller's slice once the selector is gone; the
+selector's return at restore makes Kubernetes build it again. The agent also
+repairs, at every sweep, a parked name it finds doubled - a session started
+before this fix, or before its RBAC allowed it. **Re-apply
+`deploy/plug-k8s.yaml`**: it grants `endpointslices` list/deletecollection under
+`discovery.k8s.io`; without it the takeover keeps working as before, half the
+time, and `plug doctor` says so ("endpointslices grant") and names the
+taken-over Services still doubled.
 
-The projection of 2.16-2.19 copied a workload's secrets and configs once at
-session start. Its DATA - a Docker volume, a bind, a PersistentVolumeClaim - was
-out of reach: a process replacing GeoServer could not touch its data directory.
-Now a takeover (`-s`) and `--env-of` mount every data volume of the workload,
-without being told: each lands under the session's temp directory at its
-cluster path, and the variables that name that path are repointed there - the
-same shape as the mounted secret files - so the process finds its data where
-its environment says and knows nothing. `--no-mount` turns that off,
-`--no-mount=/a,/b` leaves those out. `--mount` is the explicit form, at the
-exact path, for a process that hard-codes one:
-
-    plug -s geo:8080:8080 npm start                        # geo's volumes mounted, GEOSERVER_DATA_DIR repointed
-    plug -s geo:8080:8080 --mount /data npm start          # geo's /data, at /data here, exactly
-    plug -c --env-of geo --mount data:/srv/data python job.py   # its volume "data", at /srv/data
-    plug -c --mount api:/data:/srv/data …                  # the volume of a named workload
-
-Nothing to install on the workstation. The agent starts a helper beside the
-workload - its own image, running Samba with the volume mounted - and plug
-reaches it through the tunnel it already has, then mounts it with the SMB client
-the OS ships with: `mount_smbfs` on macOS (as you, no privilege), the kernel's
-cifs module on Linux (through mount(2), no cifs-utils). Files are written as the
-volume's owner, so the workload reads them back when it returns. The helper is
-tied to the session like a signpost: a session killed with -9 has its helper
-reaped by the agent's sweep within the minute, and its mount unmounted by the
-next run, or by `plug doctor` (`--fix`), which now checks for mounts left by a
-dead session. A tunnel blip or an agent restart re-provisions the helper under
-the same credential; the OS's SMB client reconnects and the mount never moves.
-
-Kubernetes: the helper pod is pinned to the workload's node - ReadWriteOnce is
-one node, not one pod - so it attaches beside a running workload without
-scaling anything; a ReadWriteOncePod claim is refused with the reason. The RBAC
-gains `pods` create/delete and `persistentvolumeclaims` get: re-apply
-`deploy/plug-k8s.yaml`. The agent image carries Samba now (+80 MB, the one
-package it installs; the only SMB2 server written in Go is AGPL and has no
-authentication).
-
-On Windows the share is reached by name through plug's own DNS and lands on a
-drive letter (`Z:` downwards for an automatic mount; `--mount /data:Y:` to
-name one), the variables repointed at it the same way. With `--dockerrun` the
-container gets the volume at its exact cluster path (a cifs volume the daemon
-mounts through plug).
+Why the e2e never saw it, twice over: the takeover cell stopped at the first
+local answer it got, and a 50/50 gives one within three tries; and its
+Kubernetes Service had an unnamed port, the one shape the bug spares. It now
+reads the name ten times and requires every answer to be ours, ten times after
+the restore requiring every answer to be the deployed one, on all three
+families, and the Kubernetes target carries a named port as a real one does.
 
 ### CI: a failed e2e leg now shows RED instead of being lost among cancelled jobs
 

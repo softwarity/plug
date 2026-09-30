@@ -52,3 +52,13 @@ func TestNamedPairsFallsBackToPPort(t *testing.T) {
 		t.Fatal("unreadable ports must leave the pair nameless")
 	}
 }
+
+// The slice selector the takeover deletes by: the Service's, and ONLY the
+// controller's (never the mirroring controller's, which carries plug's own
+// endpoints, nor anything a human made).
+func TestControllerSlicesSelector(t *testing.T) {
+	sel := k8sControllerSlicesOf("web")
+	if sel != "kubernetes.io/service-name=web,endpointslice.kubernetes.io/managed-by=endpointslice-controller.k8s.io" {
+		t.Fatalf("selector = %q", sel)
+	}
+}

@@ -316,6 +316,17 @@ func doInfo(cmd []string) {
 		} else {
 			grant += " exec=missing"
 		}
+		// Whether a takeover can remove the slice Kubernetes built for the
+		// deployed pod (else half the traffic still reaches it), and the
+		// parked names where that is the case right now.
+		if k8sEndpointSlicesGranted(k8sNamespace()) {
+			grant += " endpointslices=granted"
+		} else {
+			grant += " endpointslices=missing"
+		}
+		if d := k8sParkedNamesDoubled(k8sNamespace()); len(d) > 0 {
+			grant += " doubled=" + strings.Join(d, ",")
+		}
 	}
 	if img != "" {
 		answer("version=%s backend=%s image=%s%s%s", ver, backend, img, grant, who)

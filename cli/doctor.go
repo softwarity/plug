@@ -331,7 +331,7 @@ func doctorProfile(name string, add func(check)) {
 	defer tr.Close()
 
 	if out, err := tr.Exec("info"); err == nil && strings.HasPrefix(out, "version=") {
-		backend, grant, execGrant := "none", "", ""
+		backend, grant, execGrant, sliceGrant, doubled := "none", "", "", "", ""
 		for _, f := range strings.Fields(out) {
 			if v, ok := strings.CutPrefix(f, "backend="); ok {
 				backend = v
@@ -341,6 +341,12 @@ func doctorProfile(name string, add func(check)) {
 			}
 			if v, ok := strings.CutPrefix(f, "exec="); ok {
 				execGrant = v
+			}
+			if v, ok := strings.CutPrefix(f, "endpointslices="); ok {
+				sliceGrant = v
+			}
+			if v, ok := strings.CutPrefix(f, "doubled="); ok {
+				doubled = v
 			}
 		}
 		if backend == "none" {
@@ -386,6 +392,31 @@ func doctorProfile(name string, add func(check)) {
 		} else if execGrant == "granted" {
 			add(check{area: name, name: "exec grant", status: stOK,
 				detail: "a plugged service inherits the parked pod's environment, secrets included"})
+		}
+		// A TAKEN-OVER Service keeps the slice Kubernetes built for its pod
+		// unless the agent may delete it: kube-proxy then routes over both,
+		// and half the requests still reach the deployed workload - a bug that
+		// looks like "my change is there one time in two". The agent removes
+		// that slice at park, and repairs a parked name it finds doubled at
+		// every sweep, when it has the right.
+		if sliceGrant == "missing" {
+			add(check{area: name, name: "endpointslices grant", status: stWarn,
+				detail: "the agent may not delete the EndpointSlice Kubernetes built for a taken-over Service's pod: " +
+					"half of that name's requests still reach the deployed workload",
+				remedy: "re-apply deploy/plug-k8s.yaml, or grant it alone: kubectl -n <ns> patch role " +
+					"plug-serve-names --type=json -p '[{\"op\":\"add\",\"path\":\"/rules/-\"," +
+					"\"value\":{\"apiGroups\":[\"discovery.k8s.io\"],\"resources\":[\"endpointslices\"]," +
+					"\"verbs\":[\"list\",\"deletecollection\"]}}]'"})
+		} else if sliceGrant == "granted" {
+			add(check{area: name, name: "endpointslices grant", status: stOK,
+				detail: "a taken-over name answers from your process alone"})
+		}
+		if doubled != "" {
+			add(check{area: name, name: "taken-over names", status: stFail,
+				detail: "still routed to the deployed pod for half their requests: " + doubled,
+				remedy: "re-apply deploy/plug-k8s.yaml (the agent then repairs it within a minute), or by hand: " +
+					"kubectl -n <ns> delete endpointslice -l kubernetes.io/service-name=<name>," +
+					"endpointslice.kubernetes.io/managed-by=endpointslice-controller.k8s.io"})
 		}
 		add(check{area: name, name: "agent features", status: stOK,
 			detail: "≥ 2.2 (honest NXDOMAIN, -c, takeover)"})

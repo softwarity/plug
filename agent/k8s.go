@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -487,6 +488,7 @@ func k8sPointAtSelf(ns, name, podIP string, pairs []portPair) {
 		code, err := k8sWriteEndpoints(ns, name, podIP, pairs)
 		switch endpointsOutcome(code, err) {
 		case endpointsDone:
+			k8sDropControllerSlices(ns, name)
 			return
 		case endpointsFatal:
 			answer("error: pointing %q at this agent (writing its endpoints): %v", name, err)
@@ -495,6 +497,80 @@ func k8sPointAtSelf(ns, name, podIP string, pairs []portPair) {
 	if err := k8sSelectorFallback(ns, name); err != nil {
 		answer("error: pointing %q at this agent: %v", name, err)
 	}
+}
+
+// k8sDropControllerSlices removes, for a Service plug has just pointed at
+// itself, the EndpointSlices Kubernetes' own controller had built for it
+// while it still had a selector. Without a selector that controller STOPS
+// touching the Service - it neither updates nor deletes its slices - while
+// the mirroring controller derives a fresh slice from the Endpoints plug
+// writes. kube-proxy routes over every slice of the Service, so a taken-over
+// name then split its traffic: one request to the agent, the next to the
+// deployed pod, still running (plug leaves it up on purpose, env-of reads
+// it). From 2.12.0, where the selector-less shape came in, to 2.20.0: half of
+// every takeover on a cluster with the endpoints grant went to the workload.
+// A name plug CREATES never had a controller slice, which is the case the
+// old comment in plug-k8s.yaml described, and the only one it was right for.
+//
+// After the selector is gone, never before: with a selector still on the
+// Service the controller would rebuild what was deleted. At restore nothing
+// is needed: the selector comes back, the controller creates its slice from
+// the pods again, and the mirroring controller withdraws its own.
+//
+// Needs `endpointslices` delete under discovery.k8s.io (plug-k8s.yaml). A
+// cluster whose RBAC predates it is not failed - the takeover still works
+// for half the requests, which beats not at all - and the gap is named at
+// boot and to doctor (k8sEndpointSlicesGranted), where someone can act on it.
+func k8sDropControllerSlices(ns, name string) {
+	_, _ = k8sAPI("DELETE", "/apis/discovery.k8s.io/v1/namespaces/"+ns+"/endpointslices?labelSelector="+
+		url.QueryEscape(k8sControllerSlicesOf(name)), nil, nil)
+}
+
+// k8sControllerSlicesOf is the selector for the slices Kubernetes' controller
+// (not the mirroring one, not plug) built for a Service.
+func k8sControllerSlicesOf(name string) string {
+	return "kubernetes.io/service-name=" + name + ",endpointslice.kubernetes.io/managed-by=endpointslice-controller.k8s.io"
+}
+
+// k8sEndpointSlicesGranted probes the right without deleting anything: a
+// collection delete whose selector matches no slice answers 200 with the
+// right and 403 without it.
+func k8sEndpointSlicesGranted(ns string) bool {
+	code, _ := k8sAPI("DELETE", "/apis/discovery.k8s.io/v1/namespaces/"+ns+"/endpointslices?labelSelector="+
+		url.QueryEscape("kubernetes.io/service-name=plug-endpointslices-grant-probe"), nil, nil)
+	return code != 403
+}
+
+// k8sParkedNamesDoubled lists the parked Services (receipt present) that
+// still carry a controller-built slice beside plug's: the split-traffic state
+// above, on a session that started before this agent (or before its RBAC)
+// could remove it. The sweep repairs them; doctor reports them.
+func k8sParkedNamesDoubled(ns string) []string {
+	var svcs struct {
+		Items []struct {
+			Metadata struct {
+				Name        string            `json:"name"`
+				Annotations map[string]string `json:"annotations"`
+			} `json:"metadata"`
+		} `json:"items"`
+	}
+	if code, err := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/services", nil, &svcs); err != nil || code != 200 {
+		return nil
+	}
+	var out []string
+	for _, s := range svcs.Items {
+		if s.Metadata.Annotations[k8sParkedAnn] == "" {
+			continue
+		}
+		var slices struct {
+			Items []json.RawMessage `json:"items"`
+		}
+		if code, err := k8sAPI("GET", "/apis/discovery.k8s.io/v1/namespaces/"+ns+"/endpointslices?labelSelector="+
+			url.QueryEscape(k8sControllerSlicesOf(s.Metadata.Name)), nil, &slices); err == nil && code == 200 && len(slices.Items) > 0 {
+			out = append(out, s.Metadata.Name)
+		}
+	}
+	return out
 }
 
 // k8sDropName removes a plug-created name whole. The endpoints controller sweeps
@@ -548,6 +624,12 @@ func k8sNoteEndpointsGrant(ns string) {
 		gcNote("the deployed RBAC predates the endpoints grant, so a served name will select every agent " +
 			"replica by label instead of naming this pod - right at one replica, a lottery past it. " +
 			"Re-apply deploy/plug-k8s.yaml")
+		return
+	}
+	if !k8sEndpointSlicesGranted(ns) {
+		gcNote("the deployed RBAC predates the endpointslices grant, so a TAKEN-OVER Service keeps the " +
+			"slice Kubernetes built for its pod beside plug's: half of its requests will still reach " +
+			"the deployed workload. Re-apply deploy/plug-k8s.yaml")
 	}
 }
 
@@ -795,6 +877,10 @@ func k8sGC() {
 		// is serving right now, and used to be restored from under itself by any
 		// sibling that happened to boot.
 		if sessionLive(k8sReceiptOwner(s.Metadata.Annotations[k8sParkedAnn])) {
+			// Serving right now: make sure it is the only one answering. A
+			// session parked by an agent that did not yet drop the controller's
+			// slice (or could not, RBAC) is repaired here, within the minute.
+			k8sDropControllerSlices(ns, s.Metadata.Name)
 			continue
 		}
 		// No receipt means there is nothing to restore FROM, which used to end the

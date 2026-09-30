@@ -41,9 +41,10 @@
 # rewrite pods in the namespace, which is a far larger grant than writing the
 # endpoints of the names plug itself created.
 #
-# EndpointSlices are NOT granted and not needed: the mirroring controller built
-# into Kubernetes derives them from custom Endpoints automatically, which is what
-# kube-proxy actually routes on.
+# EndpointSlices: the mirroring controller built into Kubernetes derives plug's
+# from the Endpoints it writes, which is what kube-proxy routes on - no right
+# needed for a name plug CREATES. A name TAKEN OVER is different: see the
+# endpointslices rule in the Role below.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -139,6 +140,15 @@ rules:
   - apiGroups: [""]
     resources: ["endpoints"]
     verbs: ["get", "create", "update", "delete"]
+  # A taken-over Service keeps the EndpointSlice Kubernetes built for its pod
+  # while it had a selector: the controller stops touching a selector-less
+  # Service and never removes it, and kube-proxy routes over every slice, so
+  # half the requests still reached the deployed pod (2.12.0 to 2.20.0). The
+  # agent deletes that slice at park; the selector's return at restore makes
+  # the controller build it again. `list` is doctor's view of what is doubled.
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["list", "deletecollection"]
   # `plug update`: the agent triggers a rolling restart of its OWN Deployment
   # (a template-annotation patch), so the node re-pulls the tag above. Still
   # namespace-scoped, still minimal.
