@@ -11,7 +11,7 @@ moins bien, ce que les notes de version tiennent à jour._
 
 CI par push, 3 OS × **3 familles de clusters** (Compose, Swarm mono-nœud,
 Kubernetes/kind - 9 jambes amd64, plus une jambe Compose **arm64** depuis le
-07/08, 6 clusters). Les trois familles exécutent le **même bloc de cellules** (22
+07/08, 6 clusters). Les trois familles exécutent le **même bloc de cellules** (24
 aujourd'hui) et `scripts/ci/check-common-block.sh` fait échouer le build à la
 moindre dérive : c'est lui la liste à jour, pas ce fichier. **Un seul build
 d'image** (`sha-<court>`, immuable), consommé tel quel par les jambes ; il n'est
