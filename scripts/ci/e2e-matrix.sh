@@ -1475,13 +1475,22 @@ do_takeover() {
   # and it alone: ten reads, all deployed, or the restore left our route in.
   local after=""
   for _ in 1 2 3 4 5; do after="$(probe)"; [ "$after" = "deployed-$tname" ] && break; sleep 3; done
+  # After the first deployed answer the controllers are still swapping slices
+  # (the selector's own slice built, plug's mirrored one withdrawn), and for
+  # some hundreds of ms the Service has no endpoint at all: a read then gets a
+  # connection error, which is the restore's blink, not our process answering.
+  # Let it settle, and retry a read that got no answer once; what fails this
+  # assertion is a "local-" answer (our route left in) or an error that stays.
   if [ "$after" = "deployed-$tname" ]; then
-    n_local=0; n_other=0; stray=""
+    sleep 3
+    n_local=0; n_other=0; stray=""; seq=""
     for _ in 1 2 3 4 5 6 7 8 9 10; do
       r="$(probe)"
+      case "$r" in deployed-*|local-*) ;; *) sleep 1; r="$(probe)" ;; esac
+      seq="$seq $(( $(date +%s) - t0 ))s:${r:-nothing}"
       if [ "$r" = "deployed-$tname" ]; then n_local=$((n_local+1)); else n_other=$((n_other+1)); stray="$r"; fi
     done
-    [ "$n_other" -gt 0 ] && after="$n_local/10 deployed, $n_other/10 '${stray:-nothing}'"
+    [ "$n_other" -gt 0 ] && after="$n_local/10 deployed, $n_other/10 '${stray:-nothing}' (by second:$seq)"
   fi
 
   if [ "$during" = "local-$tname" ] && [ "$after" = "deployed-$tname" ]; then
