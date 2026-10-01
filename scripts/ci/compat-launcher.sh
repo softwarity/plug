@@ -86,6 +86,20 @@ done
 printf '%s\n' "$out" | tail -14 | sed 's/^/    /'
 if ! printf '%s' "$out" | grep -q '"url"'; then
   echo "COMPAT FAIL — the latest launcher could not run this branch's core against the cluster" >&2
+  # The side that decides whether a flow is carried is the machine's datapath
+  # daemon (macOS, Windows), not the session: a "connection refused" in the
+  # session's output is its verdict, and only its log says why - an
+  # unattributable flow, an account that does not hold the cluster, a dead
+  # tunnel. Print it, and the client registry it judged by, rather than guess.
+  case "$(uname -s)" in
+    Darwin)
+      echo "--- daemon log (tail) ---"; sudo tail -40 /var/run/plug/daemon.log 2>/dev/null | sed 's/^/    /'
+      echo "--- client registry ---"
+      for d in /var/run/plug/graft/*.clients /var/run/plug/*.clients; do
+        [ -d "$d" ] || continue
+        echo "    $d:"; for f in "$d"/*; do [ -f "$f" ] && echo "      $(basename "$f") = $(sudo cat "$f" 2>/dev/null | tr -d '\n' | cut -c1-80)"; done
+      done ;;
+  esac
   exit 1
 fi
 echo "compat OK — the latest launcher downloaded this branch's core and reached the cluster by name"
