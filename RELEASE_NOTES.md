@@ -2,6 +2,17 @@
 
 ## NEXT RELEASE
 
+### CI: a failing e2e cell stops its leg in seconds, and the fragile cells run first
+
+Developer-facing only; no change to plug itself. A leg red at minute 5 used to
+run twenty more minutes of cells before the run was cut. A failing cell now
+stops its leg (the cells after it skipped, grey, never green), the run is cut
+within the minute, and the cells most likely to trip on a timing - takeover,
+orphan, resilience - run right after env, before the eight-minute protocol
+matrix. The takeover cell itself reads the name ten times while the session
+lives and after the restore, stamps every answer with its second, and lets the
+restore's own blink settle before judging it.
+
 ---
 
 ## 2.20.2
