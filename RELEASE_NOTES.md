@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.20.2
+
 ### `plug doctor` fails, loudly, when the agent's RBAC is older than the agent
 
 Two grants in a row (endpoints in 2.12.0, endpointslices in 2.20.1) were
