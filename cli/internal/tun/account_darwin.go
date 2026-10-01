@@ -17,7 +17,24 @@ import (
 // read as a number by clientUIDs for the per-flow check. A decimal keeps that
 // reader working; Windows writes a SID there, which that reader skips, which is
 // what it already did with the -1 it used to find.
-func thisAccount() string { return strconv.Itoa(os.Getuid()) }
+//
+// Under `sudo plug` the real uid is 0 as well, and the account is then the
+// person sudo records (SUDO_UID) - the same rule resolveDropTarget applies to
+// the child, whose flows carry that uid: a session that registered as root
+// while its command ran as the person had every flow of its own command
+// refused by the daemon (owners {0}, flow 501), which the compat cell hid for
+// a month behind a killed session's leftover account. Root with no SUDO_UID
+// is a genuine root login, and stays 0.
+func thisAccount() string { return accountOf(os.Getuid(), os.Getenv("SUDO_UID")) }
+
+func accountOf(uid int, sudoUID string) string {
+	if uid == 0 {
+		if n, err := strconv.Atoi(sudoUID); err == nil && n > 0 {
+			return strconv.Itoa(n)
+		}
+	}
+	return strconv.Itoa(uid)
+}
 
 // accountHolds reports whether an account can hold a cluster against another.
 //
