@@ -2,6 +2,22 @@
 
 ## NEXT RELEASE
 
+### macOS: `sudo plug` refused its own command's connections
+
+Under `sudo`, plug ran the command as you (SUDO_UID) but registered the session
+as root, the real uid under sudo. The daemon's per-flow check - one cluster
+belongs to one account on a machine - then compared the command's connections
+(yours) with the accounts holding the cluster (root's) and refused every one:
+"connection refused" on each cluster name while the reverse direction worked.
+The setuid install, which `plug update` sets up, was never affected: there the
+real uid is yours. A session now registers the account sudo records, as it
+already drops the command to it; a genuine root login still registers as root.
+
+Found by the CI: the launcher-compat cell runs the published launcher under
+sudo on macOS and had passed for a month on an accident - the cell before it
+killed a session whose leftover account was still counted - which ended the
+day the cells were reordered.
+
 ### CI: a failing e2e cell stops its leg in seconds, and the fragile cells run first
 
 Developer-facing only; no change to plug itself. A leg red at minute 5 used to
