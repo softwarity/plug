@@ -306,9 +306,15 @@ func openTTY(hint string) *os.File {
 // that way before askToStop learnt to ask the OS whether stdin IS a terminal.
 // Every prompt gets the same guard here, so none of them can wedge a script, a
 // CI job or a detached run on a question nobody can answer.
+//
+// Stdin OR stderr: a person piping data into the plugged command (`cat dump |
+// plug psql`) has redirected stdin and is still sitting at a terminal, and the
+// profile picker or the wizard can ask them there, as they always could. What
+// the guard refuses is the run with no terminal on either side, which is the
+// CI job, the script and the detached service.
 func openTerminal() (*os.File, error) {
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return nil, errors.New("stdin is not a terminal")
+	if !term.IsTerminal(int(os.Stdin.Fd())) && !term.IsTerminal(int(os.Stderr.Fd())) {
+		return nil, errors.New("neither stdin nor stderr is a terminal")
 	}
 	return os.Open(ttyDevice)
 }
