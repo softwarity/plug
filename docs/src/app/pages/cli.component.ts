@@ -54,12 +54,24 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
         <td><a routerLink="/getting-started">Getting started</a></td>
       </tr>
       <tr>
-        <td><code>plug update [-p profile] [&lt;tag&gt;]</code></td>
+        <td><code>plug mounts</code></td>
+        <td>
+          from another terminal: the volumes the live sessions on this machine have mounted,
+          with the local path of each. Most are the automatic ones a takeover places under a
+          session directory, so this is where to find a workload's data to open it in an
+          editor or a file browser
+        </td>
+        <td></td>
+      </tr>
+      <tr>
+        <td><code>plug update [-p profile] [&lt;tag&gt;] [--force]</code></td>
         <td>
           the agent refreshes itself from its registry, then this launcher from the agent.
           A tag <strong>switches the channel</strong> the deployment follows -
           <code>tag</code> for the newest release, <code>latest</code> for the latest stream, or a
-          branch tag such as <code>feat-09</code>. The agent checks the tag exists before
+          branch tag such as <code>feat-09</code>. A release <em>older</em> than the one the
+          cluster runs is refused unless <code>--force</code> says the rollback is meant.
+          The agent checks the tag exists before
           repointing anything.
         </td>
         <td><a routerLink="/getting-started">Getting started</a></td>
@@ -187,7 +199,9 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
           turns that off, <code>--no-mount=/a,/b</code> leaves those out. <code>--mount</code> is the
           explicit form, at the exact path: <code>--mount /data</code> is its <code>/data</code> at <code>/data</code>;
           <code>--mount data:/srv/data</code> its volume "data" at <code>/srv/data</code>;
-          <code>--mount api:/data:/srv/data</code> names the workload. Unnamed, it is the
+          <code>--mount api:/data:/srv/data</code> names the workload. The mount point (or,
+          when it does not exist yet, its nearest existing parent) must be yours: plug mounts
+          with privilege and only where you could have written unprivileged. Unnamed, it is the
           <code>-s</code> one or the <code>--env-of</code> one. Repeatable. Nothing is installed:
           the agent starts a helper beside the workload (its own image, Samba, the volume mounted)
           and plug mounts it through the tunnel with the SMB client your OS ships with -

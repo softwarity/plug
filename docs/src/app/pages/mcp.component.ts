@@ -76,7 +76,7 @@ import { CodeComponent } from '../code/code.component';
 
     <h3>The tools</h3>
     <table class="matrix">
-      <thead><tr><th>tool</th><th>what it answers</th></tr></thead>
+      <thead><tr><th scope="col">tool</th><th scope="col">what it answers</th></tr></thead>
       <tbody>
         <tr><td><code>list_profiles</code></td><td>the clusters this machine knows: name, agent address, update policy, whether a personal key is enrolled</td></tr>
         <tr><td><code>doctor</code></td><td><code>plug doctor</code>, check by check: area, name, <code>ok</code> / <code>warn</code> / <code>fail</code>, the detail and the exact remedy. Optionally for one profile</td></tr>

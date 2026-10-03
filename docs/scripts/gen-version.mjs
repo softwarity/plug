@@ -12,10 +12,14 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Offline / no-tags fallback (e.g. `ng serve`, a shallow checkout). Nothing
-// overrides it any more, so a build without tags publishes manifests pinned to
-// THIS value: keep it at the current release.
-const FALLBACK = '2.13.0';
+// Offline / no-tags fallback for a LOCAL build only (`ng serve` on a shallow
+// checkout, a tarball without .git). A build without tags publishes manifests
+// pinned to THIS value, so keep it at the current release: the value is what
+// `git describe --tags --abbrev=0` prints on main, without the leading `v`.
+// In CI there is no fallback: a missing tag there means the checkout is
+// shallow (fetch-depth: 0 is required), and the build fails rather than
+// publishing a stale pin in silence.
+const FALLBACK = '2.20.2';
 
 function latestTag() {
   try {
@@ -25,8 +29,15 @@ function latestTag() {
       .replace(/^v/, '');
     if (t) return t;
   } catch {
-    /* no git / no tags reachable → fall back */
+    /* no git / no tags reachable: handled below */
   }
+  if (process.env.CI) {
+    throw new Error(
+      'gen-version: no release tag reachable (git describe --tags failed). ' +
+        'In CI the checkout must have the tags: use fetch-depth: 0.',
+    );
+  }
+  console.warn(`gen-version: no release tag reachable, falling back to ${FALLBACK} (local build)`);
   return FALLBACK;
 }
 
@@ -44,15 +55,18 @@ const snippetsDir = resolve(scriptDir, '../snippets'); // doc-only illustrative 
 const LATEST = /docker\.io\/softwarity\/plug:latest/g;
 const pin = `docker.io/softwarity/plug:${version}`;
 
+// A failed embed fails the build. The three assets are gitignored, so a source
+// that cannot be read would otherwise ship a site whose download buttons serve
+// "could not load" in production, with a green build behind it.
 function embed(dir, file, transform) {
   try {
     let text = readFileSync(resolve(dir, file), 'utf8').replace(LATEST, pin);
     if (transform) text = transform(text);
     writeFileSync(resolve(assetsDir, file), text);
-    console.log(`gen-version: embedded ${file} (pinned ${version})`);
   } catch (e) {
-    console.warn(`gen-version: could not embed ${file}: ${e.message}`);
+    throw new Error(`gen-version: could not embed ${file}: ${e.message}`, { cause: e });
   }
+  console.log(`gen-version: embedded ${file} (pinned ${version})`);
 }
 
 embed(deployDir, 'plug-stack.yml');

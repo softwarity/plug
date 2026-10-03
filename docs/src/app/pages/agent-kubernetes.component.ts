@@ -37,7 +37,7 @@ import { FileComponent } from '../file/file.component';
       the agent through your own chart, mirror these rules there.
     </p>
     <table class="rules">
-      <thead><tr><th>Rule</th><th>Why</th><th>Since</th><th>Without it, <code>doctor</code> says</th></tr></thead>
+      <thead><tr><th scope="col">Rule</th><th scope="col">Why</th><th scope="col">Since</th><th scope="col">Without it, <code>doctor</code> says</th></tr></thead>
       <tbody>
         <tr><td><code>services</code> get, list, create, delete, update, patch</td><td><code>-s</code> creates the Service carrying the name and deletes it after; a takeover repoints an existing one and restores it.</td><td>always</td><td>the agent refuses to start</td></tr>
         <tr><td><code>endpoints</code> get, create, update, delete</td><td>a served name points at the ONE agent pod holding the session, through Endpoints the agent writes (no selector).</td><td>2.12.0</td><td>"endpoints grant"</td></tr>

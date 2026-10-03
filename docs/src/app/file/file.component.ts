@@ -65,10 +65,17 @@ export type FileState = 'collapsed' | 'opened' | 'expanded';
           <mat-icon class="chev">{{ icon() }}</mat-icon>
           <span class="name">{{ name() }}</span>
         </button>
+        <!--
+          Copy and Download act on the fetched text, so they are disabled until
+          it is there: before the response they would copy an empty string, and
+          after a failed one they used to serve the error message as if it were
+          the file (a "could not load" line downloaded as plug-k8s.yaml).
+        -->
         <button
           type="button"
           class="act"
           [class.done]="copied()"
+          [disabled]="status() !== 'ok'"
           (click)="copy()"
           [attr.aria-label]="copied() ? 'Copied' : 'Copy'"
           title="Copy"
@@ -76,19 +83,29 @@ export type FileState = 'collapsed' | 'opened' | 'expanded';
         <button
           type="button"
           class="act"
+          [disabled]="status() !== 'ok'"
           (click)="save()"
           aria-label="Download"
           title="Download"
         ><mat-icon>download</mat-icon></button>
       </div>
 
-      @if (current() !== 'collapsed') {
+      @if (status() === 'error') {
+        <div class="err" role="alert">
+          <mat-icon>error_outline</mat-icon>
+          <span>Could not load <code>{{ name() }}</code> ({{ error() }}): nothing to copy or download. Reload the page, or take the file from the repository.</span>
+        </div>
+      } @else if (current() !== 'collapsed') {
         <div class="body">
-          <pre [class]="'language-' + lang()"><code #codeEl [class]="'language-' + lang()"></code></pre>
-          @if (current() === 'opened' && hidden() > 0) {
-            <button type="button" class="more" (click)="expand()">
-              <mat-icon>expand_more</mat-icon>&nbsp;{{ hidden() }} more line{{ hidden() === 1 ? '' : 's' }}
-            </button>
+          @if (status() === 'loading') {
+            <p class="loading">Loading {{ name() }}&hellip;</p>
+          } @else {
+            <pre [class]="'language-' + lang()"><code #codeEl [class]="'language-' + lang()"></code></pre>
+            @if (current() === 'opened' && hidden() > 0) {
+              <button type="button" class="more" (click)="expand()">
+                <mat-icon>expand_more</mat-icon>&nbsp;{{ hidden() }} more line{{ hidden() === 1 ? '' : 's' }}
+              </button>
+            }
           }
         </div>
       }
@@ -178,6 +195,12 @@ export type FileState = 'collapsed' | 'opened' | 'expanded';
         color: var(--accent-green);
         border-color: var(--accent-green);
       }
+      .act:disabled {
+        opacity: 0.35;
+        cursor: not-allowed;
+        color: var(--text-secondary);
+        border-color: var(--border-color);
+      }
       .act mat-icon {
         font-size: 17px;
         width: 17px;
@@ -185,6 +208,30 @@ export type FileState = 'collapsed' | 'opened' | 'expanded';
       }
       .body {
         border-top: 1px solid var(--border-color);
+      }
+      .loading {
+        margin: 0;
+        padding: 10px 12px;
+        color: var(--text-muted);
+        font-size: 0.85rem;
+      }
+      /* The load failure, as a banner under the header: a state of the widget,
+         not a line of the file. */
+      .err {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        padding: 10px 12px;
+        border-top: 1px solid var(--border-color);
+        color: var(--text-secondary);
+        font-size: 0.85rem;
+      }
+      .err mat-icon {
+        flex: none;
+        font-size: 18px;
+        width: 18px;
+        height: 18px;
+        color: var(--accent-purple);
       }
       .body pre {
         margin: 0;
@@ -228,6 +275,11 @@ export class FileComponent implements OnInit {
   private readonly codeEl = viewChild<ElementRef<HTMLElement>>('codeEl');
   private readonly override = signal<FileState | null>(null);
   private readonly text = signal('');
+  // The fetch's outcome. Copy and Download are enabled on 'ok' only, and the
+  // body shows the file on 'ok' only: an error is reported as a banner, never
+  // as the file's content.
+  protected readonly status = signal<'loading' | 'ok' | 'error'>('loading');
+  protected readonly error = signal('');
   protected readonly copied = signal(false);
 
   protected readonly current = computed<FileState>(
@@ -293,9 +345,15 @@ export class FileComponent implements OnInit {
 
   ngOnInit(): void {
     fetch(new URL(this.src(), document.baseURI))
-      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
-      .then((t) => this.text.set(t.replace(/\n+$/, '')))
-      .catch(() => this.text.set(`# could not load ${this.src()}`));
+      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((t) => {
+        this.text.set(t.replace(/\n+$/, ''));
+        this.status.set('ok');
+      })
+      .catch((e: unknown) => {
+        this.error.set(e instanceof Error && e.message ? e.message : 'network error');
+        this.status.set('error');
+      });
   }
 
   protected cycle(): void {
@@ -310,6 +368,7 @@ export class FileComponent implements OnInit {
   }
 
   protected copy(): void {
+    if (this.status() !== 'ok') return; // the buttons are disabled; belt and braces
     void navigator.clipboard
       ?.writeText(this.text())
       .then(() => {
@@ -321,13 +380,27 @@ export class FileComponent implements OnInit {
       });
   }
 
+  // The MIME type of the download, from the highlighting language: the two
+  // say the same thing about the file, so one input drives both.
+  private mime(): string {
+    const types: Record<string, string> = {
+      yaml: 'text/yaml',
+      json: 'application/json',
+      bash: 'text/x-shellscript',
+    };
+    return types[this.lang()] ?? 'text/plain';
+  }
+
   protected save(): void {
-    const blob = new Blob([this.text() + '\n'], { type: 'text/yaml' });
+    if (this.status() !== 'ok') return;
+    const blob = new Blob([this.text() + '\n'], { type: this.mime() });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = this.name();
     a.click();
-    URL.revokeObjectURL(url);
+    // Revoked on the next tick, not synchronously after click(): a browser that
+    // starts the download asynchronously would find the URL already gone.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 }
