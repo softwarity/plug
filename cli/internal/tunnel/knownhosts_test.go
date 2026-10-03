@@ -139,8 +139,11 @@ func TestARepinReplacesTheFileAndKeepsTheOtherHosts(t *testing.T) {
 	if got := pinnedKeys(t, path, testAddr); len(got) != 1 || got[0] != key2.Type()+" "+sshMarshal(key2) {
 		t.Errorf("the re-pin did not land: %v", got)
 	}
-	// Unix permissions only: Windows has none to report, and Go answers 0666
-	// for every file there.
+	// A Unix property. On Windows the file is SHARED by design, under
+	// %ProgramData%\plug, between the SYSTEM service and every account (see
+	// knownHostsFor in the cli package: a pin the service wrote must stay
+	// resettable by the person without admin), and it holds public host keys,
+	// not secrets. Go reports no permission bits there anyway.
 	if fi, err := os.Stat(path); runtime.GOOS != "windows" && (err != nil || fi.Mode().Perm()&0o077 != 0) {
 		t.Errorf("known_hosts is %v, want private to its owner", fi.Mode())
 	}
