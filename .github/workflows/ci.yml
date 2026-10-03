@@ -827,13 +827,14 @@ jobs:
             echo "$ref: stamped $got, signed"
           done
       # Notes, version commit, tag: computed and written, pushed below by hand
-      # so the commit can say [skip ci] (see the job comment). Told the version
-      # the images were given, so it cannot arrive at another one.
+      # so the commit can say [skip ci] (see the job comment). Given the same
+      # bump, from the same tags: the step after checks it arrived at the
+      # version the images were given (it takes no version as input).
       - name: Release notes, version commit and tag
         id: flow
         uses: softwarity/release-flow@58d6aa0216d97976a623edca2fe484eababf5b57
         with:
-          version: ${{ steps.next.outputs.version }}
+          bump: ${{ steps.bump.outputs.bump }}
           push: "false"
           create-release: "false"
       - name: Push the version commit and the tag, create the GitHub Release
