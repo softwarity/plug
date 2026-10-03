@@ -777,6 +777,16 @@ func swarmMountVolume(name, volume, agentPort, pass string, self selfInfo) {
 		"Labels":       labels,
 		"TaskTemplate": task,
 		"Mode":         map[string]any{"Replicated": map[string]any{"Replicas": 1}},
+		// No virtual IP: the name resolves to the task itself. Through a VIP,
+		// Swarm's load balancer rewrites the source of every connection to
+		// the network's own endpoint address (the lb sandbox), so the helper
+		// saw 10.0.x.4 where it expected the agent and its `hosts allow`
+		// refused the agent (measured on a single-node Swarm). Dialled
+		// directly, the connection carries the agent's task address, which is
+		// what the filter was built from; and a stranger dialling the task
+		// shows its own address, where the lb address would have vouched for
+		// every container on the network.
+		"EndpointSpec": map[string]any{"Mode": "dnsrr"},
 	}
 	if _, err := dockerAPI("POST", "/services/create", spec, nil); err != nil {
 		swarmDropMountSecret(helper)
