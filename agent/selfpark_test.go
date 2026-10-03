@@ -125,3 +125,15 @@ func TestGcNoteOnceAndRecovered(t *testing.T) {
 		t.Fatalf("a recovery clears the key, got %d", n)
 	}
 }
+
+// A Service's old target port can be the re-arming caller's own new one after
+// an agent restart; the port probe must not read the caller as a rival.
+func TestOwnsAgentPort(t *testing.T) {
+	pairs := []portPair{{cluster: "80", agent: "41000"}, {cluster: "443", agent: "41001"}}
+	if !ownsAgentPort(pairs, "41001") {
+		t.Fatal("the caller's own port must be recognised")
+	}
+	if ownsAgentPort(pairs, "41002") || ownsAgentPort(nil, "41000") {
+		t.Fatal("another port is somebody else's")
+	}
+}

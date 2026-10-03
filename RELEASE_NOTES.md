@@ -102,6 +102,14 @@ On the agent:
   restore succeeds, and the failure is logged once per receipt.
 - The Swarm secret stash lives under the agent's state directory, is removed
   on every restore path and at boot, and is read only for a parked service.
+- Kubernetes: a served name lost its ClusterIP when the agent restarted. The
+  rebooted agent's sweep found the name's session at an address that no longer
+  answered (its own previous pod address) and deleted the Service, ten seconds
+  before the session reconnected and re-armed the name into a fresh one. The
+  sweep now sets such a Service to linger, exactly as a clean unserve does,
+  and the re-arm takes it over in place: the address every caller cached
+  stays. Found by the resilience cell the day it first restarted an agent on
+  Kubernetes (see below).
 
 The manifest's header and the Security page said the Role "cannot touch
 pods"; it grants `pods` and `pods/exec`, which is running code in the

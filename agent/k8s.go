@@ -152,6 +152,17 @@ func k8sSelfUpdate(decide func(string) (string, string, string)) {
 	answer("updating deployment %s (namespace %s) — %s", name, ns, note)
 }
 
+// ownsAgentPort reports whether port is one of the agent-side ports the caller
+// is asking to serve, which makes a probe of it a probe of the caller.
+func ownsAgentPort(pairs []portPair, port string) bool {
+	for _, p := range pairs {
+		if p.agent == port {
+			return true
+		}
+	}
+	return false
+}
+
 // k8sTargetPort reads the targetPort out of a plug Service's ports.
 func k8sTargetPort(raw json.RawMessage) string {
 	var ports []struct {
@@ -637,6 +648,27 @@ func k8sParkedNamesDoubled(ns string) []string {
 	return out
 }
 
+// k8sLingerName keeps a plug-created Service resolving while nobody serves the
+// name: the linger stamp starts the grace, the owner annotation goes (a
+// lingering name belongs to nobody), and so do the Endpoints, so the name
+// REFUSES connections like any stopped service instead of swallowing them
+// until they time out. The ClusterIP, which every caller cached, stays, and a
+// serve within the grace takes the Service over in place (see k8sServe's 409
+// path). Shared by unserve and by the boot sweep, which reach the same state
+// from different directions: a session that said goodbye, and one that
+// stopped answering.
+func k8sLingerName(ns, name string) error {
+	patch := map[string]any{"metadata": map[string]any{"annotations": map[string]any{
+		lingerLabel:       lingerStamp(),
+		sessionOwnerLabel: nil,
+	}}}
+	if _, err := k8sMergePatch("/api/v1/namespaces/"+ns+"/services/"+name, patch); err != nil {
+		return err
+	}
+	_, _ = k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/endpoints/"+name, nil, nil)
+	return nil
+}
+
 // k8sDropName removes a plug-created name whole. The endpoints controller sweeps
 // an Endpoints object whose Service is gone, but only once it notices; deleting
 // both here means the name never survives its Service even for a moment. Safe
@@ -808,7 +840,13 @@ func k8sServe(name string, pairs []portPair) {
 			if sessionLive(own) {
 				answer(nameHeldRefusal, name, heldBy(name, ownerPort(own)))
 			}
-		} else if tp := k8sTargetPort(existing.Spec.Ports); tp != "" && agentPortLive(tp) {
+		} else if tp := k8sTargetPort(existing.Spec.Ports); tp != "" && !ownsAgentPort(pairs, tp) && agentPortLive(tp) {
+			// Not when the port is one of THIS caller's: a session re-arming
+			// after an agent restart has its forwards open before it asks for
+			// the name, and the agent hands out ports afresh after a restart,
+			// so the Service's old target port can be the caller's own new
+			// one. Probing it would find the caller alive and refuse the
+			// caller its own name.
 			answer(nameHeldRefusal, name, heldBy(name, tp))
 		}
 		// Take it over IN PLACE — never delete-and-recreate. The ClusterIP is
@@ -898,14 +936,9 @@ func k8sUnserve(name string) {
 		// where one still naming a pod that has moved on would swallow them until
 		// they time out. That refusal is the behaviour the linger promises, "still
 		// resolving, refusing connections like any stopped service".
-		patch := map[string]any{"metadata": map[string]any{"annotations": map[string]any{
-			lingerLabel:       lingerStamp(),
-			sessionOwnerLabel: nil,
-		}}}
-		if _, err := k8sMergePatch("/api/v1/namespaces/"+ns+"/services/"+name, patch); err != nil {
+		if err := k8sLingerName(ns, name); err != nil {
 			answer("error: %v", err)
 		}
-		_, _ = k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/endpoints/"+name, nil, nil)
 		answer("ok")
 	}
 	// A REAL Service we parked (takeover): restore it from its receipt.
@@ -941,7 +974,13 @@ func k8sGC() {
 			// Same first rule as the Swarm gc: a lingering Service within its
 			// grace keeps its ClusterIP warm across even an agent restart —
 			// sweeping it would kill the address the linger exists to keep.
-			if stamp := s.Metadata.Annotations[lingerLabel]; stamp != "" && !lingerExpired(stamp, now) {
+			// The linger rule comes FIRST, as in dockerGC: within the grace the
+			// Service stays whoever stamped it, past it it goes.
+			if stamp := s.Metadata.Annotations[lingerLabel]; stamp != "" {
+				if !lingerExpired(stamp, now) {
+					continue
+				}
+				k8sDropName(ns, s.Metadata.Name)
 				continue
 			}
 			// The label says "a plug Service", never "MY plug Service". With one
@@ -951,7 +990,22 @@ func k8sGC() {
 			if sessionLive(s.Metadata.Annotations[sessionOwnerLabel]) {
 				continue
 			}
-			k8sDropName(ns, s.Metadata.Name)
+			// A session that does not answer is not a session that is gone.
+			// This sweep runs at BOOT, and the commonest reason a boot finds
+			// owners that do not answer is that the agent itself just restarted:
+			// the owner is this pod's previous address, and the session is ten
+			// seconds away from reconnecting and re-arming the name. Deleting
+			// here handed that re-arm a fresh ClusterIP, and every caller that
+			// had cached the old one (CoreDNS TTL, connection pools) lost it.
+			// Linger instead, exactly as a clean unserve does: the address
+			// stays, the endpoints go (so the name refuses connections rather
+			// than swallowing them), and the re-arm takes the Service over in
+			// place. Nobody comes back within the grace: the next sweep drops
+			// it, by the rule above.
+			if err := k8sLingerName(ns, s.Metadata.Name); err != nil {
+				gcNoteOnce("k8s-linger:"+s.Metadata.Name, "Service %s/%s: its session does not answer and it could not be set to linger (%v); dropping it", ns, s.Metadata.Name, err)
+				k8sDropName(ns, s.Metadata.Name)
+			}
 			continue
 		}
 		// A parked REAL Service. Restoring it is no longer reserved to the agent
