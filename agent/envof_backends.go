@@ -93,7 +93,7 @@ func dockerEnvOf(name string) []string {
 		return nil
 	}
 	if self.service != "" && swarmManager() {
-		if own := swarmNameOwner(name, self); own != nil {
+		if own := swarmWorkloadOwner(name, self); own != nil {
 			var s struct {
 				Spec struct {
 					TaskTemplate struct {
@@ -137,11 +137,18 @@ func dockerEnvOf(name string) []string {
 
 // dockerNameCandidates lists the container ids a name resolves to, best first:
 // the ones the receipt on the signpost records (a PARKED, stopped container),
-// then the RUNNING containers the name owns, then the name itself. env-of and
-// files-of both need this - a takeover parks a container and reads it stopped,
-// while --env-of names a workload nobody parked and must find it RUNNING, which
-// the receipt-only lookup missed (the mounted file came back empty for -c
-// --env-of on Compose while -s got it).
+// then the RUNNING containers the name owns on a network the agent shares.
+// env-of and files-of both need this - a takeover parks a container and reads
+// it stopped, while --env-of names a workload nobody parked and must find it
+// RUNNING, which the receipt-only lookup missed (the mounted file came back
+// empty for -c --env-of on Compose while -s got it).
+//
+// The bare name is NOT a candidate any more. It used to be appended as a
+// container id or name, which the daemon resolves across every container it
+// runs, so env-of, files-of and mount-volume reached workloads on networks the
+// agent is not on, and their binds with them. What the name resolves to for
+// the agent's networks is what nameOwners lists, and nothing else; the agent's
+// own container is left out as well, since it is never the workload asked for.
 func dockerNameCandidates(name string, self selfInfo) []string {
 	var ids []string
 	var sp struct {
@@ -157,9 +164,12 @@ func dockerNameCandidates(name string, self selfInfo) []string {
 		}
 	}
 	for _, o := range nameOwners(name, self.attachableNets()) {
+		if ownerIsAgent(o, self) {
+			continue
+		}
 		ids = append(ids, o.id)
 	}
-	return append(ids, name)
+	return ids
 }
 
 // k8sEnvOf reads the environment of the pods behind the parked Service: the

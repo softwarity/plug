@@ -479,15 +479,17 @@ func doSelfUpdate(cmd []string) {
 	//                CLI does not poll for a change that cannot come
 	//   pulled …     newer image pulled; recreating is the caller's move
 	//   error: …     no orchestrator access, RBAC gap, not a manager, …
-	//   `apply <tag>` is the CLI-checked path: the caller already resolved
-	//   the target against the registry this image lives in, so the agent
-	//   applies it WITHOUT a lookup of its own — on a plugged workstation
-	//   each registry round-trip from the cluster VM cost ~31s.
+	//   `apply <tag> [force]` is the CLI-checked path: the caller resolved the
+	//   target against the registry this image lives in. The agent checks the
+	//   tag again (it exists, it is not a rollback) before applying it, since
+	//   anything reaching the port can send this verb without a CLI in front
+	//   of it; `force` is how a deliberate rollback says so (applyPlan).
 	if len(cmd) >= 2 && cmd[1] == "apply" {
-		if len(cmd) != 3 || !tagRe.MatchString(cmd[2]) {
-			answer("error: usage: self-update apply <tag>")
+		force := len(cmd) == 4 && cmd[3] == applyForceWord
+		if (len(cmd) != 3 && !force) || !tagRe.MatchString(cmd[2]) {
+			answer("error: usage: self-update apply <tag> [%s]", applyForceWord)
 		}
-		selfUpdate(applyPlan(cmd[2]))
+		selfUpdate(applyPlan(cmd[2], force))
 	}
 	want := ""
 	if len(cmd) == 2 {
@@ -818,7 +820,16 @@ func gc() {
 	// minute. The orchestrator sweeps decide by liveness, not by lease, and
 	// are safe to repeat.
 	clearNameLeases()
+	// The Swarm secret stashes too: every one of them was written by a session
+	// of THIS container, and the restart took every session down.
+	clearSwarmSecretStashes()
 	sweepOrchestrators()
+	// Once per boot, in the container's log, as the function promises: the
+	// periodic sweep used to end with it as well, which was three RBAC probes
+	// (one a collection delete) and the same warning line every minute.
+	if k8sAvailable() {
+		k8sNoteEndpointsGrant(k8sNamespace())
+	}
 }
 
 // sweepOrchestrators is the part of gc that is safe to run at any time:
@@ -998,12 +1009,18 @@ type netRef struct {
 }
 
 type selfInfo struct {
+	id      string // agent container id: what a name's owner is compared against before it is parked
 	name    string // agent container/task name — relay target for the container backend
 	service string // agent's Swarm service name (empty off Swarm) — relay target for the service backend
-	image   string
-	imageID string   // resolved image id — what self-update compares a fresh pull against
-	compose string   // compose service name (empty outside Compose) — the recreate hint
-	nets    []netRef // application networks (overlay/bridge), minus ingress/host/none
+	// The Swarm service id and the Compose project, beside the names: a name's
+	// owner is matched against every identity this agent has, so that none of
+	// them can be parked by the session it serves (ownerIsAgent).
+	serviceID string
+	project   string
+	image     string
+	imageID   string   // resolved image id: what self-update compares a fresh pull against
+	compose   string   // compose service name (empty outside Compose): the recreate hint
+	nets      []netRef // application networks (overlay/bridge), minus ingress/host/none
 }
 
 // attachableNets: networks a standalone signpost CONTAINER can join (bridge, or
@@ -1142,14 +1159,53 @@ func ownerPort(owner string) string {
 
 // owner is one RUNNING non-signpost container that answers to a name.
 type owner struct {
-	id   string
-	name string // primary container name, for messages
+	id      string
+	name    string // primary container name, for messages
+	service string // its Swarm service name, when it is a task (com.docker.swarm.service.name)
+	compose string // its Compose service, when Compose runs it (com.docker.compose.service)
+	project string // ...in this Compose project (com.docker.compose.project)
+}
+
+// ownerIsAgent reports whether a name's owner is THIS agent: its own container
+// (by id or name, which is how an alias it carries resolves back to it), a
+// task of its own Swarm service, or a replica of its own Compose service. A
+// takeover parks what owns the name, and parking the agent is the one park
+// nothing can undo: the session stops the container (or scales the service to
+// zero) that its own forward lives in, and no receipt survives to restore it.
+// Pure, so the rule is testable without a daemon.
+func ownerIsAgent(o owner, self selfInfo) bool {
+	if o.id != "" && o.id == self.id {
+		return true
+	}
+	if o.name != "" && o.name == self.name {
+		return true
+	}
+	if self.service != "" && o.service == self.service {
+		return true
+	}
+	return self.compose != "" && o.compose == self.compose && o.project == self.project
+}
+
+// agentAmongOwners returns the first owner that is the agent itself, or nil.
+func agentAmongOwners(owners []owner, self selfInfo) *owner {
+	for i := range owners {
+		if ownerIsAgent(owners[i], self) {
+			return &owners[i]
+		}
+	}
+	return nil
 }
 
 // nameOwners returns the RUNNING NON-signpost containers name already resolves
 // to on one of the given networks — i.e. the real service is deployed. Serving
 // on top of one would only add the signpost to DNS round-robin (silent
 // interception), so the caller either refuses or — takeover — parks them.
+//
+// On one of the given networks, for the container's NAME as much as for an
+// alias: a container on a network the agent does not share cannot be reached
+// by that name from the agent's networks, so it owns nothing there and must
+// not be parked for it. The same scope keeps env-of, files-of and mount-volume
+// (dockerNameCandidates) from reaching any container on the daemon by name.
 func nameOwners(name string, nets []string) []owner {
 	mine := map[string]bool{}
 	for _, n := range nets {
@@ -1171,6 +1227,16 @@ func nameOwners(name string, nets []string) []owner {
 		if c.Labels[signpostLabel] == "1" {
 			continue // our own signposts don't count
 		}
+		onMine := false
+		for net := range c.NetworkSettings.Networks {
+			if mine[net] {
+				onMine = true
+				break
+			}
+		}
+		if !onMine {
+			continue
+		}
 		primary := c.Id[:12]
 		if len(c.Names) > 0 {
 			primary = strings.TrimPrefix(c.Names[0], "/")
@@ -1188,17 +1254,16 @@ func nameOwners(name string, nets []string) []owner {
 		// would slip through here. Inspect the candidates that share a network
 		// with us to read the aliases reliably.
 		if !named {
-			onMine := false
-			for net := range c.NetworkSettings.Networks {
-				if mine[net] {
-					onMine = true
-					break
-				}
-			}
-			named = onMine && containerHasAlias(c.Id, name, mine)
+			named = containerHasAlias(c.Id, name, mine)
 		}
 		if named {
-			owners = append(owners, owner{id: c.Id, name: primary})
+			owners = append(owners, owner{
+				id:      c.Id,
+				name:    primary,
+				service: c.Labels["com.docker.swarm.service.name"],
+				compose: c.Labels["com.docker.compose.service"],
+				project: c.Labels["com.docker.compose.project"],
+			})
 		}
 	}
 	return owners
@@ -1212,6 +1277,7 @@ type swarmOwner struct {
 	replicas int
 	global   bool
 	viaAlias bool // owns the name as a network ALIAS, not as its service name
+	isAgent  bool // is this agent's own service (swarmOwnerIsAgent): never parked
 }
 
 // scaleService sets a Swarm service's replica count, round-tripping the full
@@ -1542,6 +1608,39 @@ func scaleBackParkedService(labels map[string]string) error {
 // parked.
 func gcNote(format string, a ...any) {
 	fmt.Fprintf(os.Stderr, "plug-agent gc: "+format+"\n", a...)
+}
+
+// gcNoted remembers what the sweep already said, by receipt, for the life of
+// this process. The sweep runs every minute (sweepPeriodically) and a restore
+// that fails keeps failing until someone acts, so the same line would otherwise
+// fill the log once a minute and bury everything else. One line when it starts
+// failing, one when it recovers, and the receipt stays in place in between.
+var (
+	gcNotedMu sync.Mutex
+	gcNoted   = map[string]bool{}
+)
+
+// gcNoteOnce says it the first time only, per key and per boot.
+func gcNoteOnce(key, format string, a ...any) {
+	gcNotedMu.Lock()
+	seen := gcNoted[key]
+	gcNoted[key] = true
+	gcNotedMu.Unlock()
+	if !seen {
+		gcNote(format, a...)
+	}
+}
+
+// gcNoteRecovered closes a gcNoteOnce: said only when there was a failure to
+// close, so an ordinary restore stays as quiet as it always was.
+func gcNoteRecovered(key, format string, a ...any) {
+	gcNotedMu.Lock()
+	seen := gcNoted[key]
+	delete(gcNoted, key)
+	gcNotedMu.Unlock()
+	if seen {
+		gcNote(format, a...)
+	}
 }
 
 // ownerAlive reports whether the owner agent still exists. Off a Swarm manager

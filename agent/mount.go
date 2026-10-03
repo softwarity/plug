@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -315,11 +316,17 @@ func volumesOf(name string) []string {
 }
 
 // dataVolumePaths keeps what is a data volume: not a tmpfs, not the secrets
-// mount (files-of projects that, once, as files), sorted for a stable line.
+// mount (files-of projects that, once, as files), not a bind the helper would
+// refuse anyway (mountRefused: the client mounts this list unasked, and a
+// refusal on every takeover is noise), sorted for a stable line.
 func dataVolumePaths(mounts []dockerMount) []string {
 	var out []string
-	for _, m := range mounts {
+	for i := range mounts {
+		m := mounts[i]
 		if m.Type == "tmpfs" || m.Destination == secretsMount || strings.HasPrefix(m.Destination, secretsMount+"/") {
+			continue
+		}
+		if mountRefused(&mounts[i]) != "" {
 			continue
 		}
 		if volumeArgOK(m.Destination) {
@@ -412,7 +419,7 @@ func pickDockerMount(want string, mounts []dockerMount) (*dockerMount, string) {
 
 // dockerWorkloadMounts finds the workload's mounts through the same candidates
 // env-of uses: the parking receipt (a parked, stopped container still reports
-// its mounts), a running owner, or the name as a container name.
+// its mounts) or a running owner on a network the agent shares.
 func dockerWorkloadMounts(name string, self selfInfo) ([]dockerMount, bool) {
 	for _, id := range dockerNameCandidates(name, self) {
 		var insp struct {
@@ -423,6 +430,48 @@ func dockerWorkloadMounts(name string, self selfInfo) ([]dockerMount, bool) {
 		}
 	}
 	return nil, false
+}
+
+// hostSystemDirs are the parts of the HOST a bind mount must not hand out.
+// The helper serves what it is given read-write, as root when the directory
+// is root's (mountserve.go), so a bind of /etc or / would be the host's
+// configuration, its device nodes or the daemon's own storage, writable by
+// whoever reaches the agent. A project directory bind-mounted under Compose
+// (a developer's code, a data directory under /srv or /home) is the legitimate
+// case, and stays.
+var hostSystemDirs = []string{
+	"/etc", "/var/run", "/run", "/proc", "/sys", "/dev", "/boot", "/root",
+	"/usr", "/bin", "/sbin", "/lib", "/lib64", "/var/lib/docker",
+}
+
+// bindSourceRefused says why a bind's host source may not be served, or ""
+// when it may: the root of the host, or anything at or under a system
+// directory. Compared on the cleaned path, so /etc/../etc and /etc/ are /etc.
+// Pure, so the boundary is testable without a daemon.
+func bindSourceRefused(src string) string {
+	p := path.Clean(src)
+	if p == "/" || p == "." || !strings.HasPrefix(p, "/") {
+		return "it is the host's root filesystem"
+	}
+	for _, dir := range hostSystemDirs {
+		if p == dir || strings.HasPrefix(p, dir+"/") {
+			return "it is under " + dir + ", a host system directory"
+		}
+	}
+	return ""
+}
+
+// mountRefused says why a resolved mount cannot be served by a helper, or "":
+// a bind is checked against the host (bindSourceRefused); a named volume is
+// the daemon's own storage and is always fine.
+func mountRefused(m *dockerMount) string {
+	if m.Type != "bind" {
+		return ""
+	}
+	if why := bindSourceRefused(m.Source); why != "" {
+		return fmt.Sprintf("the bind %s cannot be served: %s", m.Source, why)
+	}
+	return ""
 }
 
 // mountSpec is the HostConfig.Mounts entry (container) or ContainerSpec.Mounts
@@ -450,6 +499,9 @@ func dockerMountVolume(name, volume, agentPort, pass string, self selfInfo) {
 	m, why := pickDockerMount(volume, mounts)
 	if m == nil {
 		answer("error: %q has no volume %q — %s", name, volume, why)
+	}
+	if why := mountRefused(m); why != "" {
+		answer("error: %s", why)
 	}
 	helper := mountHelperName(name, volume, agentPort)
 	// A helper already under this name is this same session's earlier try
@@ -527,7 +579,7 @@ func dockerUnmountVolume(helper string) error {
 // placed there to see it. The node is best-effort: a service scaled to 0 (a
 // parked one) keeps its shut-down tasks listed for a while, with their NodeID.
 func swarmWorkloadMounts(name string, self selfInfo) (mounts []dockerMount, node string, found bool) {
-	own := swarmNameOwner(name, self)
+	own := swarmWorkloadOwner(name, self)
 	if own == nil {
 		return nil, "", false
 	}
@@ -582,6 +634,9 @@ func swarmMountVolume(name, volume, agentPort, pass string, self selfInfo) {
 	m, why := pickDockerMount(volume, mounts)
 	if m == nil {
 		answer("error: %q has no volume %q — %s", name, volume, why)
+	}
+	if why := mountRefused(m); why != "" {
+		answer("error: %s", why)
 	}
 	helper := mountHelperName(name, volume, agentPort)
 	var sp struct {

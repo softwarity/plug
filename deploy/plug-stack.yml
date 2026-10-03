@@ -18,8 +18,17 @@ services:
     ports:
       - "2222:22"
     volumes:
-      # Optional — only to serve a local port back to the cluster (plug -s).
-      # On Swarm the signpost is a service, so the agent must run on a manager.
+      # The Docker socket, mounted by default. It is what the reverse direction
+      # needs (plug -s: the agent creates signpost services and parks a deployed
+      # service by scaling it to zero and back) and what env-of, files-of and
+      # --mount read a workload's environment, secrets and volumes through. On
+      # Swarm the signpost is a service, so the agent must run on a MANAGER
+      # (the placement below), and the socket of a manager is root on the whole
+      # Swarm: whoever reaches the agent's port (every plug binary carries the
+      # tunnel key) can create any service, with any mount, on any node, and
+      # read any secret a running task has. Trusted dev clusters only. Remove
+      # the mount to keep plug to the forward direction (plug <cmd>), which
+      # needs none of it.
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - app_net

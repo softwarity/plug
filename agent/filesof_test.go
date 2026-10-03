@@ -6,6 +6,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -130,4 +132,30 @@ func TestMergeTarsCombinesBoth(t *testing.T) {
 	if n := namesIn(t, mergeTars(a, nil)); len(n) != 1 || n[0] != "etc/cfg/app.conf" {
 		t.Fatalf("merge with empty = %v", n)
 	}
+}
+
+// The Swarm secret stash lives under the agent's state directory, one file per
+// name, and the boot clear removes every one of them: each was written by a
+// session of this container, and a restart took every session down.
+func TestSwarmSecretStashUnderStateDirAndClearedAtBoot(t *testing.T) {
+	old := swarmSecretStashDir
+	swarmSecretStashDir = filepath.Join(t.TempDir(), "swarm-secrets")
+	defer func() { swarmSecretStashDir = old }()
+
+	p := swarmSecretStash("web")
+	if filepath.Dir(p) != swarmSecretStashDir || filepath.Base(p) != "plug-secrets-web.tar" {
+		t.Fatalf("stash path = %q", p)
+	}
+	if err := os.MkdirAll(swarmSecretStashDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("TAR"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	clearSwarmSecretStashes()
+	if _, err := os.Stat(p); !os.IsNotExist(err) {
+		t.Fatalf("the stash must be gone after the boot clear, stat err = %v", err)
+	}
+	// Nothing to clear is not an error either.
+	clearSwarmSecretStashes()
 }

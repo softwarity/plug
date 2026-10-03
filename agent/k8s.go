@@ -64,6 +64,52 @@ func k8sAgentDeployment() (depName, container, img string, code int, err error) 
 	return dep.Metadata.Name, "", "", code, nil
 }
 
+// k8sAgentPodLabels is what the agent's own pods are labelled with: the
+// template labels of the Deployment carrying app=plug, which is what a Service
+// in front of the agent selects on. The manifest's own label is the fallback
+// when the Deployment cannot be read (an older RBAC, an embedder's manifest):
+// the agent's Service selects at least that, by the same manifest.
+func k8sAgentPodLabels() map[string]string {
+	var list struct {
+		Items []struct {
+			Spec struct {
+				Template struct {
+					Metadata struct {
+						Labels map[string]string `json:"labels"`
+					} `json:"metadata"`
+				} `json:"template"`
+			} `json:"spec"`
+		} `json:"items"`
+	}
+	if _, err := k8sAPI("GET", "/apis/apps/v1/namespaces/"+k8sNamespace()+"/deployments?labelSelector=app%3Dplug", nil, &list); err == nil &&
+		len(list.Items) > 0 && len(list.Items[0].Spec.Template.Metadata.Labels) > 0 {
+		return list.Items[0].Spec.Template.Metadata.Labels
+	}
+	return map[string]string{"app": "plug"}
+}
+
+// k8sSelectsAgent reports whether a Service's selector matches the agent's own
+// pods: every pair of it is among the agent's pod labels, which is how a
+// Service selects. That Service is the one in front of the agent (the
+// manifest's `plug`), and a takeover must never repoint it: the name the
+// developer reaches the agent by would then point at one session's forward,
+// and the parked "workload" would be the agent itself. A Service whose
+// selector carries keys the agent's pods do not have is a real workload's,
+// even when it also carries this agent's own mark (k8sSelectorFallback adds
+// `app: plug` to a selector it takes over, and leaves the other keys). Pure,
+// so the rule is testable without a cluster.
+func k8sSelectsAgent(selector, agentLabels map[string]string) bool {
+	if len(selector) == 0 {
+		return false
+	}
+	for k, v := range selector {
+		if agentLabels[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
 // k8sSelfUpdate updates the agent's own Deployment. A pinned RELEASE tag is
 // rewritten to the newest release — a rolling restart alone would re-pull the
 // same pin forever. A moving tag keeps the restart-only path (the annotation
@@ -630,7 +676,9 @@ func k8sExecGranted(ns string) bool {
 // agent will fall back to the old selector shape. A verb cannot say it: its
 // stdout and stderr are merged into the one line the CLI reads as the answer, so
 // a warning there would BE the answer. Boot is the other moment the agent runs
-// code, and it is where the person who applied the manifest is looking.
+// code, and it is where the person who applied the manifest is looking. Called
+// from gc (the boot sweep) only: it costs three RBAC probes, one of them a
+// collection delete, and the periodic sweep must not pay them every minute.
 func k8sNoteEndpointsGrant(ns string) {
 	if k8sSelfIP() == "" {
 		gcNote("this pod's address is unknown, so a served name will select every agent replica by " +
@@ -697,6 +745,15 @@ func k8sServe(name string, pairs []portPair) {
 		}
 		if gerr != nil || existing.Metadata.Labels[k8sManaged] != "plug" {
 			if gerr == nil {
+				// The Service in front of the agent itself: refused before
+				// anything else, and only without a receipt, since a receipt
+				// makes it a parked workload whose selector was repointed at the
+				// agent by an earlier session (the fallback shape), not the
+				// agent's own.
+				if existing.Metadata.Annotations[k8sParkedAnn] == "" && k8sSelectsAgent(existing.Spec.Selector, k8sAgentPodLabels()) {
+					answer("error: the Service %q selects this agent's own pods (it is the Service in front of the agent): "+
+						"plug cannot park the agent that serves the session. Serve a different name", name)
+				}
 				// A REAL Service, and it may already be parked by a session that
 				// is still serving it from another pod: taking it over now would
 				// leave that session's name pointing here, and the workload parked
@@ -914,11 +971,26 @@ func k8sGC() {
 		// matter and leave a repointed Service down for good. It only ends the
 		// restore: a selector still carrying this agent's mark is an orphan of a
 		// session that died, and that much can be undone without a receipt.
-		if parked, _ := k8sRestoreParked(ns, s.Metadata.Name, s.Metadata.Annotations, s.Spec.Selector); !parked {
+		//
+		// A restore that FAILS is said, once per Service and per boot: the error
+		// used to be dropped, so an unreadable receipt, or a patch the API
+		// refused, left the Service pointing at a dead session every minute for
+		// ever, with nothing in the log naming it. The receipt stays (nothing
+		// here removes it), so the next sweep retries.
+		key := "k8s:" + ns + "/" + s.Metadata.Name
+		parked, err := k8sRestoreParked(ns, s.Metadata.Name, s.Metadata.Annotations, s.Spec.Selector)
+		switch {
+		case err != nil:
+			gcNoteOnce(key, "Service %s/%s stays parked, pointing at a session that no longer answers: %v "+
+				"- the sweep retries every minute; its receipt is the %s annotation", ns, s.Metadata.Name, err, k8sParkedAnn)
+		case parked:
+			gcNoteRecovered(key, "Service %s/%s restored, after an earlier failure", ns, s.Metadata.Name)
+		default:
 			k8sReclaimOrphanSelector(ns, s.Metadata.Name, s.Spec.Selector)
 		}
 	}
-	k8sNoteEndpointsGrant(ns)
+	// k8sNoteEndpointsGrant is NOT called here any more: this runs every minute
+	// (sweepOrchestrators), and the note belongs to boot (gc), as it says.
 }
 
 // k8sClient is the API client, built once.

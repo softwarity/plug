@@ -160,8 +160,10 @@ func TestResolveNeedsAName(t *testing.T) {
 func TestSelfUpdateChecksItsShape(t *testing.T) {
 	for _, cmd := range [][]string{
 		{"self-update", "apply"},                   // apply with no tag
-		{"self-update", "apply", "2.0.0", "extra"}, // one too many
-		{"self-update", "a", "b"},                  // two arguments, neither the apply form
+		{"self-update", "apply", "2.0.0", "extra"}, // one too many, and not the force word
+		{"self-update", "apply", "2.0.0", "force", "x"},
+		{"self-update", "apply", "bad tag!", "force"},
+		{"self-update", "a", "b"}, // two arguments, neither the apply form
 	} {
 		if said := refusalFor(t, cmd...); !strings.Contains(said, "usage: self-update") {
 			t.Errorf("%v was accepted, the agent said %q", cmd, said)

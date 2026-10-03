@@ -100,20 +100,59 @@ func followPlan(want string) func(string) (string, string, string) {
 }
 
 // applyPlan is the CLI-checked path: the caller already resolved tag against
-// the registry this image lives in and only asks for it to be APPLIED — no
-// lookup here. On a plugged workstation, each registry round-trip from the
-// cluster VM cost ~31s; the CLI's own took ~1s.
-func applyPlan(tag string) func(string) (string, string, string) {
+// the registry this image lives in and asks for it to be APPLIED. The agent
+// still checks the tag itself, because the verb is reachable by anything that
+// reaches the port, not only by a CLI that did its homework: a tag nobody
+// published is a rollout to an image that cannot pull (on Swarm, stop-first,
+// an agent that is simply gone), and a release older than the one running is
+// a way back to whatever that release got wrong. One listing of the
+// repository answers both; on a plugged workstation that round-trip from the
+// cluster VM costs ~31s, which is the price of not trusting the caller.
+//
+// force is the caller saying the downgrade is deliberate (the word `force`
+// after the tag). It never waives the existence check: there is no deliberate
+// way to want an image that does not exist.
+func applyPlan(tag string, force bool) func(string) (string, string, string) {
 	return func(img string) (target, plan, note string) {
-		target = retagged(img, tag)
-		if _, _, cur := parseImageRef(img); hasTag(img) && cur == tag {
-			if isReleaseTag(tag) {
-				return target, planCurrent, "already on " + target
-			}
-			return target, planResolve, "re-resolving " + target
+		host, repo, _ := parseImageRef(img)
+		tags, err := registryTags(host, repo)
+		target, plan, note = applyPlanWith(img, tag, localVersion(), force, tags, err)
+		if plan == "" {
+			answer("error: %s", note)
 		}
-		return target, planRetarget, fmt.Sprintf("switching the deployment from %s to %s", img, target)
+		return target, plan, note
 	}
+}
+
+// applyForceWord is the extra argument that lets `self-update apply` move a
+// deployment to an OLDER release: `self-update apply 2.3.0 force`.
+const applyForceWord = "force"
+
+// applyPlanWith is applyPlan's decision on its own, with the registry's
+// listing and the running version passed in, so every branch is exercisable
+// without a network. An empty plan means REFUSED, and note says why.
+func applyPlanWith(img, tag, running string, force bool, tags []string, listErr error) (target, plan, note string) {
+	_, repo, cur := parseImageRef(img)
+	if listErr != nil {
+		// Same rule as retargetToWith: the request is "put me on that tag", and
+		// doing it unchecked is the failure this check exists to prevent.
+		return "", "", fmt.Sprintf("cannot list the tags of %s to check %q (%v)", repo, tag, listErr)
+	}
+	if !slices.Contains(tags, tag) {
+		return "", "", fmt.Sprintf("%s has no tag %q (published: %s)", repo, tag, tagHint(tags))
+	}
+	target = retagged(img, tag)
+	if hasTag(img) && cur == tag {
+		if isReleaseTag(tag) {
+			return target, planCurrent, "already on " + target
+		}
+		return target, planResolve, "re-resolving " + target
+	}
+	if !force && releaseOlderThan(tag, running) {
+		return "", "", fmt.Sprintf("%q is older than the v%s this agent runs; a rollback is refused unless asked for "+
+			"explicitly: self-update apply %s %s", tag, running, tag, applyForceWord)
+	}
+	return target, planRetarget, fmt.Sprintf("switching the deployment from %s to %s", img, target)
 }
 
 // retargetPlan is that decision on its own, with the registry's answer passed
@@ -323,6 +362,33 @@ func releaseNewerThan(tag, current string) bool {
 		return true // a dev agent: any release is a step forward
 	}
 	return versionLess(cv, tv)
+}
+
+// releaseOlderThan reports whether tag names a release STRICTLY older than the
+// version this agent runs: the rollback applyPlan refuses without `force`. A
+// short release tag (2, 2.4) is compared on the parts it has, so 2.4 is older
+// than a running 2.5.0 while 2 is not. A moving tag (latest, a branch) and a
+// dev agent (no release to compare with) are never a rollback: a channel
+// switch is the caller's choice, and the running version has nothing to say.
+func releaseOlderThan(tag, running string) bool {
+	if !isReleaseTag(tag) {
+		return false
+	}
+	cur, _, _ := strings.Cut(running, "+")
+	cv, ok := parseExactRelease(cur)
+	if !ok {
+		return false
+	}
+	for i, part := range strings.Split(strings.TrimPrefix(tag, "v"), ".") {
+		n, err := strconv.Atoi(part)
+		if err != nil {
+			return false
+		}
+		if n != cv[i] {
+			return n < cv[i]
+		}
+	}
+	return false
 }
 
 // registryTags lists a repository's tags over the v2 API, answering the Bearer

@@ -147,6 +147,41 @@ func TestPickDockerMount(t *testing.T) {
 	}
 }
 
+// A bind hands the helper a directory of the HOST, read-write and as root
+// when root owns it: the host's root, its configuration, its device nodes and
+// the daemon's own storage are refused, a project directory is not.
+func TestBindSourceRefused(t *testing.T) {
+	for _, src := range []string{
+		"/", "/.", "//", "/etc", "/etc/", "/etc/nginx", "/var/run", "/var/run/docker.sock", "/run", "/run/secrets",
+		"/proc", "/sys", "/dev", "/boot", "/root", "/root/.ssh", "/usr", "/usr/local/bin", "/bin", "/sbin",
+		"/lib", "/lib64", "/var/lib/docker", "/var/lib/docker/volumes/x/_data",
+		"/srv/../etc/nginx", // cleaned before it is compared
+		"relative/path", "",
+	} {
+		if why := bindSourceRefused(src); why == "" {
+			t.Errorf("%q must be refused", src)
+		}
+	}
+	for _, src := range []string{
+		"/srv/conf", "/home/dev/project", "/opt/app/data", "/data", "/var/lib/postgresql", "/var/www",
+		"/mnt/data", "/tmp/build", "/etcetera", "/libraries", "/host_mnt/c/Users/dev/project", "/Users/dev/project",
+	} {
+		if why := bindSourceRefused(src); why != "" {
+			t.Errorf("%q is a project directory and must be served, got %q", src, why)
+		}
+	}
+	// mountRefused applies it to binds only: a named volume is the daemon's own.
+	if why := mountRefused(&dockerMount{Type: "volume", Name: "etc", Source: "/var/lib/docker/volumes/etc/_data"}); why != "" {
+		t.Errorf("a named volume is never refused, got %q", why)
+	}
+	if why := mountRefused(&dockerMount{Type: "bind", Source: "/etc", Destination: "/host-etc"}); why == "" || !strings.Contains(why, "/etc") {
+		t.Errorf("a bind of /etc must be refused and named, got %q", why)
+	}
+	if why := mountRefused(&dockerMount{Type: "bind", Source: "/srv/conf", Destination: "/etc/app"}); why != "" {
+		t.Errorf("the destination inside the container does not matter, got %q", why)
+	}
+}
+
 // The Kubernetes half of the same resolution: a PVC by mount path or by claim
 // name, and only PVC-backed mounts count (a configMap volume is files-of's).
 func TestPickClaim(t *testing.T) {
@@ -303,6 +338,7 @@ func TestDataVolumePathsAndReply(t *testing.T) {
 		{Type: "bind", Source: "/run/secrets/x", Destination: "/run/secrets"},
 		{Type: "bind", Source: "/x", Destination: "/run/secrets/tkofile"},
 		{Type: "bind", Source: "/y", Destination: "/with space"},
+		{Type: "bind", Source: "/etc", Destination: "/host-etc"}, // the helper would refuse it
 	}
 	got := dataVolumePaths(mounts)
 	if strings.Join(got, ",") != "/data,/var/lib/postgresql/data" {

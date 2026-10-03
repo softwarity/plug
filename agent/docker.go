@@ -242,6 +242,7 @@ func containerIDFromMount() string {
 func dockerSelf() (selfInfo, error) {
 	var s selfInfo
 	var insp struct {
+		Id     string `json:"Id"`
 		Name   string `json:"Name"`
 		Image  string `json:"Image"` // the resolved image ID (sha256:…)
 		Config struct {
@@ -262,11 +263,14 @@ func dockerSelf() (selfInfo, error) {
 			return s, fmt.Errorf("cannot identify the agent container: %v", err)
 		}
 	}
+	s.id = insp.Id
 	s.name = strings.TrimPrefix(insp.Name, "/")
 	s.image = insp.Config.Image
 	s.imageID = insp.Image
 	s.compose = insp.Config.Labels["com.docker.compose.service"]
+	s.project = insp.Config.Labels["com.docker.compose.project"]
 	s.service = insp.Config.Labels["com.docker.swarm.service.name"]
+	s.serviceID = insp.Config.Labels["com.docker.swarm.service.id"]
 	for n := range insp.NetworkSettings.Networks {
 		if undnsNetwork[n] {
 			continue
@@ -373,6 +377,14 @@ func containerServe(name string, pairs []portPair, self selfInfo) {
 		answer("error: restoring what the previous %s session parked: %v", name, err)
 	}
 	owners := nameOwners(name, nets)
+	// The agent answering to the name itself (its container name, or an alias
+	// such as its Compose service name) is the one owner a takeover must never
+	// park: stopping it stops the forward the session relies on, and the
+	// receipt goes down with the agent that would have read it.
+	if o := agentAmongOwners(owners, self); o != nil {
+		answer("error: %q is this agent's own container (%s): plug cannot park the agent that serves the session. "+
+			"Serve a different name", name, o.name)
+	}
 	receipt := make([]string, 0, len(owners))
 	for _, o := range owners {
 		receipt = append(receipt, o.id)
@@ -467,6 +479,7 @@ func dockerGC() {
 	// Standalone-container signposts.
 	var clist []struct {
 		Id     string            `json:"Id"`
+		Names  []string          `json:"Names"`
 		Labels map[string]string `json:"Labels"`
 	}
 	if _, err := dockerAPI("GET", "/containers/json?all=1&filters="+urlEscape(f), nil, &clist); err == nil {
@@ -483,10 +496,25 @@ func dockerGC() {
 				// An orphaned signpost's receipt is a takeover that never got
 				// restored (the session died with the agent) — restore it now,
 				// then sweep the signpost.
-				if failed := restartParkedContainers(c.Labels[parkedContainersLabel]); len(failed) > 0 {
-					gcNote("could not restart %s while cleaning up %s — start them by hand",
-						strings.Join(failed, ", "), c.Labels[parkedContainersLabel])
+				//
+				// Restore FIRST, and only then the signpost: the receipt lives
+				// in its labels, which is the rule restoreContainerParked keeps
+				// and this sweep used to break. It deleted the signpost on a
+				// failed restart as well, and since it runs every minute, one
+				// passing daemon error left a workload stopped with nothing
+				// anywhere saying a session had stopped it. The signpost stays,
+				// the next sweep retries, and the log says so once.
+				sp := c.Id[:12]
+				if len(c.Names) > 0 {
+					sp = strings.TrimPrefix(c.Names[0], "/")
 				}
+				if failed := restartParkedContainers(c.Labels[parkedContainersLabel]); len(failed) > 0 {
+					gcNoteOnce("container:"+c.Id, "could not restart %s while cleaning up the %s signpost - keeping it "+
+						"so its receipt survives; the sweep retries every minute, or start them by hand",
+						strings.Join(failed, ", "), sp)
+					continue
+				}
+				gcNoteRecovered("container:"+c.Id, "restarted what the %s signpost had parked, after an earlier failure", sp)
 				_, _ = dockerAPI("DELETE", "/containers/"+c.Id+"?force=1", nil, nil)
 			}
 		}
@@ -498,6 +526,7 @@ func dockerGC() {
 	var slist []struct {
 		ID   string `json:"ID"`
 		Spec struct {
+			Name   string            `json:"Name"`
 			Labels map[string]string `json:"Labels"`
 		} `json:"Spec"`
 	}
@@ -525,11 +554,24 @@ func dockerGC() {
 			}
 			o := s.Spec.Labels[signpostOwnerLabel]
 			if o == mine || !ownerAlive(o, swarm) {
+				// Same rule as the container shape above, and as
+				// restoreServiceParked: the receipt is in the signpost's labels,
+				// so a scale-back that failed keeps the signpost for the next
+				// sweep rather than leaving a service at zero replicas with
+				// nothing recording that a session put it there.
 				if err := scaleBackParkedService(s.Spec.Labels); err != nil { // undo the orphan's takeover
-					gcNote("could not scale %q back up while cleaning up: %v",
-						s.Spec.Labels[parkedServiceLabel], err)
+					gcNoteOnce("service:"+s.ID, "could not scale %q back up while cleaning up the %s signpost (%v) - keeping it "+
+						"so its receipt survives; the sweep retries every minute, or scale it by hand",
+						s.Spec.Labels[parkedServiceLabel], s.Spec.Name, err)
+					continue
 				}
+				gcNoteRecovered("service:"+s.ID, "scaled %q back up, after an earlier failure", s.Spec.Labels[parkedServiceLabel])
 				_, _ = dockerAPI("DELETE", "/services/"+s.ID, nil, nil)
+				// The secrets stashed at park are the parked service's, and it
+				// is running again: drop them, as restoreServiceParked does.
+				if n := strings.TrimPrefix(s.Spec.Name, signpostName("")); n != s.Spec.Name {
+					_ = os.Remove(swarmSecretStash(n))
+				}
 			}
 		}
 	}

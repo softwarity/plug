@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -163,10 +164,34 @@ func swarmNameOwner(name string, self selfInfo) *swarmOwner {
 				replicas: s.Spec.Mode.Replicated.Replicas,
 				global:   s.Spec.Mode.Global != nil,
 				viaAlias: viaAlias,
+				isAgent:  swarmOwnerIsAgent(s.ID, s.Spec.Name, self),
 			}
 		}
 	}
 	return nil
+}
+
+// swarmOwnerIsAgent reports whether the service owning a name is the agent's
+// own: by service id or by service name (<stack>_plug, which the stack's
+// network also answers as the alias `plug`). The Swarm twin of ownerIsAgent,
+// and the park it guards against is worse here: a service scaled to zero has
+// no task left to run the sweep that would scale it back.
+func swarmOwnerIsAgent(id, name string, self selfInfo) bool {
+	if self.service == "" {
+		return false
+	}
+	return name == self.service || (self.serviceID != "" && id == self.serviceID)
+}
+
+// swarmWorkloadOwner is swarmNameOwner for the verbs that READ a workload
+// (env-of, files-of, the mounts): the agent is never one, so a name that only
+// the agent answers to finds nothing rather than the agent's own spec.
+func swarmWorkloadOwner(name string, self selfInfo) *swarmOwner {
+	own := swarmNameOwner(name, self)
+	if own != nil && own.isAgent {
+		return nil
+	}
+	return own
 }
 
 func swarmServe(name string, pairs []portPair, self selfInfo) {
@@ -253,6 +278,12 @@ func swarmServe(name string, pairs []portPair, self selfInfo) {
 	// container-scan nameOwners can't see Swarm services, so check them explicitly.
 	own := swarmNameOwner(name, self)
 	if own != nil {
+		// The agent's own service: scaling it to zero would stop the task
+		// holding the session AND every task that could ever restore it.
+		if own.isAgent {
+			answer("error: %q is this agent's own service (%s): plug cannot park the agent that serves the session. "+
+				"Serve a different name", name, own.name)
+		}
 		if own.global {
 			answer("error: %q runs in GLOBAL mode — plug cannot park it (no replica count to restore). Remove it instead: docker service rm %s.", own.name, own.name)
 		}
@@ -317,6 +348,7 @@ func swarmServe(name string, pairs []portPair, self selfInfo) {
 		// resolver (bench-proven on the embedded DNS).
 		if err := scaleService(own.id, 0); err != nil {
 			_, _ = dockerAPI("DELETE", "/services/"+signpostName(name), nil, nil)
+			_ = os.Remove(swarmSecretStash(name)) // nothing is parked, so nothing to keep
 			answer("error: parking %q (scaling %s to 0): %v", name, own.name, err)
 		}
 		answer("dynamic parked")

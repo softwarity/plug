@@ -23,13 +23,40 @@
 #
 # The reverse direction (plug -s <name>:<cport>:<lport>) has the agent CREATE
 # and DELETE a Service pointing that name at itself, per session - no name
-# pre-declared, no redeploy. That is what the ServiceAccount + Role + RoleBinding
-# below grant: DELIBERATELY MINIMAL and namespace-scoped - manage Services and
-# their Endpoints, and nothing else. The agent can make a name in ITS namespace
-# point at itself; it cannot touch pods, secrets, other namespaces, or the
-# cluster. A name served this way is a port on the agent, reachable by whatever
-# can reach the agent - consistent with plug's trusted-dev-cluster model. Deploy
-# accordingly.
+# pre-declared, no redeploy. That is the core of what the ServiceAccount + Role
+# + RoleBinding below grant, and it is NOT all of it. The Role is scoped to this
+# namespace and to nothing narrower; rule by rule, it lets the agent:
+#
+#   services (get/list/create/delete/update/patch): create, remove and REPOINT
+#     any Service of the namespace. A takeover (plug -s on a deployed name)
+#     sends a real Service's traffic to one developer's machine for a session.
+#   endpoints (get/create/update/delete): write the addresses behind any
+#     Service of the namespace, i.e. decide where it delivers.
+#   endpointslices (list/deletecollection): remove the slices Kubernetes built
+#     for a taken-over Service (see the rule).
+#   deployments (get/list/patch): patch ANY Deployment of the namespace. The
+#     agent uses it on its own, found by the app=plug label (`plug update`).
+#   pods (get/list/create/delete) and pods/exec (get/create): list the pods,
+#     run a command in ANY of them, create pods carrying any ServiceAccount or
+#     mounting any Secret of the namespace, and delete pods. This is the right
+#     to execute code in the namespace. It reads every Secret and ConfigMap a
+#     pod has already resolved - env-of and files-of do exactly that, with no
+#     `secrets` rule needed - and the live mount (--mount) is the created pod:
+#     the agent's image with a workload's claim, served read-write over SMB.
+#   persistentvolumeclaims (get): read a claim's access modes.
+#
+# So this Role does touch pods, and through them the secrets; what it cannot
+# reach is other namespaces and the cluster. The trust boundary is not the
+# RBAC, it is whoever can reach the agent's PORT: the tunnel's key is the
+# built-in one that every plug binary carries, and the binary itself is served
+# without authentication by the `get` account on that same port, so reaching
+# the port is holding the key and every verb above. The Service below is a
+# NodePort (32222 on every node) because that is the zero-setup way to reach a
+# dev cluster from a workstation. If the port must not be exposed, do not
+# expose it: `kubectl port-forward` (at the end of this file) reaches the agent
+# through the API server's own authentication and needs no NodePort, and the
+# Service type is then yours to change. Deploy this only in a namespace whose
+# pods you would let every holder of the port exec into.
 #
 # Why Endpoints and not just a selector: a served name must reach the ONE pod
 # holding that session, and a selector cannot say that. `app: plug` matches every
@@ -119,15 +146,17 @@ spec:
       targetPort: 22
       nodePort: 32222
 ---
-# The reverse direction's grant: Services only, this namespace only.
+# The agent's grant: this namespace only, and more than Services - each rule
+# says what it reaches, the header above says what that adds up to.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: plug-serve-names
   labels: { app: plug }
 rules:
-  # Exactly what serve-name / unserve-name / boot-gc need - Services and the
-  # Endpoints of those Services, nothing else.
+  # What serve-name / unserve-name / the sweep need, on ANY Service of the
+  # namespace: a rule cannot be narrowed to the Services plug creates, since a
+  # takeover edits a Service it did not create.
   # update/patch: the takeover repoints an existing Service at the agent for
   # the session (original selector/ports saved in an annotation, restored).
   - apiGroups: [""]
@@ -135,8 +164,10 @@ rules:
     verbs: ["get", "list", "create", "delete", "update", "patch"]
   # The name points at ONE pod, and this is how it says which: the Service plug
   # creates has no selector, so its Endpoints are the agent's to write (see the
-  # header). `get` is only the boot-time check that this grant is present - an
-  # agent without it still serves names, the old way, and says so in its log.
+  # header). The rule reaches the Endpoints of every Service in the namespace,
+  # which is where any of them delivers. `get` is only the boot-time check that
+  # this grant is present - an agent without it still serves names, the old
+  # way, and says so in its log.
   - apiGroups: [""]
     resources: ["endpoints"]
     verbs: ["get", "create", "update", "delete"]
@@ -149,25 +180,32 @@ rules:
   - apiGroups: ["discovery.k8s.io"]
     resources: ["endpointslices"]
     verbs: ["list", "deletecollection"]
-  # `plug update`: the agent triggers a rolling restart of its OWN Deployment
-  # (a template-annotation patch), so the node re-pulls the tag above. Still
-  # namespace-scoped, still minimal.
+  # `plug update`: the agent rolls and retags its OWN Deployment (a template
+  # patch: the restart annotation, and the image when the tag moves). It finds
+  # it by the app=plug label, but the rule has no resourceNames, so `patch`
+  # reaches every Deployment of the namespace. Narrow it with
+  # `resourceNames: ["plug"]` if the Deployment keeps that name.
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "list", "patch"]
   # The process that takes a deployed service's place inherits that service's
   # environment, read with `exec cat /proc/1/environ` in the parked pod - the
   # same mechanism as mirrord. The pod has already resolved its Secrets, so no
-  # right to read Secrets is asked for. `pods` finds the pod behind the parked
-  # Service's original selector; `pods/exec` reads it. Without exec the agent
-  # falls back to the pod SPEC and says which variables came through empty.
-  # exec is the widest right here: it amounts to running code in this
-  # namespace's pods, and it is what makes the feature true to the cluster.
+  # `secrets` rule is asked for, and none is needed: exec reads what the pod
+  # resolved, which is every Secret and ConfigMap any pod of the namespace
+  # mounts or references. `pods` finds the pod behind the parked Service's
+  # original selector; `pods/exec` reads it. Without exec the agent falls back
+  # to the pod SPEC and says which variables came through empty.
+  # exec is the widest right here: it is the right to run code in every pod of
+  # the namespace, and it is what makes the feature true to the cluster.
   # create/delete: the live mount (--mount) starts a HELPER POD beside the
   # workload - the agent's own image, with the workload's PersistentVolumeClaim
   # mounted, serving it over SMB for the session - and removes it when the
   # session ends (or the sweep does, when the session died). Pinned to the
   # workload's node, so a ReadWriteOnce claim is shared the way the mode allows.
+  # `create` is as wide as exec by another road: a created pod may name any
+  # ServiceAccount and mount any Secret of the namespace; `delete` reaches any
+  # pod, not only the helpers.
   # `persistentvolumeclaims` get: to refuse a ReadWriteOncePod claim with a
   # reason instead of a helper that stays Pending.
   - apiGroups: [""]

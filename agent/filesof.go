@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -137,7 +138,7 @@ func dockerFilesOf(name string) ([]string, []byte) {
 // stash on disk, which this merges in. Between them a Swarm service's mounted
 // files come through whichever way they were mounted.
 func swarmFilesOf(name string, self selfInfo) ([]string, []byte) {
-	own := swarmNameOwner(name, self)
+	own := swarmWorkloadOwner(name, self)
 	if own == nil {
 		return nil, nil
 	}
@@ -187,14 +188,22 @@ func swarmFilesOf(name string, self selfInfo) ([]string, []byte) {
 		paths = append(paths, target)
 	}
 	tarball := tarFromFiles(files)
-	// The secrets. A takeover parked (scaled to 0) the service, so they were
-	// read at park time and stashed; --env-of parks nothing, so the service is
-	// still running and they are read LIVE from a task now. Either way, merge
-	// them in and add their mount root to the paths so the client repoints the
+	// The secrets. --env-of parks nothing, so the service is still running and
+	// they are read LIVE from a task, which is always the current truth. A
+	// takeover parked (scaled to 0) the service, so there is no task to ask and
+	// they were read at park time and stashed: the stash is for that case only,
+	// never read ahead of a task that runs (a stash left by an earlier session
+	// would otherwise be served stale, over the real files). The replica count
+	// is what tells the two apart without the wait swarmReadSecrets spends on
+	// a service that has no task because it is parked. Either way, merge them
+	// in and add their mount root to the paths so the client repoints the
 	// variables that name it.
-	secrets, err := os.ReadFile(swarmSecretStash(name))
-	if err != nil || len(secrets) == 0 {
+	var secrets []byte
+	if own.replicas > 0 || own.global {
 		secrets = swarmReadSecrets(own.name)
+	}
+	if len(secrets) == 0 {
+		secrets, _ = os.ReadFile(swarmSecretStash(name))
 	}
 	if len(secrets) > 0 {
 		tarball = mergeTars(tarball, secrets)
@@ -209,8 +218,24 @@ func swarmFilesOf(name string, self selfInfo) ([]string, []byte) {
 // swarmSecretStash is where a parked Swarm service's /run/secrets is kept. A
 // Swarm secret is a file only inside a RUNNING task, and the takeover scales the
 // service to zero, so it is read at park time and stashed here for files-of. Per
-// name, on the agent's own filesystem, removed when the service is restored.
-func swarmSecretStash(name string) string { return "/tmp/plug-secrets-" + name + ".tar" }
+// name, on the agent's own filesystem, removed when the service is restored
+// (restoreServiceParked, the sweep), when the park fails, and at boot
+// (clearSwarmSecretStashes). Under the agent's state directory, 0700, rather
+// than /tmp: these are a workload's secrets in clear, and /tmp is the one
+// directory every process on the box, and a gateway embedding the agent, can
+// read. name is a validated DNS label (nameRe), so it cannot leave the
+// directory. A var only so tests can point it at a scratch directory.
+var swarmSecretStashDir = filepath.Join(stateDir, "swarm-secrets")
+
+func swarmSecretStash(name string) string {
+	return filepath.Join(swarmSecretStashDir, "plug-secrets-"+name+".tar")
+}
+
+// clearSwarmSecretStashes wipes every stash at agent boot: each was written by
+// a session of THIS container, and a restart took every session down. What
+// the sessions parked is the boot sweep's to restore, and a restored service
+// reads its secrets live again.
+func clearSwarmSecretStashes() { _ = os.RemoveAll(swarmSecretStashDir) }
 
 // swarmReadSecrets tars /run/secrets from a RUNNING task of the service and
 // returns it. A Swarm secret is a tmpfs mount, invisible to the archive API
@@ -280,6 +305,9 @@ func swarmReadSecretsOnce(service string) (tarball []byte, sawRunning bool) {
 // reads them live instead.)
 func swarmStashSecrets(name, service string) {
 	if tb := swarmReadSecrets(service); len(tb) > 0 {
+		if err := os.MkdirAll(swarmSecretStashDir, 0o700); err != nil {
+			return
+		}
 		_ = os.WriteFile(swarmSecretStash(name), tb, 0o600)
 	}
 }
