@@ -56,6 +56,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -109,6 +110,13 @@ type sshServer struct {
 	// maxInFlight bounds handshakes in flight; 0 means maxHandshakes. A test
 	// lowers it rather than opening sixty-five connections to prove a leak.
 	maxInFlight int
+	// maxForwards, maxGetSessions and maxGetConnections, each 0 for its
+	// default; the tests lower them for the same reason.
+	maxFwd, maxGetSess, maxGetConns int
+
+	// `get` connections holding one of the maxGetConnections slots. Counted
+	// here, across connections; sessions are counted per connection.
+	getConns atomic.Int32
 
 	wg sync.WaitGroup
 
@@ -257,6 +265,71 @@ const (
 	maxHandshakes  = 64
 )
 
+// The ceilings past the handshake. None of them is a quota a developer meets:
+// they are the point past which a request can only be a mistake or a flood,
+// and what they bound is what each request costs the agent. Past a ceiling
+// the NEW request is refused with a reason the client prints; nothing already
+// open is touched.
+//
+// maxForwards is remote forwards per connection. A session arms one per port
+// it exposes (`-s` with a handful of ports) plus one liveness forward per
+// mounted volume; the widest workload in any stack here needs a few dozen at
+// the most, and each one is a listening socket and a goroutine on the agent.
+// 256 is an order of magnitude above the widest, and below what a loop that
+// never cancels would reach in its first minute.
+//
+// maxGetSessions is session channels open at once on ONE anonymous `get`
+// connection. The CLI opens one session per download and runs them one after
+// the other; `install` is a single session that forks a shell and base64s
+// four binaries. Eight lets a client script download in parallel and makes a
+// single stranger's connection worth at most eight shells.
+//
+// maxGetConnections is `get` connections, across the agent, that may open
+// sessions at all. A whole team installing at the same second is a few; a
+// CI fan-out is a few dozen; sixty-four is also maxHandshakes, so a flood is
+// refused at the same scale either side of the handshake. A connection past
+// it is not dropped: its sessions are refused with "retry shortly", and the
+// first one it opens once a slot is free succeeds.
+const (
+	maxForwards       = 256
+	maxGetSessions    = 8
+	maxGetConnections = 64
+)
+
+func (s *sshServer) forwardCeiling() int {
+	if s != nil && s.maxFwd > 0 {
+		return s.maxFwd
+	}
+	return maxForwards
+}
+
+func (s *sshServer) getSessionCeiling() int {
+	if s.maxGetSess > 0 {
+		return s.maxGetSess
+	}
+	return maxGetSessions
+}
+
+func (s *sshServer) getConnCeiling() int {
+	if s.maxGetConns > 0 {
+		return s.maxGetConns
+	}
+	return maxGetConnections
+}
+
+// takeGetSlot claims one of the `get` connection slots, or says there is none.
+func (s *sshServer) takeGetSlot() bool {
+	for {
+		n := s.getConns.Load()
+		if int(n) >= s.getConnCeiling() {
+			return false
+		}
+		if s.getConns.CompareAndSwap(n, n+1) {
+			return true
+		}
+	}
+}
+
 func (s *sshServer) Serve(ln net.Listener) error {
 	cap := s.maxInFlight
 	if cap == 0 {
@@ -367,10 +440,37 @@ func (s *sshServer) handle(nc net.Conn, releaseSlot func()) {
 
 	go func() { defer s.absorb("global requests", nil)(); s.globalRequests(reqs, user, fwd) }()
 
+	// The anonymous account's two ceilings (see maxGetSessions): sessions open on this
+	// connection, and the agent-wide slot it takes with its first session and
+	// keeps until it leaves. The tunnel account is a key the Host accepted, and
+	// the CLI behind it runs verbs in parallel: it is not bounded here.
+	var sessions atomic.Int32
+	hasSlot := false
+	defer func() {
+		if hasSlot {
+			s.getConns.Add(-1)
+		}
+	}()
+
 	for nch := range chans {
 		switch nch.ChannelType() {
 		case "session":
+			if user == downloadUser {
+				if !hasSlot && !s.takeGetSlot() {
+					s.note("ssh: %d download connections already active, refusing a session from %s", s.getConnCeiling(), conn.RemoteAddr())
+					_ = nch.Reject(ssh.ResourceShortage, fmt.Sprintf("this agent already serves %d download connections, retry shortly", s.getConnCeiling()))
+					continue
+				}
+				hasSlot = true
+				if int(sessions.Load()) >= s.getSessionCeiling() {
+					s.note("ssh: %d sessions already open on the download connection from %s, refusing another", s.getSessionCeiling(), conn.RemoteAddr())
+					_ = nch.Reject(ssh.ResourceShortage, fmt.Sprintf("this connection already has %d sessions open, the most the download account may", s.getSessionCeiling()))
+					continue
+				}
+			}
+			sessions.Add(1)
 			go func(nch ssh.NewChannel) {
+				defer sessions.Add(-1)
 				defer s.absorb("session", nil)()
 				s.session(nch, user, who, fwd, conn.RemoteAddr(), conn.LocalAddr())
 			}(nch)
@@ -502,6 +602,15 @@ func (f *forwardSet) open(payload []byte) (uint32, error) {
 	var req bindRequest
 	if err := ssh.Unmarshal(payload, &req); err != nil {
 		return 0, fmt.Errorf("malformed tcpip-forward: %w", err)
+	}
+	// The ceiling comes before the bind: a refused request must not have
+	// taken a port on its way out. Global requests are handled one at a time
+	// per connection, so the count read here is the count the insert sees.
+	f.mu.Lock()
+	held := len(f.lns)
+	f.mu.Unlock()
+	if ceiling := f.srv.forwardCeiling(); held >= ceiling {
+		return 0, fmt.Errorf("this connection already holds %d remote forwards, the most one session may", ceiling)
 	}
 	ln, err := net.Listen("tcp", net.JoinHostPort(req.Addr, fmt.Sprint(req.Port)))
 	if err != nil {

@@ -23,8 +23,10 @@ import (
 // through the tunnel with the client it already has.
 //
 // Everything arrives through the environment, set by whoever created the
-// container (agent/mount.go): the credential, and the share name the client
-// will ask for. The volume's path is a constant of the contract.
+// container (agent/mount.go): the credential (in the environment, or in a file
+// the orchestrator mounts: a Swarm secret), the share name the client will ask
+// for, and the addresses the agent connects from. The volume's path is a
+// constant of the contract.
 //
 // Files land under the volume owner's uid/gid, not root's: the helper reads
 // who owns the volume's root and makes Samba write as that identity (`force
@@ -34,7 +36,10 @@ const (
 	mountVolumePath = "/mnt/vol"
 	smbUserEnv      = "PLUG_SMB_USER"
 	smbPassEnv      = "PLUG_SMB_PASS"
+	smbPassFileEnv  = "PLUG_SMB_PASS_FILE" // the password's file, when it is not in the environment (Swarm secret)
 	smbShareEnv     = "PLUG_SMB_SHARE"
+	smbAllowEnv     = "PLUG_SMB_ALLOW" // space-separated addresses that may connect; empty means no filter
+	smbNoteEnv      = "PLUG_SMB_NOTE"  // one line the agent wants in the helper's log (a fallback it took)
 	smbDefaultShare = "vol"
 	smbConfPath     = "/etc/samba/smb.conf"
 	smbPasswdPath   = "/var/lib/samba/private/smbpasswd" // SMB_PASSWD_FILE, as `smbd -b` reports it
@@ -47,13 +52,32 @@ const (
 // reaches this container by the name plug hands it and never by browsing.
 // `fruit` is the Apple compatibility module: without it macOS lays `._` files
 // next to everything it touches to hold what it cannot store as xattrs.
-func smbConf(share, user, forceUser string, fruit bool) string {
+//
+// allow is the list of addresses a connection may come from: the AGENT's, and
+// nothing else, because the developer's SMB client never reaches this port
+// itself. It rides a direct-tcpip channel to the agent, and the agent dials
+// the helper, so every legitimate connection carries the agent's address as
+// its source. Anything else on the application network (a workload, a
+// neighbour's container) is refused by Samba before it can try the password.
+// An empty list sets NO filter: an agent unsure of its addresses must not turn
+// a working mount into a refusal, it says so in the log instead.
+//
+// Signing is mandatory and encryption desired, never required: every SMB2/3
+// client here (mount_smbfs, the cifs module, the Windows redirector) signs
+// when the server asks and needs no option for it; encryption is taken when
+// the client offers it (SMB3) and a client that does not still mounts.
+func smbConf(share, user, forceUser string, fruit bool, allow []string) string {
 	var b strings.Builder
 	b.WriteString("[global]\n")
 	b.WriteString("  security = user\n")
 	b.WriteString("  map to guest = Never\n")
 	b.WriteString("  passdb backend = smbpasswd\n")
 	b.WriteString("  server min protocol = SMB2_02\n")
+	b.WriteString("  server signing = mandatory\n")
+	b.WriteString("  smb encrypt = desired\n")
+	if len(allow) > 0 {
+		b.WriteString("  hosts allow = " + strings.Join(allow, " ") + "\n")
+	}
 	b.WriteString("  smb ports = " + strconv.Itoa(smbPort) + "\n")
 	b.WriteString("  disable netbios = yes\n")
 	b.WriteString("  load printers = no\n")
@@ -84,13 +108,20 @@ func smbConf(share, user, forceUser string, fruit bool) string {
 // the container's restart policy decides what happens next.
 func mountServe() {
 	user := os.Getenv(smbUserEnv)
-	pass := os.Getenv(smbPassEnv)
+	pass, passFrom, err := smbPassword(os.Getenv(smbPassEnv), os.Getenv(smbPassFileEnv))
+	if err != nil {
+		fatal("plug-agent mount-serve: %v", err)
+	}
 	if user == "" || pass == "" {
-		fatal("plug-agent mount-serve: %s and %s must be set", smbUserEnv, smbPassEnv)
+		fatal("plug-agent mount-serve: %s and %s (or %s) must be set", smbUserEnv, smbPassEnv, smbPassFileEnv)
 	}
 	share := os.Getenv(smbShareEnv)
 	if share == "" {
 		share = smbDefaultShare
+	}
+	allow := strings.Fields(os.Getenv(smbAllowEnv))
+	if note := os.Getenv(smbNoteEnv); note != "" {
+		fmt.Fprintf(os.Stderr, "plug-agent mount-serve: note: %s\n", note)
 	}
 	if _, err := os.Stat(mountVolumePath); err != nil {
 		fatal("plug-agent mount-serve: %s is not mounted: %v", mountVolumePath, err)
@@ -112,7 +143,7 @@ func mountServe() {
 	if err := os.MkdirAll(filepath.Dir(smbConfPath), 0o755); err != nil {
 		fatal("plug-agent mount-serve: %v", err)
 	}
-	if err := os.WriteFile(smbConfPath, []byte(smbConf(share, user, forceUser, ferr == nil)), 0o644); err != nil {
+	if err := os.WriteFile(smbConfPath, []byte(smbConf(share, user, forceUser, ferr == nil, allow)), 0o644); err != nil {
 		fatal("plug-agent mount-serve: writing %s: %v", smbConfPath, err)
 	}
 	// The account's NT hash, written straight into Samba's smbpasswd file:
@@ -124,8 +155,13 @@ func mountServe() {
 	if err := os.WriteFile(smbPasswdPath, []byte(smbPasswdLine(user, uid, pass, time.Now())), 0o600); err != nil {
 		fatal("plug-agent mount-serve: writing %s: %v", smbPasswdPath, err)
 	}
-	fmt.Fprintf(os.Stderr, "plug-agent mount-serve: serving %s as //%s/%s on :%d (files written as %s)\n",
-		mountVolumePath, user, share, smbPort, forceUser)
+	fmt.Fprintf(os.Stderr, "plug-agent mount-serve: serving %s as //%s/%s on :%d (files written as %s, password from %s)\n",
+		mountVolumePath, user, share, smbPort, forceUser, passFrom)
+	if len(allow) > 0 {
+		fmt.Fprintf(os.Stderr, "plug-agent mount-serve: connections accepted from %s only (the agent)\n", strings.Join(allow, ", "))
+	} else {
+		fmt.Fprintf(os.Stderr, "plug-agent mount-serve: the agent did not say which addresses it connects from, so no source filter is set\n")
+	}
 	// -F foreground, no daemon fork, logs on stdout (the container's log).
 	smbd := exec.Command("/usr/sbin/smbd", "-F", "--debug-stdout", "--no-process-group", "-s", smbConfPath)
 	smbd.Stdout, smbd.Stderr = os.Stdout, os.Stderr
@@ -141,6 +177,27 @@ func mountServe() {
 	if err := smbd.Wait(); err != nil {
 		fatal("plug-agent mount-serve: smbd: %v", err)
 	}
+}
+
+// smbPassword picks the credential: the environment when it carries one, else
+// the file (a Swarm secret under /run/secrets, which never shows in `docker
+// service inspect` the way an Env entry does). Trimmed, because a secret made
+// from `echo` ends in a newline and a password with one would never match the
+// one the developer's SMB client sends. The second value names the source for
+// the log, so a cluster where the secret could not be made (and the agent fell
+// back to the environment) is visible from the helper's own log.
+func smbPassword(env, file string) (pass, from string, err error) {
+	if env != "" {
+		return env, "the environment", nil
+	}
+	if file == "" {
+		return "", "", nil
+	}
+	b, err := os.ReadFile(file)
+	if err != nil {
+		return "", "", fmt.Errorf("reading the password file %s: %v", file, err)
+	}
+	return strings.TrimSpace(string(b)), "the file " + file, nil
 }
 
 // ownerIDs is the uid/gid owning path, asked of the coreutils rather than of

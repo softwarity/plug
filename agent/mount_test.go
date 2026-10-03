@@ -2,6 +2,10 @@ package agent
 
 import (
 	"fmt"
+	"net"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -244,7 +248,7 @@ func TestPickClaim(t *testing.T) {
 // be a label value either).
 func TestK8sMountPodShape(t *testing.T) {
 	pod := k8sMountPod("shop", "plug-mnt-web-abcd1234", "web", "/data", "web-data", "node-2",
-		"softwarity/plug:2.20.0", "10.1.2.3:40001", "s3cret")
+		"softwarity/plug:2.20.0", "10.1.2.3:40001", "s3cret", []string{"10.1.2.3"})
 	meta := pod["metadata"].(map[string]any)
 	labels := meta["labels"].(map[string]string)
 	ann := meta["annotations"].(map[string]string)
@@ -279,11 +283,16 @@ func TestK8sMountPodShape(t *testing.T) {
 	for _, e := range c["env"].([]map[string]string) {
 		env[e["name"]] = e["value"]
 	}
-	if env[smbUserEnv] != "plug" || env[smbPassEnv] != "s3cret" || env[smbShareEnv] != mountShare {
+	if env[smbUserEnv] != "plug" || env[smbPassEnv] != "s3cret" || env[smbShareEnv] != mountShare || env[smbAllowEnv] != "10.1.2.3" {
 		t.Fatalf("env %v", env)
 	}
+	// On Kubernetes the password stays in the environment: a Secret would
+	// need a verb the manifest's RBAC does not grant.
+	if _, viaFile := env[smbPassFileEnv]; viaFile {
+		t.Fatal("the k8s helper must not be pointed at a password file nothing mounts")
+	}
 	// No node known: nothing pinned, the scheduler decides.
-	free := k8sMountPod("shop", "h", "web", "data", "c", "", "img", "o", "p")
+	free := k8sMountPod("shop", "h", "web", "data", "c", "", "img", "o", "p", nil)
 	if _, pinned := free["spec"].(map[string]any)["nodeName"]; pinned {
 		t.Fatal("an unknown node must not be pinned to \"\"")
 	}
@@ -295,22 +304,145 @@ func TestK8sMountPodShape(t *testing.T) {
 // The helper's own side (mountserve.go): the Samba configuration and the
 // account file it writes.
 func TestSmbConf(t *testing.T) {
-	c := smbConf("vol", "plug", "plug", true)
+	c := smbConf("vol", "plug", "plug", true, []string{"10.0.1.5", "fd00::5"})
 	for _, want := range []string{
 		"[global]", "security = user", "passdb backend = smbpasswd", "server min protocol = SMB2_02",
 		"smb ports = 445", "disable netbios = yes", "load printers = no",
 		"vfs objects = fruit streams_xattr",
+		// Only the agent may connect: signing every client does unasked,
+		// encryption when the client has it and never as a condition.
+		"hosts allow = 10.0.1.5 fd00::5\n", "server signing = mandatory", "smb encrypt = desired",
 		"[vol]", "path = " + mountVolumePath, "read only = no", "valid users = plug", "force user = plug",
 	} {
 		if !strings.Contains(c, want) {
 			t.Errorf("missing %q in\n%s", want, c)
 		}
 	}
-	if strings.Contains(smbConf("vol", "plug", "root", false), "fruit") {
+	if strings.Contains(c, "smb encrypt = required") || strings.Contains(c, "hosts deny") {
+		t.Error("a client that does not encrypt must still mount; the allow list alone is the filter")
+	}
+	// The filter lives in [global], before the share, so it covers the
+	// negotiation itself and not just the tree connect.
+	if strings.Index(c, "hosts allow") > strings.Index(c, "[vol]") {
+		t.Error("hosts allow must be global")
+	}
+	plain := smbConf("vol", "plug", "root", false, nil)
+	if strings.Contains(plain, "fruit") {
 		t.Error("no fruit module, no fruit configuration")
 	}
-	if !strings.Contains(smbConf("vol", "plug", "root", false), "force user = root") {
+	if !strings.Contains(plain, "force user = root") {
 		t.Error("a root-owned volume is served as root")
+	}
+	// An agent that could not tell its addresses sets no filter at all: a
+	// refusal would be a mount lost for a guess.
+	if strings.Contains(plain, "hosts allow") {
+		t.Error("an empty allow list must not restrict anything")
+	}
+}
+
+// The password reaches the helper by one of two routes: the environment
+// (Docker, Kubernetes) or a file the orchestrator mounts (a Swarm secret),
+// trimmed of the newline a secret made with echo carries.
+func TestSmbPassword(t *testing.T) {
+	if p, from, err := smbPassword("abc", ""); p != "abc" || err != nil || !strings.Contains(from, "environment") {
+		t.Fatalf("env: %q %q %v", p, from, err)
+	}
+	f := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(f, []byte("fromfile\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if p, from, err := smbPassword("", f); p != "fromfile" || err != nil || !strings.Contains(from, f) {
+		t.Fatalf("file: %q %q %v", p, from, err)
+	}
+	// The environment wins when both are set: it is what the agent meant.
+	if p, _, _ := smbPassword("env", f); p != "env" {
+		t.Fatalf("both: %q", p)
+	}
+	if p, _, err := smbPassword("", ""); p != "" || err != nil {
+		t.Fatalf("neither: %q %v", p, err)
+	}
+	if _, _, err := smbPassword("", filepath.Join(t.TempDir(), "absent")); err == nil {
+		t.Fatal("a missing password file is an error, not an empty password")
+	}
+}
+
+// mountEnv, the agent's side of the same contract: the password in the
+// environment OR the file's path, never both; the allow list always, empty
+// when unknown; the note only when there is one.
+func TestMountEnv(t *testing.T) {
+	has := func(env []string, kv string) bool {
+		for _, e := range env {
+			if e == kv {
+				return true
+			}
+		}
+		return false
+	}
+	env := mountEnv("s3cret", "", []string{"10.0.1.5", "10.0.2.5"}, "")
+	if !has(env, smbPassEnv+"=s3cret") || !has(env, smbAllowEnv+"=10.0.1.5 10.0.2.5") || !has(env, smbUserEnv+"="+mountUser) || !has(env, smbShareEnv+"="+mountShare) {
+		t.Fatalf("env %v", env)
+	}
+	for _, e := range env {
+		if strings.HasPrefix(e, smbPassFileEnv+"=") || strings.HasPrefix(e, smbNoteEnv+"=") {
+			t.Fatalf("unasked variable in %v", env)
+		}
+	}
+	viaFile := mountEnv("", "/run/secrets/plug-mnt-web-abcd1234", nil, "fell back")
+	if !has(viaFile, smbPassFileEnv+"=/run/secrets/plug-mnt-web-abcd1234") || !has(viaFile, smbAllowEnv+"=") || !has(viaFile, smbNoteEnv+"=fell back") {
+		t.Fatalf("env %v", viaFile)
+	}
+	for _, e := range viaFile {
+		if strings.HasPrefix(e, smbPassEnv+"=") {
+			t.Fatalf("the password must not ride the environment beside its file: %v", viaFile)
+		}
+	}
+}
+
+// mountAllow is built from this process's interfaces plus what the
+// orchestrator adds; loopback never counts, a duplicate counts once, an
+// operator's "any" clears it all, and an operator's subnet rides along.
+func TestMountAllow(t *testing.T) {
+	t.Setenv(mountAllowEnv, "")
+	got := mountAllow("10.9.9.9", "127.0.0.1", "10.9.9.9", "", "fe80::1")
+	seen := map[string]bool{}
+	for _, a := range got {
+		if seen[a] {
+			t.Fatalf("duplicate %s in %v", a, got)
+		}
+		seen[a] = true
+		if ip := net.ParseIP(a); ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+			t.Fatalf("%s has no place in an allow list: %v", a, got)
+		}
+	}
+	if !seen["10.9.9.9"] {
+		t.Fatalf("the orchestrator's address is missing from %v", got)
+	}
+	if !sort.StringsAreSorted(got) {
+		t.Fatalf("not deterministic: %v", got)
+	}
+	t.Setenv(mountAllowEnv, "10.244.0.0/16 any")
+	if got := mountAllow("10.9.9.9"); got != nil {
+		t.Fatalf("\"any\" must clear the filter, got %v", got)
+	}
+	t.Setenv(mountAllowEnv, "10.244.0.0/16")
+	got = mountAllow("10.9.9.9")
+	found := false
+	for _, a := range got {
+		found = found || a == "10.244.0.0/16"
+	}
+	if !found {
+		t.Fatalf("the operator's subnet is missing from %v", got)
+	}
+}
+
+// The helper joins ONE network, the same one at every re-provision whatever
+// order the daemon listed them in.
+func TestMountNetwork(t *testing.T) {
+	if mountNetwork([]string{"shop_default", "shop_backend"}) != "shop_backend" || mountNetwork([]string{"shop_backend", "shop_default"}) != "shop_backend" {
+		t.Fatal("the choice must not depend on the order")
+	}
+	if mountNetwork([]string{"only"}) != "only" {
+		t.Fatal("one network is that network")
 	}
 }
 
@@ -398,7 +530,7 @@ func TestK8sMountServiceShape(t *testing.T) {
 	if spec["selector"].(map[string]string)[mountHelperLabel] != "plug-mnt-web-abcd1234" {
 		t.Fatalf("selector %v", spec["selector"])
 	}
-	pod := k8sMountPod("shop", "plug-mnt-web-abcd1234", "web", "/data", "c", "", "img", "o", "p")
+	pod := k8sMountPod("shop", "plug-mnt-web-abcd1234", "web", "/data", "c", "", "img", "o", "p", nil)
 	if pod["metadata"].(map[string]any)["labels"].(map[string]string)[mountHelperLabel] != "plug-mnt-web-abcd1234" {
 		t.Fatal("the pod must carry the label the Service selects")
 	}

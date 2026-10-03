@@ -250,7 +250,10 @@ func dockerSelf() (selfInfo, error) {
 			Labels map[string]string `json:"Labels"`
 		} `json:"Config"`
 		NetworkSettings struct {
-			Networks map[string]struct{} `json:"Networks"`
+			Networks map[string]struct {
+				IPAddress         string `json:"IPAddress"`
+				GlobalIPv6Address string `json:"GlobalIPv6Address"`
+			} `json:"Networks"`
 		} `json:"NetworkSettings"`
 	}
 	id, _ := os.Hostname()
@@ -271,12 +274,18 @@ func dockerSelf() (selfInfo, error) {
 	s.project = insp.Config.Labels["com.docker.compose.project"]
 	s.service = insp.Config.Labels["com.docker.swarm.service.name"]
 	s.serviceID = insp.Config.Labels["com.docker.swarm.service.id"]
-	for n := range insp.NetworkSettings.Networks {
+	for n, ep := range insp.NetworkSettings.Networks {
 		if undnsNetwork[n] {
 			continue
 		}
 		if app, att, ov := netKind(n); app {
-			s.nets = append(s.nets, netRef{n, att, ov})
+			var addrs []string
+			for _, a := range []string{ep.IPAddress, ep.GlobalIPv6Address} {
+				if a != "" {
+					addrs = append(addrs, a)
+				}
+			}
+			s.nets = append(s.nets, netRef{name: n, attachable: att, overlay: ov, addrs: addrs})
 		}
 	}
 	return s, nil

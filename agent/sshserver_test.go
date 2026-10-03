@@ -769,6 +769,208 @@ func TestAPanickingHandshakeGivesItsSlotBack(t *testing.T) {
 	cl.Close()
 }
 
+// The ceilings (maxForwards and the two `get` ceilings). Each is lowered to a
+// handful here: proving that the 257th forward is refused would take 256
+// sockets to say what three say as well. What matters in each case is the
+// same three facts: the request past the ceiling is refused with a reason the
+// client sees, what was already open is untouched, and releasing one makes
+// room for the next.
+
+func TestRemoteForwardsAreCappedPerConnection(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the agent only ever runs in a Linux container")
+	}
+	signer, pub := newTestKey(t)
+	addr := hardeningServer(t, func(s *sshServer) {
+		s.maxFwd = 3
+		s.host = &fakeHost{signer: s.hostKey, allowed: map[string]string{ssh.FingerprintSHA256(pub): "alice"}}
+	})
+	cl, err := dial(t, addr, tunnelUser, ssh.PublicKeys(signer))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer cl.Close()
+
+	var held []net.Listener
+	for i := 0; i < 3; i++ {
+		ln, err := cl.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("forward %d, under the ceiling: %v", i+1, err)
+		}
+		held = append(held, ln)
+	}
+	if ln, err := cl.Listen("tcp", "127.0.0.1:0"); err == nil {
+		ln.Close()
+		t.Fatal("the forward past the ceiling was accepted")
+	}
+	// The three already open still answer: a refusal costs nothing to them.
+	for _, ln := range held {
+		c, err := net.DialTimeout("tcp", ln.Addr().String(), 2*time.Second)
+		if err != nil {
+			t.Fatalf("a forward below the ceiling stopped answering: %v", err)
+		}
+		c.Close()
+	}
+	// Cancelling one makes room for one.
+	held[0].Close()
+	ln, err := cl.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("after a cancel the next forward must be taken: %v", err)
+	}
+	ln.Close()
+	// A second connection has a ceiling of its own: the count is per session,
+	// not per agent.
+	other, err := dial(t, addr, tunnelUser, ssh.PublicKeys(signer))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer other.Close()
+	if ln, err := other.Listen("tcp", "127.0.0.1:0"); err != nil {
+		t.Fatalf("another connection's forward must not count against this one: %v", err)
+	} else {
+		ln.Close()
+	}
+}
+
+// openSessions opens sessions until one is refused or n were opened,
+// returning the ones that opened and the refusal.
+func openSessions(cl *ssh.Client, n int) ([]*ssh.Session, error) {
+	var open []*ssh.Session
+	for i := 0; i < n; i++ {
+		sess, err := cl.NewSession()
+		if err != nil {
+			return open, err
+		}
+		open = append(open, sess)
+	}
+	return open, nil
+}
+
+// waitSession retries NewSession briefly: the server counts a session down
+// when its channel closes, which lands a moment after the client's Close.
+func waitSession(cl *ssh.Client) (*ssh.Session, error) {
+	var err error
+	for i := 0; i < 100; i++ {
+		var sess *ssh.Session
+		if sess, err = cl.NewSession(); err == nil {
+			return sess, nil
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return nil, err
+}
+
+func TestDownloadSessionsAreCappedPerConnection(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the agent only ever runs in a Linux container")
+	}
+	addr := hardeningServer(t, func(s *sshServer) { s.maxGetSess = 2 })
+	cl, err := ssh.Dial("tcp", addr, &ssh.ClientConfig{
+		User: downloadUser, HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: 3 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer cl.Close()
+
+	open, err := openSessions(cl, 2)
+	if err != nil {
+		t.Fatalf("under the ceiling: %v", err)
+	}
+	third, err := cl.NewSession()
+	if err == nil {
+		third.Close()
+		t.Fatal("the session past the ceiling was accepted")
+	}
+	if !strings.Contains(err.Error(), "sessions open") {
+		t.Fatalf("the refusal must say why, got %v", err)
+	}
+	// The two below it still run their command.
+	out, err := open[0].Output("version")
+	if err != nil || string(out) != "served" {
+		t.Fatalf("a session under the ceiling was hurt by the refusal: %q, %v", out, err)
+	}
+	// That one is over now (its command exited): room for one more.
+	open[0].Close()
+	sess, err := waitSession(cl)
+	if err != nil {
+		t.Fatalf("after a session ended the next must be taken: %v", err)
+	}
+	sess.Close()
+	open[1].Close()
+}
+
+func TestDownloadConnectionsAreCappedAcrossTheAgent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the agent only ever runs in a Linux container")
+	}
+	addr := hardeningServer(t, func(s *sshServer) { s.maxGetConns = 1 })
+	cfg := &ssh.ClientConfig{User: downloadUser, HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: 3 * time.Second}
+	first, err := ssh.Dial("tcp", addr, cfg)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	// The slot is taken by the first session, not by the connection: a
+	// stranger who connects and says nothing holds none.
+	sess, err := first.NewSession()
+	if err != nil {
+		t.Fatalf("the first download connection must get its session: %v", err)
+	}
+	defer sess.Close()
+
+	second, err := ssh.Dial("tcp", addr, cfg)
+	if err != nil {
+		t.Fatalf("the connection itself is not refused, only its sessions: %v", err)
+	}
+	defer second.Close()
+	if s2, err := second.NewSession(); err == nil {
+		s2.Close()
+		t.Fatal("a second download connection got a session with one slot")
+	} else if !strings.Contains(err.Error(), "retry shortly") {
+		t.Fatalf("the refusal must tell the client to retry, got %v", err)
+	}
+	// The first still works: the refusal is the stranger's, not the holder's.
+	if out, err := sess.Output("version"); err != nil || string(out) != "served" {
+		t.Fatalf("the holder was hurt by the refusal: %q, %v", out, err)
+	}
+	// Once the holder leaves, the waiting connection gets its session on the
+	// same connection: no reconnect needed.
+	first.Close()
+	s2, err := waitSession(second)
+	if err != nil {
+		t.Fatalf("after the holder left the next connection must be served: %v", err)
+	}
+	s2.Close()
+
+	// The tunnel account is not counted: a key the Host accepted opens
+	// sessions whatever the download traffic.
+	signer, pub := newTestKey(t)
+	keyed := hardeningServer(t, func(s *sshServer) {
+		s.maxGetConns = 1
+		s.host = &fakeHost{signer: s.hostKey, allowed: map[string]string{ssh.FingerprintSHA256(pub): "alice"}}
+	})
+	holder, err := ssh.Dial("tcp", keyed, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	hs, err := holder.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hs.Close()
+	tun, err := dial(t, keyed, tunnelUser, ssh.PublicKeys(signer))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tun.Close()
+	ts, err := tun.NewSession()
+	if err != nil {
+		t.Fatalf("the tunnel account must not be bounded by the download slots: %v", err)
+	}
+	ts.Close()
+}
+
 // panicHost blows up inside Verify, which runs inside ssh.NewServerConn.
 type panicHost struct {
 	signer  ssh.Signer

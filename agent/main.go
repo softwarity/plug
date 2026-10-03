@@ -1008,6 +1008,7 @@ type netRef struct {
 	name       string
 	attachable bool
 	overlay    bool
+	addrs      []string // the agent's addresses on it (v4, v6), as inspect reports them
 }
 
 type selfInfo struct {
@@ -1045,6 +1046,17 @@ func (s selfInfo) overlayNets() []string {
 		if n.overlay {
 			out = append(out, n.name)
 		}
+	}
+	return out
+}
+
+// addrs: every address this agent holds on its application networks, one or
+// two per network. What a container the agent dials sees as the source, which
+// is what a mount helper's `hosts allow` is made of (mountAllow).
+func (s selfInfo) addrs() []string {
+	var out []string
+	for _, n := range s.nets {
+		out = append(out, n.addrs...)
 	}
 	return out
 }

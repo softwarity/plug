@@ -2,6 +2,37 @@
 
 ## NEXT RELEASE
 
+### The mount helper answers the agent alone, and other hardening from the audit
+
+Nothing a working mount or session notices; what changes is what a stranger
+on the cluster network finds.
+
+- The Samba helper a live mount starts beside the workload accepted
+  connections from anywhere on its networks. It now accepts them from the
+  agent's addresses only, which is the one place a mount ever comes from
+  (the client reaches the helper through the agent's tunnel). An agent that
+  cannot tell its own addresses sets no filter and says so in the helper's
+  log; `PLUG_MOUNT_ALLOW` on the agent adds addresses or subnets for a
+  cluster that rewrites the source, or `any` to turn the filter off. SMB
+  signing is required and encryption negotiated when the client offers it;
+  macOS, the Linux cifs module and Windows all do without an option. The
+  helper joins one network instead of every network of the agent.
+- On Swarm the helper's password travels as a Swarm secret instead of an
+  environment variable readable in `docker service inspect`. Docker without
+  Swarm has no secret store, and a Kubernetes Secret would ask for a new
+  right in the manifest, so those two keep the environment: the comment in
+  the code says so.
+- The agent's SSH server caps what one connection may open: 256 forwards, 8
+  parallel sessions and 64 concurrent connections for the anonymous download
+  user. A developer's session uses a handful; past the cap the new request
+  is refused with a message and nothing already open is touched.
+- A name that could not be a cluster name (a space, a `;`, an underscore)
+  is answered NXDOMAIN by plug's resolver before anything asks an agent.
+  Valid names are answered as before.
+- `--dockerrun` runs docker as you, with your PATH and your `~/.docker`,
+  instead of with the launcher's privilege and its narrowed PATH. On macOS
+  that is where Docker Desktop's `docker` lives; nothing changes elsewhere.
+
 ---
 
 ## 2.21.1

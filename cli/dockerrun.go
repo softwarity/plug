@@ -249,11 +249,46 @@ func explainDockerRefusal(stderr string) string {
 	return ""
 }
 
+// dockerCommand is the one way this file runs the docker CLI: as the HUMAN, with
+// the human's $PATH, exactly as runChildEnv runs the command of a plain session.
+//
+// The launcher that gets here is the setuid-root helper on macOS, and it has
+// narrowed its own $PATH to the system directories (securePath). Both halves of
+// that are wrong for docker. The CLI is not a system helper: Docker Desktop puts
+// it in /usr/local/bin, Homebrew elsewhere again, and neither is in the narrowed
+// list, so a bare exec.Command("docker") found nothing. And docker is the user's
+// tool, driven by the user's ~/.docker: the current context, the credential
+// store, the credential helpers it spawns by name from $PATH. Run as root, it
+// read root's config (no context, no login) and left root-owned files behind in
+// the user's home when it wrote any. So: resolve docker in the $PATH the human
+// had, hand it that $PATH back, and drop the credentials to the human
+// (applyPrivDrop). The daemon needs none of this process's privilege: the TUN,
+// the mount namespace and the cifs mounts all happen on the daemon's side, and
+// every file this host hands docker is chowned to the user first.
+//
+// Where nothing was narrowed (Linux capabilities, Windows, an unprivileged run)
+// every step is a no-op and the command is exactly what exec.Command gave.
+func dockerCommand(args ...string) *exec.Cmd {
+	cmd := exec.Command("docker", args...)
+	if pathNarrowed {
+		if p, err := lookPathIn("docker", userPath); err == nil {
+			cmd.Path = p
+			// exec.Command already failed to find docker in the narrowed $PATH and
+			// parked that error in cmd.Err, which Start would return even with
+			// Path corrected. This resolution supersedes it (same as runChildEnv).
+			cmd.Err = nil
+		}
+		cmd.Env = withUserPath(nil)
+	}
+	applyPrivDrop(cmd)
+	return cmd
+}
+
 // dockerServerArch is the architecture of the daemon's containers, which is not
 // necessarily this machine's: it decides which of the image's Linux binaries the
 // sidecar runs.
 func dockerServerArch() (string, error) {
-	out, err := exec.Command("docker", "version", "-f", "{{.Server.Arch}}").Output()
+	out, err := dockerCommand("version", "-f", "{{.Server.Arch}}").Output()
 	if err != nil {
 		return "", fmt.Errorf("asking docker for its architecture: %w "+
 			"(is the docker daemon running?)", err)
@@ -295,26 +330,26 @@ func startDockerSidecar(cfg config, network string, plugFlags []string) (string,
 
 	args := sidecarArgs(cfg, network, plugFlags, arch, name, dockerSidecarImage(), owner)
 
-	out, err := exec.Command("docker", args...).CombinedOutput()
+	out, err := dockerCommand(args...).CombinedOutput()
 	if err != nil {
 		return "", nil, fmt.Errorf("starting the sidecar that holds the tunnel: %v: %s\n"+
 			"      Its image is %s; set PLUG_DOCKER_IMAGE to point at one that exists if this\n"+
 			"      build's version was never published",
 			err, strings.TrimSpace(string(out)), dockerSidecarImage())
 	}
-	stop := func() { _ = exec.Command("docker", "rm", "-f", name).Run() }
+	stop := func() { _ = dockerCommand("rm", "-f", name).Run() }
 
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		if exec.Command("docker", "exec", name, "test", "-f", "/tmp/plug-ready").Run() == nil {
+		if dockerCommand("exec", name, "test", "-f", "/tmp/plug-ready").Run() == nil {
 			return name, stop, nil
 		}
-		if exec.Command("docker", "inspect", "-f", "{{.State.Running}}", name).Run() != nil {
+		if dockerCommand("inspect", "-f", "{{.State.Running}}", name).Run() != nil {
 			break
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	logs, _ := exec.Command("docker", "logs", "--tail", "20", name).CombinedOutput()
+	logs, _ := dockerCommand("logs", "--tail", "20", name).CombinedOutput()
 	stop()
 	return "", nil, fmt.Errorf("the sidecar never reported a tunnel to %s:%s. It said:\n%s",
 		cfg.host, cfg.port, strings.TrimSpace(string(logs)))
@@ -378,12 +413,12 @@ func (o sidecarOwner) filters() []string {
 // everything in place, and the `docker run` that follows says what is wrong.
 func removeStaleSidecars(owner sidecarOwner) {
 	args := append([]string{"ps", "-a", "--format", "{{.Names}}\t{{.Label \"" + sidecarOwnerLabel + "\"}}"}, owner.filters()...)
-	out, err := exec.Command("docker", args...).Output()
+	out, err := dockerCommand(args...).Output()
 	if err != nil {
 		return
 	}
 	for _, name := range staleSidecars(string(out), owner.pid, processAlive) {
-		_ = exec.Command("docker", "rm", "-f", name).Run()
+		_ = dockerCommand("rm", "-f", name).Run()
 	}
 }
 
@@ -533,12 +568,21 @@ func runDockerRun(cfg config, cmdArgs []string, exposes []string, client bool) i
 		info("%v", err)
 		return 1
 	}
-	cmd := exec.Command(full[0], full[1:]...)
+	// full[0] is "docker": dockerRunCmd refused anything else above. The user's
+	// container is started by the CLI running as the user, with the user's
+	// $PATH and ~/.docker, like every other docker call here (dockerCommand).
+	cmd := dockerCommand(full[1:]...)
 	cmd.Stdin, cmd.Stdout = os.Stdin, os.Stdout
 	// The multi-line values, carried by the docker CLI's own environment and
-	// named in the env file by a bare KEY line (dockerProjectionFlags).
+	// named in the env file by a bare KEY line (dockerProjectionFlags). Added
+	// to the environment dockerCommand chose, which is nil when nothing was
+	// narrowed (inherit) and the human's $PATH restored otherwise.
 	if len(cliEnv) > 0 {
-		cmd.Env = append(os.Environ(), cliEnv...)
+		env := cmd.Env
+		if env == nil {
+			env = os.Environ()
+		}
+		cmd.Env = append(env, cliEnv...)
 	}
 	var errBuf strings.Builder
 	cmd.Stderr = &teeWriter{to: os.Stderr, into: &errBuf}
@@ -603,7 +647,10 @@ func dockerMountFlags() ([]string, func()) {
 		name := "plug-vol-" + recordName(m.spec.name + ":" + m.spec.volume + ":" + port)[:16]
 		opts := fmt.Sprintf("port=%s,username=%s,password=%s,vers=3.0,uid=0,gid=0,file_mode=0664,dir_mode=0775,noperm,nobrl",
 			port, m.target.user, m.target.pass)
-		cmd := exec.Command("docker", "volume", "create", "--driver", "local",
+		// As the user, like every docker call here: the cifs mount itself is the
+		// daemon's kernel's work, so the volume needs nothing of this process's
+		// privilege, and the user must be able to `docker volume rm` a leftover.
+		cmd := dockerCommand("volume", "create", "--driver", "local",
 			"--opt", "type=cifs", "--opt", "device=//"+dockerHostAddr()+"/"+m.target.share, "--opt", "o="+opts, name)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			info("mount %s: creating the cifs volume: %s", m.spec, strings.TrimSpace(string(out)))
@@ -619,7 +666,7 @@ func dockerMountFlags() ([]string, func()) {
 	}
 	return flags, func() {
 		for _, name := range made {
-			_ = exec.Command("docker", "volume", "rm", "-f", name).Run()
+			_ = dockerCommand("volume", "rm", "-f", name).Run()
 		}
 	}
 }

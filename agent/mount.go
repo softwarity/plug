@@ -2,9 +2,11 @@ package agent
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path"
@@ -488,12 +490,27 @@ func mountSpec(m *dockerMount) map[string]any {
 	return spec
 }
 
+// mountNetwork is the ONE network the helper joins: any network the agent is
+// on will do, since the helper only has to be reachable from the agent, and
+// the agent's resolver answers an alias on every network the agent is attached
+// to (Docker's embedded DNS looks the name up across all of them). Joining the
+// others as well put the helper beside every workload of the stack, which is
+// exactly where it does not belong. The first by name: the agent's network
+// list comes out of a map, and the choice has to be the same at every
+// re-provision of the same session.
+func mountNetwork(nets []string) string {
+	sorted := append([]string(nil), nets...)
+	sort.Strings(sorted)
+	return sorted[0]
+}
+
 func dockerMountVolume(name, volume, agentPort, pass string, self selfInfo) {
 	nets := self.attachableNets()
 	if len(nets) == 0 {
 		answer("error: the agent is on no network a mount helper can join — put it on the " +
 			"application network (an attachable overlay, or the Compose network your services share)")
 	}
+	network := mountNetwork(nets)
 	mounts, found := dockerWorkloadMounts(name, self)
 	if !found {
 		answer("error: no container answers to %q here, so there is no volume to mount", name)
@@ -511,14 +528,10 @@ func dockerMountVolume(name, volume, agentPort, pass string, self selfInfo) {
 	if code, err := dockerAPI("GET", "/containers/"+helper+"/json", nil, nil); err == nil && code == 200 {
 		_, _ = dockerAPI("DELETE", "/containers/"+helper+"?force=1", nil, nil)
 	}
-	endpoints := map[string]any{}
-	for _, n := range nets {
-		endpoints[n] = map[string]any{"Aliases": []string{helper}}
-	}
 	body := map[string]any{
 		"Image":      mountImage(self.image),
 		"Entrypoint": []string{"/usr/local/bin/plug-agent", "mount-serve"},
-		"Env":        mountEnv(pass),
+		"Env":        mountEnv(pass, "", mountAllow(self.addrs()...), ""),
 		"Labels": map[string]string{
 			mountLabel:        "1",
 			mountOfLabel:      name,
@@ -527,11 +540,13 @@ func dockerMountVolume(name, volume, agentPort, pass string, self selfInfo) {
 			sessionOwnerLabel: sessionOwner(self.relayTarget(), []portPair{{agent: agentPort}}),
 		},
 		"HostConfig": map[string]any{
-			"NetworkMode":   nets[0],
+			"NetworkMode":   network,
 			"Mounts":        []map[string]any{mountSpec(m)},
 			"RestartPolicy": map[string]any{"Name": "unless-stopped"},
 		},
-		"NetworkingConfig": map[string]any{"EndpointsConfig": map[string]any{nets[0]: endpoints[nets[0]]}},
+		"NetworkingConfig": map[string]any{"EndpointsConfig": map[string]any{
+			network: map[string]any{"Aliases": []string{helper}},
+		}},
 	}
 	var created struct {
 		Id string `json:"Id"`
@@ -539,24 +554,91 @@ func dockerMountVolume(name, volume, agentPort, pass string, self selfInfo) {
 	if _, err := dockerAPI("POST", "/containers/create?name="+helper, body, &created); err != nil {
 		answer("error: creating the mount helper for %s of %q: %v", volume, name, err)
 	}
-	for _, n := range nets[1:] {
-		if _, err := dockerAPI("POST", "/networks/"+n+"/connect",
-			map[string]any{"Container": created.Id, "EndpointConfig": endpoints[n]}, nil); err != nil {
-			_, _ = dockerAPI("DELETE", "/containers/"+created.Id+"?force=1", nil, nil)
-			answer("error: attaching the mount helper to %s: %v", n, err)
-		}
-	}
 	if _, err := dockerAPI("POST", "/containers/"+created.Id+"/start", nil, nil); err != nil {
 		_, _ = dockerAPI("DELETE", "/containers/"+created.Id+"?force=1", nil, nil)
 		answer("error: starting the mount helper: %v", err)
 	}
-	// Its name: an alias on every network the agent is on, which the embedded
-	// DNS answers - the same footing as a signpost's alias.
+	// Its name: an alias on the one network it shares with the agent, which
+	// the embedded DNS answers - the same footing as a signpost's alias.
 	answer("%s", mountReply(helper))
 }
 
-func mountEnv(pass string) []string {
-	return []string{smbUserEnv + "=" + mountUser, smbPassEnv + "=" + pass, smbShareEnv + "=" + mountShare}
+// mountEnv is the helper's environment: the account, the share, the addresses
+// it may be reached from (mountAllow), and the password, by one of two routes.
+//
+// pass puts the password in the environment itself. That is the route on
+// plain Docker and Compose, where a secret would need the Swarm store the
+// daemon does not have, and on Kubernetes, where a Secret object would need a
+// verb (secrets: create, delete) the RBAC in deploy/plug-k8s.yaml does not
+// grant: asking every cluster to re-apply the manifest for this is a cost the
+// developer experience does not pay. There the password is readable by whoever
+// can inspect the helper, which is whoever can read the workload's own
+// environment: no new audience. passFile names a file the orchestrator mounts
+// instead (a Swarm secret), and the environment then carries only its path.
+// note is one line for the helper's log, "" for none.
+func mountEnv(pass, passFile string, allow []string, note string) []string {
+	env := []string{smbUserEnv + "=" + mountUser, smbShareEnv + "=" + mountShare}
+	if passFile != "" {
+		env = append(env, smbPassFileEnv+"="+passFile)
+	} else {
+		env = append(env, smbPassEnv+"="+pass)
+	}
+	env = append(env, smbAllowEnv+"="+strings.Join(allow, " "))
+	if note != "" {
+		env = append(env, smbNoteEnv+"="+note)
+	}
+	return env
+}
+
+// mountAllowEnv is an operator's word on who may reach the helper, beside what
+// the agent works out for itself: addresses or subnets to ADD (a cluster whose
+// kube-proxy masquerades Service traffic shows the helper a node address, not
+// the agent's), or "any" to set no filter at all. Nothing in the standard
+// manifests sets it.
+const mountAllowEnv = "PLUG_MOUNT_ALLOW"
+
+// mountAllow is the list the helper's `hosts allow` is built from: every
+// address this agent can connect FROM, since the helper only ever hears from
+// the agent (see smbConf). The agent's own interfaces are the ground truth: the
+// kernel picks the source of a connection among them, whichever network the
+// helper is reached on. extra is what the orchestrator says on top (the pod
+// address on Kubernetes, the per-network addresses Docker reports), which can
+// only widen the list, never narrow it. Loopback and link-local are left out:
+// no connection to another container carries them. Empty when nothing is
+// known, which the helper takes as "no filter".
+func mountAllow(extra ...string) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(ip net.IP) {
+		if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+			return
+		}
+		if s := ip.String(); !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	if addrs, err := net.InterfaceAddrs(); err == nil {
+		for _, a := range addrs {
+			if n, ok := a.(*net.IPNet); ok {
+				add(n.IP)
+			}
+		}
+	}
+	for _, e := range extra {
+		add(net.ParseIP(strings.TrimSpace(e)))
+	}
+	for _, e := range strings.Fields(os.Getenv(mountAllowEnv)) {
+		if e == "any" {
+			return nil
+		}
+		if !seen[e] {
+			seen[e] = true
+			out = append(out, e) // an address or a subnet, as Samba takes it
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // dockerUnmountVolume removes the helper in whichever shape it has: a container
@@ -570,6 +652,7 @@ func dockerUnmountVolume(helper string) error {
 		if code, err := dockerAPI("DELETE", "/services/"+helper, nil, nil); err != nil && code != 404 {
 			return fmt.Errorf("removing the mount helper service %s: %v", helper, err)
 		}
+		swarmDropMountSecret(helper)
 	}
 	return nil
 }
@@ -641,47 +724,98 @@ func swarmMountVolume(name, volume, agentPort, pass string, self selfInfo) {
 		answer("error: %s", why)
 	}
 	helper := mountHelperName(name, volume, agentPort)
+	labels := map[string]string{
+		mountLabel:        "1",
+		mountOfLabel:      name,
+		mountVolumeLabel:  volume,
+		mountOwnerLabel:   self.owner(),
+		sessionOwnerLabel: sessionOwner(self.relayTarget(), []portPair{{agent: agentPort}}),
+	}
 	var sp struct {
 		ID string `json:"ID"`
 	}
 	if code, err := dockerAPI("GET", "/services/"+helper, nil, &sp); err == nil && code == 200 {
 		_, _ = dockerAPI("DELETE", "/services/"+sp.ID, nil, nil) // this session's earlier try
 	}
-	var attach []map[string]any
-	for _, n := range nets {
-		attach = append(attach, map[string]any{"Target": n, "Aliases": []string{helper}})
+	// The password rides a Swarm secret, created with the helper and dropped
+	// with it, mounted at /run/secrets/<helper>; the service's Env then carries
+	// only that path, so `docker service inspect` shows no credential. An
+	// earlier try's secret of this name goes first: its service is gone, which
+	// frees the name. Should the secret fail to come (a store that will not
+	// take it, a name still held by a service being torn down), the password
+	// takes the environment as it does on plain Docker: a mount that works
+	// outranks a secret, and the helper's log says which route it got.
+	swarmDropMountSecret(helper)
+	container := map[string]any{
+		"Image":   pinnedImage(mountImage(self.image)),
+		"Command": []string{"/usr/local/bin/plug-agent", "mount-serve"},
+		"Mounts":  []map[string]any{mountSpec(m)},
+	}
+	allow := mountAllow(self.addrs()...)
+	if secretID, err := swarmMountSecret(helper, pass, labels); err == nil {
+		container["Env"] = mountEnv("", secretsMount+"/"+helper, allow, "")
+		container["Secrets"] = []map[string]any{{
+			"File":       map[string]any{"Name": helper, "UID": "0", "GID": "0", "Mode": 0o400},
+			"SecretID":   secretID,
+			"SecretName": helper,
+		}}
+	} else {
+		container["Env"] = mountEnv(pass, "", allow, "the Swarm secret could not be created ("+err.Error()+"), so the password came through the environment")
 	}
 	task := map[string]any{
-		"ContainerSpec": map[string]any{
-			"Image":   pinnedImage(mountImage(self.image)),
-			"Command": []string{"/usr/local/bin/plug-agent", "mount-serve"},
-			"Env":     mountEnv(pass),
-			"Mounts":  []map[string]any{mountSpec(m)},
-		},
-		"Networks":      attach,
+		"ContainerSpec": container,
+		// One overlay, the first by name: the one the agent shares with it,
+		// which is all the helper needs (mountNetwork).
+		"Networks":      []map[string]any{{"Target": mountNetwork(nets), "Aliases": []string{helper}}},
 		"RestartPolicy": map[string]any{"Condition": "any"},
 	}
 	if node != "" {
 		task["Placement"] = map[string]any{"Constraints": []string{"node.id==" + node}}
 	}
 	spec := map[string]any{
-		"Name": helper,
-		"Labels": map[string]string{
-			mountLabel:        "1",
-			mountOfLabel:      name,
-			mountVolumeLabel:  volume,
-			mountOwnerLabel:   self.owner(),
-			sessionOwnerLabel: sessionOwner(self.relayTarget(), []portPair{{agent: agentPort}}),
-		},
+		"Name":         helper,
+		"Labels":       labels,
 		"TaskTemplate": task,
 		"Mode":         map[string]any{"Replicated": map[string]any{"Replicas": 1}},
 	}
 	if _, err := dockerAPI("POST", "/services/create", spec, nil); err != nil {
+		swarmDropMountSecret(helper)
 		answer("error: creating the mount helper service for %s of %q: %v", volume, name, err)
 	}
 	// The service name: the overlay's embedded DNS answers it with the VIP, and
 	// the client's dial goes through this agent's resolver on that overlay.
 	answer("%s", mountReply(helper))
+}
+
+// swarmMountSecret creates the secret carrying one helper's password, under
+// the helper's own name (secrets have a namespace of their own, so it cannot
+// collide with the service) and the helper's labels, so the sweep that reaps
+// a dead session's helper finds its secret by the same filter. The Swarm API
+// wants the bytes base64-encoded.
+func swarmMountSecret(helper, pass string, labels map[string]string) (string, error) {
+	var created struct {
+		ID string `json:"ID"`
+	}
+	body := map[string]any{
+		"Name":   helper,
+		"Labels": labels,
+		"Data":   base64.StdEncoding.EncodeToString([]byte(pass)),
+	}
+	if _, err := dockerAPI("POST", "/secrets/create", body, &created); err != nil {
+		return "", err
+	}
+	if created.ID == "" {
+		return "", fmt.Errorf("the secret store answered without an id")
+	}
+	return created.ID, nil
+}
+
+// swarmDropMountSecret removes a helper's secret, if any. Best effort: absent
+// is the common case (a Compose helper, a session that never got a secret),
+// and a secret still held by a service being torn down is the sweep's to
+// take on its next pass.
+func swarmDropMountSecret(helper string) {
+	_, _ = dockerAPI("DELETE", "/secrets/"+helper, nil, nil)
 }
 
 // ── Kubernetes ───────────────────────────────────────────────────────────────
@@ -834,10 +968,12 @@ func k8sClaimModes(ns, claim string) []string {
 // k8sMountPod is the helper pod. Labels carry what a label value may (the
 // flag, the workload's name, a folded volume); the session owner is host:port,
 // which a label value cannot hold, so it rides an annotation - as the parking
-// receipt's owner does.
-func k8sMountPod(ns, helper, name, volume, claim, node, image, owner, pass string) map[string]any {
+// receipt's owner does. allow is who may reach the helper: this agent's pod
+// addresses (mountAllow), what the Service in front of the pod hands smbd as
+// source, kube-proxy preserving the pod's address on ClusterIP traffic.
+func k8sMountPod(ns, helper, name, volume, claim, node, image, owner, pass string, allow []string) map[string]any {
 	env := []map[string]string{}
-	for _, kv := range mountEnv(pass) {
+	for _, kv := range mountEnv(pass, "", allow, "") {
 		k, v, _ := strings.Cut(kv, "=")
 		env = append(env, map[string]string{"name": k, "value": v})
 	}
@@ -936,7 +1072,7 @@ func k8sMountVolume(ns, name, volume, agentPort, pass string) {
 			answer("error: replacing the previous mount helper: %v", err)
 		}
 	}
-	body := k8sMountPod(ns, helper, name, volume, claim, node, mountImage(image), owner, pass)
+	body := k8sMountPod(ns, helper, name, volume, claim, node, mountImage(image), owner, pass, mountAllow(k8sSelfIP()))
 	code, err := k8sAPI("POST", "/api/v1/namespaces/"+ns+"/pods", body, nil)
 	if code == 403 {
 		answer("error: this agent's RBAC cannot create pods, which a mount helper is — re-apply deploy/plug-k8s.yaml (pods: create, delete)")
@@ -1047,6 +1183,23 @@ func dockerSweepMountHelpers() {
 		for _, s := range slist {
 			if !sessionLive(s.Spec.Labels[sessionOwnerLabel]) {
 				_, _ = dockerAPI("DELETE", "/services/"+s.ID, nil, nil)
+			}
+		}
+	}
+	// The helpers' secrets, by the same filter: one whose service is gone (the
+	// pass above, an unmount, a create that failed after the secret was made)
+	// has nobody left to read it. One still in use refuses to go, and comes
+	// back next pass.
+	var secrets []struct {
+		ID   string `json:"ID"`
+		Spec struct {
+			Labels map[string]string `json:"Labels"`
+		} `json:"Spec"`
+	}
+	if _, err := dockerAPI("GET", "/secrets?filters="+urlEscape(f), nil, &secrets); err == nil {
+		for _, s := range secrets {
+			if !sessionLive(s.Spec.Labels[sessionOwnerLabel]) {
+				_, _ = dockerAPI("DELETE", "/secrets/"+s.ID, nil, nil)
 			}
 		}
 	}

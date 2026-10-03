@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -507,36 +508,18 @@ func answerDNS(q []byte, tab *faketab, upstream *upstreamDNS, check nameChecker)
 		// force a DNS query. Strip it and mint the SAME fake IP as the bare name, so
 		// the connect maps back to "my-service" for the agent to resolve.
 		if base := name[:len(name)-len(searchSuffix)-1]; base != "" && !strings.Contains(base, ".") {
-			if check != nil && !check(base) {
-				rcode = 3 // honest NXDOMAIN — the name is in no connected cluster
-			} else if ip := tab.mint(base); ip != 0 {
-				answerIP = net.IPv4(byte(ip>>24), byte(ip>>16), byte(ip>>8), byte(ip))
-			} else {
-				rcode = 3
-			}
+			answerIP, rcode = mintAnswer(base, tab, check)
 		} else {
 			rcode = 3
 		}
 	case !strings.Contains(name, "."): // single-label cluster name → fake
-		if check != nil && !check(name) {
-			rcode = 3 // honest NXDOMAIN — the name is in no connected cluster
-		} else if ip := tab.mint(name); ip != 0 {
-			answerIP = net.IPv4(byte(ip>>24), byte(ip>>16), byte(ip>>8), byte(ip))
-		} else {
-			rcode = 3 // NXDOMAIN — this instance's /24 is exhausted
-		}
+		answerIP, rcode = mintAnswer(name, tab, check)
 	case isClusterLongName(name):
 		// A Service under its Kubernetes long name: ours, like the bare name,
 		// and handled the same way, only the name stays whole so the connect
 		// carries the namespace to the agent (see clusterLongName).
 		long, _ := clusterLongName(name)
-		if check != nil && !check(long) {
-			rcode = 3
-		} else if ip := tab.mint(long); ip != 0 {
-			answerIP = net.IPv4(byte(ip>>24), byte(ip>>16), byte(ip>>8), byte(ip))
-		} else {
-			rcode = 3
-		}
+		answerIP, rcode = mintAnswer(long, tab, check)
 	default: // dotted → resolve for real via the saved upstream
 		if upstream == nil {
 			// The second of the two places this pointer is followed. Guarded for
@@ -618,6 +601,32 @@ func answerDNS(q []byte, tab *faketab, upstream *upstreamDNS, check nameChecker)
 		r = append(r, 0, 0, 0, 5) // MINIMUM — the negative TTL
 	}
 	return r
+}
+
+// clusterNameRe is what a name must look like to be asked of a cluster: the
+// agent's own rule (hostRe in agent/main.go), applied here first. A DNS label
+// may carry any byte, and on macOS this stub answers for the whole machine,
+// so a query is the one thing any local process can put in front of the
+// agent. The agent validates too; an agent from before it did ran the name
+// through a shell. Refusing here keeps the name out of the tunnel at all.
+var clusterNameRe = regexp.MustCompile(`^[a-z]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z]([a-z0-9-]{0,61}[a-z0-9])?)*$`)
+
+// mintAnswer is the one way a name of ours becomes an address: NXDOMAIN when
+// the name is not a name a cluster could hold, NXDOMAIN when the connected
+// clusters say they do not know it (check; nil skips that), NXDOMAIN when this
+// instance's /24 is exhausted; otherwise the stable fake for it.
+func mintAnswer(name string, tab *faketab, check nameChecker) (net.IP, byte) {
+	if !clusterNameRe.MatchString(strings.ToLower(name)) {
+		return nil, 3
+	}
+	if check != nil && !check(name) {
+		return nil, 3 // honest NXDOMAIN: the name is in no connected cluster
+	}
+	ip := tab.mint(name)
+	if ip == 0 {
+		return nil, 3 // this instance's /24 is exhausted
+	}
+	return net.IPv4(byte(ip>>24), byte(ip>>16), byte(ip>>8), byte(ip)), 0
 }
 
 // isClusterLongName is clusterLongName as a predicate, for the switch above.

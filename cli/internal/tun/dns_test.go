@@ -269,3 +269,28 @@ func TestFirstInstanceResolverMatchesTheDatapath(t *testing.T) {
 		t.Error("no search domain: a bare single-label name would never reach plug's resolver from a container")
 	}
 }
+
+// A name a cluster could not hold is answered NXDOMAIN before anything asks a
+// cluster about it: the stub answers for every local process on macOS, and the
+// query is the one thing such a process can put in front of the agent.
+func TestMintAnswerRefusesWhatNoClusterCouldName(t *testing.T) {
+	tab := newFaketab(0xC6120000)
+	asked := 0
+	check := func(string) bool { asked++; return true }
+	for _, bad := range []string{"a b", "web;id", "-web", "web-", "web_api", "Web.", "x\ny", strings.Repeat("a", 64)} {
+		if ip, rcode := mintAnswer(bad, tab, check); ip != nil || rcode != 3 {
+			t.Errorf("%q: got ip=%v rcode=%d, want NXDOMAIN", bad, ip, rcode)
+		}
+	}
+	if asked != 0 {
+		t.Fatalf("a refused name must never reach a cluster: %d asked", asked)
+	}
+	for _, good := range []string{"web", "Web", "api-v2", "svc.other-ns", "a.b.c.d", "x1"} {
+		if ip, rcode := mintAnswer(good, tab, check); ip == nil || rcode != 0 {
+			t.Errorf("%q: got ip=%v rcode=%d, want a fake", good, ip, rcode)
+		}
+	}
+	if asked == 0 {
+		t.Fatal("a valid name is asked of the clusters")
+	}
+}

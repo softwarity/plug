@@ -342,6 +342,72 @@ func TestDockerProjectionFlagsAndPlacement(t *testing.T) {
 	}
 }
 
+// Every docker call of --dockerrun goes through dockerCommand, and the launcher
+// that makes them is the setuid helper with its $PATH narrowed to the system
+// directories. Docker Desktop's CLI is not in those, so a bare exec.Command
+// found nothing; and docker is the user's tool, whose ~/.docker holds their
+// context and logins. The helper must find docker where the HUMAN's $PATH
+// says, and hand that $PATH on, while the argv stays the one the caller wrote.
+func TestDockerIsResolvedInTheHumansPathNotTheNarrowedOne(t *testing.T) {
+	// A docker that exists only in the human's PATH, and a narrowed PATH with
+	// nothing in it, the way securePath leaves a privileged launcher.
+	userDir := t.TempDir()
+	fake := filepath.Join(userDir, "docker")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir())
+	savedPath, savedNarrowed := userPath, pathNarrowed
+	userPath, pathNarrowed = userDir, true
+	defer func() { userPath, pathNarrowed = savedPath, savedNarrowed }()
+
+	cmd := dockerCommand("version", "-f", "{{.Server.Arch}}")
+	if want := []string{"docker", "version", "-f", "{{.Server.Arch}}"}; !reflect.DeepEqual(cmd.Args, want) {
+		t.Fatalf("argv = %q, want %q: the helper must not touch what it is asked to run", cmd.Args, want)
+	}
+	// lookPathIn reads the Unix execute bit, which a Windows file never carries;
+	// no launcher is setuid there either, so its $PATH is never narrowed and
+	// exec.Command's own lookup is the one that counts.
+	if runtime.GOOS != "windows" {
+		if cmd.Err != nil {
+			t.Fatalf("docker was looked up in the narrowed PATH only: %v", cmd.Err)
+		}
+		if cmd.Path != fake {
+			t.Fatalf("docker resolved to %q, want the human's %q", cmd.Path, fake)
+		}
+	}
+	var paths []string
+	for _, kv := range cmd.Env {
+		if strings.HasPrefix(kv, "PATH=") {
+			paths = append(paths, kv)
+		}
+	}
+	if !reflect.DeepEqual(paths, []string{"PATH=" + userDir}) {
+		t.Fatalf("docker's PATH = %v, want the human's alone: the credential helpers it spawns are found through it", paths)
+	}
+
+	// Nothing narrowed (Linux capabilities, Windows, an unprivileged run): the
+	// command is exactly what exec.Command gives, environment inherited.
+	pathNarrowed = false
+	plain := dockerCommand("rm", "-f", "plug-net-x")
+	if want := []string{"docker", "rm", "-f", "plug-net-x"}; !reflect.DeepEqual(plain.Args, want) {
+		t.Fatalf("argv = %q, want %q", plain.Args, want)
+	}
+	if plain.Env != nil {
+		t.Fatalf("an unnarrowed run must inherit its environment, got %v", plain.Env)
+	}
+
+	// The user's own `docker run` takes the same road: the line dockerRunCmd
+	// splices is handed over whole, "docker" at its head.
+	full, err := dockerRunCmd([]string{"docker", "run", "--rm", "img"}, "side", "/r", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dockerCommand(full[1:]...).Args; !reflect.DeepEqual(got, full) {
+		t.Fatalf("the user's line reached docker as %q, want %q", got, full)
+	}
+}
+
 // docker's env-file holds one variable per line and takes the value verbatim,
 // so a value with a newline in it cannot be a line. Those travel the one other
 // way docker offers that keeps them off the argv: a bare KEY line, which makes
