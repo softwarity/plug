@@ -4,6 +4,7 @@ package tun
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -142,5 +143,111 @@ func write(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// fakeStore answers scutil for a machine whose primary service X has a
+// manual (Setup:) DNS entry pointing at plug, and nothing else. What the
+// daemon writes on every session, and what a kill -9 leaves behind.
+func fakeStore(script string) (string, error) {
+	switch {
+	case strings.HasPrefix(script, "show State:/Network/Global/IPv4"):
+		return "  PrimaryService : X\n", nil
+	case strings.HasPrefix(script, "show Setup:/Network/Service/X/DNS"):
+		return "<dictionary> {\n  ServerAddresses : <array> {\n    0 : 198.18.0.53\n  }\n}\n", nil
+	default:
+		return "No such key", nil
+	}
+}
+
+// The manual (Setup:) entry is PERSISTENT: of the three stores plug writes it
+// is the one a reboot does not clear, and until it was looked at here a
+// daemon killed with -9 on a DHCP machine (where no backup of it was ever
+// taken) left the person's manual DNS pointing at a dead resolver for good,
+// with `plug down` and `plug doctor` both reporting a healthy machine.
+func TestAPoisonedSetupEntryIsSeenByTheRepairAndByDoctor(t *testing.T) {
+	saved := scutil
+	scutil = fakeStore
+	defer func() { scutil = saved }()
+
+	keys := poisonedKeys()
+	if len(keys) != 1 || keys[0] != "Setup:/Network/Service/X/DNS" {
+		t.Errorf("poisonedKeys = %v, want the Setup: entry alone: with no backup, the repair removes "+
+			"what is listed here and nothing else", keys)
+	}
+	views := strings.Join(PoisonedViews(), " | ")
+	if !strings.Contains(views, "Setup:") {
+		t.Errorf("PoisonedViews = %q: doctor would call this machine healthy", views)
+	}
+}
+
+// A Setup: backup that is present but EMPTY says the service had no manual
+// entry before plug wrote one (the DHCP case, which is nearly everyone): the
+// repair must REMOVE the entry, not pin the service to an empty dictionary.
+func TestAnEmptySetupBackupRemovesTheManualEntry(t *testing.T) {
+	dir := t.TempDir()
+	savedDir := graftDir
+	graftDir = dir
+	defer func() { graftDir = savedDir }()
+
+	var seq []string
+	sSet, sRemove, sResolv := scutilSet, scutilRemove, restoreResolv
+	defer func() { scutilSet, scutilRemove, restoreResolv = sSet, sRemove, sResolv }()
+	scutilSet = func(key, _ string) error { seq = append(seq, "set "+key); return nil }
+	scutilRemove = func(key string) error { seq = append(seq, "remove "+key); return nil }
+	restoreResolv = func(string) {}
+	savedKeys := poisonedKeys
+	poisonedKeys = func() []string { return nil }
+	defer func() { poisonedKeys = savedKeys }()
+
+	const key = "cluster.example:2222"
+	write(t, setupBackupPath(key), "Setup:/Network/Service/X/DNS\n")
+
+	RestoreOrphanDNS(key)
+
+	if strings.Join(seq, " | ") != "remove Setup:/Network/Service/X/DNS" {
+		t.Errorf("an empty Setup: backup replayed as %v, want the entry removed and nothing else", seq)
+	}
+	if _, err := os.Stat(setupBackupPath(key)); err == nil {
+		t.Error("the Setup: backup survived the recovery")
+	}
+}
+
+// The ".plug" resolver file under /etc/resolver is the one leftover that lives
+// outside /var/run: a reboot clears the backups and the dynamic store, not
+// this file, and getaddrinfo kept sending every "<name>.plug" lookup to an
+// address nothing answered on. The repair removes it whether or not it has a
+// backup to replay.
+func TestOrphanRecoveryRemovesTheScopedResolverFile(t *testing.T) {
+	dir := t.TempDir()
+	savedDir := graftDir
+	graftDir = dir
+	defer func() { graftDir = savedDir }()
+	savedPath := resolverPath
+	resolverPath = filepath.Join(dir, "resolver", "plug")
+	defer func() { resolverPath = savedPath }()
+
+	sSet, sRemove, sResolv := scutilSet, scutilRemove, restoreResolv
+	defer func() { scutilSet, scutilRemove, restoreResolv = sSet, sRemove, sResolv }()
+	scutilSet = func(string, string) error { return nil }
+	scutilRemove = func(string) error { return nil }
+	restoreResolv = func(string) {}
+	savedKeys := poisonedKeys
+	poisonedKeys = func() []string { return nil }
+	defer func() { poisonedKeys = savedKeys }()
+
+	const key = "cluster.example:2222"
+	for _, withBackup := range []bool{false, true} {
+		if err := os.MkdirAll(filepath.Dir(resolverPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		write(t, resolverPath, "nameserver 198.18.0.53\n")
+		if withBackup {
+			write(t, backupPath(key), "State:/Network/Service/X/DNS\n")
+		}
+		RestoreOrphanDNS(key)
+		if _, err := os.Stat(resolverPath); err == nil {
+			t.Errorf("with backup=%v, the scoped resolver file survived the recovery", withBackup)
+		}
 	}
 }

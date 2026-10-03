@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -122,6 +123,15 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 	// teardown; crash net in SaveDNSBackup/RestoreOrphanDNS).
 	setupKey := "Setup:/Network/Service/" + svc + "/DNS"
 	setupRestore, setupServers, _ := readDNSDict(setupKey)
+	// A Setup: entry already pointing at plug is a previous session's leftover,
+	// and Setup: is PERSISTENT: putting it back at teardown would pin the
+	// person's manual DNS to a dead resolver across reboots. Same rule as the
+	// State: dict above; an empty restore removes the entry instead.
+	if poisonedByPlug(setupServers) {
+		log.f("tun[mac]: the service's manual (Setup:) DNS already pointed at a plug resolver (a previous " +
+			"session's leftover) - it will be dropped rather than restored at teardown")
+		setupRestore, setupServers = "", nil
+	}
 	// ALWAYS written, not only when the person had typed servers in by hand -
 	// and a day was lost to that condition. With no Setup: entry, configd
 	// composes the service's resolver from State: alone, and on a machine in
@@ -177,9 +187,8 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 	// domain-scoped resolver for a matching name. Paired with the "plug" search domain
 	// above, getaddrinfo tries "<name>.plug", which this routes to us; answerDNS strips
 	// it. Mirrors the Windows NRPT rule.
-	resolverFile := "/etc/resolver/" + searchSuffix
-	_ = os.MkdirAll("/etc/resolver", 0o755)
-	_ = os.WriteFile(resolverFile, []byte("nameserver "+dnsIP+"\n"), 0o644)
+	_ = os.MkdirAll(filepath.Dir(resolverPath), 0o755)
+	_ = os.WriteFile(resolverPath, []byte("nameserver "+dnsIP+"\n"), 0o644)
 
 	// Also point /etc/resolv.conf at us. getaddrinfo (node/python/java) already
 	// resolves via the scoped resolver above, but a program with its OWN resolver —
@@ -275,7 +284,9 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 						log.f("tun[mac]: forwarding dotted names to %v (the new primary's resolver)", real)
 					}
 					setupRestore, newSetupServers, _ = readDNSDict(setupKey)
-					_ = newSetupServers
+					if poisonedByPlug(newSetupServers) {
+						setupRestore = "" // a leftover of ours on the new primary too: drop, do not restore
+					}
 					setupOverridden = true // same rule as at startup: Setup: is always ours during a session
 					set = "d.init\nd.add ServerAddresses * " + dnsIP + "\nd.add SearchDomains * " +
 						searchSuffix + "\n"
@@ -335,8 +346,8 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 						effective = true
 					}
 				}
-				if b, err := os.ReadFile(resolverFile); err != nil || string(b) != "nameserver "+dnsIP+"\n" {
-					_ = os.WriteFile(resolverFile, []byte("nameserver "+dnsIP+"\n"), 0o644)
+				if b, err := os.ReadFile(resolverPath); err != nil || string(b) != "nameserver "+dnsIP+"\n" {
+					_ = os.WriteFile(resolverPath, []byte("nameserver "+dnsIP+"\n"), 0o644)
 					effective = true
 				}
 				if b, err := os.ReadFile(resolvConf); err != nil || !strings.Contains(string(b), dnsIP) {
@@ -360,7 +371,7 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 		close(stopWatch)
 		<-watchDone // never re-assert after the restore below
 		restoreResolv(resolvSnap)
-		_ = os.Remove(resolverFile)
+		_ = os.Remove(resolverPath)
 		if restore != "" {
 			_ = scutilSet(dnsKey, restore) // put the original DNS dict back
 		} else {
@@ -548,8 +559,10 @@ func readScopedDict(key string) (servers, domains []string) {
 }
 
 // scutil pipes a batch script into scutil (root; the plug core runs under sudo),
-// used for dynamic-store reads and edits.
-func scutil(script string) (string, error) {
+// used for dynamic-store reads and edits. A var so a test can stand a fake
+// store behind the readers (poisonedKeys, PoisonedViews) and describe the
+// machine it wants instead of reading the one it runs on.
+var scutil = func(script string) (string, error) {
 	cmd := exec.Command(HelperPath("scutil"))
 	cmd.Stdin = strings.NewReader(script)
 	out, err := cmd.CombinedOutput()
@@ -582,6 +595,13 @@ var scutilRemove = func(key string) error {
 // hands out fake IPs, and the owning cluster is resolved at connect() by process
 // ancestry (as on Windows) — proven simultaneously in CI.
 var resolvConf = "/etc/resolv.conf" // overridable in tests
+
+// resolverPath is the domain-scoped resolver file for ".plug" (see configure).
+// A package path rather than a local of configure, because the orphan repair
+// has to remove it too: a daemon that died the hard way left it behind, and a
+// file under /etc/resolver outlives /var/run, so it was the one leftover that
+// neither `plug down` nor a reboot cleared.
+var resolverPath = "/etc/resolver/" + searchSuffix // overridable in tests
 
 // snapshotResolv captures /etc/resolv.conf as a restorable token: "L\n<target>" for
 // a symlink (the usual case — it points at /var/run/resolv.conf), "F\n<content>" for
@@ -702,12 +722,21 @@ func SaveDNSBackup(key string) error {
 	if err != nil {
 		return err
 	}
-	// The MANUAL DNS dict (Setup:) is persistent — snapshot it whenever it defines
-	// servers, since configure() will override it in that case.
+	// The MANUAL DNS dict (Setup:) is PERSISTENT, and configure() ALWAYS writes
+	// it, whether or not the person had typed servers in by hand (see there: a
+	// DHCP machine needs it too). So the snapshot is always written as well. It
+	// used to be taken only when Setup: defined servers, which on a DHCP
+	// machine is never: a daemon killed with -9 then left Setup: pointing at a
+	// dead resolver, with no backup for the repair to replay and nothing in
+	// poisonedKeys looking there, and the breakage survived a reboot. An empty
+	// snapshot means there was no entry, and restoring it REMOVES ours. A
+	// leftover of ours is not the state to put back either, as in configure.
 	setupKey := "Setup:/Network/Service/" + svc + "/DNS"
-	if setupRestore, setupServers, _ := readDNSDict(setupKey); len(setupServers) > 0 {
-		_ = persistDNSBackup(setupBackupPath(key), setupKey, setupRestore)
+	setupRestore, setupServers, _ := readDNSDict(setupKey)
+	if poisonedByPlug(setupServers) {
+		setupRestore = ""
 	}
+	_ = persistDNSBackup(setupBackupPath(key), setupKey, setupRestore)
 	dnsKey := "State:/Network/Service/" + svc + "/DNS"
 	restore, _, _ := readDNSDict(dnsKey)
 	return persistDNSBackup(backupPath(key), dnsKey, restore)
@@ -721,6 +750,10 @@ func RestoreOrphanDNS(key string) {
 		restoreResolv(string(b))
 		_ = os.Remove(resolvBackupPath(key))
 	}
+	// The ".plug" scoped resolver file, whether or not a backup exists: it is
+	// only ever ours, it lives under /etc rather than /var/run, and a daemon
+	// that died the hard way left it there for getaddrinfo to keep trying.
+	_ = os.Remove(resolverPath)
 	if _, err := os.Stat(setupBackupPath(key)); err == nil {
 		_ = restoreDNSBackup(setupBackupPath(key)) // manual (Setup:) DNS back first
 	}
@@ -745,20 +778,24 @@ func RestoreOrphanDNS(key string) {
 }
 
 // poisonedKeys lists the dynamic-store DNS keys that point at a plug resolver:
-// the global one, and the primary service's. A var so the orphan-repair tests
-// can decide what the machine looks like instead of reading the one they run
-// on - which is exactly the machine this bug lives on, some days.
+// the global one, the primary service's, and the primary service's MANUAL
+// (Setup:) entry. A var so the orphan-repair tests can decide what the machine
+// looks like instead of reading the one they run on - which is exactly the
+// machine this bug lives on, some days.
 var poisonedKeys = func() []string {
 	var out []string
 	if _, servers, _ := readDNSDict("State:/Network/Global/DNS"); poisonedByPlug(servers) {
 		out = append(out, "State:/Network/Global/DNS")
 	}
-	// The primary service's own dict too: with no snapshot to put back, dropping
-	// ours lets configd repopulate it from DHCP or the VPN.
+	// The primary service's own dicts too: with no snapshot to put back, dropping
+	// ours lets configd repopulate them from DHCP or the VPN. Setup: is the one
+	// that matters most here: it is persistent, so a leftover there is the only
+	// one a reboot does not clear, and until it was listed here nothing cleared it.
 	if svc, err := primaryService(); err == nil {
-		k := "State:/Network/Service/" + svc + "/DNS"
-		if _, servers, _ := readDNSDict(k); poisonedByPlug(servers) {
-			out = append(out, k)
+		for _, k := range []string{"State:/Network/Service/" + svc + "/DNS", "Setup:/Network/Service/" + svc + "/DNS"} {
+			if _, servers, _ := readDNSDict(k); poisonedByPlug(servers) {
+				out = append(out, k)
+			}
 		}
 	}
 	return out
@@ -766,7 +803,7 @@ var poisonedKeys = func() []string {
 
 // PoisonedViews names the DNS stores that still point at a plug resolver: the
 // global key configd renders /etc/resolv.conf from, the primary service's own
-// dict, and resolv.conf itself.
+// dict, its persistent manual (Setup:) entry, and resolv.conf itself.
 //
 // Distinct from poisonedKeys: that one returns store keys to REMOVE, this one
 // returns words for a person, resolv.conf included. Exported for doctor, which used to read only
@@ -780,6 +817,9 @@ func PoisonedViews() []string {
 	if svc, err := primaryService(); err == nil {
 		if _, servers, _ := readDNSDict("State:/Network/Service/" + svc + "/DNS"); poisonedByPlug(servers) {
 			out = append(out, "the primary service's DNS")
+		}
+		if _, servers, _ := readDNSDict("Setup:/Network/Service/" + svc + "/DNS"); poisonedByPlug(servers) {
+			out = append(out, "the primary service's manual (Setup:) DNS")
 		}
 	}
 	if b, err := os.ReadFile("/etc/resolv.conf"); err == nil {

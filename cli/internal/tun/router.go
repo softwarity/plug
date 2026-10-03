@@ -36,7 +36,7 @@ func multiDial(ct *ClusterTransports) dialFunc {
 			return d, key, ok
 		}
 		if d, key, ok := ct.sole(); ok {
-			if !soleAllows(srcPort, r.pidForConn, uidOf, clientUIDs(key)) {
+			if !soleAllows(srcPort, r.pidForConn, accountOfPID, clientAccounts(key)) {
 				return nil, "", false
 			}
 			return d, key, true // one cluster → transparent, like constDial
@@ -157,9 +157,18 @@ func StartGlobalDatapath(ct *ClusterTransports, logf func(string, ...any)) (*Dat
 // main path, and a datapath that starts refusing on a bad second would be worse
 // than the leak it closes.
 //
+// Accounts are TEXT, as the registry writes them: a decimal uid on macOS, a SID
+// on Windows (accountOfPID, clientAccounts). The check compared integers once,
+// and Windows, whose accounts are not integers, had an empty owner set and a
+// uid lookup that always failed: both read as "unknown", every flow was let
+// through, and every account on the machine reached the one cluster that was
+// up. An account that cannot hold a cluster (accountHolds: root, LocalSystem,
+// or something that names nobody) cannot be refused one either; root already
+// owns the machine, and the daemon's own probes run there.
+//
 // It does not pretend to stop code running AS the user. That code can run plug
 // itself, and no check here changes that.
-func soleAllows(srcPort uint16, pidForConn func(uint16) (int, bool), uidOf func(int) (int, bool), owners map[int]bool) bool {
+func soleAllows(srcPort uint16, pidForConn func(uint16) (int, bool), accountOf func(int) (string, bool), owners map[string]bool) bool {
 	if len(owners) == 0 {
 		return true // nobody recorded an owner: unknown, which is not the same as nobody
 	}
@@ -167,12 +176,12 @@ func soleAllows(srcPort uint16, pidForConn func(uint16) (int, bool), uidOf func(
 	if !ok {
 		return true
 	}
-	uid, ok := uidOf(pid)
+	account, ok := accountOf(pid)
 	if !ok {
 		return true
 	}
-	if uid == 0 {
-		return true // root already owns the machine; refusing it buys nothing and can break the daemon's own probes
+	if !accountHolds(account) {
+		return true
 	}
-	return owners[uid]
+	return owners[account]
 }

@@ -74,6 +74,24 @@ func spawnAndKill(t *testing.T) int {
 	return pid
 }
 
+// spawnLive starts a process that outlives the test and returns its pid: a
+// second live launcher, for the tests that need two. Killed and reaped at
+// cleanup.
+func spawnLive(t *testing.T) int {
+	t.Helper()
+	var c *exec.Cmd
+	if runtime.GOOS == "windows" {
+		c = exec.Command("ping", "-n", "30", "127.0.0.1")
+	} else {
+		c = exec.Command("sleep", "30")
+	}
+	if err := c.Start(); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Process.Kill(); _, _ = c.Process.Wait() })
+	return c.Process.Pid
+}
+
 // The daemon holds ONE tunnel per cluster and knows a cluster only as host:port.
 // It dials on a client's behalf, so the identity it presents has to be that
 // client's: without this, an enrolled developer on macOS was refused with the

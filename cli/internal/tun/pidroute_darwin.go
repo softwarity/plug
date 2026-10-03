@@ -177,3 +177,16 @@ func uidOf(pid int) (int, bool) {
 	}
 	return int(kp.Eproc.Ucred.Uid), true
 }
+
+// accountOfPID is uidOf spelled the way the registry spells an account: the
+// decimal uid, which is what a client writes in its .uid sidecar
+// (thisAccount) and what soleAllows compares against. One spelling on both
+// platforms lets the check be written once, with the SID on Windows and the
+// uid here, and never have to know which it is holding.
+func accountOfPID(pid int) (string, bool) {
+	uid, ok := uidOf(pid)
+	if !ok {
+		return "", false
+	}
+	return strconv.Itoa(uid), true
+}

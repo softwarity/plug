@@ -12,7 +12,8 @@ import (
 )
 
 // The client registry, shared by the macOS daemon and the Windows service (the
-// per-OS bit is only processAlive, in registry_<os>.go). Each `plug <cmd>`
+// per-OS bits are processAlive and markerOwnedByProcess, in registry_<os>.go
+// and account_<os>.go). Each `plug <cmd>`
 // drops a PID marker carrying its cluster key under graftDir; the global
 // datapath owner (daemon / SYSTEM service) counts the LIVE ones to know which
 // clusters are active and when to shut down. A file registry (not a pipe)
@@ -77,12 +78,60 @@ func RegisterClient(key string, pid int, keyFile string) func() {
 	if start, ok := procStart(pid); ok {
 		_ = os.WriteFile(marker+startFileSuffix, []byte(strconv.FormatInt(start, 10)), 0o644)
 	}
-	return func() {
-		_ = os.Remove(marker)
-		_ = os.Remove(marker + keyFileSuffix)
-		_ = os.Remove(marker + uidFileSuffix)
-		_ = os.Remove(marker + startFileSuffix)
+	return func() { reapMarker(dir, pid) }
+}
+
+// reapMarker removes a client's marker and every sidecar beside it. One list,
+// in one place: the three readers that reaped used to carry their own, none of
+// them complete, and a .pins left behind became active again the day the kernel
+// handed its pid number to something else.
+func reapMarker(dir string, pid int) {
+	base := filepath.Join(dir, strconv.Itoa(pid))
+	for _, suffix := range []string{"", keyFileSuffix, uidFileSuffix, startFileSuffix, pinsFileSuffix} {
+		_ = os.Remove(base + suffix)
 	}
+}
+
+// liveMarker reads the marker of pid in dir and answers the cluster key it
+// carries, or nothing when the marker is not to be trusted. This is the ONE
+// place that decides what a trustworthy marker is, and every reader goes
+// through it, because the registry lives in a directory that is not plug's
+// alone: on Windows every account can write %ProgramData%\plug, and on both
+// platforms a crashed client leaves its files behind for the kernel to give
+// its pid number to a stranger.
+//
+// Three things have to hold:
+//
+//   - The directory is named after the key the marker carries. A marker is
+//     found by scanning *.clients, and a directory named by hand could carry
+//     any key at all: "route this pid into that cluster", chosen by whoever
+//     wrote it. The name is the only part the writer cannot pick freely, since
+//     RegisterClient derives it from the key.
+//   - The process is still the one that registered (markerStillItsProcess). A
+//     pid alone says "alive"; a pid plus its start stamp says "the same". A
+//     marker whose process is gone, or whose number now names something else,
+//     is reaped here, so a dead launcher's pins and key do not outlive it.
+//   - The file was written by the account the process runs under, where the
+//     operating system can say so (markerOwnedByProcess, Windows). Without
+//     it, a marker named with somebody else's pid would send their traffic
+//     into the writer's cluster.
+func liveMarker(dir string, pid int) (string, bool) {
+	b, err := os.ReadFile(filepath.Join(dir, strconv.Itoa(pid)))
+	if err != nil {
+		return "", false
+	}
+	key := strings.TrimSpace(string(b))
+	if key == "" || filepath.Base(dir) != ClusterHash(key)+".clients" {
+		return "", false
+	}
+	if !markerStillItsProcess(dir, pid) {
+		reapMarker(dir, pid)
+		return "", false
+	}
+	if !markerOwnedByProcess(filepath.Join(dir, strconv.Itoa(pid)), pid) {
+		return "", false
+	}
+	return key, true
 }
 
 // uidFileSuffix names the owner sidecar, like keyFileSuffix and for the same
@@ -115,7 +164,10 @@ func clientAccounts(key string) map[string]bool {
 			continue
 		}
 		pid, err := strconv.Atoi(strings.TrimSuffix(name, uidFileSuffix))
-		if err != nil || !markerStillItsProcess(clientsDir(key), pid) {
+		if err != nil {
+			continue
+		}
+		if _, ok := liveMarker(clientsDir(key), pid); !ok {
 			continue
 		}
 		b, err := os.ReadFile(filepath.Join(clientsDir(key), name))
@@ -124,22 +176,6 @@ func clientAccounts(key string) map[string]bool {
 		}
 		if account := strings.TrimSpace(string(b)); account != "" {
 			out[account] = true
-		}
-	}
-	return out
-}
-
-// clientUIDs is clientAccounts for the per-flow check, which compares numbers.
-// A SID is not one and is skipped, which is what that check already did with the
-// -1 every Windows client used to record: it falls through and allows. The rule
-// that actually holds a cluster is ClusterHeldByOther, and it reads the accounts
-// as written.
-
-func clientUIDs(key string) map[int]bool {
-	out := map[int]bool{}
-	for account := range clientAccounts(key) {
-		if uid, err := strconv.Atoi(account); err == nil {
-			out[uid] = true
 		}
 	}
 	return out
@@ -175,7 +211,10 @@ func ClusterKeyFileFrom(key string) (keyFile, marker string) {
 	}
 	for _, e := range entries {
 		pid, err := strconv.Atoi(e.Name())
-		if err != nil || !processAlive(pid) {
+		if err != nil {
+			continue
+		}
+		if _, ok := liveMarker(clientsDir(key), pid); !ok {
 			continue
 		}
 		m := filepath.Join(clientsDir(key), e.Name())
@@ -192,26 +231,28 @@ func ClusterKeyFileFrom(key string) (keyFile, marker string) {
 // (PID→cluster, the reverse the multicluster router walk needs; see
 // walkToCluster in pidroute.go) by finding its marker across the per-cluster
 // client dirs and reading the key it carries. The fs scan is the source of
-// truth; holders cache it.
+// truth; holders cache it. Only a marker liveMarker vouches for counts: this
+// is the answer that sends a flow into a tunnel, and a marker left by a dead
+// launcher, or written by hand under a directory of someone's choosing, must
+// not be the thing that decides which one.
 func clusterForPID(pid int) (string, bool) {
 	entries, err := os.ReadDir(graftDir)
 	if err != nil {
 		return "", false
 	}
-	name := strconv.Itoa(pid)
 	for _, e := range entries {
 		if !e.IsDir() || !strings.HasSuffix(e.Name(), ".clients") {
 			continue
 		}
-		if b, err := os.ReadFile(filepath.Join(graftDir, e.Name(), name)); err == nil {
-			return strings.TrimSpace(string(b)), true
+		if key, ok := liveMarker(filepath.Join(graftDir, e.Name()), pid); ok {
+			return key, true
 		}
 	}
 	return "", false
 }
 
-// LiveClients counts client markers whose process is still alive, reaping
-// stale ones on the way.
+// LiveClients counts client markers whose process is still the one that
+// registered, reaping stale ones on the way.
 func LiveClients(key string) int {
 	entries, err := os.ReadDir(clientsDir(key))
 	if err != nil {
@@ -223,12 +264,8 @@ func LiveClients(key string) int {
 		if err != nil {
 			continue
 		}
-		if processAlive(pid) {
+		if _, ok := liveMarker(clientsDir(key), pid); ok {
 			n++
-		} else {
-			_ = os.Remove(filepath.Join(clientsDir(key), e.Name()))
-			_ = os.Remove(filepath.Join(clientsDir(key), e.Name()+keyFileSuffix))
-			_ = os.Remove(filepath.Join(clientsDir(key), e.Name()+uidFileSuffix))
 		}
 	}
 	return n
@@ -261,17 +298,12 @@ func ActiveClusters() []string {
 			if err != nil {
 				continue
 			}
-			if !processAlive(pid) {
-				// Reap the marker AND its sidecar, or a dead client's key path
-				// outlives it and the daemon dials with a stale identity.
-				_ = os.Remove(filepath.Join(dir, m.Name()))
-				_ = os.Remove(filepath.Join(dir, m.Name()+keyFileSuffix))
-				continue
-			}
-			if key == "" {
-				if b, err := os.ReadFile(filepath.Join(dir, m.Name())); err == nil {
-					key = strings.TrimSpace(string(b))
-				}
+			// liveMarker reaps a dead client's marker AND its sidecars, or its
+			// key path outlives it and the daemon dials with a stale identity.
+			// Every marker is visited, not only the ones before the first live
+			// one, so the reaping does not depend on directory order.
+			if k, ok := liveMarker(dir, pid); ok && key == "" {
+				key = k
 			}
 		}
 		if key != "" {
@@ -341,6 +373,13 @@ const ClusterHeldRefusal = "error: cluster %s is in use by another account on TH
 // the answer stays what it always was: alive is good enough. Refusing on a
 // missing stamp would turn a version skew into a lockout, and this file already
 // takes the opposite side of that trade twice.
+//
+// A "yes" is remembered for stampVerdictTTL, keyed on the marker AND the stamp
+// it carried. On macOS procStart is a fork of ps, about 16ms, and the daemon's
+// reconcile loop reads ActiveClusters three times a second: unremembered, three
+// clients cost it a seventh of a core to re-learn what it knew a moment ago. A
+// "no" is never remembered, since the caller reaps the marker on it; a marker
+// rewritten with a new stamp has a new key and is asked afresh.
 func markerStillItsProcess(dir string, pid int) bool {
 	if !processAlive(pid) {
 		return false
@@ -353,9 +392,32 @@ func markerStillItsProcess(dir string, pid int) bool {
 	if err != nil {
 		return true
 	}
+	verdictKey := filepath.Join(dir, strconv.Itoa(pid)) + "@" + strconv.FormatInt(want, 10)
+	stampMu.Lock()
+	at, seen := stampVerdicts[verdictKey]
+	stampMu.Unlock()
+	if seen && time.Since(at) < stampVerdictTTL {
+		return true
+	}
 	start, ok := procStart(pid)
-	return !ok || start == want
+	if ok && start != want {
+		return false
+	}
+	stampMu.Lock()
+	if len(stampVerdicts) >= pidCacheMax {
+		stampVerdicts = map[string]time.Time{} // bounded the way pidCache is: cleared, not evicted
+	}
+	stampVerdicts[verdictKey] = time.Now()
+	stampMu.Unlock()
+	return true
 }
+
+const stampVerdictTTL = 2 * time.Second
+
+var (
+	stampMu       sync.Mutex
+	stampVerdicts = map[string]time.Time{}
+)
 
 // pinsFileSuffix names the sidecar listing the cluster names a client PINNED
 // to its cluster, one per line: names only that client's session can have
@@ -386,6 +448,13 @@ func UnpinNames(key string, pid int) {
 // nothing. Scans the registry (a directory per cluster, a small file per
 // pinning client); a per-name verdict is kept for a few seconds, since a
 // mount opens many flows in a row.
+//
+// A pin is honoured on the same terms as the marker it rides beside
+// (liveMarker), and on Windows the pins file itself must be the process's own
+// (markerOwnedByProcess). This answer is taken BEFORE any account check,
+// because the kernel's SMB client is nobody's account; it is therefore the one
+// a hand-written file could abuse most cheaply, and the one that must trust
+// the least.
 func pinnedCluster(name string) (string, bool) {
 	name = strings.ToLower(name)
 	pinMu.Lock()
@@ -401,7 +470,11 @@ scan:
 		pins, _ := filepath.Glob(filepath.Join(dir, "*"+pinsFileSuffix))
 		for _, file := range pins {
 			pid, err := strconv.Atoi(strings.TrimSuffix(filepath.Base(file), pinsFileSuffix))
-			if err != nil || !processAlive(pid) {
+			if err != nil {
+				continue
+			}
+			k, ok := liveMarker(dir, pid)
+			if !ok || !markerOwnedByProcess(file, pid) {
 				continue
 			}
 			b, err := os.ReadFile(file)
@@ -410,10 +483,8 @@ scan:
 			}
 			for _, line := range strings.Split(string(b), "\n") {
 				if strings.TrimSpace(line) == name {
-					if k, err := os.ReadFile(filepath.Join(dir, strconv.Itoa(pid))); err == nil {
-						key = strings.TrimSpace(string(k))
-						break scan
-					}
+					key = k
+					break scan
 				}
 			}
 		}

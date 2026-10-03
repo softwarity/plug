@@ -14,6 +14,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -66,6 +67,10 @@ type Transport struct {
 	// keepalive path clears it before re-dialling.
 	connected bool
 	done      chan struct{}
+	// dialing is the dial in flight, if any. Everyone who finds the transport
+	// dead waits on this ONE dial, outside the mutex, instead of holding the
+	// mutex through it; see reconnectCtx.
+	dialing *dialAttempt
 
 	// resolveUnsupported remembers an agent that predates the `resolve` verb
 	// (it answered "unknown command") — asked once, then every later name
@@ -247,38 +252,98 @@ func (t *Transport) LocalAddr() string {
 
 // reconnectFrom swaps in a fresh client, unless another goroutine already
 // replaced `stale` (the client the caller found dead). Returns the client to
-// use next.
+// use next. It waits for the dial with no patience of its own: the dial is
+// bounded twice over by dialTimeout, and Close() releases the wait early.
 func (t *Transport) reconnectFrom(stale *ssh.Client) (*ssh.Client, error) {
+	return t.reconnectCtx(context.Background(), stale)
+}
+
+// dialAttempt is one dial in flight, shared by everyone who needs its result.
+type dialAttempt struct {
+	done   chan struct{} // closed once the dial has ended, either way
+	client *ssh.Client
+	err    error
+}
+
+// reconnectCtx is reconnectFrom with the caller's own patience.
+//
+// The dial runs OUTSIDE t.mu, as a single flight. It used to run under it, and
+// a dial is the slowest thing this file does: up to dialTimeout for the TCP
+// connect and dialTimeout again for the handshake. For those thirty seconds
+// every caller of current() queued on the mutex. DialContext stopped honouring
+// its context, Exec and LocalAddr hung, Close() waited for a dial it was about
+// to throw away, and ResolveInCluster, which the CLI's resolver asks of every
+// cluster before answering a bare name, froze name resolution for the whole
+// machine on macOS while ONE cluster was reconnecting. The mutex now guards a
+// pointer to the attempt and nothing slower: the first caller starts the dial,
+// later ones find it in flight and wait on its channel with their own context,
+// and the transport's state is touched again only once the dial has ended.
+// current() answers at once with what there is, which during a dial is nil.
+func (t *Transport) reconnectCtx(ctx context.Context, stale *ssh.Client) (*ssh.Client, error) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	if t.closed {
+		t.mu.Unlock()
 		return nil, errClosed
 	}
 	if t.client != nil && t.client != stale {
-		return t.client, nil // someone else already reconnected
+		cl := t.client
+		t.mu.Unlock()
+		return cl, nil // someone else already reconnected
 	}
+	attempt := t.dialing
+	if attempt == nil {
+		attempt = &dialAttempt{done: make(chan struct{})}
+		t.dialing = attempt
+		go t.runDial(attempt, stale)
+	}
+	t.mu.Unlock()
+	select {
+	case <-attempt.done:
+		return attempt.client, attempt.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-t.done:
+		return nil, errClosed // Close() never waits for a dial, and neither does anyone waiting on it
+	}
+}
+
+// runDial is the single flight: dial with no lock held, then install the
+// result under the mutex and wake everyone waiting on it.
+func (t *Transport) runDial(a *dialAttempt, stale *ssh.Client) {
 	nc, err := t.dial()
-	if err != nil {
-		return nil, err
+	t.mu.Lock()
+	t.dialing = nil
+	switch {
+	case err != nil:
+	case t.closed:
+		// Close() ran while this dial was in flight. It found no client to
+		// close, so this one is ours to close: a transport that was told to go
+		// away must not come back holding a fresh connection nobody will end.
+		nc.Close()
+		nc, err = nil, errClosed
+	default:
+		if stale != nil {
+			stale.Close()
+		}
+		// Announced on the strength of having been connected BEFORE, not on
+		// holding a stale client to close. The keepalive path always arrives
+		// here with nil: it calls dropDead first, which closes the dead client
+		// and clears the field. So the one reconnect the user never asked for,
+		// the one after a laptop wakes or a VPN blinks, was the one that said
+		// nothing. They saw "agent unreachable" when the re-dial failed and
+		// silence when it worked, which reads like the outage never ended. A -s
+		// session was covered by a substitute line from socks_run.go, which is
+		// probably why this went unnoticed.
+		if t.connected {
+			t.note("agent connection re-established")
+		}
+		t.connected = true
+		t.client = nc
+		go t.checkAgentVersion()
 	}
-	if stale != nil {
-		stale.Close()
-	}
-	// Announced on the strength of having been connected BEFORE, not on holding a
-	// stale client to close. The keepalive path always arrives here with nil: it
-	// calls dropDead first, which closes the dead client and clears the field. So
-	// the one reconnect the user never asked for, the one after a laptop wakes or
-	// a VPN blinks, was the one that said nothing. They saw "agent unreachable"
-	// when the re-dial failed and silence when it worked, which reads like the
-	// outage never ended. A -s session was covered by a substitute line from
-	// socks_run.go, which is probably why this went unnoticed.
-	if t.connected {
-		t.note("agent connection re-established")
-	}
-	t.connected = true
-	t.client = nc
-	go t.checkAgentVersion()
-	return nc, nil
+	a.client, a.err = nc, err
+	t.mu.Unlock()
+	close(a.done)
 }
 
 // checkAgentVersion asks the agent what version it is now and says so when that
@@ -287,9 +352,9 @@ func (t *Transport) reconnectFrom(stale *ssh.Client) (*ssh.Client, error) {
 // the user's command at the end of its pipes — so the only useful thing to do
 // with the news is to say it.
 //
-// Runs in its own goroutine, out of the reconnect path: the caller holds t.mu,
-// which Exec needs, and a reconnect must not wait on a round-trip to report a
-// version nobody is blocked on.
+// Runs in its own goroutine, out of the reconnect path: runDial holds t.mu
+// while it installs the client, which Exec needs, and a reconnect must not
+// wait on a round-trip to report a version nobody is blocked on.
 func (t *Transport) checkAgentVersion() {
 	now, err := t.Exec("version")
 	if err != nil || now == "" || strings.HasPrefix(now, "error:") {
@@ -328,7 +393,7 @@ func (t *Transport) DialContext(ctx context.Context, network, addr string) (net.
 	cl := t.current()
 	if cl == nil {
 		var err error
-		if cl, err = t.reconnectFrom(nil); err != nil {
+		if cl, err = t.reconnectCtx(ctx, nil); err != nil {
 			return nil, err
 		}
 	}
@@ -349,9 +414,13 @@ func (t *Transport) DialContext(ctx context.Context, network, addr string) (net.
 	if errors.As(err, &oce) {
 		return nil, err
 	}
-	// Otherwise the connection may be dead. Reconnect once and retry.
-	cl2, rerr := t.reconnectFrom(cl)
+	// Otherwise the connection may be dead. Reconnect once and retry, for as
+	// long as the caller is still waiting.
+	cl2, rerr := t.reconnectCtx(ctx, cl)
 	if rerr != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, err // surface the original open error
 	}
 	return channelDial(ctx, cl2, addr)
@@ -561,7 +630,9 @@ func (t *Transport) execRaw(cmd string) (string, error) {
 }
 
 // Close tears down the transport (and every channel on it) and stops the
-// keepalive.
+// keepalive. It never waits for a dial in flight: closing t.done releases
+// whoever is waiting on that dial, and runDial closes whatever the dial brings
+// back once it finds the transport closed.
 func (t *Transport) Close() error {
 	t.mu.Lock()
 	if t.closed {
@@ -580,14 +651,38 @@ func (t *Transport) Close() error {
 }
 
 // tofuHostKey returns a host-key callback that pins the agent's key on first
-// sight (trust on first use) in path and verifies it on every later connect —
+// sight (trust on first use) in path and verifies it on every later connect,
 // a cheap MITM tripwire on top of plug's no-secret transport. With path == ""
 // it accepts any key (the previous behaviour).
-// HostKeyCallback is tofuHostKey for callers outside the transport: the DOWNLOAD
-// channel, which carries the version, the digest and the binary that is then run
-// with privilege, and which pinned nothing at all. Same policy as the tunnel, on
-// the same file, so one agent is recorded once and a change is noticed wherever
-// it shows up first.
+//
+// A CHANGED key is re-pinned and noted, not refused. The agent regenerates its
+// host key on EVERY start (ssh-keygen -A), so a changed key is the normal case
+// after a cluster or agent restart, not an attack: plug's model is a trusted
+// dev cluster, and the install already connects with StrictHostKeyChecking=no.
+// Blocking here just forced the user to hand-edit known_hosts after each
+// restart, which trained them to ignore the warning. The note is the tripwire:
+// a key change on a host you did NOT restart still deserves a glance. Set
+// PLUG_STRICT_HOSTKEY=1 to turn that glance into a refusal: a changed key then
+// fails the connection with the line to remove, for a cluster whose agent is
+// known to keep its key (a persistent volume) or a network that is not trusted.
+//
+// Every read and write of path goes through readKnownHosts and
+// writeKnownHosts, and that matters because this callback runs on EVERY dial,
+// which in the macOS daemon means with euid 0, hours or days after the
+// launcher checked the path once (guardUserPath). A known_hosts replaced by a
+// symlink in between would have had root append to, then rewrite, whatever it
+// pointed at. Neither helper follows a link, both require a regular file that
+// belongs to the expected owner (SetKnownHostsOwner), and the rewrite lands
+// as a rename of a temporary file in the same directory. A file that fails
+// those checks is left alone and said so: the connection goes ahead unpinned
+// rather than refused, which is what a file that could not be written always
+// meant here, and the message names the reason instead of hiding it.
+//
+// HostKeyCallback is tofuHostKey for callers outside the transport: the
+// DOWNLOAD channel, which carries the version, the digest and the binary that
+// is then run with privilege, and which pinned nothing at all. Same policy as
+// the tunnel, on the same file, so one agent is recorded once and a change is
+// noticed wherever it shows up first.
 func HostKeyCallback(path, addr string, note Logf) ssh.HostKeyCallback {
 	return tofuHostKey(path, addr, note)
 }
@@ -607,42 +702,53 @@ func tofuHostKey(path, addr string, note func(string, ...any)) ssh.HostKeyCallba
 	}
 	return func(_ string, _ net.Addr, key ssh.PublicKey) error {
 		enc := key.Type() + " " + base64.StdEncoding.EncodeToString(key.Marshal())
-		data, _ := os.ReadFile(path)
+		data, err := readKnownHosts(path)
+		if err != nil {
+			note("known_hosts left alone: %v (the agent host key is neither checked nor pinned this time)", err)
+			return nil
+		}
 		for _, line := range strings.Split(string(data), "\n") {
 			f := strings.SplitN(strings.TrimSpace(line), " ", 2)
 			if len(f) == 2 && f[0] == addr {
 				if f[1] == enc {
 					return nil // known and matches
 				}
-				// The agent regenerates its host key on EVERY start (ssh-keygen -A),
-				// so a changed key is the NORMAL case after a cluster/agent restart,
-				// not an attack — plug's model is a trusted dev cluster, and the
-				// install already connects with StrictHostKeyChecking=no. Blocking
-				// here just forced the user to hand-edit known_hosts after each
-				// restart, which trained them to ignore the warning. Re-pin instead
-				// and note it: the note is the informative tripwire (a key change on a
-				// host you did NOT restart still deserves a glance), without the chore.
-				note("agent host key for %s changed (agent restart?) — re-pinned", addr)
-				repin(path, addr, enc)
+				if strictHostKey() {
+					return fmt.Errorf("agent host key for %s changed, and PLUG_STRICT_HOSTKEY is set: refusing to connect. "+
+						"If the agent was restarted (it regenerates its host key at every start), remove the line "+
+						"starting with %q from %s and connect again; if it was not, something may be sitting "+
+						"between this machine and the cluster", addr, addr, path)
+				}
+				note("agent host key for %s changed (agent restart?) - re-pinned", addr)
+				if err := repin(path, data, addr, enc); err != nil {
+					note("known_hosts left alone: %v", err)
+				}
 				return nil
 			}
 		}
-		// First sight — pin it.
-		_ = os.MkdirAll(filepath.Dir(path), 0o700)
-		if f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
-			fmt.Fprintf(f, "%s %s\n", addr, enc)
-			f.Close()
+		// First sight: pin it.
+		if err := writeKnownHosts(path, string(data)+addr+" "+enc+"\n"); err != nil {
+			note("could not pin the agent host key: %v", err)
+			return nil
 		}
 		note("pinned agent host key (%s)", ssh.FingerprintSHA256(key))
 		return nil
 	}
 }
 
+// strictHostKey reports whether a changed agent host key must refuse the
+// connection. Read at every check rather than once, so a session started with
+// the variable sees it, and a test can set it.
+func strictHostKey() bool {
+	v := os.Getenv("PLUG_STRICT_HOSTKEY")
+	return v == "1" || strings.EqualFold(v, "true")
+}
+
 // repin rewrites path with enc as the pinned key for addr, dropping any stale
-// line for that addr (and blank lines). Best-effort: a failed rewrite just means
-// the next connect re-pins again.
-func repin(path, addr, enc string) {
-	data, _ := os.ReadFile(path)
+// line for that addr (and blank lines). data is the file as readKnownHosts
+// returned it, so the rewrite works from the bytes that were checked rather
+// than from a second read of a path somebody may have changed meanwhile.
+func repin(path string, data []byte, addr, enc string) error {
 	var b strings.Builder
 	for _, line := range strings.Split(string(data), "\n") {
 		t := strings.TrimSpace(line)
@@ -656,7 +762,174 @@ func repin(path, addr, enc string) {
 		b.WriteByte('\n')
 	}
 	b.WriteString(addr + " " + enc + "\n")
-	_ = os.WriteFile(path, []byte(b.String()), 0o600)
+	return writeKnownHosts(path, b.String())
+}
+
+// knownHostsOwner is the uid known_hosts and its directory must belong to,
+// stored as uid+1 so that zero means "not set". See SetKnownHostsOwner.
+var knownHostsOwner atomic.Int64
+
+// SetKnownHostsOwner names the account the known_hosts file must belong to
+// before this package reads or writes it while holding a privilege it did
+// not get from that account. The default is the REAL uid, which under the
+// setuid launcher is the person who ran plug; under sudo both uids are 0 and
+// the person is SUDO_UID, which the launcher knows and this package does not,
+// so it is the launcher's to pass. A negative uid restores the default.
+//
+// When the effective uid is the real one and nothing was set, no owner is
+// checked at all: the kernel already enforces the person's own rights, and
+// $HOME is theirs to point wherever they like (the same line guardUserPath
+// draws in the launcher).
+func SetKnownHostsOwner(uid int) {
+	if uid < 0 {
+		knownHostsOwner.Store(0)
+		return
+	}
+	knownHostsOwner.Store(int64(uid) + 1)
+}
+
+// expectedKnownHostsOwner is the uid to check files against, and whether to
+// check at all.
+func expectedKnownHostsOwner() (int, bool) {
+	if v := knownHostsOwner.Load(); v != 0 {
+		return int(v - 1), true
+	}
+	if os.Geteuid() == os.Getuid() {
+		return 0, false
+	}
+	return os.Getuid(), true
+}
+
+// openKnownHosts opens path without following a link and proves, on the
+// descriptor it opened, that it is a regular file belonging to the expected
+// owner. The Lstat first is for Windows, where the open has no O_NOFOLLOW to
+// refuse a link with; on unix the flag makes the open itself refuse, and the
+// fstat afterwards is the check that cannot be raced.
+func openKnownHosts(path string, flag int) (*os.File, error) {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file (a symlink?) and plug will not follow it", path)
+	}
+	f, err := os.OpenFile(path, flag|noFollow, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	fi, err = f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		f.Close()
+		return nil, fmt.Errorf("%s is not a regular file (a symlink?) and plug will not follow it", path)
+	}
+	if uid, check := expectedKnownHostsOwner(); check {
+		if owner, _, known := fileOwner(fi); known && owner != uid {
+			f.Close()
+			return nil, fmt.Errorf("%s belongs to uid %d, not to you (uid %d), and plug is holding a privilege you do not have",
+				path, owner, uid)
+		}
+	}
+	return f, nil
+}
+
+// readKnownHosts is the file's content, empty when there is no file yet.
+func readKnownHosts(path string) ([]byte, error) {
+	f, err := openKnownHosts(path, os.O_RDONLY)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(f)
+}
+
+// writeKnownHosts replaces path with content, through a temporary file in the
+// same directory and a rename, so the path is never opened for writing and a
+// link planted there is replaced rather than followed. The DIRECTORY is what
+// is checked for ownership here, following links on purpose: it is where the
+// write lands, and a dotfile directory symlinked into the person's own tree
+// must keep working while one pointed at /etc must not. A missing directory
+// is created only directly under one the person owns, and handed to them.
+func writeKnownHosts(path, content string) error {
+	dir := filepath.Dir(path)
+	uid, check := expectedKnownHostsOwner()
+	gid := -1
+	dfi, err := os.Stat(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		pfi, perr := os.Stat(filepath.Dir(dir))
+		if perr != nil {
+			return perr
+		}
+		if check {
+			owner, g, known := fileOwner(pfi)
+			if known && owner != uid {
+				return fmt.Errorf("%s belongs to uid %d, not to you (uid %d): plug will not create %s there as root",
+					filepath.Dir(dir), owner, uid, filepath.Base(dir))
+			}
+			gid = g
+		}
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			return err
+		}
+		if check {
+			if err := chownTo(dir, uid, gid); err != nil {
+				return err
+			}
+		}
+		dfi, err = os.Stat(dir)
+	}
+	if err != nil {
+		return err
+	}
+	if !dfi.IsDir() {
+		return fmt.Errorf("%s is not a directory", dir)
+	}
+	if check {
+		owner, g, known := fileOwner(dfi)
+		if known && owner != uid {
+			return fmt.Errorf("%s belongs to uid %d, not to you (uid %d), and plug is holding a privilege you do not have",
+				dir, owner, uid)
+		}
+		gid = g
+	}
+	if fi, err := os.Lstat(path); err == nil && !fi.Mode().IsRegular() {
+		return fmt.Errorf("%s is not a regular file (a symlink?) and plug will not replace it", path)
+	}
+	tmp, err := os.CreateTemp(dir, ".known_hosts-*")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	fail := func(err error) error {
+		tmp.Close()
+		_ = os.Remove(name)
+		return err
+	}
+	if check {
+		// Created with euid 0, so it would be root's: hand it to the person
+		// before it takes the name, or the next check refuses our own file.
+		if err := chownTo(name, uid, gid); err != nil {
+			return fail(err)
+		}
+	}
+	if _, err := tmp.WriteString(content); err != nil {
+		return fail(err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(name)
+		return err
+	}
+	if err := os.Rename(name, path); err != nil {
+		_ = os.Remove(name)
+		return err
+	}
+	return nil
 }
 
 // ResolveInCluster reports whether name exists in this transport's cluster,
