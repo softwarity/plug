@@ -195,3 +195,93 @@ func TestSwarmMountVolumeCreatesTheSecretAndADNSRRService(t *testing.T) {
 		}
 	}
 }
+
+// seedK8sWorkload puts a workload behind a Service in the fake: the Service's
+// selector, one pod on a node with a claim mounted, the claim itself, and the
+// agent's own Deployment (the image the helper runs is read off it).
+func seedK8sWorkload(fa *fakeAPIServer) {
+	fa.add("services", k8sObject("Service", "db", nil, nil, map[string]any{
+		"selector": map[string]string{"app": "db"},
+		"ports":    []map[string]any{{"name": "pg", "port": 5432, "targetPort": 5432}},
+	}))
+	fa.add("pods", k8sObject("Pod", "db-0", map[string]string{"app": "db"}, nil, map[string]any{
+		"nodeName": "node-b",
+		"volumes":  []map[string]any{{"name": "data", "persistentVolumeClaim": map[string]any{"claimName": "pgdata"}}},
+		"containers": []map[string]any{{
+			"name":         "db",
+			"volumeMounts": []map[string]any{{"name": "data", "mountPath": "/var/lib/postgresql/data"}},
+		}},
+	}))
+	fa.add("persistentvolumeclaims", k8sObject("PersistentVolumeClaim", "pgdata", nil, nil, map[string]any{"accessModes": []string{"ReadWriteOnce"}}))
+	fa.add("deployments", map[string]any{
+		"apiVersion": "apps/v1", "kind": "Deployment",
+		"metadata": map[string]any{"name": "plug", "labels": map[string]string{"app": "plug"}},
+		"spec": map[string]any{"template": map[string]any{"spec": map[string]any{
+			"containers": []map[string]any{{"name": "plug", "image": "example/plug:test"}},
+		}}},
+	})
+}
+
+// A Kubernetes helper, both shapes, chosen by what the API says the platform
+// is. On OpenShift (the security.openshift.io group answers discovery) the pod
+// is the unprivileged one: a high container port the Service maps 445 to, the
+// listen port in the environment, the securityContext the restricted SCC
+// admits; anywhere else the root one, 445 to 445, as it always was. The
+// client is told 445 in both. Would have caught: a detection that never
+// reached the API (a vanilla answer on OpenShift, the helper crash-looping on
+// bind 445), a Service left targeting 445 while the container moved, a root
+// pod shape changed by the addition.
+func TestK8sMountVolumeTakesTheShapeThePlatformAdmits(t *testing.T) {
+	for _, tc := range []struct {
+		openshift bool
+		port      float64
+	}{{true, mountListenUnprivileged}, {false, 445}} {
+		fa := newFakeAPIServer(t, testNS, testPodIP)
+		fa.openshift = tc.openshift
+		t.Setenv(mountAllowEnv, "")
+		seedK8sWorkload(fa)
+
+		helper := mountHelperName("db", "pgdata", "41020")
+		if said := verbReply(t, func() { k8sMountVolume(testNS, "db", "pgdata", "41020", hexPass) }); said != mountReply(helper) {
+			t.Fatalf("openshift=%v: mount answered %q, want %q (445 announced in every shape)", tc.openshift, said, mountReply(helper))
+		}
+		if k8sRequests(fa.requests(), "GET", "/apis/security.openshift.io") != 1 {
+			t.Errorf("openshift=%v: the platform is asked of API discovery exactly once, got %v", tc.openshift, fa.requests())
+		}
+		pod := fa.get("pods", helper)
+		if pod == nil {
+			t.Fatalf("openshift=%v: no helper pod", tc.openshift)
+		}
+		c := anyMap(anyMap(pod["spec"])["containers"].([]any)[0])
+		if port := anyMap(c["ports"].([]any)[0])["containerPort"]; port != tc.port {
+			t.Errorf("openshift=%v: containerPort %v, want %v", tc.openshift, port, tc.port)
+		}
+		env := map[string]string{}
+		for _, e := range c["env"].([]any) {
+			env[anyMap(e)["name"].(string)], _ = anyMap(e)["value"].(string)
+		}
+		_, sc := c["securityContext"]
+		if tc.openshift {
+			if env[smbListenEnv] != "1445" || !sc {
+				t.Errorf("the unprivileged helper is told its port and carries a securityContext, got env %v, securityContext %v", env, sc)
+			}
+			for _, k := range []string{"runAsUser", "runAsGroup"} {
+				if _, named := anyMap(c["securityContext"])[k]; named {
+					t.Errorf("%s would have the pod refused by the SCC", k)
+				}
+			}
+		} else if _, told := env[smbListenEnv]; told || sc {
+			t.Errorf("the root helper is what it always was, got env %v, securityContext %v", env, sc)
+		}
+		if anyMap(pod["spec"])["nodeName"] != "node-b" || env[smbPassEnv] != hexPass {
+			t.Errorf("openshift=%v: pinned to the workload's node with the session's credential, got %v / %v", tc.openshift, anyMap(pod["spec"])["nodeName"], env)
+		}
+		svc, ok := fa.service(helper)
+		if !ok || len(svc.Spec.Ports) != 1 || svc.Spec.Ports[0].Port != 445 || svc.Spec.Ports[0].TargetPort != tc.port {
+			t.Errorf("openshift=%v: the Service answers 445 and targets the container's port, got %+v", tc.openshift, svc.Spec.Ports)
+		}
+		if svc.Spec.Selector[mountHelperLabel] != helper {
+			t.Errorf("openshift=%v: the Service selects the helper, got %v", tc.openshift, svc.Spec.Selector)
+		}
+	}
+}

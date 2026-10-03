@@ -4,6 +4,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -236,7 +237,7 @@ func TestPickClaim(t *testing.T) {
 // be a label value either).
 func TestK8sMountPodShape(t *testing.T) {
 	pod := k8sMountPod("shop", "plug-mnt-web-abcd1234", "web", "/data", "web-data", "node-2",
-		"softwarity/plug:2.20.0", "10.1.2.3:40001", "s3cret", []string{"10.1.2.3"})
+		"softwarity/plug:2.20.0", "10.1.2.3:40001", "s3cret", []string{"10.1.2.3"}, false)
 	meta := pod["metadata"].(map[string]any)
 	labels := meta["labels"].(map[string]string)
 	ann := meta["annotations"].(map[string]string)
@@ -280,19 +281,102 @@ func TestK8sMountPodShape(t *testing.T) {
 		t.Fatal("the k8s helper must not be pointed at a password file nothing mounts")
 	}
 	// No node known: nothing pinned, the scheduler decides.
-	free := k8sMountPod("shop", "h", "web", "data", "c", "", "img", "o", "p", nil)
+	free := k8sMountPod("shop", "h", "web", "data", "c", "", "img", "o", "p", nil, false)
 	if _, pinned := free["spec"].(map[string]any)["nodeName"]; pinned {
 		t.Fatal("an unknown node must not be pinned to \"\"")
 	}
 	if labelSafe("web-data") != "web-data" || !strings.HasPrefix(labelSafe("/a/b"), "path-") {
 		t.Fatal("labelSafe")
 	}
+	// The root shape, which every cluster but OpenShift runs: 445 in the
+	// container, no securityContext, no listen port in the environment. This
+	// is the shape that must not move when the other one is added.
+	if ports := c["ports"].([]map[string]any); len(ports) != 1 || ports[0]["containerPort"] != 445 {
+		t.Fatalf("root shape ports %v", ports)
+	}
+	if _, has := c["securityContext"]; has {
+		t.Fatal("the root shape carries no securityContext")
+	}
+	if _, has := env[smbListenEnv]; has {
+		t.Fatal("the root shape listens on 445 and says nothing about it")
+	}
+}
+
+// The OpenShift shape: the `restricted` SCC admits no port under 1024, no
+// capability, no root, and no pod that names its own uid. So the container
+// listens high (PLUG_SMB_LISTEN, the Service's targetPort) behind a Service
+// that still answers 445, under a securityContext with exactly what the SCC
+// wants and NOTHING about the uid. Would have caught: a runAsUser the
+// platform rejects, a containerPort the pod cannot bind, a Service still
+// targeting 445 (connection refused), a listen port the helper was not told.
+func TestK8sMountPodUnprivilegedShape(t *testing.T) {
+	pod := k8sMountPod("shop", "plug-mnt-web-abcd1234", "web", "/data", "web-data", "node-2",
+		"softwarity/plug:2.20.0", "10.1.2.3:40001", "s3cret", []string{"10.1.2.3"}, true)
+	c := pod["spec"].(map[string]any)["containers"].([]map[string]any)[0]
+	ports := c["ports"].([]map[string]any)
+	if len(ports) != 1 || ports[0]["containerPort"] != mountListenUnprivileged || mountListenUnprivileged < 1024 {
+		t.Fatalf("the unprivileged helper binds one port above 1024, got %v", ports)
+	}
+	env := map[string]string{}
+	for _, e := range c["env"].([]map[string]string) {
+		env[e["name"]] = e["value"]
+	}
+	if env[smbListenEnv] != "1445" {
+		t.Fatalf("%s = %q, want the container port", smbListenEnv, env[smbListenEnv])
+	}
+	if env[smbUserEnv] != "plug" || env[smbPassEnv] != "s3cret" || env[smbAllowEnv] != "10.1.2.3" {
+		t.Fatalf("the rest of the environment is the root shape's: %v", env)
+	}
+	sc, ok := c["securityContext"].(map[string]any)
+	if !ok {
+		t.Fatal("no securityContext")
+	}
+	if sc["runAsNonRoot"] != true || sc["allowPrivilegeEscalation"] != false {
+		t.Fatalf("securityContext %v", sc)
+	}
+	if drop := sc["capabilities"].(map[string]any)["drop"].([]string); len(drop) != 1 || drop[0] != "ALL" {
+		t.Fatalf("capabilities %v", sc["capabilities"])
+	}
+	if sc["seccompProfile"].(map[string]any)["type"] != "RuntimeDefault" {
+		t.Fatalf("seccompProfile %v", sc["seccompProfile"])
+	}
+	for _, k := range []string{"runAsUser", "runAsGroup", "fsGroup"} {
+		if _, named := sc[k]; named {
+			t.Fatalf("%s names a uid the platform allocates itself; OpenShift refuses the pod", k)
+		}
+	}
+	if len(sc) != 4 {
+		t.Fatalf("securityContext carries exactly the four fields the SCC wants, got %v", sc)
+	}
+	if _, named := pod["spec"].(map[string]any)["securityContext"]; named {
+		t.Fatal("no pod-level securityContext either (fsGroup lives there)")
+	}
+	// Everything the sweep and the Service rely on is the same in both shapes.
+	root := k8sMountPod("shop", "plug-mnt-web-abcd1234", "web", "/data", "web-data", "node-2",
+		"softwarity/plug:2.20.0", "10.1.2.3:40001", "s3cret", []string{"10.1.2.3"}, false)
+	if !reflect.DeepEqual(pod["metadata"], root["metadata"]) {
+		t.Fatal("labels and annotations must not depend on the shape")
+	}
+	if pod["spec"].(map[string]any)["nodeName"] != "node-2" {
+		t.Fatal("the unprivileged helper is pinned to the workload's node like the root one")
+	}
+	// The Service: 445 to the client in both shapes, the target follows the
+	// container.
+	svc := k8sMountService("shop", "plug-mnt-web-abcd1234", "o", true)["spec"].(map[string]any)["ports"].([]map[string]any)[0]
+	if svc["port"] != 445 || svc["targetPort"] != mountListenUnprivileged {
+		t.Fatalf("unprivileged Service port %v", svc)
+	}
+	svc = k8sMountService("shop", "plug-mnt-web-abcd1234", "o", false)["spec"].(map[string]any)["ports"].([]map[string]any)[0]
+	if svc["port"] != 445 || svc["targetPort"] != 445 {
+		t.Fatalf("root Service port %v", svc)
+	}
 }
 
 // The helper's own side (mountserve.go): the Samba configuration and the
 // account file it writes.
 func TestSmbConf(t *testing.T) {
-	c := smbConf("vol", "plug", "plug", true, []string{"10.0.1.5", "fd00::5"})
+	root := smbOptions{share: "vol", user: "plug", forceUser: "plug", fruit: true, allow: []string{"10.0.1.5", "fd00::5"}, listen: smbPort}
+	c := smbConf(root)
 	for _, want := range []string{
 		"[global]", "security = user", "passdb backend = smbpasswd", "server min protocol = SMB2_02",
 		"smb ports = 445", "disable netbios = yes", "load printers = no",
@@ -314,7 +398,18 @@ func TestSmbConf(t *testing.T) {
 	if strings.Index(c, "hosts allow") > strings.Index(c, "[vol]") {
 		t.Error("hosts allow must be global")
 	}
-	plain := smbConf("vol", "plug", "root", false, nil)
+	// The root shape names none of its directories: Samba's compiled-in ones
+	// are root's and the configuration is byte-for-byte what it was before
+	// the unprivileged shape existed.
+	for _, dir := range []string{"directory =", "private dir", "ncalrpc dir", "log file", "smb passwd file"} {
+		if strings.Contains(c, dir) {
+			t.Errorf("the root shape must not relocate %q:\n%s", dir, c)
+		}
+	}
+	if root.confFile() != smbConfPath || root.passwdFile() != smbPasswdPath {
+		t.Errorf("root files at %s and %s", root.confFile(), root.passwdFile())
+	}
+	plain := smbConf(smbOptions{share: "vol", user: "plug", forceUser: "root", listen: smbPort})
 	if strings.Contains(plain, "fruit") {
 		t.Error("no fruit module, no fruit configuration")
 	}
@@ -325,6 +420,120 @@ func TestSmbConf(t *testing.T) {
 	// refusal would be a mount lost for a guess.
 	if strings.Contains(plain, "hosts allow") {
 		t.Error("an empty allow list must not restrict anything")
+	}
+	// The listen port is the helper's own and the announced one never moves:
+	// a Service maps 445 to whatever smbd binds, and the client is told 445
+	// in every shape (TestMountReplyShape).
+	if high := smbConf(smbOptions{share: "vol", user: "plug", forceUser: "root", listen: 1445}); !strings.Contains(high, "smb ports = 1445\n") || strings.Contains(high, "smb ports = 445\n") {
+		t.Errorf("listen 1445 must bind 1445 and nothing else:\n%s", high)
+	}
+	if mountHelperPort != "445" || smbPort != 445 {
+		t.Fatal("the announced port is 445 whatever the helper binds")
+	}
+}
+
+// The unprivileged shape of the configuration (mount-serve not root): every
+// path smbd opens for itself under the one directory it was given, the account
+// file with them, the high port, and NO `force user`, since there is no root
+// to become anyone and the files are the process's own. Would have caught: a
+// `force user` smbd refuses without root, a lock directory under /var/lib, a
+// smbpasswd written where the conf does not look.
+func TestSmbConfUnprivileged(t *testing.T) {
+	dir := t.TempDir()
+	o := smbOptions{share: "vol", user: "plug", fruit: true, allow: []string{"10.0.1.5"}, listen: 1445, stateDir: dir}
+	c := smbConf(o)
+	for _, want := range []string{
+		"smb ports = 1445\n",
+		"lock directory = " + filepath.Join(dir, "lock") + "\n",
+		"state directory = " + filepath.Join(dir, "state") + "\n",
+		"cache directory = " + filepath.Join(dir, "cache") + "\n",
+		"private dir = " + filepath.Join(dir, "private") + "\n",
+		"pid directory = " + filepath.Join(dir, "pid") + "\n",
+		"ncalrpc dir = " + filepath.Join(dir, "ncalrpc") + "\n",
+		"log file = " + filepath.Join(dir, "log.smbd") + "\n",
+		"smb passwd file = " + filepath.Join(dir, "smbpasswd") + "\n",
+		"hosts allow = 10.0.1.5\n", "valid users = plug\n", "vfs objects = fruit streams_xattr",
+	} {
+		if !strings.Contains(c, want) {
+			t.Errorf("missing %q in\n%s", want, c)
+		}
+	}
+	if strings.Contains(c, "force user") {
+		t.Errorf("no force user without root:\n%s", c)
+	}
+	if strings.Contains(c, "/etc/samba") || strings.Contains(c, "/var/lib/samba") || strings.Contains(c, "smb ports = 445\n") {
+		t.Errorf("nothing of root's layout may remain:\n%s", c)
+	}
+	// Every relocated directory is named in [global], before the share.
+	if strings.LastIndex(c, "directory = ") > strings.Index(c, "[vol]") {
+		t.Error("the directories belong to [global]")
+	}
+	if o.confFile() != filepath.Join(dir, "smb.conf") || o.passwdFile() != filepath.Join(dir, "smbpasswd") {
+		t.Errorf("files at %s and %s", o.confFile(), o.passwdFile())
+	}
+	// Every directory the conf names is one mount-serve creates (smbd makes
+	// some itself and not others).
+	for _, d := range smbStateDirs {
+		if !strings.Contains(c, d[0]+" = "+filepath.Join(dir, d[1])+"\n") {
+			t.Errorf("%s is created but not configured", d[1])
+		}
+	}
+}
+
+// What nss_wrapper serves smbd on the unprivileged path: the SMB account under
+// the process's own ids (so the account Samba resolves is the uid it already
+// runs as), and `nobody`, the guest account Samba insists on at start even
+// though `map to guest = Never` means nobody ever becomes it; the groups to
+// match. Would have caught: smbd exiting on "guest account nobody is invalid",
+// or on an account that NSS does not know.
+func TestNSSWrapperFiles(t *testing.T) {
+	passwd, group := nssWrapperFiles("plug", 1000680000, 0)
+	if passwd != "plug:x:1000680000:0:plug:/tmp:/sbin/nologin\nnobody:x:65534:65534:nobody:/:/sbin/nologin\n" {
+		t.Errorf("passwd:\n%s", passwd)
+	}
+	if group != "plug:x:0:\nnobody:x:65534:\n" {
+		t.Errorf("group:\n%s", group)
+	}
+	if !passwdHas([]byte(passwd), "plug") || !passwdHas([]byte(passwd), "nobody") || groupByGID([]byte(group), 65534) != "nobody" {
+		t.Error("the files must read back through the same helpers the root path uses")
+	}
+	// Written where asked, and smbd told to read them there; the library is
+	// the one thing the image must carry, and a missing one is named with its
+	// package rather than left for smbd to fail on.
+	dir := t.TempDir()
+	old := nssWrapperLib
+	t.Cleanup(func() { nssWrapperLib = old })
+	nssWrapperLib = filepath.Join(dir, "libnss_wrapper.so")
+	if _, err := nssWrapperEnv(dir, "plug", 1000680000, 0); err == nil || !strings.Contains(err.Error(), "nss_wrapper") || !strings.Contains(err.Error(), "1000680000") {
+		t.Fatalf("a missing library must name the package and the uid, got %v", err)
+	}
+	if err := os.WriteFile(nssWrapperLib, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env, err := nssWrapperEnv(dir, "plug", 1000680000, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(env, " ") != "LD_PRELOAD="+nssWrapperLib+" NSS_WRAPPER_PASSWD="+filepath.Join(dir, "passwd")+" NSS_WRAPPER_GROUP="+filepath.Join(dir, "group") {
+		t.Errorf("env %v", env)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "passwd")); string(b) != passwd {
+		t.Errorf("passwd on disk:\n%s", b)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "group")); string(b) != group {
+		t.Errorf("group on disk:\n%s", b)
+	}
+	// The listen port: unset is 445, a port is itself, anything else refused.
+	if p, err := smbListenPort(""); p != smbPort || err != nil {
+		t.Errorf("unset: %d %v", p, err)
+	}
+	if p, err := smbListenPort("1445"); p != 1445 || err != nil {
+		t.Errorf("1445: %d %v", p, err)
+	}
+	for _, bad := range []string{"0", "65536", "smb", "-1"} {
+		if _, err := smbListenPort(bad); err == nil {
+			t.Errorf("%q accepted as a port", bad)
+		}
 	}
 }
 
@@ -500,7 +709,7 @@ func TestDataVolumePathsAndReply(t *testing.T) {
 // reaps it with a dead session's names), a mount's, selecting the one pod by
 // the helper label the pod carries.
 func TestK8sMountServiceShape(t *testing.T) {
-	svc := k8sMountService("shop", "plug-mnt-web-abcd1234", "10.1.2.3:40001")
+	svc := k8sMountService("shop", "plug-mnt-web-abcd1234", "10.1.2.3:40001", false)
 	meta := svc["metadata"].(map[string]any)
 	labels := meta["labels"].(map[string]string)
 	if labels[k8sManaged] != "plug" || labels[mountLabel] != "1" {
@@ -513,7 +722,7 @@ func TestK8sMountServiceShape(t *testing.T) {
 	if spec["selector"].(map[string]string)[mountHelperLabel] != "plug-mnt-web-abcd1234" {
 		t.Fatalf("selector %v", spec["selector"])
 	}
-	pod := k8sMountPod("shop", "plug-mnt-web-abcd1234", "web", "/data", "c", "", "img", "o", "p", nil)
+	pod := k8sMountPod("shop", "plug-mnt-web-abcd1234", "web", "/data", "c", "", "img", "o", "p", nil, false)
 	if pod["metadata"].(map[string]any)["labels"].(map[string]string)[mountHelperLabel] != "plug-mnt-web-abcd1234" {
 		t.Fatal("the pod must carry the label the Service selects")
 	}

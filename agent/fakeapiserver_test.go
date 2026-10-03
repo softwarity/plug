@@ -37,11 +37,12 @@ type fakeAPIServer struct {
 	srv *httptest.Server
 	ns  string
 
-	mu      sync.Mutex
-	seq     int
-	objects map[string]map[string]map[string]any // resource -> name -> object
-	log     []string
-	refuse  func(method, path string) (int, string)
+	mu        sync.Mutex
+	seq       int
+	objects   map[string]map[string]map[string]any // resource -> name -> object
+	log       []string
+	refuse    func(method, path string) (int, string)
+	openshift bool // answer API discovery the way OpenShift does (the security.openshift.io group exists)
 }
 
 // newFakeAPIServer starts the fake in namespace ns and points every seam the
@@ -57,9 +58,12 @@ func newFakeAPIServer(t *testing.T, ns, podIP string) *fakeAPIServer {
 			t.Fatal(err)
 		}
 	}
-	oldSA, oldBase, oldClient, oldSock := k8sSA, k8sAPIBase, k8sClient, dockerSock
+	oldSA, oldBase, oldClient, oldSock, oldOpenShift := k8sSA, k8sAPIBase, k8sClient, dockerSock, k8sIsOpenShift
 	k8sSA, k8sAPIBase = sa, fa.srv.URL
 	k8sClient = func() *http.Client { return fa.srv.Client() }
+	// The platform is asked once per process; here once per fake, since each
+	// test decides what its cluster is.
+	k8sIsOpenShift = memoize(k8sDetectOpenShift)
 	// No Docker socket, whatever the host has: the k8s backend must be the one
 	// answering here.
 	dockerSock = filepath.Join(t.TempDir(), "absent.sock")
@@ -67,7 +71,7 @@ func newFakeAPIServer(t *testing.T, ns, podIP string) *fakeAPIServer {
 	t.Cleanup(func() {
 		fa.srv.Client().CloseIdleConnections()
 		fa.srv.Close()
-		k8sSA, k8sAPIBase, k8sClient, dockerSock = oldSA, oldBase, oldClient, oldSock
+		k8sSA, k8sAPIBase, k8sClient, dockerSock, k8sIsOpenShift = oldSA, oldBase, oldClient, oldSock, oldOpenShift
 	})
 	return fa
 }
@@ -85,6 +89,16 @@ func (fa *fakeAPIServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			k8sStatus(w, code, msg)
 			return
 		}
+	}
+	// API discovery, the one group the agent asks about: present on OpenShift
+	// and OKD, a 404 everywhere else, which is what a real server answers.
+	if r.Method == "GET" && r.URL.Path == "/apis/security.openshift.io" {
+		if fa.openshift {
+			jsonReply(w, 200, map[string]any{"kind": "APIGroup", "apiVersion": "v1", "name": "security.openshift.io"})
+		} else {
+			k8sStatus(w, 404, "the server could not find the requested resource")
+		}
+		return
 	}
 	res, name, sub, ok := fa.route(r.URL.Path)
 	if !ok {
@@ -197,7 +211,9 @@ func (fa *fakeAPIServer) collection(res string) map[string]map[string]any {
 }
 
 // stamp is what the server adds to an object it stores: a namespace, a uid,
-// and, for a Service that asked for none, a ClusterIP.
+// for a Service that asked for none a ClusterIP, and for a pod with no status
+// yet what the scheduler and the kubelet would give it, an address and a
+// phase, since the mount waits for the address before it answers.
 func (fa *fakeAPIServer) stamp(res string, obj map[string]any) {
 	meta := anyMap(obj["metadata"])
 	if meta == nil {
@@ -207,6 +223,9 @@ func (fa *fakeAPIServer) stamp(res string, obj map[string]any) {
 	fa.seq++
 	meta["namespace"] = fa.ns
 	meta["uid"] = fmt.Sprintf("uid-%d", fa.seq)
+	if res == "pods" && obj["status"] == nil {
+		obj["status"] = map[string]any{"phase": "Running", "podIP": fmt.Sprintf("10.244.2.%d", fa.seq)}
+	}
 	if res != "services" {
 		return
 	}

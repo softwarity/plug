@@ -209,7 +209,9 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
           the agent within the minute and its mount cleaned by the next run or
           <code>plug doctor --fix</code>. Kubernetes: the helper pod is pinned to the workload's
           node (ReadWriteOnce is one node, not one pod); the RBAC needs <code>pods</code>
-          create/delete, re-apply <code>plug-k8s.yaml</code>. On Windows a mount lands on a drive
+          create/delete, re-apply <code>plug-k8s.yaml</code>. OpenShift and OKD: the helper runs
+          without privilege under the <code>restricted</code> SCC (a high port behind its Service,
+          the uid the platform allocates, files written by that uid), nothing to grant. On Windows a mount lands on a drive
           letter (an automatic one takes a free letter from Z down; <code>--mount /data:Y:</code>
           names one), the variables repointed at it the same way. With <code>--dockerrun</code>
           the container gets the volume at its exact cluster path.

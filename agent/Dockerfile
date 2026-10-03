@@ -133,9 +133,19 @@ FROM alpine:3.24
 # registry. A failed install fails THIS build, loudly, and never an image that
 # is published: the e2e legs pull what this produced, and only a green run is
 # promoted.
-RUN for i in 1 2 3; do apk add --no-cache samba-server && break; \
-      echo "apk failed (attempt $i/3) — retrying"; sleep $((i * 5)); \
-    done && [ -x /usr/sbin/smbd ]
+#
+# nss_wrapper rides with it, for the helper that is NOT root: OpenShift and OKD
+# run every pod under an arbitrary uid with no capability (the restricted SCC),
+# and Samba resolves its account through NSS, where that uid is unknown. The
+# helper then preloads this library over passwd/group files it writes itself
+# (mountserve.go, nssWrapperFiles). An image built without it serves the root
+# path as before and refuses the unprivileged one, naming this package. An
+# embedder that builds its own image from this agent (the hosted flavour, a
+# gateway) must add the same package beside samba-server, or its mounts fail on
+# OpenShift with that message.
+RUN for i in 1 2 3; do apk add --no-cache samba-server nss_wrapper && break; \
+      echo "apk failed (attempt $i/3), retrying"; sleep $((i * 5)); \
+    done && [ -x /usr/sbin/smbd ] && [ -f /usr/lib/libnss_wrapper.so ]
 
 # No sshd. The SSH server is `plug-agent serve` (agent/sshserver.go),
 # which speaks the same protocol to the same CLI and replaces the whole of what

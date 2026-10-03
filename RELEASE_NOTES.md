@@ -2,6 +2,30 @@
 
 ## NEXT RELEASE
 
+### Live mounts on OpenShift and OKD
+
+The helper a live mount starts beside the workload ran as root on port 445,
+wrote its Samba files under `/etc`, created a Unix account and wrote files as
+the volume's owner. Under the `restricted` security context constraint of
+OpenShift and OKD none of that is allowed: a pod there runs as an arbitrary
+uid from the namespace's range with every capability removed, and the helper
+crashed in a loop, so `--mount` and the automatic mounts of a takeover did
+not work on those platforms at all.
+
+The helper now adapts to the uid it is given. Where the cluster is OpenShift
+(the agent asks the API for `security.openshift.io`, a discovery call that
+needs no new right) the pod is created without privilege: a high port behind
+the Service, which keeps answering on 445 as every client expects, a
+`securityContext` that drops every capability and names no uid (the platform
+allocates it), and a Samba that keeps its files under a temporary directory,
+resolves its account through `nss_wrapper` and writes through the mount as
+the pod's uid. Everywhere else the helper runs exactly as before: root, port
+445, files written as the volume's owner.
+
+The standalone image carries the `nss_wrapper` package it needs. A gateway
+that embeds the agent and serves as its own helper (the hosted flavour) must
+add the same package to its image, or the helper says so and stops.
+
 ---
 
 ## 2.21.4

@@ -48,6 +48,19 @@ import { FileComponent } from '../file/file.component';
       </tbody>
     </table>
 
+    <h3>OpenShift and OKD</h3>
+    <p>
+      The same manifest, the same Role, and the mount works under the default <code>restricted</code>
+      SCC. The agent tells the platform apart by API discovery (the <code>security.openshift.io</code>
+      group, readable by every ServiceAccount, so no rule is added) and starts the helper pod in the
+      shape that SCC admits: no root, no capability, no <code>runAsUser</code> (the platform allocates
+      the uid from the namespace's range and refuses a pod that names its own), Samba listening on a
+      high port with the helper's Service mapping 445 to it, so the client is told 445 as everywhere.
+      Files are then written by that uid rather than the volume's owner, which is what OpenShift sets
+      volumes up for (group 0 writable). Everywhere else the helper runs as root and writes as the
+      volume's owner, as before.
+    </p>
+
     <h3>Reaching it</h3>
     <ul>
       <li>

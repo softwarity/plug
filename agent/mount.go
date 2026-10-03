@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -67,14 +68,24 @@ import (
 // ReadWriteOncePod, refused below), so the helper attaches beside a running
 // workload without scaling anything. The helper mounting the PVC is what the
 // workload does; normal, not a defect.
+//
+// On OpenShift and OKD the helper pod takes a second shape (k8sMountPod,
+// unprivileged): the `restricted` SCC gives every pod an arbitrary uid, no
+// capability and no say in its own uid, so the container listens on a high
+// port and the Service maps 445 to it. The client is told 445 either way:
+// mountHelperPort is the ANNOUNCED port, what mountReply carries, and it never
+// changes, because the Windows SMB client wants 445 of a name it resolves.
 const (
 	mountLabel       = "plug.mount"        // this container/service/pod IS a live-mount helper
 	mountOfLabel     = "plug.mount.of"     // …for this workload name
 	mountVolumeLabel = "plug.mount.volume" // …serving this volume
 	mountOwnerLabel  = "plug.mount.owner"  // …created by this agent (role, as signpostOwnerLabel)
 	mountImageEnv    = "PLUG_MOUNT_IMAGE"  // an embedder's override, as signpostImageEnv
-	mountHelperPort  = "445"
+	mountHelperPort  = "445"               // the port the client is told, whatever the helper binds
 	mountShare       = "vol"
+	// mountListenUnprivileged is the port the helper binds when it cannot bind
+	// 445 (no NET_BIND_SERVICE): above 1024, and 445 of the Service in front.
+	mountListenUnprivileged = 1445
 )
 
 // mountHelperName is the helper's cluster name: one per (workload, volume,
@@ -933,17 +944,63 @@ func k8sClaimModes(ns, claim string) []string {
 	return pvc.Spec.AccessModes
 }
 
+// k8sIsOpenShift says whether this cluster is OpenShift or OKD: the one
+// platform whose default admission (the `restricted` SCC) refuses the root
+// helper. Asked of API discovery, which every ServiceAccount may read
+// (system:discovery is bound to system:authenticated), so no rule is added to
+// the Role: the security.openshift.io group exists there and nowhere else. One
+// answer per process, since a cluster does not change platform under a
+// running agent; a call that could not reach the API is asked again next
+// time, a plain "no" (a 404 on vanilla Kubernetes) is kept. A variable, so the
+// backend tests can stand in for the API.
+var k8sIsOpenShift = memoize(k8sDetectOpenShift)
+
+func k8sDetectOpenShift() (bool, error) {
+	code, err := k8sAPI("GET", "/apis/security.openshift.io", nil, nil)
+	if code == 0 {
+		return false, err
+	}
+	return code == 200, nil
+}
+
 // k8sMountPod is the helper pod. Labels carry what a label value may (the
 // flag, the workload's name, a folded volume); the session owner is host:port,
 // which a label value cannot hold, so it rides an annotation - as the parking
 // receipt's owner does. allow is who may reach the helper: this agent's pod
 // addresses (mountAllow), what the Service in front of the pod hands smbd as
 // source, kube-proxy preserving the pod's address on ClusterIP traffic.
-func k8sMountPod(ns, helper, name, volume, claim, node, image, owner, pass string, allow []string) map[string]any {
+//
+// unprivileged is the OpenShift shape (k8sIsOpenShift): the container listens
+// on mountListenUnprivileged, says so through PLUG_SMB_LISTEN, and carries the
+// securityContext the `restricted` SCC admits: non-root, no escalation, every
+// capability dropped, the runtime's seccomp profile. No runAsUser, runAsGroup
+// or fsGroup: OpenShift allocates the uid from the namespace's range and
+// REJECTS a pod that names its own. mount-serve then sees it is not root and
+// takes the unprivileged path on its own (mountserve.go). The root shape is
+// what it always was: 445 in the container, no securityContext.
+func k8sMountPod(ns, helper, name, volume, claim, node, image, owner, pass string, allow []string, unprivileged bool) map[string]any {
 	env := []map[string]string{}
 	for _, kv := range mountEnv(pass, "", allow, "") {
 		k, v, _ := strings.Cut(kv, "=")
 		env = append(env, map[string]string{"name": k, "value": v})
+	}
+	container := map[string]any{
+		"name":         "mount",
+		"image":        image,
+		"command":      []string{"/usr/local/bin/plug-agent", "mount-serve"},
+		"env":          env,
+		"ports":        []map[string]any{{"containerPort": 445}},
+		"volumeMounts": []map[string]any{{"name": "vol", "mountPath": mountVolumePath}},
+	}
+	if unprivileged {
+		container["env"] = append(env, map[string]string{"name": smbListenEnv, "value": strconv.Itoa(mountListenUnprivileged)})
+		container["ports"] = []map[string]any{{"containerPort": mountListenUnprivileged}}
+		container["securityContext"] = map[string]any{
+			"runAsNonRoot":             true,
+			"allowPrivilegeEscalation": false,
+			"capabilities":             map[string]any{"drop": []string{"ALL"}},
+			"seccompProfile":           map[string]any{"type": "RuntimeDefault"},
+		}
 	}
 	spec := map[string]any{
 		"restartPolicy": "Always",
@@ -951,14 +1008,7 @@ func k8sMountPod(ns, helper, name, volume, claim, node, image, owner, pass strin
 			"name":                  "vol",
 			"persistentVolumeClaim": map[string]any{"claimName": claim},
 		}},
-		"containers": []map[string]any{{
-			"name":         "mount",
-			"image":        image,
-			"command":      []string{"/usr/local/bin/plug-agent", "mount-serve"},
-			"env":          env,
-			"ports":        []map[string]any{{"containerPort": 445}},
-			"volumeMounts": []map[string]any{{"name": "vol", "mountPath": mountVolumePath}},
-		}},
+		"containers": []map[string]any{container},
 	}
 	if node != "" {
 		spec["nodeName"] = node
@@ -991,8 +1041,14 @@ const mountHelperLabel = "plug.mount.helper"
 
 // k8sMountService is the Service that gives the helper pod a NAME the cluster
 // resolves: plug's own (k8sManaged, so the Service sweep reaps it with a dead
-// session's names) and a mount's (mountLabel), selecting the one pod.
-func k8sMountService(ns, helper, owner string) map[string]any {
+// session's names) and a mount's (mountLabel), selecting the one pod. Port
+// 445 always, the one the client is told; the target is the container's
+// port, which the unprivileged shape moves above 1024.
+func k8sMountService(ns, helper, owner string, unprivileged bool) map[string]any {
+	target := 445
+	if unprivileged {
+		target = mountListenUnprivileged
+	}
 	return map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Service",
@@ -1004,7 +1060,7 @@ func k8sMountService(ns, helper, owner string) map[string]any {
 		},
 		"spec": map[string]any{
 			"selector": map[string]string{mountHelperLabel: helper},
-			"ports":    []map[string]any{{"name": "smb", "port": 445, "targetPort": 445}},
+			"ports":    []map[string]any{{"name": "smb", "port": 445, "targetPort": target}},
 		},
 	}
 }
@@ -1040,7 +1096,10 @@ func k8sMountVolume(ns, name, volume, agentPort, pass string) {
 			answer("error: replacing the previous mount helper: %v", err)
 		}
 	}
-	body := k8sMountPod(ns, helper, name, volume, claim, node, mountImage(image), owner, pass, mountAllow(k8sSelfIP()))
+	// The platform decides the pod's shape: OpenShift admits only the
+	// unprivileged one, everything else runs the root one it always did.
+	unprivileged, _ := k8sIsOpenShift()
+	body := k8sMountPod(ns, helper, name, volume, claim, node, mountImage(image), owner, pass, mountAllow(k8sSelfIP()), unprivileged)
 	code, err := k8sAPI("POST", "/api/v1/namespaces/"+ns+"/pods", body, nil)
 	if code == 403 {
 		answer("error: this agent's RBAC cannot create pods, which a mount helper is — re-apply deploy/plug-k8s.yaml (pods: create, delete)")
@@ -1051,7 +1110,7 @@ func k8sMountVolume(ns, name, volume, agentPort, pass string) {
 	// The name in front of it. A leftover Service of this name is this
 	// session's earlier try: replaced.
 	_, _ = k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/services/"+helper, nil, nil)
-	if _, err := k8sAPI("POST", "/api/v1/namespaces/"+ns+"/services", k8sMountService(ns, helper, owner), nil); err != nil {
+	if _, err := k8sAPI("POST", "/api/v1/namespaces/"+ns+"/services", k8sMountService(ns, helper, owner, unprivileged), nil); err != nil {
 		_, _ = k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/pods/"+helper, nil, nil)
 		answer("error: creating the mount helper's Service: %v", err)
 	}
