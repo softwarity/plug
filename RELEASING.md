@@ -50,6 +50,13 @@ Settings > Environments > New environment, named exactly `release`:
 secrets; the CI builds need them before any approval. Nothing is published to
 GitHub Packages, so no packages permission is involved.
 
+One more environment is involved, `github-pages`: the documentation site
+redeploys on `release: published`, a run whose ref is the TAG, so that
+environment must allow tags `v*` as well as `main` (Settings > Environments >
+github-pages > Deployment branches and tags). Without the tag rule the deploy
+is refused and the site keeps showing the previous version, since the version
+commit itself is pushed with `[skip ci]` and starts no deploy.
+
 ## The release signing key
 
 plug runs the core with the privilege it holds: root on macOS, `CAP_SYS_ADMIN`
