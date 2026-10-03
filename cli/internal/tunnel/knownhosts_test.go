@@ -3,6 +3,7 @@ package tunnel
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -138,7 +139,9 @@ func TestARepinReplacesTheFileAndKeepsTheOtherHosts(t *testing.T) {
 	if got := pinnedKeys(t, path, testAddr); len(got) != 1 || got[0] != key2.Type()+" "+sshMarshal(key2) {
 		t.Errorf("the re-pin did not land: %v", got)
 	}
-	if fi, err := os.Stat(path); err != nil || fi.Mode().Perm()&0o077 != 0 {
+	// Unix permissions only: Windows has none to report, and Go answers 0666
+	// for every file there.
+	if fi, err := os.Stat(path); runtime.GOOS != "windows" && (err != nil || fi.Mode().Perm()&0o077 != 0) {
 		t.Errorf("known_hosts is %v, want private to its owner", fi.Mode())
 	}
 }
