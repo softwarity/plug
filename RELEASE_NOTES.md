@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.21.0
+
 ### macOS: `sudo plug` refused its own command's connections
 
 Under `sudo`, plug ran the command as you (SUDO_UID) but registered the session
