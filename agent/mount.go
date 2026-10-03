@@ -83,10 +83,12 @@ const (
 // what Samba is for), and a re-provision after a reconnect - a new port - is
 // a new helper beside the old one, which the sweep reaps as the old port no
 // longer answers. Hashed: a volume name can be sixty characters and a bind is
-// a path, neither of which fits a DNS label beside the workload's name.
+// a path, neither of which fits a DNS label beside the workload's name. The
+// workload's name itself may not fit either, past 45 characters: fitClusterName
+// cuts the whole and signs it, and mountOfLabel keeps the name whole.
 func mountHelperName(name, volume, agentPort string) string {
 	sum := sha256.Sum256([]byte(volume + ":" + agentPort))
-	return "plug-mnt-" + name + "-" + hex.EncodeToString(sum[:])[:8]
+	return fitClusterName("plug-mnt-" + name + "-" + hex.EncodeToString(sum[:])[:8])
 }
 
 // mountImage is the image the helper runs: the agent's own, which carries

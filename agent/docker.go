@@ -398,6 +398,7 @@ func containerServe(name string, pairs []portPair, self selfInfo) {
 		"Entrypoint": signpostArgs(pairs, self.relayTarget()),
 		"Labels": map[string]string{
 			signpostLabel:         "1",
+			signpostNameLabel:     name,
 			signpostOwnerLabel:    self.owner(),
 			sessionOwnerLabel:     sessionOwner(self.relayTarget(), pairs),
 			parkedContainersLabel: strings.Join(receipt, ","),
@@ -568,8 +569,10 @@ func dockerGC() {
 				gcNoteRecovered("service:"+s.ID, "scaled %q back up, after an earlier failure", s.Spec.Labels[parkedServiceLabel])
 				_, _ = dockerAPI("DELETE", "/services/"+s.ID, nil, nil)
 				// The secrets stashed at park are the parked service's, and it
-				// is running again: drop them, as restoreServiceParked does.
-				if n := strings.TrimPrefix(s.Spec.Name, signpostName("")); n != s.Spec.Name {
+				// is running again: drop them, as restoreServiceParked does. The
+				// stash is keyed by the served name, which the label carries
+				// whole (the object's name may have been cut to fit).
+				if n := signpostServedName(s.Spec.Name, s.Spec.Labels); n != "" {
 					_ = os.Remove(swarmSecretStash(n))
 				}
 			}

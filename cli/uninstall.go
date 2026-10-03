@@ -168,8 +168,11 @@ func hasProfiles(plugDir string) bool {
 	return false
 }
 
+// promptPurge asks before deleting the profiles. The device comes from
+// openTerminal, never from a literal: on Windows /dev/tty does not exist, so
+// this used to keep the profiles on every console there without ever asking.
 func promptPurge() bool {
-	tty, err := os.Open("/dev/tty")
+	tty, err := openTerminal()
 	if err != nil {
 		info("keeping your profiles (no terminal to ask; use --purge to remove)")
 		return false

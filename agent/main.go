@@ -41,6 +41,8 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1078,7 +1080,55 @@ func (s selfInfo) owner() string {
 // inside a gateway that scales.
 func (s selfInfo) relayTarget() string { return s.name }
 
-func signpostName(name string) string { return "plug-sp-" + name }
+// clusterNameMax is the longest name every backend takes: a DNS label. A k8s
+// Service name, a k8s label value and a Swarm service name are all bounded by
+// it, and each refuses the object outright one character past it.
+const clusterNameMax = 63
+
+// fitClusterName keeps a DERIVED name (a prefix in front of a workload's name,
+// sometimes a hash behind it) within clusterNameMax. A name that fits is
+// returned untouched: the e2e suites and every session in flight know their
+// signposts and helpers by today's names, and a renaming would orphan them. A
+// name that does not fit is cut and gets a 6-hex digest of the FULL name, so two
+// long names that share their first fifty characters still get two objects,
+// and the same long name always gets the same one. The cut never ends in a
+// dash and the result stays lowercase, so it is still a valid label.
+//
+// Nothing reads a workload's name back out of a fitted name: the objects carry
+// it in a label of their own (signpostNameLabel, mountOfLabel).
+func fitClusterName(full string) string {
+	if len(full) <= clusterNameMax {
+		return full
+	}
+	sum := sha256.Sum256([]byte(full))
+	tag := hex.EncodeToString(sum[:])[:6]
+	keep := strings.TrimRight(full[:clusterNameMax-1-len(tag)], "-")
+	return keep + "-" + tag
+}
+
+func signpostName(name string) string { return fitClusterName("plug-sp-" + name) }
+
+// signpostNameLabel carries the served name on a signpost, whole. The object's
+// own name used to be the only record of it, prefix stripped, and that stops
+// working the day a name is cut to fit (fitClusterName): the sweep that removes
+// a parked service's secret stash needs the name the stash was keyed by.
+const signpostNameLabel = "plug.signpost.name"
+
+// signpostServedName is the plug name a signpost carries: its label, or, for a
+// signpost an older agent created, its object name with the prefix taken off.
+// That fallback is exact: an older agent never cut a name, and one too long for
+// the backend was refused at creation, so a signpost without the label is one
+// whose object name holds the served name whole. Pure, so the fallback is
+// testable without a daemon.
+func signpostServedName(objectName string, labels map[string]string) string {
+	if n := labels[signpostNameLabel]; n != "" {
+		return n
+	}
+	if n := strings.TrimPrefix(objectName, signpostName("")); n != objectName {
+		return n
+	}
+	return ""
+}
 
 // Parking receipts — how a takeover is undone. The signpost created for the
 // session carries, in its labels, exactly what was parked; unserve-name and the

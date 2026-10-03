@@ -23,8 +23,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"golang.org/x/term"
 )
 
 func servedDir() string { return filepath.Join(plugDir(), "served") }
@@ -194,13 +192,11 @@ func holderIsOurs(r *servedRecord, refusal string) bool {
 // opens quite happily in a CI job with no console attached, and the read that
 // follows never returns — 16 minutes of a Windows e2e leg went that way before
 // this was written. Ask the OS whether stdin IS a terminal, which is the real
-// question, and keep a backstop deadline for any context neither of us thought
-// of: an unanswered question falls back to reporting, never to killing.
+// question (openTerminal does, for every prompt plug has), and keep a backstop
+// deadline for any context neither of us thought of: an unanswered question
+// falls back to reporting, never to killing.
 func askToStop(r *servedRecord) bool {
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return false
-	}
-	tty, err := os.Open(ttyDevice)
+	tty, err := openTerminal()
 	if err != nil {
 		return false
 	}

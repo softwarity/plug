@@ -302,6 +302,7 @@ func swarmServe(name string, pairs []portPair, self selfInfo) {
 	}
 	labels := map[string]string{
 		signpostLabel:      "1",
+		signpostNameLabel:  name,
 		signpostOwnerLabel: self.owner(),
 		sessionOwnerLabel:  sessionOwner(self.relayTarget(), pairs),
 	}

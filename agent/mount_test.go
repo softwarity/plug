@@ -84,6 +84,30 @@ func TestMountHelperName(t *testing.T) {
 	if !nameRe.MatchString(a) {
 		t.Fatalf("%q is not a DNS label", a)
 	}
+	// The workload's name is a label of up to 63 characters, and the helper's
+	// name wraps it in a prefix and a hash: past 45 the whole no longer fits a
+	// label, and every backend refused the helper (the k8s label value, the k8s
+	// Service name, the Swarm service name). A name of 45 is the last one to
+	// fit, and it keeps the shape every session knows.
+	n45 := strings.Repeat("w", 45)
+	if got := mountHelperName(n45, "data", "40001"); len(got) != 63 || !strings.HasPrefix(got, "plug-mnt-"+n45+"-") {
+		t.Fatalf("a 45-char name fits as it always did, got %q (%d)", got, len(got))
+	}
+	for _, n := range []string{strings.Repeat("w", 46), strings.Repeat("w", 63), "a" + strings.Repeat("-b", 31)} {
+		got := mountHelperName(n, "data", "40001")
+		if len(got) > clusterNameMax || !nameRe.MatchString(got) {
+			t.Fatalf("mountHelperName(%d chars) = %q: not a label the cluster takes", len(n), got)
+		}
+		if !strings.HasPrefix(got, "plug-mnt-") {
+			t.Fatalf("the prefix is how a helper is told apart, got %q", got)
+		}
+		if got == mountHelperName(n, "logs", "40001") || got == mountHelperName(n, "data", "40002") {
+			t.Fatalf("a cut name must still tell volumes and sessions apart: %q", got)
+		}
+		if got != mountHelperName(n, "data", "40001") {
+			t.Fatal("a cut name must still be deterministic")
+		}
+	}
 }
 
 // The reply line is one token per field, so the client splits it on spaces;

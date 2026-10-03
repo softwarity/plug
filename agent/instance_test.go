@@ -222,6 +222,58 @@ func TestReceiptWithoutAnOwnerReadsAsGone(t *testing.T) {
 	}
 }
 
+// The sweep judges a plug Service by its owner annotation, and that annotation
+// is EMPTY on a pod that never learnt its address (no downward API in the
+// manifest, k8sNoteEndpointsGrant). sessionLive("") is false, so a live
+// session's Service read as a crashed one's and was set to linger, endpoints
+// cut, within the minute. The serve path had always asked the Service's own
+// target port in that case; the sweep must ask the same question.
+func TestK8sServiceSessionLiveFallsBackToThePortWithoutAnOwner(t *testing.T) {
+	alive := func(string) bool { return true }
+	dead := func(string) bool { return false }
+	// What each probe was asked, so a case can assert WHICH source decided.
+	var dialled, probed []string
+	record := func(into *[]string, answer bool) func(string) bool {
+		return func(s string) bool { *into = append(*into, s); return answer }
+	}
+	cases := []struct {
+		what       string
+		owner      string
+		targetPort string
+		live       func(string) bool
+		portLive   func(string) bool
+		want       bool
+	}{
+		{"owner named and answering", "10.244.1.7:41017", "41017", alive, dead, true},
+		{"owner named and silent: gone, whatever the port says", "10.244.1.7:41017", "41017", dead, alive, false},
+		{"no owner, the port answers on this pod", "", "41017", dead, alive, true},
+		{"no owner, the port is silent", "", "41017", dead, dead, false},
+		{"no owner and no port: nothing could answer for it", "", "", alive, alive, false},
+	}
+	for _, c := range cases {
+		if got := k8sServiceSessionLive(c.owner, c.targetPort, c.live, c.portLive); got != c.want {
+			t.Errorf("%s: k8sServiceSessionLive(%q, %q) = %v, want %v", c.what, c.owner, c.targetPort, got, c.want)
+		}
+	}
+	// With an owner, the port is never consulted; without one, the owner never is.
+	k8sServiceSessionLive("10.244.1.7:41017", "41017", record(&dialled, false), record(&probed, true))
+	if len(dialled) != 1 || dialled[0] != "10.244.1.7:41017" || len(probed) != 0 {
+		t.Errorf("a named owner is the whole question: dialled %v, probed %v", dialled, probed)
+	}
+	dialled, probed = nil, nil
+	k8sServiceSessionLive("", "41017", record(&dialled, true), record(&probed, false))
+	if len(dialled) != 0 || len(probed) != 1 || probed[0] != "41017" {
+		t.Errorf("without an owner the port is asked, and only the port: dialled %v, probed %v", dialled, probed)
+	}
+	// The port the sweep hands it is the one k8sServe wrote: the agent port.
+	if tp := k8sTargetPort(json.RawMessage(`[{"name":"p8081","port":8081,"targetPort":41017}]`)); tp != "41017" {
+		t.Errorf("k8sTargetPort = %q, want the session's agent port", tp)
+	}
+	if tp := k8sTargetPort(nil); tp != "" {
+		t.Errorf("a Service listed without ports yields no port, got %q", tp)
+	}
+}
+
 // A Service with no selector and no Endpoints resolves to nothing, so what
 // happens when the write fails decides whether a cluster keeps working.
 //

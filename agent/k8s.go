@@ -163,6 +163,29 @@ func ownsAgentPort(pairs []portPair, port string) bool {
 	return false
 }
 
+// k8sServiceSessionLive decides whether the session behind a plug Service is
+// still there: the one question the serve path and the sweep both ask, with the
+// same two sources. owner is the Service's sessionOwnerLabel annotation and
+// live dials it; targetPort is the first port's targetPort (the session's agent
+// port) and portLive probes it on THIS pod.
+//
+// An owner that is named is the whole answer, alive or dead: it is an address
+// any replica can dial, and the port says nothing a dead owner's silence does
+// not. An owner that is NOT named is the case the fallback exists for. The
+// annotation is empty when k8sSelfIP found no address (a manifest without the
+// downward API, k8sNoteEndpointsGrant), and sessionLive("") reads as dead; the
+// sweep then set a live session's Service to linger, cutting its endpoints,
+// within the minute. The serve path had always asked the port instead in that
+// case, which the single replica such a deployment runs can see; the sweep now
+// asks the same. No port at all is a Service nothing could answer for: gone.
+// Pure, so the rule is testable without a cluster.
+func k8sServiceSessionLive(owner, targetPort string, live func(string) bool, portLive func(string) bool) bool {
+	if owner != "" {
+		return live(owner)
+	}
+	return targetPort != "" && portLive(targetPort)
+}
+
 // k8sTargetPort reads the targetPort out of a plug Service's ports.
 func k8sTargetPort(raw json.RawMessage) string {
 	var ports []struct {
@@ -959,6 +982,7 @@ func k8sGC() {
 			} `json:"metadata"`
 			Spec struct {
 				Selector map[string]string `json:"selector"`
+				Ports    json.RawMessage   `json:"ports"`
 			} `json:"spec"`
 		} `json:"items"`
 	}
@@ -987,7 +1011,9 @@ func k8sGC() {
 			// agent that was the same sentence; with a replica booting beside
 			// three that are serving, it is the difference between sweeping this
 			// pod's leftovers and cutting a colleague's session off mid-request.
-			if sessionLive(s.Metadata.Annotations[sessionOwnerLabel]) {
+			// Without an owner (this pod never learnt its address) the port is
+			// asked, as the serve path asks it: see k8sServiceSessionLive.
+			if k8sServiceSessionLive(s.Metadata.Annotations[sessionOwnerLabel], k8sTargetPort(s.Spec.Ports), sessionLive, agentPortLive) {
 				continue
 			}
 			// A session that does not answer is not a session that is gone.

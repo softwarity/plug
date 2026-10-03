@@ -88,9 +88,10 @@ func configTarget(profile string) string {
 	return ""
 }
 
-// setProfileKey rewrites one key in a profile, in place. It reads the file back
-// line by line rather than reserialising it, so comments, spacing and any key
-// this version does not know about survive being edited by it.
+// setProfileKey rewrites one key in an EXISTING profile, in place (see
+// upsertProfileKeys: comments, spacing and unknown keys survive). Unlike
+// writeProfile it refuses to create the file: a key or an update policy with no
+// host to go with it is not a profile anyone can use.
 func setProfileKey(name, key, val string) {
 	path := profilePath(name)
 	guardUserPath(path) // plug may hold root here — never write outside the caller's tree
@@ -98,25 +99,5 @@ func setProfileKey(name, key, val string) {
 	if err != nil {
 		fatal("no profile %q in %s — create one with 'plug init'", name, plugDir())
 	}
-	lines := strings.Split(string(data), "\n")
-	replaced := false
-	for i, line := range lines {
-		k, _, ok := strings.Cut(strings.TrimSpace(line), "=")
-		if ok && strings.TrimSpace(k) == key {
-			lines[i] = fmt.Sprintf("%s = %s", key, val)
-			replaced = true
-			break
-		}
-	}
-	if !replaced {
-		// Append, keeping exactly one trailing newline whatever the file had.
-		for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
-			lines = lines[:len(lines)-1]
-		}
-		lines = append(lines, fmt.Sprintf("%s = %s", key, val), "")
-	}
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o600); err != nil {
-		fatal("cannot write %s: %v", path, err)
-	}
-	chownToUser(path) // written as euid 0 on the setuid path
+	saveProfileText(path, upsertProfileKeys(string(data), [2]string{key, val}))
 }

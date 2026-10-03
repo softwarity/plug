@@ -138,7 +138,7 @@ func TestTheSidecarFollowsTheLauncherFlavour(t *testing.T) {
 // is more honest than a green tick that would not have covered it.
 func TestTheProfileKeyReachesTheSidecar(t *testing.T) {
 	withKey := sidecarArgs(config{host: "h", port: "2222", key: "/home/dev/.plug/prod.key"},
-		"", []string{"-c"}, "amd64", "plug-net-abc", "img")
+		"", []string{"-c"}, "amd64", "plug-net-abc", "img", testOwner)
 	joined := strings.Join(withKey, " ")
 
 	if !strings.Contains(joined, "-v /home/dev/.plug/prod.key:/plug/key:ro") {
@@ -153,9 +153,83 @@ func TestTheProfileKeyReachesTheSidecar(t *testing.T) {
 
 	// And no phantom mount when the profile has none: every cluster without a
 	// gateway is in this case, and an empty -v would fail the run outright.
-	none := strings.Join(sidecarArgs(config{host: "h", port: "2222"}, "", []string{"-c"}, "amd64", "n", "img"), " ")
+	none := strings.Join(sidecarArgs(config{host: "h", port: "2222"}, "", []string{"-c"}, "amd64", "n", "img", testOwner), " ")
 	if strings.Contains(none, "/plug/key") || strings.Contains(none, "PLUG_CORE_KEY") {
 		t.Errorf("a profile with no key still produced a mount: %q", none)
+	}
+}
+
+// testOwner stands for the session starting a sidecar in the argv tests.
+var testOwner = sidecarOwner{cluster: "0123456789abcdef", pid: 4242, host: "dev-box"}
+
+// Two sessions towards the same cluster, on the same machine, must never share
+// a sidecar name. The name used to be the cluster hash alone, and the cleanup
+// that kept `docker run --name` from clashing was a `docker rm -f` of it: the
+// second --dockerrun removed the first one's sidecar, which was its network.
+func TestSidecarNamesAreUniquePerSession(t *testing.T) {
+	a := sidecarOwner{cluster: "0123456789abcdef", pid: 100, host: "dev-box"}
+	b := sidecarOwner{cluster: "0123456789abcdef", pid: 101, host: "dev-box"}
+	if a.name() == b.name() {
+		t.Fatalf("two sessions on one cluster got the same sidecar name %q", a.name())
+	}
+	if !strings.HasPrefix(a.name(), "plug-net-0123456789abcdef") {
+		t.Errorf("the name no longer says which cluster: %q", a.name())
+	}
+	if !strings.HasSuffix(a.name(), "-100") {
+		t.Errorf("the name no longer says whose it is: %q", a.name())
+	}
+	// And the user's container joins THAT name, so the two are spliced from the
+	// same value: a mismatch here is a container in the wrong network.
+	full, err := dockerRunCmd([]string{"docker", "run", "img"}, a.name(), "/r", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(full, " "), "--network container:"+a.name()) {
+		t.Errorf("the user's container does not join the sidecar by its name: %q", full)
+	}
+}
+
+// The labels are what the next session's cleanup reads to tell a leftover from
+// a live session. Without them the decision falls back to the name, and the
+// name was the whole problem.
+func TestSidecarCarriesItsOwnerAsLabels(t *testing.T) {
+	got := strings.Join(sidecarArgs(config{host: "h", port: "2222"}, "", nil, "amd64", testOwner.name(), "img", testOwner), " ")
+	for _, want := range []string{
+		"--label plug.cluster=0123456789abcdef",
+		"--label plug.owner.pid=4242",
+		"--label plug.owner.host=dev-box",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the sidecar is missing %q:\n  %s", want, got)
+		}
+	}
+	// The cleanup lists by the same labels it writes, or it never finds anything.
+	filters := strings.Join(testOwner.filters(), " ")
+	for _, want := range []string{"label=plug.cluster=0123456789abcdef", "label=plug.owner.host=dev-box"} {
+		if !strings.Contains(filters, want) {
+			t.Errorf("the listing does not select on %q: %s", want, filters)
+		}
+	}
+}
+
+// The decision that costs another session its network if it is wrong: of the
+// sidecars of this cluster, only those whose owner is gone are leftovers. A live
+// owner is left alone whatever its name; this process's own PID is a previous
+// life of the PID and so stale; a line docker could not label is nobody's.
+func TestOnlyTheSidecarsOfDeadOwnersAreStale(t *testing.T) {
+	alive := func(pid int) bool { return pid == 2000 }
+	listing := "plug-net-abc-1000\t1000\n" + // dead owner: a killed run
+		"plug-net-abc-2000\t2000\n" + // live owner: another session, right now
+		"plug-net-abc-3000\t3000\n" + // this process's own PID, reused since
+		"plug-net-abc-x\t\n" + // no owner label
+		"\n"
+	got := staleSidecars(listing, 3000, alive)
+	want := []string{"plug-net-abc-1000", "plug-net-abc-3000"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("stale = %q, want %q", got, want)
+	}
+	if got := staleSidecars("", 1, alive); len(got) != 0 {
+		t.Errorf("an empty listing produced %q", got)
 	}
 }
 
@@ -164,7 +238,7 @@ func TestTheProfileKeyReachesTheSidecar(t *testing.T) {
 // that never comes up rather than as a missing flag.
 func TestTheSidecarCarriesWhatTheDatapathNeeds(t *testing.T) {
 	got := strings.Join(sidecarArgs(config{host: "h.example", port: "2200"},
-		"plug-e2e_edge", []string{"-s", "api:8080:8080"}, "arm64", "plug-net-1", "softwarity/plug:x"), " ")
+		"plug-e2e_edge", []string{"-s", "api:8080:8080"}, "arm64", "plug-net-1", "softwarity/plug:x", testOwner), " ")
 
 	for _, want := range []string{
 		"--cap-add NET_ADMIN",                // the TUN device and its routes

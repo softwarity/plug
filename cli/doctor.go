@@ -463,32 +463,29 @@ func doctorProfile(name string, add func(check)) {
 }
 
 // readProfileSoft reads a profile without loadProfile's fatal — doctor reports
-// a broken profile as a finding, it must not die on it.
+// a broken profile as a finding, it must not die on it. Same parser as
+// loadProfile (parseProfile), so every key the launcher honours is reported
+// here too; the port defaults because the callers (doctor, versions, prune,
+// update, the MCP server) dial the agent with it and have no resolveConfig to
+// fill it in. The name is checked before profilePath sees it, since that one is
+// fatal on a bad name and a bad name is exactly what this must report instead.
 func readProfileSoft(name string) (config, error) {
 	if err := checkProfileName(name); err != nil {
 		return config{}, err
 	}
-	data, err := os.ReadFile(filepath.Join(plugDir(), name+".conf"))
+	data, err := os.ReadFile(profilePath(name))
 	if err != nil {
 		return config{}, fmt.Errorf("unreadable: %v", err)
 	}
-	cfg := config{port: defaultPort}
-	for _, line := range strings.Split(string(data), "\n") {
-		key, val, ok := strings.Cut(strings.TrimSpace(line), "=")
-		if !ok {
-			continue
-		}
-		switch strings.TrimSpace(key) {
-		case "host":
-			cfg.host = strings.TrimSpace(val)
-		case "port":
-			cfg.port = strings.TrimSpace(val)
-		case "key":
-			cfg.key = strings.TrimSpace(val)
-		}
+	cfg, _, err := parseProfile(data)
+	if err != nil {
+		return config{}, err
 	}
 	if cfg.host == "" {
 		return config{}, fmt.Errorf("no host in the profile")
+	}
+	if cfg.port == "" {
+		cfg.port = defaultPort
 	}
 	return cfg, nil
 }

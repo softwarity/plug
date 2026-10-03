@@ -12,8 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/term"
-
 	"github.com/softwarity/plug/cli/internal/tun"
 	"github.com/softwarity/plug/cli/internal/tunnel"
 )
@@ -315,10 +313,7 @@ const offerUpdateDeadline = 12 * time.Second
 // fatal() on failure, and a failed update must never cost the user the command
 // they actually typed.
 func offerUpdate(cfg config, available string) bool {
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return false
-	}
-	tty, err := os.Open(ttyDevice)
+	tty, err := openTerminal()
 	if err != nil {
 		return false
 	}

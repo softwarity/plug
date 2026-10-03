@@ -173,7 +173,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }} # idle-until-caller-done polls the caller run
           PLUG_CALLER_RUN_ID: ${{ inputs.caller }} # authoritative; the corr split is the fallback
-          PLUG_CLUSTER_TTL: "1200" # backstop only — kill-cluster cancels this run when the e2e jobs finish
+          # Same backstop as k8s and swarm: the compose legs have 25 minutes
+          # and e2e-arm64 starts late on these very clusters, so 1200 could
+          # expire under a slow leg. kill-cluster cancels this run long before.
+          PLUG_CLUSTER_TTL: "2100"
           # The cluster's identity, served by the `ident` service — the multicluster
           # e2e asserts that the SAME name reaches the RIGHT cluster through each plug.
           PLUG_CLUSTER_IDENT: ${{ inputs.corr }}

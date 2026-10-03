@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -280,13 +281,19 @@ func startDockerSidecar(cfg config, network string, plugFlags []string) (string,
 	if err != nil {
 		return "", nil, err
 	}
-	name := "plug-net-" + tun.ClusterHash(cfg.host+":"+cfg.port)
+	owner := thisSidecarOwner(cfg)
+	name := owner.name()
 
 	// A leftover from a killed run would make `docker run --name` fail with a
-	// name clash, which says nothing about plug. Ours to clean up, by name.
-	_ = exec.Command("docker", "rm", "-f", name).Run()
+	// name clash, which says nothing about plug. Ours to clean up, but only OURS:
+	// the name used to be the cluster hash alone and the cleanup a `docker rm -f`
+	// of it, so a second --dockerrun towards the same cluster removed the first
+	// one's sidecar, which was that session's whole network, without a word to
+	// either of them. The name now carries the owner's PID and the labels say
+	// whose it is; only a sidecar whose owner is gone is a leftover.
+	removeStaleSidecars(owner)
 
-	args := sidecarArgs(cfg, network, plugFlags, arch, name, dockerSidecarImage())
+	args := sidecarArgs(cfg, network, plugFlags, arch, name, dockerSidecarImage(), owner)
 
 	out, err := exec.Command("docker", args...).CombinedOutput()
 	if err != nil {
@@ -313,6 +320,100 @@ func startDockerSidecar(cfg config, network string, plugFlags []string) (string,
 		cfg.host, cfg.port, strings.TrimSpace(string(logs)))
 }
 
+// The labels a sidecar carries, so that whose it is can be asked of the docker
+// daemon rather than guessed from a name. plug.cluster says which agent it holds
+// a tunnel to; plug.owner.pid and plug.owner.host say which plug process, on
+// which machine, is running on top of it. The machine matters because a daemon
+// can be shared (DOCKER_HOST): a PID is only meaningful on the host that owns it.
+const (
+	sidecarClusterLabel = "plug.cluster"
+	sidecarOwnerLabel   = "plug.owner.pid"
+	sidecarHostLabel    = "plug.owner.host"
+)
+
+// sidecarOwner identifies the plug session a sidecar belongs to: the cluster it
+// holds a tunnel to (tun.ClusterHash of host:port) and the process, on this
+// machine, that runs on top of it.
+type sidecarOwner struct {
+	cluster string
+	pid     int
+	host    string // os.Hostname(), empty when the OS could not say
+}
+
+func thisSidecarOwner(cfg config) sidecarOwner {
+	host, _ := os.Hostname()
+	return sidecarOwner{cluster: tun.ClusterHash(cfg.host + ":" + cfg.port), pid: os.Getpid(), host: host}
+}
+
+// name is the sidecar's container name, which the user's container joins with
+// --network container:<name>. It carries the PID so two sessions towards the
+// same cluster, on the same machine, never share one: the cluster hash alone
+// made the second `docker run --name` clash with the first, and the cleanup
+// that avoided the clash removed a live session's network.
+func (o sidecarOwner) name() string {
+	return "plug-net-" + o.cluster + "-" + strconv.Itoa(o.pid)
+}
+
+// labels are the --label flags that make the owner readable back from docker.
+func (o sidecarOwner) labels() []string {
+	return []string{
+		"--label", sidecarClusterLabel + "=" + o.cluster,
+		"--label", sidecarOwnerLabel + "=" + strconv.Itoa(o.pid),
+		"--label", sidecarHostLabel + "=" + o.host,
+	}
+}
+
+// filters select, among everything the daemon has, the sidecars this process
+// may judge: same cluster, started from this machine.
+func (o sidecarOwner) filters() []string {
+	return []string{
+		"--filter", "label=" + sidecarClusterLabel + "=" + o.cluster,
+		"--filter", "label=" + sidecarHostLabel + "=" + o.host,
+	}
+}
+
+// removeStaleSidecars removes the sidecars of this cluster, from this machine,
+// whose owning process is gone. It asks docker for name and owner PID in one
+// listing and decides with staleSidecars; a daemon that cannot be listed leaves
+// everything in place, and the `docker run` that follows says what is wrong.
+func removeStaleSidecars(owner sidecarOwner) {
+	args := append([]string{"ps", "-a", "--format", "{{.Names}}\t{{.Label \"" + sidecarOwnerLabel + "\"}}"}, owner.filters()...)
+	out, err := exec.Command("docker", args...).Output()
+	if err != nil {
+		return
+	}
+	for _, name := range staleSidecars(string(out), owner.pid, processAlive) {
+		_ = exec.Command("docker", "rm", "-f", name).Run()
+	}
+}
+
+// staleSidecars reads a `docker ps` listing of "name<TAB>owner pid" lines and
+// names the sidecars whose owner is dead. Separated from docker so the decision
+// can be tested against a table, since the cost of getting it wrong is another
+// session's network.
+//
+// A sidecar labelled with THIS process's PID is stale too: this process has
+// just started and owns nothing yet, so the label is a previous life of the PID
+// (the OS reuses them), and the name it carries is the one about to be taken.
+// A line whose PID does not parse is nobody's to judge and is left alone.
+func staleSidecars(listing string, self int, alive func(int) bool) []string {
+	var stale []string
+	for _, line := range strings.Split(listing, "\n") {
+		name, pidText, ok := strings.Cut(strings.TrimSpace(line), "\t")
+		if !ok || name == "" {
+			continue
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(pidText))
+		if err != nil || pid <= 0 {
+			continue
+		}
+		if pid == self || !alive(pid) {
+			stale = append(stale, name)
+		}
+	}
+	return stale
+}
+
 // sidecarArgs builds the `docker run` for the container that holds the tunnel.
 //
 // Separated from the running of it so the shape can be asserted without a docker
@@ -328,8 +429,10 @@ func startDockerSidecar(cfg config, network string, plugFlags []string) (string,
 // holds one throwaway key and NOT the key built into plug. The built-in key is
 // refused there, so a tunnel that comes up could only have been carried by the
 // file mounted below, and the same profile with its key line removed is refused.
-func sidecarArgs(cfg config, network string, plugFlags []string, arch, name, image string) []string {
-	args := []string{"run", "-d", "--name", name,
+func sidecarArgs(cfg config, network string, plugFlags []string, arch, name, image string, owner sidecarOwner) []string {
+	args := []string{"run", "-d", "--name", name}
+	args = append(args, owner.labels()...) // whose it is, for the next session's cleanup to read
+	args = append(args,
 		"--cap-add", "NET_ADMIN", // the TUN device and its routes
 		"--cap-add", "SYS_ADMIN", // the per-launch mount namespace
 		// The host's AppArmor profile blocks that mount namespace bind on Linux
@@ -337,9 +440,9 @@ func sidecarArgs(cfg config, network string, plugFlags []string, arch, name, ima
 		"--security-opt", "apparmor:unconfined",
 		"--device", "/dev/net/tun:/dev/net/tun",
 		"-e", "PLUG_CORE=1",
-		"-e", "PLUG_CORE_HOST=" + cfg.host,
-		"-e", "PLUG_CORE_PORT=" + cfg.port,
-	}
+		"-e", "PLUG_CORE_HOST="+cfg.host,
+		"-e", "PLUG_CORE_PORT="+cfg.port,
+	)
 	if network != "" {
 		args = append(args, "--network", network)
 	}

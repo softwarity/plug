@@ -79,8 +79,12 @@ func configure(_ any, n int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 	}
 	// Replies to the child arrive on the TUN with a 198.18/15 source; their route
 	// back is the TUN itself, so strict reverse-path filtering would drop them.
+	// The interface's own setting is enough: the kernel applies the HIGHER of
+	// conf.all and conf.<ifname>, so 2 (loose) here wins over a strict 1 in
+	// `all`. This used to set `all` as well, which relaxed anti-spoofing for
+	// every interface of the machine and was never put back; the TUN's entry
+	// disappears with the TUN.
 	_ = run("sysctl", "-w", "net.ipv4.conf."+ifname+".rp_filter=2")
-	_ = run("sysctl", "-w", "net.ipv4.conf.all.rp_filter=2")
 
 	// A PRIVATE resolv.conf — bind-mounted over /etc/resolv.conf inside the child's
 	// mount namespace (see runChild), so the repoint is scoped to this launch.

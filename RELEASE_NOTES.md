@@ -2,6 +2,33 @@
 
 ## NEXT RELEASE
 
+### Eight small bugs from the audit
+
+- Windows: `plug init`, `plug -p <new> <cmd>` and the profile chooser always
+  answered "no terminal available". They opened `/dev/tty`, which Windows does
+  not have; they open the console the way every other prompt in plug does.
+- Two `--dockerrun` sessions to the same cluster: the second removed the
+  first one's network sidecar, and with it the first session's network. A
+  sidecar now carries its session's pid in its name and as a label, and a
+  start only removes sidecars whose owner is gone.
+- A workload named with more than 45 characters had its mount helper, and
+  past 55 its signpost, refused by Kubernetes and Swarm (63-character limit).
+  Long names are cut and signed with a short hash; names that fit are
+  unchanged, and the full name travels in a label.
+- `plug -p prod -H host ...` and `plug init` rewrote the profile file whole,
+  dropping the personal key and the update policy without a word. They
+  rewrite only the host and the port now, and keep the rest, comments
+  included. A stray line in a hand-edited profile is reported, not fatal.
+- The MCP tool `list_profiles` always reported an empty update mode: doctor
+  parsed profiles with a second, lesser parser. There is one parser.
+- Kubernetes, an agent without a pod address: the sweep took every served
+  name for dead within the minute. It now asks the name's own port, as the
+  serve path already did.
+- Linux: each session relaxed reverse-path filtering for every interface of
+  the machine and never restored it. Only the TUN interface is set now; the
+  kernel applies the higher of the two settings, so nothing else was needed.
+- CI: the compose clusters' safety TTL was shorter than the legs using them.
+
 ---
 
 ## 2.21.0
