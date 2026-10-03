@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.21.4
+
 ### The audit's structural lot, and one notice that now reaches you
 
 - `check-update` on the agent always answered "current": the comparison it
