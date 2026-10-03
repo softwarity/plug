@@ -29,6 +29,106 @@ matrix. The takeover cell itself reads the name ten times while the session
 lives and after the restore, stamps every answer with its second, and lets the
 restore's own blink settle before judging it.
 
+### Security audit: the launcher, the mount point, the agent's verbs
+
+A deep audit of the codebase (CLI, tunnel, agent, CI, documentation) was run
+on 2026-10-02. What it found that matters to a person running plug, and what
+this release does about it:
+
+- `plug update` replaced the launcher, then made it setuid root again, even
+  when the agent could not say what hash the new build should have: a fake
+  agent on 127.0.0.1 was enough to install any binary as root. The launcher
+  is now replaced only with a digest AND a release signature that verify, the
+  same rule the core already lived by. The WinTUN DLL follows: the agent
+  signs and attests it (`digest wintun`), and a DLL that does not verify is
+  never written beside the Windows service's binary.
+- `--mount` accepted any directory as a mount point, and mounted there with
+  privilege (CAP_SYS_ADMIN through mount(2) on Linux, a root-created directory
+  on macOS). The mount point, or its nearest existing parent when it does not
+  exist yet, must now belong to you: plug mounts only where you could have
+  written unprivileged, the rule every other privileged write already obeys.
+  And since most mounts are placed by plug, not asked for, `plug mounts` from
+  another terminal lists what the live sessions have mounted and where, so a
+  workload's data can be opened in an editor or a file browser.
+- `~/.plug/known_hosts` is re-pinned on every reconnect, as root under the
+  setuid install, and that write followed symlinks with a guard made only once
+  at the first dial. Every write now refuses a symlink, checks the owner, and
+  lands through a temporary file and a rename. `PLUG_STRICT_HOSTKEY=1` turns
+  the "key changed, re-pinned" notice into a refusal for an agent whose host
+  key you keep stable.
+- `--dockerrun` passed the workload's variables, secrets included, as `-e`
+  arguments to docker, readable in `ps` for the life of the container. They
+  go through a 0600 env file in the session's temporary directory now.
+- The shared daemon (root on macOS, SYSTEM on Windows) exited, every session
+  of every account with it and the resolver left poisoned, when one profile
+  carried a key it could not read or that belonged to another account. Such
+  a profile is now reported as a refused dial and backed off; nothing else
+  stops. `plug prune` and the SIGTERM sent to a session holding a served name
+  got the same ownership guards as the rest.
+- Windows: the per-flow account check that macOS got in 2.19 existed on
+  Windows as a stub that allowed everything, so with one cluster plugged any
+  local account could reach it. The check now compares the SID of the
+  connecting process with the account holding the cluster. The client
+  registry under %ProgramData%\plug, writable by every user, is trusted only
+  when a marker's directory matches the hash of the key it names, its owner
+  is the account of the process it names, and its start stamp matches: a
+  recycled PID no longer inherits a dead session's cluster, on any OS.
+- macOS: the manual DNS entry (`Setup:`) plug writes was never backed up on
+  a DHCP machine, so a crash or a kill -9 of the daemon left the machine's
+  DNS pointed at a resolver that was gone, through reboots, and neither
+  `plug down` nor doctor repaired it. It is backed up every time, the orphan
+  repair and doctor both look at it, and the scoped resolver file goes too.
+- macOS: during a reconnect the tunnel held its lock through the whole SSH
+  dial, up to 30 seconds, and the machine's resolution of bare names waited
+  with it. The dial runs outside the lock now; callers share one attempt.
+
+On the agent:
+
+- `self-update apply <tag>` applied any well-formed tag without asking the
+  registry: a typo gave an ImagePullBackOff, an older tag a silent rollback.
+  The tag is checked against the registry and a release older than the one
+  running is refused unless asked for: `plug update <tag> --force`.
+- A takeover could park the agent itself (`plug -s plug ...`): the Compose
+  container stopped, the Swarm service scaled to zero with nobody left to
+  restore it. All three backends refuse a name that is the agent's own.
+- On Docker, `env-of`, `files-of` and `mount-volume` found any container of
+  the daemon by name, networks shared with the agent or not, and served
+  binds of the host's system directories read-write. Candidates are the
+  parked receipt and the owners on shared networks; a bind under `/etc`,
+  `/var/run`, `/usr` and the like is refused with its reason.
+- The sweep that restores what a dead session left parked deleted the
+  parking receipt even when the restore had failed, so a transient Docker
+  error left a workload stopped with no trace. The receipt stays until the
+  restore succeeds, and the failure is logged once per receipt.
+- The Swarm secret stash lives under the agent's state directory, is removed
+  on every restore path and at boot, and is read only for a parked service.
+
+The manifest's header and the Security page said the Role "cannot touch
+pods"; it grants `pods` and `pods/exec`, which is running code in the
+namespace. Both now say so, rule by rule, and say what the real boundary is:
+whoever reaches the agent's port has every verb. `kubectl port-forward` is
+the way to keep that port off the network.
+
+Dependencies: `golang.org/x/crypto` 0.57.0 (two advisories reachable through
+the SSH dial), the documentation site's packages at zero known advisories,
+and the one script it loaded from a CDN at run time is now part of its bundle.
+
+### CI: the resilience cell on Kubernetes never restarted the agent
+
+Developer-facing. The chaos service looked for the per-leg agent pod under a
+label nothing carried, answered "no pod", and the cell discarded the answer:
+on the three Kubernetes legs the cell had passed since it existed without
+cutting a session once. It restarts the right pod now, requires the answer,
+and requires a reconnect in the session's log. Along with it: every cell that
+judged on the first matching answer reads ten; the per-leg test agents get
+their RBAC from the published manifest instead of a copy that had drifted
+(they lacked the EndpointSlice right, so the half-the-requests bug of 2.20.1
+was still live for them, unseen); the e2e legs lost `actions: write` and
+their persisted token; the image job pins its third-party actions by commit
+like the others; a cluster workflow's image input is validated instead of
+interpolated into a shell; and the cell watchdog counts from the job's real
+start, not from the end of its setup.
+
 ---
 
 ## 2.20.2
