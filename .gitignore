@@ -29,3 +29,7 @@ e2e/services/*/flaky
 e2e/services/*/gateway
 e2e/services/*/grpc
 e2e/services/*/websocket
+
+# Local maintainer notes, never published
+release-manual.md
+AUDIT-*.md
