@@ -7,8 +7,9 @@
 do_multicluster() {
   echo "=== multicluster: http://ident:5678 through plug-A and plug-B ==="
   # ident answers the corr id - strip whichever family prefix this leg targets
-  # (plug-cluster-<corr> compose, plug-k8s-<corr> kind, plug-swarm-<corr> swarm).
-  local expect_a="${peer#plug-cluster-}" expect_b="${peer_b#plug-cluster-}"
+  # (plug-compose-<corr>, plug-k8s-<corr>, plug-swarm-<corr>: one rule, see
+  # _cluster.yml).
+  local expect_a="${peer#plug-compose-}" expect_b="${peer_b#plug-compose-}"
   expect_a="${expect_a#plug-k8s-}"; expect_b="${expect_b#plug-k8s-}"
   expect_a="${expect_a#plug-swarm-}"; expect_b="${expect_b#plug-swarm-}"
   local ip_b mc=PASS a_out="" b_out="" mc_pid
