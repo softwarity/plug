@@ -2065,9 +2065,15 @@ do_resilience() {
     sleep 5
   done
   # Five reads, all ours again: the re-park is a takeover like any other and
-  # a single matching read proves no more here than it did above.
+  # a single matching read proves no more here than it did above. Three must
+  # fit before the phase's deadline: a Windows read costs eight seconds and
+  # the reconnect itself has already spent most of the window, so the fifth
+  # read landed just past the deadline on a run where every read was right
+  # (the first real run of this cell on Windows swarm). What this phase
+  # asserts is "no read went to the deployed service", and three reads say
+  # that as well as five; what it must never do is accept ONE.
   if [ "$after_crash" = "local-res-$leg" ]; then
-    assert_all bprobe "local-res-$leg" 5 "deployed- local-" "$res_deadline" || after_crash="$aa_why"
+    assert_all bprobe "local-res-$leg" 5 "deployed- local-" "$res_deadline" 3 || after_crash="$aa_why"
   fi
   addr_after="$(cresolve)"
   # Whether the name KEEPS its address across this depends on what the backend
