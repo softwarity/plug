@@ -245,7 +245,7 @@ func startExposes(cfg config) (func(), error) {
 	// a -c gets an environment at all, and how a -s borrows another service's
 	// rather than the one it replaces; the parked branch below stays out of it.
 	if from := cfg.envPolicy.from; from != "" {
-		tr, err := dialTunnel(cfg)
+		tr, err := dialSession(cfg)
 		if err != nil {
 			return nil, err
 		}
@@ -255,7 +255,7 @@ func startExposes(cfg config) (func(), error) {
 	if len(cfg.exposes) == 0 {
 		return func() {}, nil
 	}
-	tr, err := dialTunnel(cfg)
+	tr, err := dialSession(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -268,7 +268,7 @@ func startExposes(cfg config) (func(), error) {
 	// The mappings of each name, by name. Declared here — before drop — because
 	// the teardown has to tell the agent WHICH session is releasing the name,
 	// and that identity is the current agent port of the name's first mapping.
-	groups := map[string][]*tunnel.Exposed{}
+	groups := map[string][]exposedMapping{}
 	// Forgets this session's ~/.plug/served records — the breadcrumb that lets a
 	// LATER session name whoever holds a name it is refused.
 	var unmark []func()
@@ -320,7 +320,7 @@ func startExposes(cfg config) (func(), error) {
 	// DEFAULT — restored on exit. The pairs read the groupmates' CURRENT
 	// AgentPort at call time, so a re-arm that re-allocated one forward's port
 	// re-provisions the signpost with every port fresh.
-	verb := func(group []*tunnel.Exposed) string {
+	verb := func(group []exposedMapping) string {
 		pairs := make([]string, 0, len(group))
 		for _, g := range group {
 			pairs = append(pairs, g.Spec().ClusterPort+":"+g.AgentPort())
@@ -339,7 +339,7 @@ func startExposes(cfg config) (func(), error) {
 	// member — on Swarm, ~8.5s of delete+recreate each time. So the hooks only
 	// signal, and this goroutine coalesces the wave: it waits for it to settle,
 	// then sends ONE serve-name carrying every member's current port.
-	armRearm := func(group []*tunnel.Exposed) {
+	armRearm := func(group []exposedMapping) {
 		name := group[0].Spec().Name
 		trigger := make(chan struct{}, 1)
 		for _, ex := range group {
@@ -583,7 +583,7 @@ func runCoreInProcess(cfg config, cmdArgs []string) int {
 // sets what the merge rule keeps on this process, so the command inherits it.
 // The agent's stderr notes (a missing right, keys that came through empty) are
 // relayed as info lines: they explain, they do not fail the session.
-func projectWorkloadEnv(tr *tunnel.Transport, name string, p envPolicy) {
+func projectWorkloadEnv(tr envExecer, name string, p envPolicy) {
 	reply, err := readWorkloadEnv(tr, name)
 	if err != nil {
 		info("%s: could not read the deployed workload's environment (%v); your own applies", name, err)

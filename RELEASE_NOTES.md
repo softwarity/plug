@@ -2,6 +2,26 @@
 
 ## NEXT RELEASE
 
+### Two small fixes, and the backends tested without a cluster
+
+- macOS: two automatic mounts of one workload shared a single record under
+  `~/.plug/mounts` (the record's name was a truncated copy of a path whose
+  prefix alone, under the temp directory macOS gives a session, filled it),
+  so after a crash the next run and doctor saw one mount to clean, not two.
+  Long paths are now recorded under a hash of the whole path.
+- `plug update` run from a script with its input on `/dev/null` took that for
+  a terminal and started `sudo` on it. It asks the OS whether there is a
+  terminal, as every other prompt does, and prints the hint otherwise.
+
+Developer-facing: the agent's Docker, Swarm and Kubernetes code paths, and
+the CLI's `-s`, mounts, profile resolution and holder stopping, are now
+exercised by unit tests against an in-memory Docker Engine and an in-memory
+API server (51 new tests). The three bugs of this week's releases, a parking
+receipt destroyed after a failed restore, a takeover parking the agent
+itself, a Service losing its ClusterIP across an agent restart, each have a
+test that fails without its fix. They used to be reachable only by the
+forty-minute e2e run.
+
 ---
 
 ## 2.21.2

@@ -195,7 +195,13 @@ func holderIsOurs(r *servedRecord, refusal string) bool {
 // question (openTerminal does, for every prompt plug has), and keep a backstop
 // deadline for any context neither of us thought of: an unanswered question
 // falls back to reporting, never to killing.
-func askToStop(r *servedRecord) bool {
+//
+// askToStop is the var the product calls, askToStopOnTerminal the body: a
+// seam, so the test of the takeover can answer the question without a
+// terminal. Never reassigned outside tests.
+var askToStop = askToStopOnTerminal
+
+func askToStopOnTerminal(r *servedRecord) bool {
 	tty, err := openTerminal()
 	if err != nil {
 		return false
@@ -225,6 +231,25 @@ func askToStop(r *servedRecord) bool {
 // interactive cannot wedge a session.
 const askToStopDeadline = 2 * time.Minute
 
+// The bricks stopHolder is made of, as vars so its ordering can be tested
+// without a second process to signal: the account check first, the signal only
+// after it, the wait only after the signal. Each default is the real thing.
+// Never reassigned outside tests.
+var (
+	holderOwnedByMe = holderIsMine
+	signalHolder    = func(pid int) error {
+		p, err := os.FindProcess(pid)
+		if err != nil {
+			return err
+		}
+		return p.Signal(syscall.SIGTERM)
+	}
+	holderAlive = processAlive
+	// stopHolderTick paces the wait, stopHolderTicks bounds it (10s in all).
+	stopHolderTick  = 100 * time.Millisecond
+	stopHolderTicks = 100
+)
+
 // stopHolder asks the holder to stop and waits for it to let the name go.
 //
 // SIGTERM, never SIGKILL: plug relays it to the command, then runs its teardown
@@ -235,25 +260,22 @@ func stopHolder(r *servedRecord) error {
 	// process is theirs: PIDs are recycled, and on macOS this signal is sent
 	// with euid 0, which reaches any process on the machine. Ask the kernel who
 	// owns it before asking it to stop (holderIsMine, per OS).
-	if err := holderIsMine(r.pid); err != nil {
+	if err := holderOwnedByMe(r.pid); err != nil {
 		return err
 	}
-	p, err := os.FindProcess(r.pid)
-	if err != nil {
-		return err
-	}
-	if err := p.Signal(syscall.SIGTERM); err != nil {
+	if err := signalHolder(r.pid); err != nil {
 		return err
 	}
 	// Its teardown has a cluster round-trip to make; wait for the process to go
 	// rather than for a fixed delay.
-	for i := 0; i < 100; i++ {
-		if !processAlive(r.pid) {
+	for i := 0; i < stopHolderTicks; i++ {
+		if !holderAlive(r.pid) {
 			return nil
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(stopHolderTick)
 	}
-	return fmt.Errorf("PID %d is still running 10s after being asked to stop", r.pid)
+	return fmt.Errorf("PID %d is still running %s after being asked to stop",
+		r.pid, time.Duration(stopHolderTicks)*stopHolderTick)
 }
 
 // roughAge renders a duration the way someone reads it off a screen.

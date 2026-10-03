@@ -954,8 +954,17 @@ func relay(a, b net.Conn) {
 
 // ---- docker backend (sock mounted — the stack file's opt-in) ----
 
-const dockerSock = "/var/run/docker.sock"
+// dockerSock is where the Engine listens; dockerAvailable is a stat on it. A
+// var, not a const, only so a test can stand a scratch file in for the socket
+// and have the Docker backend answer "available" without a daemon. Nothing in
+// the agent ever reassigns it.
+var dockerSock = "/var/run/docker.sock"
 
+// dockerClient is the one client every Engine call goes through, dialling the
+// socket above. A var so a test can point it at a fake Engine behind an
+// httptest.Server (fakeengine_test.go): the paths that create, park, restore
+// and sweep used to be reachable only through a real daemon, which is to say
+// only by the e2e suite, forty minutes per attempt.
 var dockerClient = &http.Client{
 	Timeout: 20 * time.Second,
 	Transport: &http.Transport{
@@ -1198,7 +1207,11 @@ func sessionOwner(addr string, pairs []portPair) string {
 // One dial, from wherever the asking agent runs - a sibling replica's forward
 // answers on the network exactly as this one's does, which 127.0.0.1 could never
 // see. An empty address is nobody: gone.
-func sessionLive(owner string) bool {
+//
+// A var so a test can say which owners answer without a listener behind each
+// one: every sweep and every serve asks this about addresses that are container
+// or task NAMES, which a unit test must never try to resolve.
+var sessionLive = func(owner string) bool {
 	if owner == "" {
 		return false
 	}
@@ -1726,7 +1739,14 @@ func urlEscape(s string) string {
 
 // ---- kubernetes backend (RBAC applied — part of deploy/plug-k8s.yaml) ----
 
-const k8sSA = "/var/run/secrets/kubernetes.io/serviceaccount"
+// k8sSA is the ServiceAccount mount: the token, the namespace and the CA every
+// API call is made with. A var only so a test can point it at a scratch
+// directory holding the three files; nothing in the agent reassigns it.
+var k8sSA = "/var/run/secrets/kubernetes.io/serviceaccount"
+
+// k8sAPIBase is the API server, as the kubelet names it in every pod. A var so
+// a test can point every call at a fake API server (fakeapiserver_test.go).
+var k8sAPIBase = "https://kubernetes.default.svc"
 
 // readAPIReply turns one orchestrator answer into (status, error). Shared by the
 // Docker and Kubernetes callers because they had the same twenty lines and had

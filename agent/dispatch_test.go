@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 )
@@ -27,31 +26,7 @@ type exitReply struct{ said string }
 // failure being guarded against.
 func refusalFor(t *testing.T, cmd ...string) string {
 	t.Helper()
-	realAnswer, realFatal := answer, fatal
-	defer func() { answer, fatal = realAnswer, realFatal }()
-
-	// A panic, not a plain record: the real answer() exits, so the lines after
-	// each call assume they are unreachable. Letting a stub return would run the
-	// serve path on input the agent had just rejected.
-	stop := func(format string, a ...any) { panic(exitReply{fmt.Sprintf(format, a...)}) }
-	answer, fatal = stop, stop
-
-	var said string
-	func() {
-		defer func() {
-			r := recover()
-			if r == nil {
-				return
-			}
-			e, ok := r.(exitReply)
-			if !ok {
-				panic(r)
-			}
-			said = e.said
-		}()
-		dispatch(cmd)
-	}()
-	return said
+	return verbReply(t, func() { dispatch(cmd) })
 }
 
 func TestServeNameRefusesNamesTheClusterWouldNotAccept(t *testing.T) {

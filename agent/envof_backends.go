@@ -330,10 +330,6 @@ func k8sExec(ns, pod, container string, argv ...string) ([]byte, int, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	pool := x509.NewCertPool()
-	if ca, err := os.ReadFile(k8sSA + "/ca.crt"); err == nil {
-		pool.AppendCertsFromPEM(ca)
-	}
 	q := url.Values{}
 	q.Set("container", container)
 	q.Set("stdout", "true")
@@ -341,11 +337,10 @@ func k8sExec(ns, pod, container string, argv ...string) ([]byte, int, error) {
 	for _, a := range argv {
 		q.Add("command", a)
 	}
-	host := "kubernetes.default.svc"
+	addr, host := k8sAPIHost()
 	path := "/api/v1/namespaces/" + ns + "/pods/" + pod + "/exec?" + q.Encode()
 
-	d := &net.Dialer{Timeout: 10 * time.Second}
-	conn, err := tls.DialWithDialer(d, "tcp", host+":443", &tls.Config{RootCAs: pool, ServerName: host})
+	conn, err := k8sExecDial(addr, host)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -387,6 +382,19 @@ func k8sExec(ns, pod, container string, argv ...string) ([]byte, int, error) {
 		return nil, 0, fmt.Errorf("exec opened but stdout carried nothing (read error: %v)", err)
 	}
 	return stdout, 0, nil
+}
+
+// k8sExecDial opens the exec handshake's connection: TLS to the API server,
+// trusting the ServiceAccount's CA, which the REST client (k8sClient) trusts the
+// same way. A var so a test can hand the handshake a plain connection to a fake
+// server; nothing in the agent reassigns it.
+var k8sExecDial = func(addr, serverName string) (net.Conn, error) {
+	pool := x509.NewCertPool()
+	if ca, err := os.ReadFile(k8sSA + "/ca.crt"); err == nil {
+		pool.AppendCertsFromPEM(ca)
+	}
+	d := &net.Dialer{Timeout: 10 * time.Second}
+	return tls.DialWithDialer(d, "tcp", addr, &tls.Config{RootCAs: pool, ServerName: serverName})
 }
 
 // readChannelFrames reads WebSocket frames from a server (never masked) until

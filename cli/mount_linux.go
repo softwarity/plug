@@ -32,7 +32,7 @@ func autoMountPath(dir, clusterPath string) string {
 	return filepath.Join(dir, filepath.FromSlash(clusterPath))
 }
 
-func mountSMB(t mountTarget, path string) (string, error) {
+func mountSMBShare(t mountTarget, path string) (string, error) {
 	if err := ensureMountpoint(path); err != nil {
 		return "", err
 	}
@@ -59,7 +59,7 @@ func mountSMB(t mountTarget, path string) (string, error) {
 	return path, nil
 }
 
-func unmountSMB(path string) error {
+func unmountSMBShare(path string) error {
 	if !mountedAt(path) {
 		return nil
 	}

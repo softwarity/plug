@@ -233,7 +233,7 @@ func k8sDo(method, path, contentType string, body any, out any) (int, error) {
 		}
 		rd = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, "https://kubernetes.default.svc"+path, rd)
+	req, err := http.NewRequest(method, k8sAPIBase+path, rd)
 	if err != nil {
 		return 0, err
 	}
@@ -253,6 +253,26 @@ func k8sDo(method, path, contentType string, body any, out any) (int, error) {
 func k8sNamespace() string {
 	ns, _ := os.ReadFile(k8sSA + "/namespace")
 	return strings.TrimSpace(string(ns))
+}
+
+// k8sAPIHost is the API server as a dial address and as the name its
+// certificate must carry, both read off k8sAPIBase so the exec handshake
+// (k8sExec, a raw connection) and the REST calls (k8sDo) address one server.
+// The scheme's default port is filled in, since a raw dial has no scheme to
+// infer it from.
+func k8sAPIHost() (addr, serverName string) {
+	u, err := url.Parse(k8sAPIBase)
+	if err != nil || u.Hostname() == "" {
+		return "kubernetes.default.svc:443", "kubernetes.default.svc"
+	}
+	port := u.Port()
+	if port == "" {
+		port = "443"
+		if u.Scheme == "http" {
+			port = "80"
+		}
+	}
+	return net.JoinHostPort(u.Hostname(), port), u.Hostname()
 }
 
 // k8sSignReceipt records WHO is parking, without disturbing WHAT was parked. A

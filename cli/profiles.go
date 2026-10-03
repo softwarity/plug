@@ -288,10 +288,17 @@ func prompt(in *bufio.Reader, label, def string) string {
 func openTTY(hint string) *os.File {
 	tty, err := openTerminal()
 	if err != nil {
-		fatal("no terminal available; %s", hint)
+		noTerminalFatal("no terminal available; %s", hint)
 	}
 	return tty
 }
+
+// noTerminalFatal is how openTTY gives up. A var, and only so a test can stand
+// in for it: the real fatal exits the process, and the two refusals that go
+// through here (the picker with several profiles, the wizard for a profile that
+// does not exist) are what resolveConfig says to a script or a CI job, where
+// they could not otherwise be observed at all. Never reassigned outside tests.
+var noTerminalFatal = fatal
 
 // openTerminal opens the terminal a question is asked on, whatever stdin was
 // redirected to, and is the ONLY place that names the device: /dev/tty on unix,

@@ -17,6 +17,8 @@ import (
 
 	"github.com/softwarity/plug/cli/internal/tunnel"
 	"golang.org/x/crypto/ssh"
+
+	"golang.org/x/term"
 )
 
 // safeVersionRe is what an agent version may contain before plug turns it into
@@ -662,9 +664,11 @@ func drawBar(label string, n int64, frame int) {
 	fmt.Fprintf(os.Stderr, "\r[plug] updating %s  [%s]  %s ", label, b.String(), humanBytes(n))
 }
 
+// isTTY asks the OS, not the file mode: /dev/null is a character device too,
+// and `plug update </dev/null` from a script used to pass this test and run
+// sudo on a terminal nobody was at. Same rule as openTerminal.
 func isTTY(f *os.File) bool {
-	fi, err := f.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(int(f.Fd()))
 }
 
 func humanBytes(n int64) string {

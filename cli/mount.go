@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -386,7 +387,7 @@ func splice(a, b net.Conn) {
 // where the helper stands (mount-status) and the progress line says it - a
 // task pending on a constrained node, a pod pulling its image - and when the
 // budget runs out that last word is the error, not a bare timeout.
-func mountHelperReady(tr *tunnel.Transport, addr string, budget time.Duration, status func() string, p *progress) error {
+func mountHelperReady(tr sessionTransport, addr string, budget time.Duration, status func() string, p *progress) error {
 	deadline := time.Now().Add(budget)
 	lastAsk := time.Time{}
 	last := ""
@@ -415,13 +416,29 @@ func mountHelperReady(tr *tunnel.Transport, addr string, budget time.Duration, s
 
 // helperStatus asks the agent where the helper stands; "" when it cannot say
 // (an agent too old for the verb answers "unknown command", which is no news).
-func helperStatus(tr *tunnel.Transport, m *liveMount, agentPort string) string {
+func helperStatus(tr sessionTransport, m *liveMount, agentPort string) string {
 	out, err := tr.Exec("mount-status " + m.spec.name + " " + m.spec.volume + " " + agentPort)
 	if err != nil || !strings.HasPrefix(out, "status ") {
 		return ""
 	}
 	return strings.TrimSpace(strings.TrimPrefix(out, "status "))
 }
+
+// mountForwardBind is where the local end of a mount's forward listens: the
+// loopback, on a port the OS picks. A var so a test can make the listen fail
+// (an unusable port) and watch what the failure leaves behind. Never
+// reassigned outside tests.
+var mountForwardBind = "127.0.0.1:0"
+
+// mountSMB mounts one share at path with the OS's own SMB client and answers
+// where it landed; unmountSMB undoes it. Both are vars over the per-OS bodies
+// (mount_<os>.go), so the whole of startMounts can be driven without a share
+// to mount: what is asked of the agent, what is recorded, what the teardown
+// undoes. Never reassigned outside tests.
+var (
+	mountSMB   = mountSMBShare
+	unmountSMB = unmountSMBShare
+)
 
 // liveMount is one mounted volume, everything its teardown needs.
 type liveMount struct {
@@ -457,7 +474,7 @@ func startMounts(cfg config) (func(), error) {
 	}
 	dockerMounts = nil
 	sweepOrphanMounts()
-	tr, err := dialTunnel(cfg)
+	tr, err := dialSession(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -569,8 +586,11 @@ func startMounts(cfg config) (func(), error) {
 		p.step("mounting")
 		t := mountTarget{mountReply: reply, pass: m.pass}
 		if mountUsesForward() || cfg.dockerRun {
-			fw, err := newMountForward("127.0.0.1:0", target, tr.DialCluster)
+			fw, err := newMountForward(mountForwardBind, target, tr.DialCluster)
 			if err != nil {
+				// Ended like the other failures of this loop. Left open, the
+				// progress line's spinner kept redrawing over the error.
+				p.done("failed")
 				return fail(err)
 			}
 			m.fw = fw
@@ -657,7 +677,7 @@ func autoMountNames(cfg config) []string {
 // workloadVolumes asks the agent what the workload mounts as data. An agent
 // that predates the verb answers "unknown command": nothing to mount, not
 // an error - the session is as it was before the feature.
-func workloadVolumes(tr *tunnel.Transport, name string) ([]string, error) {
+func workloadVolumes(tr sessionTransport, name string) ([]string, error) {
 	out, err := tr.Exec("volumes-of " + name)
 	if err != nil {
 		return nil, err
@@ -682,7 +702,7 @@ func parseVolumesReply(out string) ([]string, error) {
 
 // provisionMount asks the agent for the helper, under this session's current
 // liveness port and the session's credential.
-func provisionMount(tr *tunnel.Transport, m *liveMount, agentPort string) (mountReply, error) {
+func provisionMount(tr sessionTransport, m *liveMount, agentPort string) (mountReply, error) {
 	out, err := tr.Exec("mount-volume " + m.spec.name + " " + m.spec.volume + " " + agentPort + " " + m.pass)
 	if err != nil {
 		return mountReply{}, fmt.Errorf("asking the agent to mount %s of %s: %w", m.spec.volume, m.spec.name, err)
@@ -735,7 +755,13 @@ func markMounted(spec mountSpec, local, cluster string) func() {
 func recordName(path string) string {
 	sum := hex.EncodeToString([]byte(filepath.ToSlash(path)))
 	if len(sum) > 120 {
-		sum = sum[:120]
+		// Cut short, the name is no longer the path's. The automatic mounts of
+		// one workload all sit under the session directory, and on macOS that
+		// prefix alone (/var/folders/<xx>/<id>/T/plug-vol-<n>/) is past the cut:
+		// two volumes wrote ONE record, and the sweep after a crash saw one
+		// mount. The head stays readable; the tail is a digest of the whole.
+		d := sha256.Sum256([]byte(filepath.ToSlash(path)))
+		sum = sum[:88] + hex.EncodeToString(d[:16])
 	}
 	return sum
 }

@@ -235,11 +235,16 @@ func containerIDFromMount() string {
 	return ""
 }
 
-// dockerSelf identifies OUR container. The hostname is the short container id by
+// dockerSelf identifies OUR container. A var holding dockerSelfInspect so a test
+// can hand the backends an identity directly: the real one asks the daemon
+// about THIS process's hostname, which no fake Engine can answer for.
+var dockerSelf = dockerSelfInspect
+
+// dockerSelfInspect is that lookup. The hostname is the short container id by
 // default and resolves directly — the proven path. Only if that GET fails (a
 // stack that overrode the hostname) do we fall back to the authoritative id
 // parsed from mountinfo.
-func dockerSelf() (selfInfo, error) {
+func dockerSelfInspect() (selfInfo, error) {
 	var s selfInfo
 	var insp struct {
 		Id     string `json:"Id"`

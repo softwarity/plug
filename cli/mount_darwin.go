@@ -36,7 +36,7 @@ func autoMountPath(dir, clusterPath string) string {
 	return filepath.Join(dir, filepath.FromSlash(clusterPath))
 }
 
-func mountSMB(t mountTarget, path string) (string, error) {
+func mountSMBShare(t mountTarget, path string) (string, error) {
 	if err := ensureMountpoint(path); err != nil {
 		return "", err
 	}
@@ -73,10 +73,10 @@ func mountSMB(t mountTarget, path string) (string, error) {
 	return path, nil
 }
 
-// unmountSMB unmounts, trying umount first and diskutil after it: umount runs
+// unmountSMBShare unmounts, trying umount first and diskutil after it: umount runs
 // under the caller's TCC identity and may be refused where diskarbitrationd,
 // which diskutil asks, is not.
-func unmountSMB(path string) error {
+func unmountSMBShare(path string) error {
 	if !mountedAt(path) {
 		return nil
 	}

@@ -39,7 +39,7 @@ func mountUsesForward() bool { return false }
 // made, not before.
 func autoMountPath(dir, clusterPath string) string { return "" }
 
-func mountSMB(t mountTarget, path string) (string, error) {
+func mountSMBShare(t mountTarget, path string) (string, error) {
 	unc := `\\` + t.host + `\` + t.share
 	switch {
 	case path == "":
@@ -83,7 +83,7 @@ func mountSMB(t mountTarget, path string) (string, error) {
 	}
 }
 
-func unmountSMB(path string) error {
+func unmountSMBShare(path string) error {
 	if !mountedAt(path) {
 		return nil
 	}
