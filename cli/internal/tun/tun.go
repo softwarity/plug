@@ -68,7 +68,8 @@ func instanceNet(n int) (cidr, dnsIP string, base uint32) {
 const NsShimVerb = "__plug-ns"
 
 // DaemonVerb is the hidden re-exec subcommand that runs the persistent macOS
-// datapath daemon for one cluster (see daemonMain). Dispatched at the top of main().
+// datapath daemon, the one datapath of the machine that every cluster's tunnel
+// grafts onto (see daemonMain). Dispatched at the top of main().
 const DaemonVerb = "__plug-daemon"
 
 // logfn is an optional progress sink.
@@ -88,9 +89,14 @@ type Datapath struct {
 	Ifname     string
 	DNSIP      string
 	privResolv string
-	stop       func()
-	done       chan struct{}
-	once       sync.Once
+	// up is the live upstream table and upstreams what configure captured to
+	// seed it: the self-test reads both, to assert what was captured and to
+	// watch the table follow a fake VPN. Nothing else needs them.
+	up        *upstreamDNS
+	upstreams []string
+	stop      func()
+	done      chan struct{}
+	once      sync.Once
 }
 
 // StartDatapath brings up the TUN, configures routes + the system/child DNS,
@@ -181,7 +187,7 @@ func startDatapathDF(df dialFunc, dialers func() []Dialer, logf func(string, ...
 
 	log.f("root mode (TUN %s): DNS %s:53 in-netstack, %s → tunnel (covers every runtime)", ifname, dnsIP, cidr)
 
-	dp := &Datapath{Ifname: ifname, DNSIP: dnsIP, privResolv: privResolv, done: make(chan struct{})}
+	dp := &Datapath{Ifname: ifname, DNSIP: dnsIP, privResolv: privResolv, up: up, upstreams: upstreams, done: make(chan struct{})}
 	dp.stop = func() {
 		cancel()         // stop the bridge's fromStack loop
 		st.Close()       // tear down the netstack

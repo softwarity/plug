@@ -1,3 +1,5 @@
+//go:build darwin || windows
+
 package main
 
 // dockerHostAddr is how the docker daemon's kernel reaches THIS host: on

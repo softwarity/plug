@@ -12,15 +12,10 @@ import "strings"
 const docsBase = "https://softwarity.github.io/plug/"
 
 // The pages, named after what the reader is looking for. Values are the router
-// paths in docs/src/app/app.routes.ts.
-const (
-	docHome       = ""
-	docKubernetes = "kubernetes"
-	docSwarm      = "swarm"
-	// Why a name served with -s can stop pointing at the developer's machine: a
-	// CD controller (Argo CD, Flux, Fleet, Crossplane) reverting the takeover.
-	docContinuousDeployment = "continuous-deployment"
-)
+// paths in docs/src/app/app.routes.ts. Only the home page is linked from the
+// agent today (Preflight); a verb that points at another page adds its
+// constant here, beside the CLI's copy.
+const docHome = ""
 
 // docURL renders the link to a page, optionally to a section within it. Deep
 // links resolve because the deploy copies index.html to 404.html — see

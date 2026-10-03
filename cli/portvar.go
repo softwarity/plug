@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/softwarity/plug/cli/internal/tunnel"
@@ -159,16 +160,6 @@ func declaredList(ports map[string]string) string {
 	for name := range ports {
 		names = append(names, "{"+name+"}")
 	}
-	sortStrings(names)
+	sort.Strings(names)
 	return strings.Join(names, ", ")
-}
-
-// sortStrings is insertion sort — the slice is the number of -s flags on one
-// command line, and this saves pulling "sort" into main's import set.
-func sortStrings(s []string) {
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j] < s[j-1]; j-- {
-			s[j], s[j-1] = s[j-1], s[j]
-		}
-	}
 }

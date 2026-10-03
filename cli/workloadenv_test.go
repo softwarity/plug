@@ -14,7 +14,7 @@ func TestTheClusterWinsUnlessNoEnvHoldsAKeyBack(t *testing.T) {
 	caller := []string{"PATH=/usr/bin", "APP_DB_PASSWORD=from-shell"}
 
 	// Default: the cluster's password overwrites the shell's; nothing is kept.
-	set, kept := mergeWorkloadEnv(cluster, caller, envPolicy{})
+	set, kept, _ := mergeWorkloadEnvWithEmpty(cluster, caller, envPolicy{})
 	if set["APP_DB_PASSWORD"] != "from-cluster" {
 		t.Fatalf("the cluster's value must win, got %q", set["APP_DB_PASSWORD"])
 	}
@@ -24,7 +24,7 @@ func TestTheClusterWinsUnlessNoEnvHoldsAKeyBack(t *testing.T) {
 
 	// --no-env=APP_DB_PASSWORD: the cluster holds that key back, the shell's value
 	// stands, and the key is named in kept.
-	set, kept = mergeWorkloadEnv(cluster, caller, parseNoEnv("APP_DB_PASSWORD"))
+	set, kept, _ = mergeWorkloadEnvWithEmpty(cluster, caller, parseNoEnv("APP_DB_PASSWORD"))
 	if _, overwritten := set["APP_DB_PASSWORD"]; overwritten {
 		t.Fatal("--no-env=APP_DB_PASSWORD must NOT take the cluster's value")
 	}
@@ -40,10 +40,10 @@ func TestTheClusterWinsUnlessNoEnvHoldsAKeyBack(t *testing.T) {
 // and projects the rest. Both spellings must parse, spaces and all.
 func TestNoEnvTurnsItOffOrDropsNamedKeys(t *testing.T) {
 	cluster := []string{"A=1", "B=2", "C=3"}
-	if set, _ := mergeWorkloadEnv(cluster, nil, parseNoEnv("")); len(set) != 0 {
+	if set, _, _ := mergeWorkloadEnvWithEmpty(cluster, nil, parseNoEnv("")); len(set) != 0 {
 		t.Fatalf("a bare --no-env must project nothing, got %v", set)
 	}
-	set, _ := mergeWorkloadEnv(cluster, nil, parseNoEnv("A, C"))
+	set, _, _ := mergeWorkloadEnvWithEmpty(cluster, nil, parseNoEnv("A, C"))
 	keys := make([]string, 0, len(set))
 	for k := range set {
 		keys = append(keys, k)
@@ -56,7 +56,7 @@ func TestNoEnvTurnsItOffOrDropsNamedKeys(t *testing.T) {
 
 // Malformed lines are dropped rather than invented, and a value may contain "=".
 func TestWorkloadLinesAreReadVerbatim(t *testing.T) {
-	set, _ := mergeWorkloadEnv([]string{"URL=postgres://u:p@odb/db?x=1", "garbage", "=novalue"}, nil, envPolicy{})
+	set, _, _ := mergeWorkloadEnvWithEmpty([]string{"URL=postgres://u:p@odb/db?x=1", "garbage", "=novalue"}, nil, envPolicy{})
 	if set["URL"] != "postgres://u:p@odb/db?x=1" || len(set) != 1 {
 		t.Fatalf("got %v", set)
 	}

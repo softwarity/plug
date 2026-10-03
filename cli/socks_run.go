@@ -14,10 +14,6 @@ import (
 	"github.com/softwarity/plug/cli/internal/tunnel"
 )
 
-// dialTunnel opens the SSH transport to the cluster agent. Shared by coreRun
-// (Linux/Windows) and the macOS datapath daemon. coreRun itself is per-OS
-// (socks_run_darwin.go / socks_run_other.go): macOS routes through a persistent
-// daemon, elsewhere each launch is autonomous.
 // knownHostsFor is where this agent's host key is recorded, "" when it should not
 // be recorded at all.
 //
@@ -44,6 +40,10 @@ func knownHostsFor(host string) string {
 	return ""
 }
 
+// dialTunnel opens the SSH transport to the cluster agent. Shared by coreRun
+// (Linux/Windows) and the macOS datapath daemon. coreRun itself is per-OS
+// (socks_run_darwin.go / socks_run_other.go): macOS routes through a persistent
+// daemon, elsewhere each launch is autonomous.
 func dialTunnel(cfg config) (*tunnel.Transport, error) {
 	knownHosts := knownHostsFor(cfg.host)
 	// The pin file is written by the tunnel package, possibly with euid 0 — same
@@ -164,11 +164,6 @@ type pathVerifier interface {
 // verdict on the path, and nothing to report.
 var errStopped = errors.New("session ending")
 
-// verifyExposed proves the mapping's path end to end, retrying while the name
-// the agent just created is still being scheduled by the cluster.
-//
-// stopped is polled between probes: this runs alongside the session, and a check
-// outliving it would keep narrating a name nobody is waiting on any more.
 // gaveUp says the two things a reader needs: that it kept trying, and what kept
 // failing. The second half used to depend on WHERE the loop ran out of time. The
 // path after a failed attempt wrapped that attempt's error; the path at the top
@@ -190,6 +185,11 @@ func gaveUp(last error, attempts int) error {
 		last, exposeVerifyBudget, attempts)
 }
 
+// verifyExposed proves the mapping's path end to end, retrying while the name
+// the agent just created is still being scheduled by the cluster.
+//
+// stopped is polled between probes: this runs alongside the session, and a check
+// outliving it would keep narrating a name nobody is waiting on any more.
 func verifyExposed(ex pathVerifier, name string, stopped func() bool) error {
 	start := time.Now()
 	deadline := start.Add(exposeVerifyBudget)
@@ -228,13 +228,13 @@ func verifyExposed(ex pathVerifier, name string, stopped func() bool) error {
 }
 
 // startExposes arms the session's -s mappings (the reverse direction) on a
-// DEDICATED transport, so the listeners' lifetime is exactly this session's —
+// DEDICATED transport, so the listeners' lifetime is exactly this session's:
 // even on macOS/Windows where the forward datapath lives in a shared daemon.
 //
 // Everything that can be decided AT ONCE is decided here, and fails the session:
 // an agent that cannot provision names at all, a port another instance already
 // exposes, a name the agent refuses, a workload it cannot park. Each mapping is
-// then proven end-to-end (through the cluster's own DNS) in the BACKGROUND — a
+// then proven end-to-end (through the cluster's own DNS) in the BACKGROUND: a
 // too-old agent image or a competing instance still gets said out loud, but the
 // wait for a cluster to schedule the name is not charged to the command the
 // user is launching.
@@ -259,134 +259,8 @@ func startExposes(cfg config) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	// Set by teardown, read by the background path checks: once the transport is
-	// closing, their failures are the session ending, not a verdict on the path.
-	var done atomic.Bool
-	// Names provisioned so far — dropped on teardown AND on any error below (a
-	// signpost/Service created for spec N must not survive a failure on N or N+1).
-	var dynamic []string
-	// The mappings of each name, by name. Declared here — before drop — because
-	// the teardown has to tell the agent WHICH session is releasing the name,
-	// and that identity is the current agent port of the name's first mapping.
-	groups := map[string][]exposedMapping{}
-	// Forgets this session's ~/.plug/served records — the breadcrumb that lets a
-	// LATER session name whoever holds a name it is refused.
-	var unmark []func()
-	drop := func() {
-		for _, f := range unmark {
-			f()
-		}
-		for _, name := range dynamic {
-			// Say it when this fails. Releasing a name is not just removing a
-			// signpost: on a takeover it RESTORES what the session parked
-			// (containers restarted, service scaled back, k8s Service
-			// repointed). The likeliest moment for the Exec to fail is a
-			// network already gone — which is exactly when you Ctrl-C — and
-			// leaving silently would let you walk away believing a workload
-			// came back up when it is still down.
-			// Name the port we hold it on. If this name went to another session
-			// while we were away (a sleep past the keepalive frees it — the
-			// lease only holds while the port answers), the agent must NOT act
-			// on our teardown, or we would delete the signpost our successor is
-			// now serving and restore a workload it had parked.
-			mine := ""
-			if g := groups[name]; len(g) > 0 {
-				mine = " " + g[0].AgentPort()
-			}
-			out, err := tr.Exec("unserve-name " + name + mine)
-			switch {
-			case out == "ok reassigned":
-				info("%s went to another session while this one was running — left alone, "+
-					"it belongs to that session now.", name)
-			case err != nil:
-				info("WARNING could not release %s (%v) — anything this session parked is STILL parked.\n"+
-					"      Re-run the session to restore it, or restart the agent (its boot gc restores).", name, err)
-			case strings.HasPrefix(out, "error:"):
-				info("WARNING releasing %s: %s — anything this session parked is STILL parked.",
-					name, strings.TrimSpace(strings.TrimPrefix(out, "error:")))
-			}
-		}
-	}
-	fail := func(err error) (func(), error) {
-		drop()
-		tr.Close()
-		return nil, err
-	}
-	// The serve-name verb: ONE per NAME, all its cluster ports at once — a
-	// service exposing HTTP+SMTP+POP3 on one name is ONE signpost listening on
-	// all three, each relayed to that mapping's sshd-ALLOCATED port (see
-	// tunnel/expose.go — allocation is what lets many names share one cluster
-	// port). takeover: parking a deployed workload owning the name is the
-	// DEFAULT — restored on exit. The pairs read the groupmates' CURRENT
-	// AgentPort at call time, so a re-arm that re-allocated one forward's port
-	// re-provisions the signpost with every port fresh.
-	verb := func(group []exposedMapping) string {
-		pairs := make([]string, 0, len(group))
-		for _, g := range group {
-			pairs = append(pairs, g.Spec().ClusterPort+":"+g.AgentPort())
-		}
-		return "serve-name " + group[0].Spec().Name + " " + strings.Join(pairs, ",") + " takeover"
-	}
-	// After a reconnect, a restarted agent has GC'd the signpost — AND, on a
-	// takeover, restored the parked workload — so re-run the SAME verb (re-park
-	// included) and re-verify: the name must not be silently dead (or silently
-	// back on the deployed version) while the forward reports re-armed.
-	//
-	// ONE re-provisioner per NAME, fed by every member's hook. A transport death
-	// re-arms all of a name's mappings independently, each on a freshly
-	// allocated port: re-provisioning per member would read the others' ports
-	// while they are still being reallocated, and rebuild the signpost once per
-	// member — on Swarm, ~8.5s of delete+recreate each time. So the hooks only
-	// signal, and this goroutine coalesces the wave: it waits for it to settle,
-	// then sends ONE serve-name carrying every member's current port.
-	armRearm := func(group []exposedMapping) {
-		name := group[0].Spec().Name
-		trigger := make(chan struct{}, 1)
-		for _, ex := range group {
-			ex.OnRearm(func() {
-				select {
-				case trigger <- struct{}{}:
-				default: // a wave is already pending; it will read our port too
-				}
-			})
-		}
-		go func() {
-			for range trigger {
-				// Let the rest of the wave land, then drain what it queued: the
-				// verb below reads every member's port at call time, so one pass
-				// covers them all.
-				time.Sleep(rearmSettle)
-				select {
-				case <-trigger:
-				default:
-				}
-				if done.Load() {
-					return
-				}
-				m, err := tr.Exec(verb(group))
-				switch {
-				case err != nil:
-					info("WARNING %s: re-provisioning after reconnect failed (%v) — the name may be unreachable", name, err)
-					continue
-				case strings.HasPrefix(m, "error:"):
-					info("WARNING %s: agent refused to re-provision after reconnect: %s", name, strings.TrimSpace(strings.TrimPrefix(m, "error:")))
-					continue
-				}
-				// Same race as at startup, and worse to get wrong here: the verb
-				// above just re-created the signpost, so a single early probe
-				// would time out and report the name dead while it was merely
-				// coming up — a scary note about a path that then works.
-				if verr := verifyExposed(group[0], name, done.Load); verr != nil {
-					if !errors.Is(verr, errStopped) && !done.Load() {
-						info("WARNING %s: re-provisioned after reconnect but nothing reached it (%v)", name, verr)
-					}
-					continue
-				}
-				info("%s: re-provisioned and verified after reconnect", name)
-			}
-		}()
-	}
-	// Arm every forward first — each -s gets its own sshd-allocated port — and
+	s := &exposeSession{cfg: cfg, tr: tr, groups: map[string][]exposedMapping{}}
+	// Arm every forward first (each -s gets its own sshd-allocated port) and
 	// group the mappings by NAME: one signpost carries a name, so a name's
 	// ports must reach the agent in one verb (a second one would read as a
 	// second SESSION on the name and bounce on the liveness check).
@@ -394,135 +268,296 @@ func startExposes(cfg config) (func(), error) {
 	for _, spec := range cfg.exposes {
 		ex, err := tr.Expose(spec)
 		if err != nil {
-			return fail(err)
+			return s.fail(err)
 		}
-		if _, seen := groups[spec.Name]; !seen {
+		if _, seen := s.groups[spec.Name]; !seen {
 			order = append(order, spec.Name)
 		}
-		groups[spec.Name] = append(groups[spec.Name], ex)
+		s.groups[spec.Name] = append(s.groups[spec.Name], ex)
 	}
 	for _, name := range order {
-		group := groups[name]
-		// Ask the agent to provision the NAME (a docker signpost, a Swarm
-		// service, a k8s Service — whatever the deployment has). Provisioning is
-		// the whole point of -s: you name a service and it exists, with nothing
-		// to agree cluster-side beforehand.
-		reply, err := tr.Exec(verb(group))
-		// Refused because a live session holds the name? If that session is one
-		// of OURS — same agent port, so it is the holder and not a leftover
-		// naming a recycled PID — offer to stop it. A terminal is required to
-		// ask: no prompt in a script or a CI job.
-		if err == nil && strings.Contains(reply, "another live session") {
-			if h := servedHolder(name); holderIsOurs(h, reply) && askToStop(h) {
-				if serr := stopHolder(h); serr != nil {
-					return fail(fmt.Errorf("%s: could not stop the session holding it: %w", name, serr))
-				}
-				info("%s released — taking it", name)
-				reply, err = tr.Exec(verb(group))
+		if err := s.provision(name); err != nil {
+			return s.fail(err)
+		}
+		s.prove(s.groups[name])
+		// One re-provisioner for the whole name, once its mappings are armed.
+		s.armRearm(s.groups[name])
+	}
+	return s.teardown, nil
+}
+
+// exposeSession is one session's -s state: the dedicated transport, what has
+// been provisioned on it so far, and the records to forget on the way out.
+// startExposes builds it and runs the steps in order; the background checks
+// and the re-provisioners keep reading it for the session's lifetime.
+type exposeSession struct {
+	cfg config
+	tr  sessionTransport
+	// Set by teardown, read by the background path checks: once the transport is
+	// closing, their failures are the session ending, not a verdict on the path.
+	done atomic.Bool
+	// Names provisioned so far, dropped on teardown AND on any error (a
+	// signpost/Service created for spec N must not survive a failure on N or N+1).
+	dynamic []string
+	// The mappings of each name, by name. The teardown has to tell the agent
+	// WHICH session is releasing the name, and that identity is the current
+	// agent port of the name's first mapping.
+	groups map[string][]exposedMapping
+	// Forgets this session's ~/.plug/served records, the breadcrumb that lets a
+	// LATER session name whoever holds a name it is refused.
+	unmark []func()
+}
+
+// drop releases every name provisioned so far and forgets their records.
+func (s *exposeSession) drop() {
+	for _, f := range s.unmark {
+		f()
+	}
+	for _, name := range s.dynamic {
+		// Say it when this fails. Releasing a name is not just removing a
+		// signpost: on a takeover it RESTORES what the session parked
+		// (containers restarted, service scaled back, k8s Service
+		// repointed). The likeliest moment for the Exec to fail is a
+		// network already gone, which is exactly when you Ctrl-C, and
+		// leaving silently would let you walk away believing a workload
+		// came back up when it is still down.
+		// Name the port we hold it on. If this name went to another session
+		// while we were away (a sleep past the keepalive frees it; the
+		// lease only holds while the port answers), the agent must NOT act
+		// on our teardown, or we would delete the signpost our successor is
+		// now serving and restore a workload it had parked.
+		mine := ""
+		if g := s.groups[name]; len(g) > 0 {
+			mine = " " + g[0].AgentPort()
+		}
+		out, err := s.tr.Exec("unserve-name " + name + mine)
+		switch {
+		case out == "ok reassigned":
+			info("%s went to another session while this one was running — left alone, "+
+				"it belongs to that session now.", name)
+		case err != nil:
+			info("WARNING could not release %s (%v) — anything this session parked is STILL parked.\n"+
+				"      Re-run the session to restore it, or restart the agent (its boot gc restores).", name, err)
+		case strings.HasPrefix(out, "error:"):
+			info("WARNING releasing %s: %s — anything this session parked is STILL parked.",
+				name, strings.TrimSpace(strings.TrimPrefix(out, "error:")))
+		}
+	}
+}
+
+// fail ends the session on err: what was provisioned is dropped, the
+// transport closed, and err handed back as startExposes' result.
+func (s *exposeSession) fail(err error) (func(), error) {
+	s.drop()
+	s.tr.Close()
+	return nil, err
+}
+
+// teardown is what startExposes returns: the session is over.
+func (s *exposeSession) teardown() {
+	s.done.Store(true)
+	// Drop the dynamic names BEFORE the transport goes: a signpost/Service
+	// must not outlive its session.
+	s.drop()
+	s.tr.Close()
+}
+
+// serveNameVerb is the verb that provisions a name: ONE per NAME, all its
+// cluster ports at once. A service exposing HTTP+SMTP+POP3 on one name is ONE
+// signpost listening on all three, each relayed to that mapping's
+// sshd-ALLOCATED port (see tunnel/expose.go: allocation is what lets many
+// names share one cluster port). takeover: parking a deployed workload owning
+// the name is the DEFAULT, restored on exit. The pairs read the groupmates'
+// CURRENT AgentPort at call time, so a re-arm that re-allocated one forward's
+// port re-provisions the signpost with every port fresh.
+func serveNameVerb(group []exposedMapping) string {
+	pairs := make([]string, 0, len(group))
+	for _, g := range group {
+		pairs = append(pairs, g.Spec().ClusterPort+":"+g.AgentPort())
+	}
+	return "serve-name " + group[0].Spec().Name + " " + strings.Join(pairs, ",") + " takeover"
+}
+
+// provision asks the agent for the NAME (a docker signpost, a Swarm service, a
+// k8s Service: whatever the deployment has) and registers it for cleanup.
+// Provisioning is the whole point of -s: you name a service and it exists,
+// with nothing to agree cluster-side beforehand.
+func (s *exposeSession) provision(name string) error {
+	group := s.groups[name]
+	reply, err := s.tr.Exec(serveNameVerb(group))
+	// Refused because a live session holds the name? If that session is one
+	// of OURS (same agent port, so it is the holder and not a leftover naming
+	// a recycled PID) offer to stop it. A terminal is required to ask: no
+	// prompt in a script or a CI job.
+	if err == nil && strings.Contains(reply, "another live session") {
+		if h := servedHolder(name); holderIsOurs(h, reply) && askToStop(h) {
+			if serr := stopHolder(h); serr != nil {
+				return fmt.Errorf("%s: could not stop the session holding it: %w", name, serr)
 			}
+			info("%s released — taking it", name)
+			reply, err = s.tr.Exec(serveNameVerb(group))
 		}
-		if err != nil {
-			return fail(err)
+	}
+	if err != nil {
+		return err
+	}
+	if strings.HasPrefix(reply, "error:") {
+		msg := strings.TrimSpace(strings.TrimPrefix(reply, "error:"))
+		// "already exposed by another live session" is correct and unhelpful
+		// on its own: the holder is a process you may have no window onto
+		// (an editor closed, its terminal panes gone, what ran in them still
+		// running). If it is on this machine, we know which one.
+		if strings.Contains(msg, "another live session") {
+			return errors.New(holderVerdict(name, msg, servedHolder(name), s.tr.LocalAddr()))
 		}
-		if strings.HasPrefix(reply, "error:") {
-			msg := strings.TrimSpace(strings.TrimPrefix(reply, "error:"))
-			// "already exposed by another live session" is correct and unhelpful
-			// on its own: the holder is a process you may have no window onto
-			// (an editor closed, its terminal panes gone, what ran in them still
-			// running). If it is on this machine, we know which one.
-			if strings.Contains(msg, "another live session") {
-				return fail(errors.New(holderVerdict(name, msg, servedHolder(name), tr.LocalAddr())))
+		return fmt.Errorf("%s: agent: %s", name, msg)
+	}
+	// "dynamic" may carry the "parked" note: a deployed workload was parked
+	// (stopped / scaled to 0 / repointed) and will be restored on teardown.
+	fields := strings.Fields(reply)
+	// An agent that created the name answers "dynamic". Anything else is off
+	// protocol: an agent that failed says so above, with the access it is
+	// missing, so there is nothing to add here beyond refusing to continue.
+	if len(fields) == 0 || fields[0] != "dynamic" {
+		return fmt.Errorf("%s: agent answered %q, expected \"dynamic\"", name, strings.TrimSpace(reply))
+	}
+	parked := len(fields) > 1 && fields[1] == "parked"
+	split := len(fields) > 2 && fields[2] == "split"
+	// Provisioned: register for cleanup BEFORE the check, so a failure
+	// later still tears the name down.
+	s.dynamic = append(s.dynamic, name)
+	s.unmark = append(s.unmark, markServed(name, group[0].AgentPort(), os.Args[1:]))
+	if parked {
+		info("took over %s — the deployed workload is parked for this session (restored on exit)", name)
+		if split {
+			// Said at the moment it bites, not left for doctor: a session
+			// where every second request reaches the old pod looks like a
+			// flaky app, not like a missing RBAC rule.
+			info("WARNING %s: HALF of its requests still reach the deployed pod - the agent's RBAC cannot delete", name)
+			info("        the EndpointSlice Kubernetes built for it (endpointslices, needed since 2.20.1).")
+			info("        Re-apply deploy/plug-k8s.yaml or update the chart that deploys the agent; plug doctor -p <profile> has the one-line patch.")
+		}
+		// Its environment too, by default: the process that takes a
+		// service's place gets the service's variables, secrets included
+		// as the pod already had them, the caller's own winning. An agent
+		// older than the verb answers "unknown command" and the session
+		// runs with the caller's environment alone, as it always did.
+		// --env-of named another workload: its environment was projected
+		// before the takeover, and the parked one's is not wanted.
+		if !s.cfg.envPolicy.off && s.cfg.envPolicy.from == "" {
+			projectWorkloadEnv(s.tr, name, s.cfg.envPolicy)
+		}
+	}
+	return nil
+}
+
+// prove checks each mapping's path: once, briefly, on the caller's time, and
+// otherwise in the background.
+//
+// -s was asked for explicitly: an unproven path must never pass silently
+// (fix the cluster side, run again). But proving it is NOT always the
+// user's wait to bear. Measured on one Docker Desktop Swarm, the phases
+// of a session start are: dial 0.04s, remote bind 0.00s, serve-name 0.03s,
+// and then 6s, 37s, 29s on three identical runs, all of it Swarm
+// scheduling the signpost task. That wait belongs to the cluster, not to
+// the command the user is launching.
+//
+// The name was created a moment ago, so a probe that fails now means
+// "not scheduled yet" far more often than anything else, and the two
+// are indistinguishable from the error alone: a freshly created Swarm
+// service has no VIP yet, so the cluster answers "Name does not resolve"
+// (75ms) word for word as it would for a name that will never exist.
+// Branching on that failed every session at startup (one regression's
+// worth of learning). So: one short probe, because a cluster that is
+// already ready answers in 1-5ms and the session is then proven before
+// it starts, and otherwise the wait moves off the critical path.
+func (s *exposeSession) prove(group []exposedMapping) {
+	for _, ex := range group {
+		spec := ex.Spec()
+		if verr := ex.Verify(exposeVerifyUpfront); verr == nil {
+			info("serving %s (path verified through the cluster)", spec)
+			continue
+		}
+		info("serving %s (proving the path in the background)", spec)
+		go func() {
+			verr := verifyExposed(ex, spec.Name, s.done.Load)
+			// Teardown closes the transport, which fails an in-flight probe.
+			// That is the session ending, not a broken path: don't diagnose it.
+			if errors.Is(verr, errStopped) || s.done.Load() {
+				return
 			}
-			return fail(fmt.Errorf("%s: agent: %s", name, msg))
-		}
-		// "dynamic" may carry the "parked" note: a deployed workload was parked
-		// (stopped / scaled to 0 / repointed) and will be restored on teardown.
-		fields := strings.Fields(reply)
-		// An agent that created the name answers "dynamic". Anything else is off
-		// protocol — an agent that failed says so above, with the access it is
-		// missing, so there is nothing to add here beyond refusing to continue.
-		if len(fields) == 0 || fields[0] != "dynamic" {
-			return fail(fmt.Errorf("%s: agent answered %q, expected \"dynamic\"", name, strings.TrimSpace(reply)))
-		}
-		parked := len(fields) > 1 && fields[1] == "parked"
-		split := len(fields) > 2 && fields[2] == "split"
-		// Provisioned — register for cleanup BEFORE the check, so a failure
-		// below still tears the name down.
-		dynamic = append(dynamic, name)
-		unmark = append(unmark, markServed(name, group[0].AgentPort(), os.Args[1:]))
-		if parked {
-			info("took over %s — the deployed workload is parked for this session (restored on exit)", name)
-			if split {
-				// Said at the moment it bites, not left for doctor: a session
-				// where every second request reaches the old pod looks like a
-				// flaky app, not like a missing RBAC rule.
-				info("WARNING %s: HALF of its requests still reach the deployed pod - the agent's RBAC cannot delete", name)
-				info("        the EndpointSlice Kubernetes built for it (endpointslices, needed since 2.20.1).")
-				info("        Re-apply deploy/plug-k8s.yaml or update the chart that deploys the agent; plug doctor -p <profile> has the one-line patch.")
+			if verr == nil {
+				info("%s: path verified through the cluster", spec.Name)
+				return
 			}
-			// Its environment too, by default: the process that takes a
-			// service's place gets the service's variables, secrets included
-			// as the pod already had them, the caller's own winning. An agent
-			// older than the verb answers "unknown command" and the session
-			// runs with the caller's environment alone, as it always did.
-			// --env-of named another workload: its environment was projected
-			// before the takeover, and the parked one's is not wanted.
-			if !cfg.envPolicy.off && cfg.envPolicy.from == "" {
-				projectWorkloadEnv(tr, name, cfg.envPolicy)
+			info("WARNING %v\n"+
+				"      %s is armed but nothing ever reached it. The session keeps running — a name that "+
+				"comes up later still works — but as it stands the cluster cannot see this process.\n"+
+				"      Check it cluster-side: docker service ps plug-sp-%s / kubectl get svc %s",
+				verr, spec.Name, spec.Name, spec.Name)
+		}()
+	}
+}
+
+// armRearm installs the name's re-provisioner. After a reconnect, a restarted
+// agent has GC'd the signpost AND, on a takeover, restored the parked
+// workload, so the SAME verb is re-run (re-park included) and re-verified:
+// the name must not be silently dead (or silently back on the deployed
+// version) while the forward reports re-armed.
+//
+// ONE re-provisioner per NAME, fed by every member's hook. A transport death
+// re-arms all of a name's mappings independently, each on a freshly
+// allocated port: re-provisioning per member would read the others' ports
+// while they are still being reallocated, and rebuild the signpost once per
+// member (on Swarm, ~8.5s of delete+recreate each time). So the hooks only
+// signal, and this goroutine coalesces the wave: it waits for it to settle,
+// then sends ONE serve-name carrying every member's current port.
+func (s *exposeSession) armRearm(group []exposedMapping) {
+	name := group[0].Spec().Name
+	trigger := make(chan struct{}, 1)
+	for _, ex := range group {
+		ex.OnRearm(func() {
+			select {
+			case trigger <- struct{}{}:
+			default: // a wave is already pending; it will read our port too
 			}
-		}
-		for _, ex := range group {
-			spec := ex.Spec()
-			// -s was asked for explicitly: an unproven path must never pass silently
-			// (fix the cluster side, run again). But proving it is NOT always the
-			// user's wait to bear. Measured on one Docker Desktop Swarm, the phases
-			// of this loop are: dial 0.04s, remote bind 0.00s, serve-name 0.03s —
-			// and then 6s, 37s, 29s on three identical runs, all of it Swarm
-			// scheduling the signpost task. That wait belongs to the cluster, not to
-			// the command the user is launching.
-			//
-			// The name was created a moment ago, so a probe that fails now means
-			// "not scheduled yet" far more often than anything else — and the two
-			// are indistinguishable from the error alone: a freshly created Swarm
-			// service has no VIP yet, so the cluster answers "Name does not resolve"
-			// (75ms) word for word as it would for a name that will never exist.
-			// Branching on that failed every session at startup (one regression's
-			// worth of learning). So: one short probe, because a cluster that is
-			// already ready answers in 1-5ms and the session is then proven before
-			// it starts — and otherwise the wait moves off the critical path.
-			if verr := ex.Verify(exposeVerifyUpfront); verr == nil {
-				info("serving %s (path verified through the cluster)", spec)
+		})
+	}
+	go func() {
+		for range trigger {
+			// Let the rest of the wave land, then drain what it queued: the
+			// verb below reads every member's port at call time, so one pass
+			// covers them all.
+			time.Sleep(rearmSettle)
+			select {
+			case <-trigger:
+			default:
+			}
+			if s.done.Load() {
+				return
+			}
+			m, err := s.tr.Exec(serveNameVerb(group))
+			switch {
+			case err != nil:
+				info("WARNING %s: re-provisioning after reconnect failed (%v) — the name may be unreachable", name, err)
+				continue
+			case strings.HasPrefix(m, "error:"):
+				info("WARNING %s: agent refused to re-provision after reconnect: %s", name, strings.TrimSpace(strings.TrimPrefix(m, "error:")))
 				continue
 			}
-			info("serving %s (proving the path in the background)", spec)
-			go func() {
-				verr := verifyExposed(ex, spec.Name, done.Load)
-				// Teardown closes the transport, which fails an in-flight probe.
-				// That is the session ending, not a broken path: don't diagnose it.
-				if errors.Is(verr, errStopped) || done.Load() {
-					return
+			// Same race as at startup, and worse to get wrong here: the verb
+			// above just re-created the signpost, so a single early probe
+			// would time out and report the name dead while it was merely
+			// coming up: a scary note about a path that then works.
+			if verr := verifyExposed(group[0], name, s.done.Load); verr != nil {
+				if !errors.Is(verr, errStopped) && !s.done.Load() {
+					info("WARNING %s: re-provisioned after reconnect but nothing reached it (%v)", name, verr)
 				}
-				if verr == nil {
-					info("%s: path verified through the cluster", spec.Name)
-					return
-				}
-				info("WARNING %v\n"+
-					"      %s is armed but nothing ever reached it. The session keeps running — a name that "+
-					"comes up later still works — but as it stands the cluster cannot see this process.\n"+
-					"      Check it cluster-side: docker service ps plug-sp-%s / kubectl get svc %s",
-					verr, spec.Name, spec.Name, spec.Name)
-			}()
+				continue
+			}
+			info("%s: re-provisioned and verified after reconnect", name)
 		}
-		// One re-provisioner for the whole name, once its mappings are armed.
-		armRearm(group)
-	}
-	return func() {
-		done.Store(true)
-		// Drop the dynamic names BEFORE the transport goes: a signpost/Service
-		// must not outlive its session.
-		drop()
-		tr.Close()
-	}, nil
+	}()
 }
 
 // isLoopback reports whether host is the local machine (no network to intercept).

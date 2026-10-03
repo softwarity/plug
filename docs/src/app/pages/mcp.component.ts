@@ -5,7 +5,6 @@ import { CodeComponent } from '../code/code.component';
 @Component({
   selector: 'app-mcp',
   imports: [CodeComponent, RouterLink],
-  preserveWhitespaces: true,
   template: `
     <h2>MCP: plug for your AI coding agent</h2>
 

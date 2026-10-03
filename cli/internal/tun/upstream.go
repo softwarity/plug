@@ -41,18 +41,6 @@ func inFakeRange(addr string) bool {
 	return u&fakeMask15 == fakeBase&fakeMask15
 }
 
-// pickUpstreams turns what the OS reported into the servers plug will forward
-// to: the ones that can actually answer, best interface first, each once.
-//
-// Order matters because the first is the one every relayed query goes to. The
-// OS ranks its interfaces by metric and so do we — on a laptop with a corporate
-// VPN up, that is the VPN's resolver, which is the only one that knows the
-// internal names.
-func pickUpstreams(cands []dnsCandidate) []string {
-	out, _ := pickUpstreamsTraced(cands)
-	return out
-}
-
 // siteLocalV6 reports whether addr is in fec0::/10 — the IPv6 site-local range,
 // deprecated by RFC 3879 in 2004. Windows hands fec0:0:0:ffff::1/2/3 to any
 // adapter with no DNS of its own, so they turn up in the adapter table of most
@@ -62,8 +50,15 @@ func siteLocalV6(addr string) bool {
 	return ip != nil && ip.To4() == nil && len(ip) == net.IPv6len && ip[0] == 0xfe && ip[1]&0xc0 == 0xc0
 }
 
-// pickUpstreamsTraced is pickUpstreams, also returning what it dropped for being
-// site-local IPv6 — so the caller can SAY it.
+// pickUpstreamsTraced turns what the OS reported into the servers plug will
+// forward to: the ones that can actually answer, best interface first, each
+// once. It also returns what it dropped for being site-local IPv6, so the
+// caller can SAY it.
+//
+// Order matters because the first is the one every relayed query goes to. The
+// OS ranks its interfaces by metric and so do we: on a laptop with a corporate
+// VPN up, that is the VPN's resolver, which is the only one that knows the
+// internal names.
 //
 // Dropping them is a judgement: it declares a whole address family "not a real
 // resolver", and one day, on a network nobody here imagined, that will be wrong.

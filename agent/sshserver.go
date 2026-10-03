@@ -21,8 +21,8 @@ package agent
 //     recreation, a CLI that REFUSES a change instead of noting it, and a way
 //     to learn the fingerprint other than by connecting.
 //
-// What it must reproduce is short and fully enumerated - the sshd_config this
-// replaces is in agent/Dockerfile:
+// What it must reproduce is short and fully enumerated - the sshd_config the
+// Dockerfile used to generate said:
 //
 //	user `plug`  publickey only; direct-tcpip anywhere (PermitOpen any);
 //	             exec restricted to the verbs (ForceCommand); remote forwards
@@ -31,17 +31,14 @@ package agent
 //	user `get`   no authentication at all; exec restricted to serving binaries;
 //	             no forwarding of any kind.
 //
-// Steps 1 to 3 are here: accept, authenticate, exec, plus both forwarding
-// primitives. What remains before the switch-over is the keepalive tuning, a
-// host key that survives POD recreation (a file in the container only survives
-// a process restart), and the image change itself. Until then this server is
-// wired nowhere and sshd still serves.
+// It is the server now: `plug-agent serve` (serve.go) runs it in the
+// container, and an embedder calls Start. sshd is gone from the image.
 //
-// The exec runs the SAME binary sshd runs today, as a subprocess with
-// SSH_ORIGINAL_COMMAND set. Deliberately: it keeps the 3100 lines of verbs
-// untouched, so this server can be compared against sshd behaviour for
-// behaviour before anything else moves. Turning those verbs into an importable
-// package is what Meerkat needs, and it is a different piece of work.
+// The exec runs the agent binary as a subprocess with SSH_ORIGINAL_COMMAND
+// set, the way sshd did: a verb's whole job is one answer, and a process per
+// verb is what keeps one verb's failure from being the server's. An embedder
+// that would rather not re-execute a binary per verb has runVerb (main.go),
+// which runs the same dispatch in-process and hands the answer back.
 
 import (
 	"crypto/ed25519"

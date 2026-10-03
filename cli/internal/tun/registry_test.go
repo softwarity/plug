@@ -106,8 +106,8 @@ func TestTheClientMarkerCarriesTheProfileKeyForTheDaemon(t *testing.T) {
 	un := RegisterClient(key, os.Getpid(), "/home/dev/.plug/keys/neo")
 	defer un()
 
-	if got := ClusterKeyFile(key); got != "/home/dev/.plug/keys/neo" {
-		t.Errorf("ClusterKeyFile = %q, want the path the client registered", got)
+	if got, _ := ClusterKeyFileFrom(key); got != "/home/dev/.plug/keys/neo" {
+		t.Errorf("ClusterKeyFileFrom = %q, want the path the client registered", got)
 	}
 	// The cluster key still reads back: the second line must not disturb the first.
 	if got := ActiveClusters(); len(got) != 1 || got[0] != key {
@@ -160,11 +160,11 @@ func TestTheKeySidecarLivesAndDiesWithItsMarker(t *testing.T) {
 	key := "cluster.example:2222"
 
 	un := RegisterClient(key, os.Getpid(), "/home/dev/.plug/keys/neo")
-	if got := ClusterKeyFile(key); got != "/home/dev/.plug/keys/neo" {
-		t.Fatalf("ClusterKeyFile = %q, want the path the client registered", got)
+	if got, _ := ClusterKeyFileFrom(key); got != "/home/dev/.plug/keys/neo" {
+		t.Fatalf("ClusterKeyFileFrom = %q, want the path the client registered", got)
 	}
 	un()
-	if got := ClusterKeyFile(key); got != "" {
+	if got, _ := ClusterKeyFileFrom(key); got != "" {
 		t.Errorf("the sidecar outlived its client: %q", got)
 	}
 	entries, err := os.ReadDir(clientsDir(key))
@@ -211,8 +211,8 @@ func TestAMarkerWithNoSidecarNamesItsClusterAndNoKey(t *testing.T) {
 	if got := ActiveClusters(); len(got) != 1 || got[0] != key {
 		t.Errorf("ActiveClusters = %v, want [%s]", got, key)
 	}
-	if got := ClusterKeyFile(key); got != "" {
-		t.Errorf("ClusterKeyFile = %q, want empty for a client that registered none", got)
+	if got, _ := ClusterKeyFileFrom(key); got != "" {
+		t.Errorf("ClusterKeyFileFrom = %q, want empty for a client that registered none", got)
 	}
 }
 
@@ -249,8 +249,8 @@ func TestAClientWithNoKeyWritesTheOldShape(t *testing.T) {
 	if !sawMarker {
 		t.Errorf("no marker named %q among %d entries", me, len(entries))
 	}
-	if got := ClusterKeyFile(key); got != "" {
-		t.Errorf("ClusterKeyFile = %q, want empty", got)
+	if got, _ := ClusterKeyFileFrom(key); got != "" {
+		t.Errorf("ClusterKeyFileFrom = %q, want empty", got)
 	}
 }
 

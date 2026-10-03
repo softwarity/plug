@@ -220,9 +220,9 @@ func isBareDrive(p string) bool {
 	return len(p) == 2 && p[1] == ':' && (p[0] >= 'A' && p[0] <= 'Z' || p[0] >= 'a' && p[0] <= 'z')
 }
 
-var dnsLabelRe = regexp.MustCompile(`^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$`)
-
-func dnsLabel(s string) bool { return dnsLabelRe.MatchString(s) }
+// dnsLabel: a workload name a mount can belong to is the same label a -s name
+// is (exposeName), since it names the same thing.
+func dnsLabel(s string) bool { return exposeName.MatchString(s) }
 
 // resolveMountNames fills in the workload every unnamed mount belongs to: the
 // one name -s serves, or the --env-of one. Two -s names and no --env-of is an
@@ -430,6 +430,11 @@ func helperStatus(tr sessionTransport, m *liveMount, agentPort string) string {
 // reassigned outside tests.
 var mountForwardBind = "127.0.0.1:0"
 
+// mountHelperBudget bounds the wait for a helper to come up: a Swarm or a
+// k8s scheduler can take most of a minute to place it (see exposeVerifyBudget
+// for the measurements on a signpost, which is the same wait).
+const mountHelperBudget = 90 * time.Second
+
 // mountSMB mounts one share at path with the OS's own SMB client and answers
 // where it landed; unmountSMB undoes it. Both are vars over the per-OS bodies
 // (mount_<os>.go), so the whole of startMounts can be driven without a share
@@ -518,115 +523,148 @@ func startMounts(cfg config) (func(), error) {
 		tr.Close()
 		return nil, fmt.Errorf("opening the mount session's liveness forward: %w", err)
 	}
-	var mounts []*liveMount
-	var done atomic.Bool
-	stop := func() {
-		done.Store(true)
-		for i := len(mounts) - 1; i >= 0; i-- {
-			m := mounts[i]
-			if m.mounted {
-				if err := unmountSMB(m.spec.path); err != nil {
-					info("could not unmount %s: %v — plug doctor --fix will", m.spec.path, err)
-				} else {
-					info("unmounted %s", m.spec.path)
-				}
-			}
-			if m.fw != nil {
-				m.fw.Close()
-			}
-			if out, err := tr.Exec("unmount-volume " + m.spec.name + " " + m.spec.volume + " " + live.AgentPort()); err != nil || strings.HasPrefix(out, "error:") {
-				info("could not release the mount helper for %s: %s%v", m.spec, out, err)
-			}
-			if m.unmark != nil {
-				m.unmark()
-			}
-		}
-		// The session directory the automatic mounts sat under: removed only
-		// once nothing is mounted there any more - a RemoveAll through a live
-		// mount would be the volume's files, not the directory.
-		for name, a := range autoMounts {
-			delete(autoMounts, name)
-			busy := false
-			for _, m := range a.mounts {
-				if mountedAt(m.local) {
-					busy = true
-				}
-			}
-			if !busy && a.dir != "" {
-				_ = os.RemoveAll(a.dir)
-			}
-		}
-		unpinMountNames(cfg)
-		tr.Close()
-	}
-	fail := func(err error) (func(), error) {
-		stop()
-		return nil, err
-	}
+	s := &mountSession{cfg: cfg, tr: tr, live: live}
 	for _, spec := range specs {
-		m := &liveMount{spec: spec, pass: mintMountPass()}
-		if m.pass == "" {
-			return fail(errors.New("no entropy to mint the mount credential"))
+		if err := s.mountOne(spec); err != nil {
+			return s.fail(err)
 		}
-		mounts = append(mounts, m)
-		p := startProgress("mounting " + spec.volume + " of " + spec.name)
-		p.step("asking the agent for a helper")
-		reply, err := provisionMount(tr, m, live.AgentPort())
-		if err != nil {
-			p.done("failed")
-			return fail(err)
-		}
-		pinMountName(cfg, reply.host)
-		target := net.JoinHostPort(reply.host, reply.port)
-		p.step("helper " + reply.host + " starting")
-		if err := mountHelperReady(tr, target, 90*time.Second, func() string { return helperStatus(tr, m, live.AgentPort()) }, p); err != nil {
-			p.done("failed")
-			return fail(err)
-		}
-		p.step("mounting")
-		t := mountTarget{mountReply: reply, pass: m.pass}
-		if mountUsesForward() || cfg.dockerRun {
-			fw, err := newMountForward(mountForwardBind, target, tr.DialCluster)
-			if err != nil {
-				// Ended like the other failures of this loop. Left open, the
-				// progress line's spinner kept redrawing over the error.
-				p.done("failed")
-				return fail(err)
-			}
-			m.fw = fw
-			t.local = fw.Addr()
-		}
-		if cfg.dockerRun {
-			// Not mounted here: handed to the container as a cifs volume the
-			// daemon mounts through the forward (dockerMountFlags).
-			dockerMounts = append(dockerMounts, dockerMount{spec: spec, target: t})
-			p.done("served for the container through " + t.local)
-			continue
-		}
-		at, err := mountSMB(t, spec.path)
-		if err != nil {
-			p.done("failed")
-			return fail(fmt.Errorf("mounting %s of %s at %s: %w", spec.volume, spec.name, spec.path, err))
-		}
-		m.spec.path = at
-		m.mounted = true
-		m.unmark = markMounted(m.spec, t.local, net.JoinHostPort(cfg.host, cfg.port))
-		if spec.auto {
-			a := autoMounts[spec.name]
-			a.mounts = append(a.mounts, volumeMount{cluster: spec.volume, local: at})
-			autoMounts[spec.name] = a
-		}
-		p.done("mounted at " + at + ", read-write, live")
 	}
-	if len(mounts) == 0 {
+	if len(s.mounts) == 0 {
 		tr.Close()
 		return func() {}, nil
 	}
-	// A reconnect re-allocates the liveness port: re-provision every helper
-	// under the new one, or the sweep reaps them within the minute. The hook
-	// must not block (see Exposed.OnRearm); the work happens on its own.
+	s.armRearm()
+	return s.stop, nil
+}
+
+// mountSession is one session's --mount state: the dedicated transport, the
+// liveness forward the helpers are labelled with, and what is mounted so far.
+// startMounts builds it and mounts in order; the re-provisioner keeps reading
+// it for the session's lifetime.
+type mountSession struct {
+	cfg    config
+	tr     sessionTransport
+	live   exposedMapping
+	mounts []*liveMount
+	done   atomic.Bool
+}
+
+// stop is what startMounts returns: unmount, release every helper, forget the
+// records, and remove the session directory once nothing is mounted under it.
+func (s *mountSession) stop() {
+	s.done.Store(true)
+	for i := len(s.mounts) - 1; i >= 0; i-- {
+		m := s.mounts[i]
+		if m.mounted {
+			if err := unmountSMB(m.spec.path); err != nil {
+				info("could not unmount %s: %v — plug doctor --fix will", m.spec.path, err)
+			} else {
+				info("unmounted %s", m.spec.path)
+			}
+		}
+		if m.fw != nil {
+			m.fw.Close()
+		}
+		if out, err := s.tr.Exec("unmount-volume " + m.spec.name + " " + m.spec.volume + " " + s.live.AgentPort()); err != nil || strings.HasPrefix(out, "error:") {
+			info("could not release the mount helper for %s: %s%v", m.spec, out, err)
+		}
+		if m.unmark != nil {
+			m.unmark()
+		}
+	}
+	// The session directory the automatic mounts sat under: removed only
+	// once nothing is mounted there any more - a RemoveAll through a live
+	// mount would be the volume's files, not the directory.
+	for name, a := range autoMounts {
+		delete(autoMounts, name)
+		busy := false
+		for _, m := range a.mounts {
+			if mountedAt(m.local) {
+				busy = true
+			}
+		}
+		if !busy && a.dir != "" {
+			_ = os.RemoveAll(a.dir)
+		}
+	}
+	unpinMountNames(s.cfg)
+	s.tr.Close()
+}
+
+// fail ends the session on err: what was mounted is undone, and err handed
+// back as startMounts' result.
+func (s *mountSession) fail(err error) (func(), error) {
+	s.stop()
+	return nil, err
+}
+
+// mountOne asks the agent for spec's helper, waits for it, and mounts it (or,
+// under --dockerrun, hands it to the container). The mount is registered for
+// the teardown before anything is asked, so a failure anywhere is undone.
+func (s *mountSession) mountOne(spec mountSpec) error {
+	m := &liveMount{spec: spec, pass: mintMountPass()}
+	if m.pass == "" {
+		return errors.New("no entropy to mint the mount credential")
+	}
+	s.mounts = append(s.mounts, m)
+	p := startProgress("mounting " + spec.volume + " of " + spec.name)
+	p.step("asking the agent for a helper")
+	reply, err := provisionMount(s.tr, m, s.live.AgentPort())
+	if err != nil {
+		p.done("failed")
+		return err
+	}
+	pinMountName(s.cfg, reply.host)
+	target := net.JoinHostPort(reply.host, reply.port)
+	p.step("helper " + reply.host + " starting")
+	if err := mountHelperReady(s.tr, target, mountHelperBudget, func() string { return helperStatus(s.tr, m, s.live.AgentPort()) }, p); err != nil {
+		p.done("failed")
+		return err
+	}
+	p.step("mounting")
+	t := mountTarget{mountReply: reply, pass: m.pass}
+	if mountUsesForward() || s.cfg.dockerRun {
+		fw, err := newMountForward(mountForwardBind, target, s.tr.DialCluster)
+		if err != nil {
+			// Ended like the other failures here. Left open, the progress
+			// line's spinner kept redrawing over the error.
+			p.done("failed")
+			return err
+		}
+		m.fw = fw
+		t.local = fw.Addr()
+	}
+	if s.cfg.dockerRun {
+		// Not mounted here: handed to the container as a cifs volume the
+		// daemon mounts through the forward (dockerMountFlags).
+		dockerMounts = append(dockerMounts, dockerMount{spec: spec, target: t})
+		p.done("served for the container through " + t.local)
+		return nil
+	}
+	at, err := mountSMB(t, spec.path)
+	if err != nil {
+		p.done("failed")
+		return fmt.Errorf("mounting %s of %s at %s: %w", spec.volume, spec.name, spec.path, err)
+	}
+	m.spec.path = at
+	m.mounted = true
+	m.unmark = markMounted(m.spec, t.local, net.JoinHostPort(s.cfg.host, s.cfg.port))
+	if spec.auto {
+		a := autoMounts[spec.name]
+		a.mounts = append(a.mounts, volumeMount{cluster: spec.volume, local: at})
+		autoMounts[spec.name] = a
+	}
+	p.done("mounted at " + at + ", read-write, live")
+	return nil
+}
+
+// armRearm installs the re-provisioner. A reconnect re-allocates the liveness
+// port: every helper is re-provisioned under the new one, or the sweep reaps
+// them within the minute. The hook must not block (see Exposed.OnRearm); the
+// work happens on its own.
+func (s *mountSession) armRearm() {
 	kick := make(chan struct{}, 1)
-	live.OnRearm(func() {
+	s.live.OnRearm(func() {
 		select {
 		case kick <- struct{}{}:
 		default:
@@ -634,23 +672,22 @@ func startMounts(cfg config) (func(), error) {
 	})
 	go func() {
 		for range kick {
-			if done.Load() {
+			if s.done.Load() {
 				return
 			}
-			for _, m := range mounts {
-				reply, err := provisionMount(tr, m, live.AgentPort())
+			for _, m := range s.mounts {
+				reply, err := provisionMount(s.tr, m, s.live.AgentPort())
 				if err != nil {
 					info("re-provisioning the mount helper for %s after a reconnect: %v", m.spec, err)
 					continue
 				}
-				pinMountName(cfg, reply.host)
+				pinMountName(s.cfg, reply.host)
 				if m.fw != nil {
 					m.fw.Retarget(net.JoinHostPort(reply.host, reply.port))
 				}
 			}
 		}
 	}()
-	return stop, nil
 }
 
 // autoMountNames are the workloads whose volumes are mounted by default: the

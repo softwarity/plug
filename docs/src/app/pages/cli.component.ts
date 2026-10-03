@@ -5,7 +5,6 @@ import { CodeComponent } from '../code/code.component';
 @Component({
   selector: 'app-cli',
   imports: [CodeComponent, RouterLink],
-  preserveWhitespaces: true,
   template: `
     <h2>CLI reference</h2>
 

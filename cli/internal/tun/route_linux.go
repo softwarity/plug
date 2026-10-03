@@ -59,11 +59,6 @@ func hasEffCap(bit uint) bool {
 // the child's former upstream nameservers (read before anything changes).
 func configure(_ any, n int, ifname, cidr, dnsIP string, up *upstreamDNS, log logfn) ([]string, string, func(), error) {
 	ups := resolvNameservers()
-	// /etc/resolv.conf is never touched here — the repoint is a bind-mount inside
-	// the child's own mount namespace — so re-reading it later is honest, and it
-	// is where a VPN client writes its servers.
-	stopWatch := make(chan struct{})
-	go watchUpstreams(up, resolvNameservers, upstreamPoll, log, stopWatch)
 
 	// Per-instance link-local address (10.99.99.1, 10.99.100.1, ...): simultaneous
 	// instances must not share it, or their connected routes become ambiguous.
@@ -85,6 +80,14 @@ func configure(_ any, n int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 	// every interface of the machine and was never put back; the TUN's entry
 	// disappears with the TUN.
 	_ = run("sysctl", "-w", "net.ipv4.conf."+ifname+".rp_filter=2")
+
+	// /etc/resolv.conf is never touched here (the repoint is a bind-mount inside
+	// the child's own mount namespace) so re-reading it later is honest, and it
+	// is where a VPN client writes its servers. Started once the link is up:
+	// before, a failed `ip` command returned without ever closing stopWatch and
+	// the watcher outlived the datapath it was watching for.
+	stopWatch := make(chan struct{})
+	go watchUpstreams(up, resolvNameservers, upstreamPoll, log, stopWatch)
 
 	// A PRIVATE resolv.conf — bind-mounted over /etc/resolv.conf inside the child's
 	// mount namespace (see runChild), so the repoint is scoped to this launch.

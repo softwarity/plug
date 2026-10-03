@@ -4,7 +4,7 @@ services:
     image: docker.io/softwarity/plug:latest
     ports:
       - "2222:22"
-    # required — the agent creates your -s name through it
+    # required - the agent creates your -s name through it
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     # Swarm only, for -s: the signpost is a service, so run the agent on a

@@ -111,7 +111,7 @@ func newFakeEngine(t *testing.T) *fakeEngine {
 	}
 	fe.srv = httptest.NewServer(fe)
 	addr := fe.srv.Listener.Addr().String()
-	oldClient, oldSock, oldSA := dockerClient, dockerSock, k8sSA
+	oldClient, oldSock, oldSA, oldControl := dockerClient, dockerSock, k8sSA, swarmControl
 	dockerClient = &http.Client{
 		Timeout: 20 * time.Second,
 		Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -126,10 +126,13 @@ func newFakeEngine(t *testing.T) *fakeEngine {
 		t.Fatal(err)
 	}
 	k8sSA = t.TempDir()
+	// The agent remembers the manager probe's answer for the life of the
+	// process; this fake is the process's daemon for the life of the test.
+	fe.forgetSwarm()
 	t.Cleanup(func() {
 		dockerClient.CloseIdleConnections()
 		fe.srv.Close()
-		dockerClient, dockerSock, k8sSA = oldClient, oldSock, oldSA
+		dockerClient, dockerSock, k8sSA, swarmControl = oldClient, oldSock, oldSA, oldControl
 	})
 	return fe
 }
@@ -620,8 +623,16 @@ func (fe *fakeEngine) setServiceMounts(id string, mounts ...dockerMount) {
 // whether the service, secret and task endpoints answer at all.
 func (fe *fakeEngine) setSwarm(manager bool) {
 	fe.mu.Lock()
-	defer fe.mu.Unlock()
 	fe.swarm = manager
+	fe.mu.Unlock()
+	fe.forgetSwarm()
+}
+
+// forgetSwarm makes the agent ask /info again: it remembers a manager probe
+// that answered, and a test that turns Swarm on mid-way is a node promoted
+// under a running agent, which the real one would only see at its next start.
+func (fe *fakeEngine) forgetSwarm() {
+	swarmControl = memoize(swarmControlProbe)
 }
 
 // refuseWith installs the failure hook: a non-zero code answers that request
@@ -838,35 +849,19 @@ func liveSessions(t *testing.T, addrs ...string) map[string]bool {
 	return live
 }
 
-// verbReply runs a verb body with answer and fatal swapped for a panic and
-// returns the one line the agent would have printed. Both exits leave the
-// process, so without this no test can see what a serve, an unserve, a mount
-// answered, nor get control back to look at the cluster afterwards. The lines
-// after each answer() assume they are unreachable, which is why it panics
-// rather than records (dispatch_test.go).
+// verbReply runs a verb body and returns the one line the agent would have
+// printed, through the agent's own ending (captureVerb): answer and fatal end
+// a verb with a panic the process entry point turns into the exit, and this is
+// that entry point for a test, which then has control back to look at the
+// cluster afterwards. A body that returns without answering is a failure of
+// the body, said as such.
 func verbReply(t *testing.T, fn func()) string {
 	t.Helper()
-	realAnswer, realFatal := answer, fatal
-	defer func() { answer, fatal = realAnswer, realFatal }()
-	stop := func(format string, a ...any) { panic(exitReply{fmt.Sprintf(format, a...)}) }
-	answer, fatal = stop, stop
-
-	var said string
-	func() {
-		defer func() {
-			r := recover()
-			if r == nil {
-				return
-			}
-			e, ok := r.(exitReply)
-			if !ok {
-				panic(r)
-			}
-			said = e.said
-		}()
-		fn()
-	}()
-	return said
+	e, exited := captureVerb(fn)
+	if !exited {
+		t.Fatal("the verb returned without answering: a subprocess would have exited 0 and said nothing")
+	}
+	return e.reply
 }
 
 // stderrOf runs fn with os.Stderr captured: what the sweeps say (gcNote) goes

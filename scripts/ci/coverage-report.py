@@ -32,21 +32,22 @@ import sys
 
 
 def read(paths):
-    """Every block from every profile, keyed by (file, span) with counts summed."""
+    """Every block from every profile, keyed by (file, span) with counts summed.
+
+    The `mode:` line is skipped, not read: the profiles are all written with
+    -covermode=atomic (ci.yml), and summing counts is right for atomic and
+    count alike (a set profile would need max, and nothing here produces one).
+    """
     blocks = collections.Counter()
-    mode = "atomic"
     for p in paths:
         with open(p, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
-                if not line:
-                    continue
-                if line.startswith("mode:"):
-                    mode = line.split(":", 1)[1].strip()
+                if not line or line.startswith("mode:"):
                     continue
                 loc, nstmt, count = line.rsplit(" ", 2)
                 blocks[(loc, int(nstmt))] += int(count)
-    return mode, blocks
+    return blocks
 
 
 def per_file(blocks):
@@ -61,13 +62,8 @@ def per_file(blocks):
 
 def shorten(path):
     """github.com/softwarity/plug/cli/internal/tun/dns.go -> cli/internal/tun/dns.go"""
-    for marker in ("/plug/", "/"):
-        if marker in path:
-            i = path.find("/plug/")
-            if i >= 0:
-                return path[i + len("/plug/"):]
-            break
-    return path
+    i = path.find("/plug/")
+    return path[i + len("/plug/"):] if i >= 0 else path
 
 
 def main():
@@ -77,7 +73,7 @@ def main():
     if not profiles:
         sys.exit("no non-empty coverage profile was given")
 
-    _, blocks = read(profiles)
+    blocks = read(profiles)
     total, covered = per_file(blocks)
     T, C = sum(total.values()), sum(covered.values())
     if T == 0:

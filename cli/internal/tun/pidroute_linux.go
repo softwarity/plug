@@ -8,6 +8,15 @@ import (
 	"strings"
 )
 
+// The Linux connect-time attribution primitives. Nothing in the Linux build
+// calls them: Linux runs one datapath per launch, scoped by the child's mount
+// namespace, so no flow ever has to be attributed to a cluster, and the router
+// (pidroute.go) is not built here. They are kept, and kept tested
+// (pidroute_linux_test.go), as the reference implementation of what a shared
+// Linux datapath would need the day one lands: deleting them would cost more
+// to rediscover (the /proc/net/tcp inode walk in particular) than they cost to
+// carry.
+
 // ppidOf reads /proc/<pid>/stat. Layout: "pid (comm) state ppid ...". comm may
 // contain spaces AND ')', so we split on the LAST ')' and read from there: the
 // remainder is "state ppid ...", so ppid is the 2nd field.

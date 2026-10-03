@@ -106,10 +106,7 @@ func doctorOS(add func(check)) {
 	if len(poisoned) > 0 {
 		plugged = true
 	}
-	sessions := 0
-	for _, k := range tun.ActiveClusters() {
-		sessions += tun.LiveClients(k)
-	}
+	sessions := liveSessions()
 	switch {
 	case plugged && sessions == 0 && daemons == 0:
 		// THE dirty state: a daemon died without tidying up, so the machine's

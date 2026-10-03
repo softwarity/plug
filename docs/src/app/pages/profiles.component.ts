@@ -5,7 +5,6 @@ import { CodeComponent } from '../code/code.component';
 @Component({
   selector: 'app-profiles',
   imports: [CodeComponent, RouterLink],
-  preserveWhitespaces: true,
   template: `
     <h2>Profiles &amp; versions</h2>
 
@@ -57,25 +56,11 @@ port = 2222</app-code>
     </p>
     <app-code lang="bash">plug -p prod -s my-app:8080:3000 npm run start   # → cluster prod
 plug -p staging -s my-app:8080:3000 npm run start   # → cluster staging, side by side</app-code>
-    <p>How plug keeps parallel clusters apart differs by OS:</p>
-    <ul>
-      <li>
-        <strong>Linux</strong> - each launch runs in its own <strong>mount namespace</strong> with a
-        private resolver, so two launches never share DNS: isolation for free.
-      </li>
-      <li>
-        <strong>Windows</strong> - the SYSTEM service holds <strong>one tunnel per cluster</strong>
-        and attributes each connection to the right one <strong>at <code>connect()</code></strong>,
-        walking the process back to the <code>plug -p</code> that launched it (PID-at-connect).
-      </li>
-      <li>
-        <strong>macOS</strong> - the <strong>same PID-at-connect design</strong> as Windows: the global
-        daemon holds one tunnel per cluster and routes each flow to the right one at
-        <code>connect()</code> (proven simultaneously in CI).
-      </li>
-    </ul>
     <p>
-      See <a routerLink="/how-it-works">how plug tells them apart</a> and the
+      The same service names resolve to the right backend in each. How plug keeps the two apart
+      differs by OS (a private resolver per launch on Linux, one tunnel per cluster attributed at
+      <code>connect()</code> on macOS and Windows): see
+      <a routerLink="/how-it-works">how plug tells them apart</a> and the
       <a routerLink="/coverage">coverage matrix</a>.
     </p>
 

@@ -91,3 +91,58 @@ func TestNoServersIsNotACrash(t *testing.T) {
 		t.Errorf("got %q with no servers configured", r)
 	}
 }
+
+// A server that answers SERVFAIL or REFUSED has not answered: a VPN's resolver
+// asked about a name outside its view says so at once, and taken as the reply
+// it hid a healthy server that was asked a moment later. Such a reply is held
+// as the fallback and the next server is brought in; only when every server
+// has failed is the last failure relayed, so the client hears what the servers
+// said rather than an invented one.
+func TestAServerFailureIsNotAnAnswerWhileServersRemain(t *testing.T) {
+	reply := func(rcode byte, tag string) []byte {
+		r := make([]byte, 12, 12+len(tag))
+		r[2], r[3] = 0x81, 0x80|rcode
+		return append(r, tag...)
+	}
+	servfail := reply(2, "servfail")
+	refused := reply(5, "refused")
+	nxdomain := reply(3, "nxdomain")
+	answer := reply(0, "answer")
+
+	var asked atomic.Int32
+	got := raceUpstreams([]string{"vpn", "corp", "healthy"}, 5*time.Second, func(addr string) []byte {
+		asked.Add(1)
+		switch addr {
+		case "vpn":
+			return servfail
+		case "corp":
+			return refused
+		}
+		return answer
+	})
+	if string(got[12:]) != "answer" {
+		t.Errorf("got %q, want the healthy server's answer: a SERVFAIL and a REFUSED were taken as replies", got[12:])
+	}
+	if asked.Load() != 3 {
+		t.Errorf("asked %d servers, want all three: a failure must bring the next one in", asked.Load())
+	}
+
+	// NXDOMAIN is a verdict about the name, not a failure of the server: it wins
+	// at once, as before.
+	asked.Store(0)
+	got = raceUpstreams([]string{"a", "b"}, 5*time.Second, func(string) []byte { asked.Add(1); return nxdomain })
+	if string(got[12:]) != "nxdomain" || asked.Load() != 1 {
+		t.Errorf("NXDOMAIN from the first server: got %q after %d questions, want it relayed from the one", got[12:], asked.Load())
+	}
+
+	// Everyone failing: the last failure is relayed, not nothing.
+	got = raceUpstreams([]string{"a", "b"}, time.Millisecond, func(addr string) []byte {
+		if addr == "a" {
+			return servfail
+		}
+		return refused
+	})
+	if string(got[12:]) != "refused" {
+		t.Errorf("every server failed and the relay returned %q, want the last failure (REFUSED) as the fallback", got)
+	}
+}

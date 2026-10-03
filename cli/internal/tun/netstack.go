@@ -64,22 +64,47 @@ type logLimiter struct {
 	mu     sync.Mutex
 	last   map[string]time.Time
 	window time.Duration
+	now    func() time.Time // time.Now, replaceable by a test
 }
 
+// limiterMax bounds the keys a limiter remembers. The keys are names and
+// targets, fed by every process on the machine (a Docker Desktop VM forwarding
+// its containers' lookups here, a browser's prefetches), and a daemon that runs
+// for weeks used to keep every one of them for ever. At the bound, entries
+// whose window has passed are forgotten; they would answer "allow" anyway.
+const limiterMax = 4096
+
 func newLogLimiter(window time.Duration) *logLimiter {
-	return &logLimiter{last: map[string]time.Time{}, window: window}
+	return &logLimiter{last: map[string]time.Time{}, window: window, now: time.Now}
 }
 
 // allow reports whether key may be logged now, recording the time when it may.
 func (l *logLimiter) allow(key string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	now := time.Now()
+	now := l.now()
 	if t, ok := l.last[key]; ok && now.Sub(t) < l.window {
 		return false
 	}
+	if len(l.last) >= limiterMax {
+		l.purge(now)
+	}
 	l.last[key] = now
 	return true
+}
+
+// purge forgets every key whose window has passed and, if that was not enough
+// (a burst of fresh keys), everything: a repeat that is logged once more is
+// cheaper than a map that only grows.
+func (l *logLimiter) purge(now time.Time) {
+	for k, t := range l.last {
+		if now.Sub(t) >= l.window {
+			delete(l.last, k)
+		}
+	}
+	if len(l.last) >= limiterMax {
+		l.last = map[string]time.Time{}
+	}
 }
 
 func buildStack(tab *faketab, df dialFunc, upstream *upstreamDNS, check nameChecker, log logfn) (*stack.Stack, *channel.Endpoint) {
@@ -228,17 +253,19 @@ type closeWriter interface{ CloseWrite() error }
 
 // relay splices two connections, half-closing each side on EOF and tearing both
 // down once both directions finish.
-// One of THREE copies of this function, and the only one that differed. The
-// others are cli/internal/tunnel/transport.go and agent/main.go; the agent is a
-// separate module, so a shared one would mean publishing a package for fifteen
-// lines. Kept duplicated on purpose, and now kept IDENTICAL, which is the part
-// that was not true.
 //
-// The difference was the else branch below. Without it, a direction that
-// finished copying into a conn with no CloseWrite signalled nothing, so the
+// One of TWO copies of this function; the other is agent/main.go's relay, and
+// the agent is a separate module, so a shared one would mean publishing a
+// package for fifteen lines. Kept duplicated on purpose, and kept identical in
+// behaviour. (A third copy used to live in cli/internal/tunnel/transport.go; what
+// is there now is Exposed.relayLocal in expose.go, which is a different thing:
+// it dials the local side itself and replays sniffed bytes first.)
+//
+// The else branch below is the part that once differed. Without it, a direction
+// that finished copying into a conn with no CloseWrite signalled nothing, so the
 // other direction could wait on an EOF that never came and this function never
 // returned. It does not bite today - both ends here (gonet.TCPConn, ssh.Channel)
-// implement CloseWrite - which is exactly why it survived three copies.
+// implement CloseWrite - which is exactly why it survived the copies.
 func relay(a, b net.Conn) {
 	done := make(chan struct{}, 2)
 	cp := func(dst, src net.Conn) {

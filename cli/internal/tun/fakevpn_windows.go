@@ -16,7 +16,7 @@ import (
 // probeResolverAddr is where the fake VPN's resolver answers. TEST-NET-2
 // (RFC 5737): assigned to nobody and routed nowhere, so an adapter carrying it
 // cannot shadow a network this machine is on. It must not be a loopback address
-// either — Windows resolvers never are, and pickUpstreams drops those.
+// either: Windows resolvers never are, and pickUpstreamsTraced drops those.
 const probeResolverAddr = "198.51.100.53"
 
 // probeAdapter is the fake VPN's adapter name, distinct from plug's own so
@@ -105,20 +105,8 @@ func newVPNRig(_ []string, _ string, log logfn) (*vpnRig, error) {
 	// table untouched. That is the exact registry shape scopedResolversNRPT reads.
 	const scopeRule = `{7A4C3B2D-5E6F-7081-9AB0-1C2D3E4F5A6C}`
 	scope := func() error {
-		k, _, err := registry.CreateKey(registry.LOCAL_MACHINE, nrptConfigPath+`\`+scopeRule, registry.SET_VALUE)
-		if err != nil {
+		if err := writeNRPTRule(scopeRule, []string{"." + scopeDomain}, probeResolverAddr); err != nil {
 			return err
-		}
-		defer k.Close()
-		for _, e := range []error{
-			k.SetDWordValue("Version", 2),
-			k.SetStringsValue("Name", []string{"." + scopeDomain}),
-			k.SetStringValue("GenericDNSServers", probeResolverAddr),
-			k.SetDWordValue("ConfigOptions", 0x8),
-		} {
-			if e != nil {
-				return e
-			}
 		}
 		flushDNS()
 		return nil

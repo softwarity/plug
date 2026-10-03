@@ -28,14 +28,14 @@ func keyPathError(path string) error {
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
-		return refuse("plug: %s is not a usable path (%v)", path, err)
+		return refuse("%s is not a usable path (%v)", path, err)
 	}
 	fi, err := os.Lstat(abs)
 	if err != nil {
 		return nil // absent is the caller's problem to report, not a privilege question
 	}
 	if why := keyPathRefusal(abs, fi.Mode(), systemRootsForKeyGuard()); why != "" {
-		return refuse("plug: refusing to read %s as a key: %s", abs, why)
+		return refuse("refusing to read %s as a key: %s", abs, why)
 	}
 	return nil
 }
@@ -56,21 +56,9 @@ func keyPathRefusal(abs string, mode os.FileMode, systemRoots []string) string {
 		return "it is not a regular file. plug can run as a machine-wide service here, and a\n" +
 			"      pipe or a device in place of a key file is how that privilege gets borrowed"
 	}
-	// Normalised in WINDOWS terms, not with path/filepath. filepath follows the
-	// HOST separator, so on a developer's mac or on a linux CI leg it would leave
-	// every backslash in place, compare nothing, and this rule would quietly allow
-	// everything while its tests passed. The rule is about Windows paths; it has
-	// to be written in them wherever it runs.
-	norm := func(p string) string {
-		p = strings.ToLower(strings.TrimSpace(strings.ReplaceAll(p, "/", `\`)))
-		for strings.Contains(p, `\\`) {
-			p = strings.ReplaceAll(p, `\\`, `\`)
-		}
-		return strings.TrimSuffix(p, `\`)
-	}
-	lower := norm(abs)
+	lower := windowsPathKey(abs)
 	for _, root := range systemRoots {
-		root = norm(root)
+		root = windowsPathKey(root)
 		if root == "" {
 			continue
 		}
@@ -84,6 +72,20 @@ func keyPathRefusal(abs string, mode os.FileMode, systemRoots []string) string {
 		}
 	}
 	return ""
+}
+
+// windowsPathKey normalises a path for the two guards above, in WINDOWS terms
+// and not with path/filepath. filepath follows the HOST separator, so on a
+// developer's mac or on a linux CI leg it would leave every backslash in
+// place, compare nothing, and the rules would quietly allow everything while
+// their tests passed. The rules are about Windows paths; they have to be
+// written in them wherever they run.
+func windowsPathKey(p string) string {
+	p = strings.ToLower(strings.TrimSpace(strings.ReplaceAll(p, "/", `\`)))
+	for strings.Contains(p, `\\`) {
+		p = strings.ReplaceAll(p, `\\`, `\`)
+	}
+	return strings.TrimSuffix(p, `\`)
 }
 
 // systemRootsForKeyGuard lists the trees a key must never be read from. Built
@@ -126,14 +128,7 @@ func keyOutsideOwnersProfile(keyPath, ownerProfile string) bool {
 	if ownerProfile == "" || keyPath == "" {
 		return false // unknown is not outside; the caller decides what to do with that
 	}
-	norm := func(p string) string {
-		p = strings.ToLower(strings.TrimSpace(strings.ReplaceAll(p, "/", `\`)))
-		for strings.Contains(p, `\\`) {
-			p = strings.ReplaceAll(p, `\\`, `\`)
-		}
-		return strings.TrimSuffix(p, `\`)
-	}
-	k, prof := norm(keyPath), norm(ownerProfile)
+	k, prof := windowsPathKey(keyPath), windowsPathKey(ownerProfile)
 	// On the separator boundary: C:\Users\bob2 is not inside C:\Users\bob, and a
 	// rule that said it was would be refusing the wrong thing while looking right.
 	return !strings.HasPrefix(k, prof+`\`)

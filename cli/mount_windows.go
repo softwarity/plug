@@ -31,8 +31,6 @@ import (
 
 func mountSupported() error { return nil }
 
-func mountBindAddr() string { return "" }
-
 func mountUsesForward() bool { return false }
 
 // autoMountPath is "" on Windows: the letter is picked when the mount is

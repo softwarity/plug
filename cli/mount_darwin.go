@@ -24,18 +24,6 @@ import (
 // Files and Folders > Network Volumes). Terminal asks once; an app that never
 // asked gets EPERM. Seen from a shell under an editor; doctor names it.
 
-func mountSupported() error { return nil }
-
-func mountBindAddr() string { return "127.0.0.1:0" }
-
-func mountUsesForward() bool { return true }
-
-// autoMountPath is where an automatic mount goes: under the session
-// directory, at its cluster path.
-func autoMountPath(dir, clusterPath string) string {
-	return filepath.Join(dir, filepath.FromSlash(clusterPath))
-}
-
 func mountSMBShare(t mountTarget, path string) (string, error) {
 	if err := ensureMountpoint(path); err != nil {
 		return "", err
@@ -159,10 +147,3 @@ func hasNsmbSection(conf []byte, server string) bool {
 	}
 	return false
 }
-
-// pinMountName / unpinMountNames: nothing to pin here. The helper's name is
-// dialled by this process through its own forward, never by the kernel
-// through the machine's datapath (see mount_windows.go).
-func pinMountName(config, string) {}
-
-func unpinMountNames(config) {}

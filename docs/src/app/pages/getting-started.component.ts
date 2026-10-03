@@ -77,7 +77,7 @@ function guessOs(): Os {
       One line, straight from the cluster - the agent hands over the right binary. The install
       grants plug its privilege <strong>once</strong>, so that no later run ever needs it.
     </p>
-    <p class="for-os">Commands below are for <ng-container *ngTemplateOutlet="osPicker" /></p>
+    <div class="for-os">Commands below are for <ng-container *ngTemplateOutlet="osPicker" /></div>
     @if (os() === 'windows') {
       <p>
         From Git Bash, the assumed Windows shell - it ships with
@@ -118,7 +118,7 @@ ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get&#64;
       script. It reaches services by name, but nothing is named and no port is reserved on the
       agent. One stance or the other, never both:
     </p>
-    <p class="for-os">Commands below are for <ng-container *ngTemplateOutlet="osPicker" /></p>
+    <div class="for-os">Commands below are for <ng-container *ngTemplateOutlet="osPicker" /></div>
     @if (os() === 'windows') {
       <app-code lang="bash">plug -c "/c/Program Files/MongoDB Compass/MongoDBCompass.exe"</app-code>
     } @else if (os() === 'macos') {
@@ -256,11 +256,15 @@ plug -s web:80:PORT -s web-tls:443:PORT node server.js --listen=&#123;PORT&#125;
         box-shadow: inset 0 -2px 0 var(--accent-blue);
       }
       /* The reminder line: the switch sits IN the sentence, so it reads as part
-         of it rather than as a control someone parked there. */
+         of it rather than as a control someone parked there. A div, not a p:
+         the switch is a role="group" of buttons, and a <p> may not contain a
+         <div> - the parser closed the paragraph before it. The paragraph's
+         margin is kept by hand. */
       .for-os {
         display: flex;
         align-items: center;
         gap: 10px;
+        margin: 0 0 16px;
         color: var(--text-muted);
         font-size: 0.9rem;
       }

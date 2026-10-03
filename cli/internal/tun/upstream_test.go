@@ -15,14 +15,14 @@ func up(addr string, metric uint32) dnsCandidate {
 // up, the low-metric one is the VPN's resolver — the only one that knows the
 // internal names plug is being asked about.
 func TestTheOSPreferredInterfaceComesFirst(t *testing.T) {
-	got := pickUpstreams([]dnsCandidate{
+	got, _ := pickUpstreamsTraced([]dnsCandidate{
 		up("192.168.1.1", 35), // home router
 		up("10.8.0.1", 5),     // corporate VPN
 		up("192.168.1.254", 40),
 	})
 	want := []string{"10.8.0.1", "192.168.1.1", "192.168.1.254"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Errorf("pickUpstreams = %v, want %v", got, want)
+		t.Errorf("pickUpstreamsTraced = %v, want %v", got, want)
 	}
 }
 
@@ -31,14 +31,14 @@ func TestTheOSPreferredInterfaceComesFirst(t *testing.T) {
 // ever, on the resolver the whole machine is using.
 func TestOurOwnResolverIsNeverAnUpstream(t *testing.T) {
 	mine := dnsCandidate{addr: "198.18.0.53", metric: 1, up: true, own: true}
-	got := pickUpstreams([]dnsCandidate{mine, up("192.168.1.1", 35)})
+	got, _ := pickUpstreamsTraced([]dnsCandidate{mine, up("192.168.1.1", 35)})
 	for _, g := range got {
 		if g == "198.18.0.53" {
 			t.Fatal("plug would forward its own queries to itself — an unbounded loop")
 		}
 	}
 	if len(got) != 1 || got[0] != "192.168.1.1" {
-		t.Errorf("pickUpstreams = %v, want just the real resolver", got)
+		t.Errorf("pickUpstreamsTraced = %v, want just the real resolver", got)
 	}
 }
 
@@ -47,9 +47,9 @@ func TestOurOwnResolverIsNeverAnUpstream(t *testing.T) {
 // or a second instance. It cannot answer for anything real either way.
 func TestAnyAddressInPlugsRangeIsRefused(t *testing.T) {
 	for _, addr := range []string{"198.18.0.53", "198.18.7.53", "198.19.255.254"} {
-		got := pickUpstreams([]dnsCandidate{up(addr, 1), up("1.1.1.1", 50)})
+		got, _ := pickUpstreamsTraced([]dnsCandidate{up(addr, 1), up("1.1.1.1", 50)})
 		if len(got) != 1 || got[0] != "1.1.1.1" {
-			t.Errorf("with %s offered, pickUpstreams = %v, want only 1.1.1.1", addr, got)
+			t.Errorf("with %s offered, pickUpstreamsTraced = %v, want only 1.1.1.1", addr, got)
 		}
 	}
 	// And the neighbouring ranges are NOT ours — refusing them would throw away
@@ -62,27 +62,27 @@ func TestAnyAddressInPlugsRangeIsRefused(t *testing.T) {
 }
 
 func TestDownAndLoopbackInterfacesAreSkipped(t *testing.T) {
-	got := pickUpstreams([]dnsCandidate{
+	got, _ := pickUpstreamsTraced([]dnsCandidate{
 		{addr: "10.0.0.1", metric: 1, up: false},                 // interface is down
 		{addr: "127.0.0.1", metric: 2, up: true, loopback: true}, // a local stub
 		up("192.168.1.1", 30),
 	})
 	if len(got) != 1 || got[0] != "192.168.1.1" {
-		t.Errorf("pickUpstreams = %v, want only the live non-loopback server", got)
+		t.Errorf("pickUpstreamsTraced = %v, want only the live non-loopback server", got)
 	}
 }
 
 // Windows lists the same server once per adapter it is configured on. Asking it
 // twice in a row on failure wastes the whole timeout budget on one resolver.
 func TestTheSameServerIsListedOnce(t *testing.T) {
-	got := pickUpstreams([]dnsCandidate{
+	got, _ := pickUpstreamsTraced([]dnsCandidate{
 		up("192.168.1.1", 10),
 		up("192.168.1.1", 20),
 		up("8.8.8.8", 30),
 	})
 	want := []string{"192.168.1.1", "8.8.8.8"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Errorf("pickUpstreams = %v, want %v", got, want)
+		t.Errorf("pickUpstreamsTraced = %v, want %v", got, want)
 	}
 }
 
@@ -90,14 +90,14 @@ func TestTheSameServerIsListedOnce(t *testing.T) {
 // which carries information we have no better substitute for. An unstable sort
 // would make plug pick a different resolver between two runs on one machine.
 func TestEqualMetricsKeepTheOSOrder(t *testing.T) {
-	got := pickUpstreams([]dnsCandidate{
+	got, _ := pickUpstreamsTraced([]dnsCandidate{
 		up("10.0.0.1", 25),
 		up("10.0.0.2", 25),
 		up("10.0.0.3", 25),
 	})
 	want := []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Errorf("pickUpstreams = %v, want the listing order %v", got, want)
+		t.Errorf("pickUpstreamsTraced = %v, want the listing order %v", got, want)
 	}
 }
 
@@ -105,16 +105,16 @@ func TestEqualMetricsKeepTheOSOrder(t *testing.T) {
 // caller's fallback (a public resolver, announced loudly) depends on being able
 // to tell "none" apart from "some".
 func TestNothingUsableYieldsNothing(t *testing.T) {
-	if got := pickUpstreams(nil); len(got) != 0 {
-		t.Errorf("pickUpstreams(nil) = %v, want empty", got)
+	if got, _ := pickUpstreamsTraced(nil); len(got) != 0 {
+		t.Errorf("pickUpstreamsTraced(nil) = %v, want empty", got)
 	}
-	got := pickUpstreams([]dnsCandidate{
+	got, _ := pickUpstreamsTraced([]dnsCandidate{
 		{addr: "198.18.0.53", metric: 1, up: true, own: true},
 		{addr: "10.0.0.1", metric: 2, up: false},
 		{addr: "", metric: 3, up: true},
 	})
 	if len(got) != 0 {
-		t.Errorf("pickUpstreams = %v, want empty so the caller can fall back and say so", got)
+		t.Errorf("pickUpstreamsTraced = %v, want empty so the caller can fall back and say so", got)
 	}
 }
 

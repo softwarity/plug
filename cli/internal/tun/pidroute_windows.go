@@ -10,10 +10,10 @@ import (
 
 // The Windows connect-time attribution primitives, mirrors of the Linux/macOS
 // ones: ppidOf walks the process table (ToolHelp snapshot), pidForLocalPort maps
-// a local TCP source port to its owning PID (GetExtendedTcpTable). These are the
-// bricks the multicluster router needs; wiring them into an N-tunnel datapath on
-// Windows (a persistent SYSTEM service, like the macOS daemon) is the remaining
-// step — the single-cluster Windows path never calls these.
+// a local TCP source port to its owning PID (GetExtendedTcpTable). The
+// multicluster router (router.go) feeds them to the SYSTEM service's datapath,
+// the Windows counterpart of the macOS daemon, and the client registry reads
+// procStart to stamp and verify its markers.
 
 // procStart returns pid's creation time as raw FILETIME ticks (100 ns since 1601),
 // via OpenProcess + GetProcessTimes. Numeric and boot-stable; only comparability

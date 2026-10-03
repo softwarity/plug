@@ -26,7 +26,7 @@ import (
 // would quietly stop applying to sessions that were already open across the
 // upgrade. A fork saved on the multicluster path is not worth a security check
 // that lapses while people update. Only comparability feeds the ancestry walk, not the unit, so a
-// coarse second granularity is enough to catch a recycled PID — and two processes
+// coarse second granularity is enough to catch a recycled PID, and two processes
 // born in the same second compare equal (<=), never a false "younger parent".
 // LANG/LC pinned to C so we parse the fixed English date form regardless of locale.
 func procStart(pid int) (int64, bool) {
@@ -43,9 +43,10 @@ func procStart(pid int) (int64, bool) {
 	return t.Unix(), true
 }
 
-// ppidOf returns pid's parent via `ps -o ppid=`. Cgo-free on purpose — the
+// ppidOf returns pid's parent via `ps -o ppid=`. Cgo-free on purpose: the
 // datapath builds with CGO_ENABLED=0, so we avoid libproc. The parent walk is a
-// few hops and its result is cached per connection, so the exec cost amortizes.
+// few hops and its verdict is remembered per PROCESS (pidCache), so the exec
+// cost is paid once per client, not once per connection.
 func ppidOf(pid int) (int, bool) {
 	out, err := exec.Command(HelperPath("ps"), "-o", "ppid=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {

@@ -174,7 +174,20 @@ const nrptRuleName = `{6F3B2A1C-4D5E-6F70-8A9B-0C1D2E3F4A5B}` // stable id for p
 // mechanism Tailscale/WireGuard use.
 func setSystemNRPT(dnsIP string) error {
 	clearSystemNRPT(dnsIP) // drop a stale rule a crashed run (or an old pwsh one) may have left
-	k, _, err := registry.CreateKey(registry.LOCAL_MACHINE, nrptConfigPath+`\`+nrptRuleName, registry.SET_VALUE)
+	if err := writeNRPTRule(nrptRuleName, []string{"." + searchSuffix}, dnsIP); err != nil {
+		return err
+	}
+	flushDNS() // so a prior "Could not resolve" negative doesn't stick
+	return nil
+}
+
+// writeNRPTRule creates (or rewrites) the DnsPolicyConfig rule guid, routing
+// names (".suffix", leading dot as the table stores them) to server: the shape
+// the Add-DnsClientNrptRule cmdlet encodes, written without PowerShell. The
+// fake VPN of the self-test writes its scope the same way, which is the point:
+// it then exercises the same registry shape scopedResolversNRPT reads.
+func writeNRPTRule(guid string, names []string, server string) error {
+	k, _, err := registry.CreateKey(registry.LOCAL_MACHINE, nrptConfigPath+`\`+guid, registry.SET_VALUE)
 	if err != nil {
 		return err
 	}
@@ -182,17 +195,13 @@ func setSystemNRPT(dnsIP string) error {
 	if err := k.SetDWordValue("Version", 2); err != nil {
 		return err
 	}
-	if err := k.SetStringsValue("Name", []string{"." + searchSuffix}); err != nil {
+	if err := k.SetStringsValue("Name", names); err != nil {
 		return err
 	}
-	if err := k.SetStringValue("GenericDNSServers", dnsIP); err != nil {
+	if err := k.SetStringValue("GenericDNSServers", server); err != nil {
 		return err
 	}
-	if err := k.SetDWordValue("ConfigOptions", 0x8); err != nil { // 0x8 = use GenericDNSServers
-		return err
-	}
-	flushDNS() // so a prior "Could not resolve" negative doesn't stick
-	return nil
+	return k.SetDWordValue("ConfigOptions", 0x8) // 0x8 = use GenericDNSServers
 }
 
 // clearSystemNRPT removes every DnsPolicyConfig rule whose DNS server is dnsIP (ours)

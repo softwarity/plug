@@ -74,7 +74,7 @@ func keyOwnerError(keyPath, marker string) error {
 		return nil
 	}
 	if keyOutsideOwnersProfile(abs, profile) {
-		return refuse("plug: refusing to read %s as a key.\n"+
+		return refuse("refusing to read %s as a key.\n"+
 			"      The client that asked for it was registered by an account whose profile is %s,\n"+
 			"      and that key is outside it. plug runs as a machine-wide service here, so reading\n"+
 			"      a file from another account's profile would be doing for one user something they\n"+

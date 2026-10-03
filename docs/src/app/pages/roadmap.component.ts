@@ -5,7 +5,6 @@ import { MatIconModule } from '@angular/material/icon';
 @Component({
   selector: 'app-roadmap',
   imports: [RouterLink, MatIconModule],
-  preserveWhitespaces: true,
   styles: [
     `
       .status-icon {
@@ -20,11 +19,6 @@ import { MatIconModule } from '@angular/material/icon';
       }
       .status-icon.soon {
         color: var(--accent-yellow);
-      }
-      /* Neither promised nor finished. Without it, a line that is half done has
-         to lie in one direction or the other, and both readings mislead. */
-      .status-icon.partial {
-        color: var(--accent-blue);
       }
     `,
   ],

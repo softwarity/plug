@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"crypto/rand"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -184,51 +183,17 @@ func dockerNameCandidates(name string, self selfInfo) []string {
 // named on stderr so the session says which ones came through empty and what
 // right would fill them.
 func k8sEnvOf(ns, name string) []string {
-	var svc struct {
-		Metadata struct {
-			Annotations map[string]string `json:"annotations"`
-		} `json:"metadata"`
-		Spec struct {
-			Selector map[string]string `json:"selector"`
-		} `json:"spec"`
-	}
-	if code, err := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/services/"+name, nil, &svc); err != nil || code != 200 {
+	sel, code, err := k8sWorkloadSelector(ns, name)
+	if err != nil {
 		envNote("note: %s: the Service could not be read (code %d, %v), so no environment was projected", name, code, err)
 		return nil
-	}
-	sel := svc.Spec.Selector
-	if raw := svc.Metadata.Annotations[k8sParkedAnn]; raw != "" {
-		var r k8sReceipt
-		if json.Unmarshal([]byte(raw), &r) == nil && len(r.Selector) > 0 {
-			sel = r.Selector // the ORIGINAL selector: the parked Service points at the agent now
-		}
 	}
 	if len(sel) == 0 {
 		envNote("note: %s: the Service has no selector and no parking receipt names one, so no pod to read", name)
 		return nil
 	}
-	var pods struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-			Status struct {
-				Phase string `json:"phase"`
-			} `json:"status"`
-			Spec struct {
-				Containers []struct {
-					Name string `json:"name"`
-					Env  []struct {
-						Name      string          `json:"name"`
-						Value     string          `json:"value"`
-						ValueFrom json.RawMessage `json:"valueFrom"`
-					} `json:"env"`
-				} `json:"containers"`
-			} `json:"spec"`
-		} `json:"items"`
-	}
-	code, err := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/pods?labelSelector="+url.QueryEscape(labelSelector(sel)), nil, &pods)
-	if err != nil || code != 200 {
+	pods, code, err := k8sPodsSelected(ns, sel)
+	if err != nil {
 		if code != 403 {
 			envNote("note: %s: listing pods for selector %s failed (code %d, %v)", name, labelSelector(sel), code, err)
 		}
@@ -240,7 +205,7 @@ func k8sEnvOf(ns, name string) []string {
 	}
 	var pod string
 	var containers []string
-	for _, p := range pods.Items {
+	for _, p := range pods {
 		if p.Status.Phase == "Running" {
 			pod = p.Metadata.Name
 			for _, c := range p.Spec.Containers {
@@ -250,7 +215,7 @@ func k8sEnvOf(ns, name string) []string {
 		}
 	}
 	if pod == "" {
-		envNote("note: %s: no Running pod behind selector %s (%d pod(s) seen), so no environment to read", name, labelSelector(sel), len(pods.Items))
+		envNote("note: %s: no Running pod behind selector %s (%d pod(s) seen), so no environment to read", name, labelSelector(sel), len(pods))
 		return nil
 	}
 	if env, code, err := k8sExecEnviron(ns, pod, containers[0]); err == nil {
@@ -269,7 +234,7 @@ func k8sEnvOf(ns, name string) []string {
 	}
 	// The spec fallback.
 	var out, missing []string
-	for _, p := range pods.Items {
+	for _, p := range pods {
 		if p.Metadata.Name != pod {
 			continue
 		}
@@ -385,16 +350,14 @@ func k8sExec(ns, pod, container string, argv ...string) ([]byte, int, error) {
 }
 
 // k8sExecDial opens the exec handshake's connection: TLS to the API server,
-// trusting the ServiceAccount's CA, which the REST client (k8sClient) trusts the
-// same way. A var so a test can hand the handshake a plain connection to a fake
-// server; nothing in the agent reassigns it.
+// trusting what the REST client trusts (k8sTLSConfig). A var so a test can hand
+// the handshake a plain connection to a fake server; nothing in the agent
+// reassigns it.
 var k8sExecDial = func(addr, serverName string) (net.Conn, error) {
-	pool := x509.NewCertPool()
-	if ca, err := os.ReadFile(k8sSA + "/ca.crt"); err == nil {
-		pool.AppendCertsFromPEM(ca)
-	}
+	cfg := k8sTLSConfig().Clone()
+	cfg.ServerName = serverName
 	d := &net.Dialer{Timeout: 10 * time.Second}
-	return tls.DialWithDialer(d, "tcp", addr, &tls.Config{RootCAs: pool, ServerName: serverName})
+	return tls.DialWithDialer(d, "tcp", addr, cfg)
 }
 
 // readChannelFrames reads WebSocket frames from a server (never masked) until

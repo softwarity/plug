@@ -3,17 +3,12 @@ import {
   ChangeDetectionStrategy,
   Component,
   ElementRef,
-  Input,
+  input,
   signal,
   viewChild,
 } from '@angular/core';
 import { MatIconModule } from '@angular/material/icon';
-import Prism from 'prismjs';
-import 'prismjs/components/prism-typescript';
-import 'prismjs/components/prism-bash';
-import 'prismjs/components/prism-json';
-import 'prismjs/components/prism-markup';
-import 'prismjs/components/prism-yaml';
+import { Prism } from '../prism';
 
 /**
  * Renders a syntax-highlighted code block with Prism (Catppuccin Mocha theme),
@@ -29,7 +24,7 @@ import 'prismjs/components/prism-yaml';
   selector: 'app-code',
   imports: [MatIconModule],
   changeDetection: ChangeDetectionStrategy.OnPush,
-  template: `<div class="wrap"><pre [class]="'language-' + lang"><code #codeEl [class]="'language-' + lang"><ng-content /></code></pre><button
+  template: `<div class="wrap"><pre [class]="'language-' + lang()"><code #codeEl [class]="'language-' + lang()"><ng-content /></code></pre><button
         type="button"
         class="copy"
         [class.done]="copied()"
@@ -86,7 +81,7 @@ import 'prismjs/components/prism-yaml';
   ],
 })
 export class CodeComponent implements AfterViewInit {
-  @Input() lang = 'ts';
+  readonly lang = input('ts');
 
   readonly copied = signal(false);
 

@@ -407,22 +407,6 @@ func attachMountPolicy(cfg *config, noMount bool, list string) {
 	}
 }
 
-// stripLeadingExposes pops the -s/--serve pairs (and a -c/--client flag) a
-// launcher left at the head of the core's argv (see encodeCoreArgv) and parses
-// them — an old launcher forwards them there without understanding them.
-func stripLeadingExposes(args []string) ([]tunnel.ExposeSpec, bool, []string, error) {
-	specs, client, _, rest, err := stripLeadingFlags(args)
-	return specs, client, rest, err
-}
-
-// stripLeadingFlags is stripLeadingExposes plus the --no-env policy, which
-// travels the same way: at the head of the core's argv, put there by the
-// launcher, stripped back here.
-func stripLeadingFlags(args []string) ([]tunnel.ExposeSpec, bool, envPolicy, []string, error) {
-	lead, rest, err := stripLeadingAll(args)
-	return lead.specs, lead.client, lead.policy, rest, err
-}
-
 // leadingFlags is everything a launcher puts at the head of the core's argv.
 type leadingFlags struct {
 	specs       []tunnel.ExposeSpec
@@ -433,8 +417,10 @@ type leadingFlags struct {
 	noMountList string
 }
 
-// stripLeadingAll is the one parser; stripLeadingFlags keeps the tuple its
-// callers read.
+// stripLeadingAll pops what a launcher left at the head of the core's argv
+// (see encodeCoreArgv): the -s/--serve pairs, -c, --no-env, --env-of and the
+// mount flags. An old launcher forwards them there without understanding
+// them, and the core, which owns the grammar, strips them back.
 func stripLeadingAll(args []string) (leadingFlags, []string, error) {
 	var lead leadingFlags
 	var specs []tunnel.ExposeSpec

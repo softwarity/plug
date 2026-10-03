@@ -4,7 +4,6 @@ import { RouterLink } from '@angular/router';
 @Component({
   selector: 'app-how-it-works',
   imports: [RouterLink],
-  preserveWhitespaces: true,
   styles: [
     `
       .diagram {
@@ -19,6 +18,9 @@ import { RouterLink } from '@angular/router';
         max-width: 900px;
         height: auto;
         margin: 0 auto;
+      }
+      .diagram text.mono {
+        font-family: var(--font-mono);
       }
     `,
   ],
@@ -43,9 +45,9 @@ import { RouterLink } from '@angular/router';
         <rect x="30" y="70" width="234" height="264" rx="12" fill="#0e141b" stroke="#30363d" />
         <text x="50" y="98" font-size="12" letter-spacing="2" fill="#8b949e" font-weight="700">YOUR MACHINE</text>
         <rect x="50" y="150" width="194" height="104" rx="9" fill="#21262d" stroke="#30363d" />
-        <text x="147" y="182" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="14" fill="#e6edf3" font-weight="600">your process</text>
+        <text x="147" y="182" text-anchor="middle" class="mono" font-size="14" fill="#e6edf3" font-weight="600">your process</text>
         <text x="147" y="203" text-anchor="middle" font-size="11" fill="#8b949e">npm run start:dev</text>
-        <text x="147" y="234" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="10" fill="#6e7681">plug -s service1:80:3000</text>
+        <text x="147" y="234" text-anchor="middle" class="mono" font-size="10" fill="#8b949e">plug -s service1:80:3000</text>
 
         <rect x="286" y="150" width="248" height="104" rx="10" fill="#0e141b" stroke="#30363d" />
         <text x="410" y="140" text-anchor="middle" font-size="10.5" fill="#8b949e">one SSH connection · userspace TUN · DNS by name</text>
@@ -55,15 +57,15 @@ import { RouterLink } from '@angular/router';
         <ellipse cx="628" cy="168" rx="30" ry="9" fill="#161b22" stroke="#30363d" />
         <path d="M598 168 V204 a30 9 0 0 0 60 0 V168" fill="#161b22" stroke="#30363d" />
         <ellipse cx="628" cy="168" rx="30" ry="9" fill="#161b22" stroke="#30363d" />
-        <text x="628" y="192" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#e6edf3" font-weight="600">db</text>
+        <text x="628" y="192" text-anchor="middle" class="mono" font-size="13" fill="#e6edf3" font-weight="600">db</text>
         <rect x="690" y="150" width="84" height="40" rx="7" fill="#161b22" stroke="#a371f7" stroke-width="1.3" />
         <text x="732" y="175" text-anchor="middle" font-size="11" fill="#e6edf3">agent</text>
         <rect x="596" y="228" width="150" height="34" rx="7" fill="#161b22" stroke="#30363d" stroke-dasharray="4 3" />
-        <text x="671" y="250" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#3fb950">service1</text>
+        <text x="671" y="250" text-anchor="middle" class="mono" font-size="11" fill="#3fb950">service1</text>
 
         <line x1="244" y1="176" x2="596" y2="176" stroke="#a371f7" stroke-width="2.3" marker-end="url(#hiw-out)" />
         <text x="410" y="169" text-anchor="middle" font-size="10.5" fill="#a371f7" font-weight="600">outbound - reach db by name</text>
-        <text x="360" y="199" text-anchor="middle" font-size="9.5" fill="#6e7681">name → fake IP → SSH channel → agent dials db</text>
+        <text x="360" y="199" text-anchor="middle" font-size="9.5" fill="#8b949e">name → fake IP → SSH channel → agent dials db</text>
 
         <!--
           The five #3fb950 below are SVG PRESENTATION ATTRIBUTES, left as
@@ -74,7 +76,7 @@ import { RouterLink } from '@angular/router';
         -->
         <line x1="596" y1="228" x2="244" y2="228" stroke="#3fb950" stroke-width="2.3" marker-end="url(#hiw-in)" />
         <text x="410" y="245" text-anchor="middle" font-size="10.5" fill="#3fb950" font-weight="600">inbound - -s publishes service1</text>
-        <text x="410" y="286" text-anchor="middle" font-size="9.5" fill="#6e7681">a cluster workload hits service1 → SSH remote-forward → your local :3000</text>
+        <text x="410" y="286" text-anchor="middle" font-size="9.5" fill="#8b949e">a cluster workload hits service1 → SSH remote-forward → your local :3000</text>
 
         <line x1="70" y1="360" x2="100" y2="360" stroke="#a371f7" stroke-width="2.6" />
         <text x="108" y="364" font-size="11.5" fill="#8b949e">outbound - SSH direct-tcpip (agent opens the real connection)</text>

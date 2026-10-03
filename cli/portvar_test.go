@@ -270,8 +270,9 @@ func TestFreeLocalPort(t *testing.T) {
 // launcher resolved it instead, an old core would receive a number it never
 // asked for and the {…} references would already be gone.
 func TestStripLeadingExposesKeepsPortVar(t *testing.T) {
-	specs, client, rest, err := stripLeadingExposes(
+	lead, rest, err := stripLeadingAll(
 		[]string{"-s", "web:8080:PORT", "npm", "run", "dev", "--", "--port={PORT}"})
+	specs, client := lead.specs, lead.client
 	if err != nil || client || len(specs) != 1 {
 		t.Fatalf("specs = %+v, client = %v, err = %v", specs, client, err)
 	}

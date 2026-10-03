@@ -1,11 +1,8 @@
 import { Routes } from '@angular/router';
 
-// A title per route, so the document title changes when the page does.
-//
-// It did not. On a single-page site the browser tab, the history entry and,
-// most of all, what a screen reader announces on navigation all come
-// from document.title, and it stayed "plug" from the first load to the last.
-// Angular's default TitleStrategy applies these; nothing else is needed.
+// A title per route: on a single-page site the browser tab, the history entry
+// and what a screen reader announces on navigation all come from
+// document.title. Angular's default TitleStrategy applies these.
 
 export const routes: Routes = [
   {

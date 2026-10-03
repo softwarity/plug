@@ -12,7 +12,9 @@ package main
 // remains as the fallback for a registry only the cluster can reach.
 //
 // The pure helpers are MIRRORED from agent/registry.go (separate Go
-// modules) — keep changes in sync with their twin.
+// modules): keep changes in sync with their twin (registrymirror_test.go
+// checks). The version arithmetic is the exception: it goes through the
+// launcher's one parser in version.go.
 
 import (
 	"encoding/json"
@@ -22,7 +24,6 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -32,66 +33,33 @@ import (
 // is a moving tag.
 var releaseTagRe = regexp.MustCompile(`^v?\d+(\.\d+){0,2}$`)
 
-// exactReleaseRe matches the tags worth retargeting TO: a full x.y.z.
-var exactReleaseRe = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)$`)
-
 func isReleaseTag(tag string) bool { return releaseTagRe.MatchString(tag) }
 
-func parseExactRelease(tag string) ([3]int, bool) {
-	m := exactReleaseRe.FindStringSubmatch(tag)
-	if m == nil {
-		return [3]int{}, false
-	}
-	var v [3]int
-	for i := 0; i < 3; i++ {
-		n, err := strconv.Atoi(m[i+1])
-		if err != nil {
-			return [3]int{}, false
-		}
-		v[i] = n
-	}
-	return v, true
-}
-
-func versionLess(a, b [3]int) bool {
-	for i := 0; i < 3; i++ {
-		if a[i] != b[i] {
-			return a[i] < b[i]
-		}
-	}
-	return false
-}
-
+// releaseNewerThan reports whether tag is a strictly newer release than the
+// version the agent runs. Unlike the agent twin, a dev agent answers false:
+// the CLI path never reaches here with one (decideClient delegates first).
 func releaseNewerThan(tag, current string) bool {
-	tv, ok := parseExactRelease(tag)
+	tv, ok := parseRelease(tag)
 	if !ok {
 		return false
 	}
-	cv, ok := parseExactRelease(runningRelease(current))
+	cv, ok := parseRelease(current)
 	if !ok {
 		return false
 	}
-	return versionLess(cv, tv)
-}
-
-// runningRelease strips the build metadata an agent's version may carry —
-// releases before 2.4.1 were stamped `x.y.z+<rev>`. Without this, such an agent
-// reads as unparseable and every lookup is delegated to it, which is exactly
-// the slow path this file exists to avoid. Mirrors the agent twin.
-func runningRelease(v string) string {
-	base, _, _ := strings.Cut(v, "+")
-	return base
+	return cv.less(tv)
 }
 
 // newestOf picks the newest x.y.z among tags, or "" when none is published.
+// A flavoured tag is not a candidate: it is another product's lineage.
 func newestOf(tags []string) string {
-	best, bestV := "", [3]int{-1, 0, 0}
+	best, bestV := "", semver{major: -1}
 	for _, t := range tags {
-		v, ok := parseExactRelease(t)
+		v, ok := parseRelease(t)
 		if !ok {
 			continue
 		}
-		if versionLess(bestV, v) {
+		if bestV.less(v) {
 			best, bestV = t, v
 		}
 	}
@@ -325,13 +293,15 @@ func tagHint(tags []string) string {
 			streams = append(streams, t)
 		}
 	}
+	// Newest first. A short tag (2.4) sorts as 0.0.0, after every full
+	// release, which is where the agent twin puts it too.
+	key := func(t string) semver { v, _ := parseRelease(t); return v }
 	slices.SortFunc(releases, func(a, b string) int {
-		av, _ := parseExactRelease(a)
-		bv, _ := parseExactRelease(b)
+		av, bv := key(a), key(b)
 		switch {
-		case versionLess(av, bv):
+		case av.less(bv):
 			return 1
-		case versionLess(bv, av):
+		case bv.less(av):
 			return -1
 		}
 		return 0
@@ -360,7 +330,7 @@ func decideClient(img, before, want string, tags []string) (apply, current, errM
 		if imageHasTag(img) && !isReleaseTag(cur) {
 			return "", "", "", true
 		}
-		if _, ok := parseExactRelease(runningRelease(before)); !ok {
+		if !isRelease(before) {
 			return "", "", "", true // a dev/unversioned agent: let it decide
 		}
 		newest := newestOf(tags)
@@ -368,7 +338,7 @@ func decideClient(img, before, want string, tags []string) (apply, current, errM
 			return "", "", "", true
 		}
 		if !releaseNewerThan(newest, before) {
-			return "", fmt.Sprintf("v%s — already the newest release published for %s (checked from this machine)", runningRelease(before), img), "", false
+			return "", fmt.Sprintf("v%s — already the newest release published for %s (checked from this machine)", shortVersion(before), img), "", false
 		}
 		return newest, "", "", false
 	case wantNewestReleaseCLI:

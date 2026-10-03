@@ -4,14 +4,12 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"net"
 	"net/url"
 	"os"
 	"path"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -150,7 +148,7 @@ func doMountVolume(cmd []string) {
 	if len(cmd) != 5 || !nameRe.MatchString(cmd[1]) || !volumeArgOK(cmd[2]) || !passArgOK(cmd[4]) {
 		answer("error: usage: mount-volume <name> <volume-or-path> <agent-port> <password>")
 	}
-	if n, err := strconv.Atoi(cmd[3]); err != nil || n < 1 || n > 65535 {
+	if !portArgOK(cmd[3]) {
 		answer("error: %q is not a valid port", cmd[3])
 	}
 	mountVolume(cmd[1], cmd[2], cmd[3], cmd[4])
@@ -160,7 +158,7 @@ func doMountStatus(cmd []string) {
 	if len(cmd) != 4 || !nameRe.MatchString(cmd[1]) || !volumeArgOK(cmd[2]) {
 		answer("error: usage: mount-status <name> <volume-or-path> <agent-port>")
 	}
-	if n, err := strconv.Atoi(cmd[3]); err != nil || n < 1 || n > 65535 {
+	if !portArgOK(cmd[3]) {
 		answer("error: %q is not a valid port", cmd[3])
 	}
 	answer("%s", mountStatus(mountHelperName(cmd[1], cmd[2], cmd[3])))
@@ -220,8 +218,7 @@ func swarmMountStatus(helper string) (string, string) {
 			Err     string `json:"Err"`
 		} `json:"Status"`
 	}
-	f := `{"service":["` + helper + `"]}`
-	if _, err := dockerAPI("GET", "/tasks?filters="+urlEscape(f), nil, &tasks); err != nil || len(tasks) == 0 {
+	if _, err := dockerAPI("GET", "/tasks?filters="+dockerFilters(map[string][]string{"service": {helper}}), nil, &tasks); err != nil || len(tasks) == 0 {
 		return "pending", "no task yet"
 	}
 	latest := tasks[0]
@@ -345,7 +342,7 @@ func doUnmountVolume(cmd []string) {
 	if len(cmd) != 4 || !nameRe.MatchString(cmd[1]) || !volumeArgOK(cmd[2]) {
 		answer("error: usage: unmount-volume <name> <volume-or-path> <agent-port>")
 	}
-	if n, err := strconv.Atoi(cmd[3]); err != nil || n < 1 || n > 65535 {
+	if !portArgOK(cmd[3]) {
 		answer("error: %q is not a valid port", cmd[3])
 	}
 	unmountVolume(cmd[1], cmd[2], cmd[3])
@@ -548,14 +545,10 @@ func dockerMountVolume(name, volume, agentPort, pass string, self selfInfo) {
 			network: map[string]any{"Aliases": []string{helper}},
 		}},
 	}
-	var created struct {
-		Id string `json:"Id"`
-	}
-	if _, err := dockerAPI("POST", "/containers/create?name="+helper, body, &created); err != nil {
-		answer("error: creating the mount helper for %s of %q: %v", volume, name, err)
-	}
-	if _, err := dockerAPI("POST", "/containers/"+created.Id+"/start", nil, nil); err != nil {
-		_, _ = dockerAPI("DELETE", "/containers/"+created.Id+"?force=1", nil, nil)
+	if _, step, _, err := createAttachedContainer(helper, body, nil, nil); err != nil {
+		if step == stepCreate {
+			answer("error: creating the mount helper for %s of %q: %v", volume, name, err)
+		}
 		answer("error: starting the mount helper: %v", err)
 	}
 	// Its name: an alias on the one network it shares with the agent, which
@@ -695,8 +688,7 @@ func swarmWorkloadMounts(name string, self selfInfo) (mounts []dockerMount, node
 		NodeID    string `json:"NodeID"`
 		CreatedAt string `json:"CreatedAt"`
 	}
-	f := `{"service":["` + own.id + `"]}`
-	if _, err := dockerAPI("GET", "/tasks?filters="+urlEscape(f), nil, &tasks); err == nil {
+	if _, err := dockerAPI("GET", "/tasks?filters="+dockerFilters(map[string][]string{"service": {own.id}}), nil, &tasks); err == nil {
 		latest := ""
 		for _, t := range tasks {
 			if t.NodeID != "" && t.CreatedAt > latest {
@@ -830,18 +822,10 @@ func swarmDropMountSecret(helper string) {
 
 // ── Kubernetes ───────────────────────────────────────────────────────────────
 
-// k8sClaimVolume is the sliver of a pod volume this reads: a PVC's claim.
-type k8sClaimVolume struct {
-	Name string `json:"name"`
-	PVC  *struct {
-		ClaimName string `json:"claimName"`
-	} `json:"persistentVolumeClaim"`
-}
-
 // pickClaim resolves <volume> against a pod's PVC-backed mounts: by mount
 // path, or by claim name. Returns the claim name and "", or "" and what was
 // there, for the refusal.
-func pickClaim(want string, vols []k8sClaimVolume, mounts []k8sMount) (string, string) {
+func pickClaim(want string, vols []k8sVolume, mounts []k8sMount) (string, string) {
 	claimOf := map[string]string{}
 	for _, v := range vols {
 		if v.PVC != nil && v.PVC.ClaimName != "" {
@@ -892,52 +876,26 @@ func k8sWorkloadVolumePaths(ns, name string) []string {
 	return out
 }
 
-// k8sWorkloadPod is the sliver of a pod the volume verbs read.
-type k8sWorkloadPod struct {
-	Spec struct {
-		NodeName   string           `json:"nodeName"`
-		Volumes    []k8sClaimVolume `json:"volumes"`
-		Containers []struct {
-			VolumeMounts []k8sMount `json:"volumeMounts"`
-		} `json:"containers"`
-	} `json:"spec"`
-}
-
-// k8sWorkloadPods finds the pods behind <name>, the route files-of takes: the
-// Service's selector, or the receipt's when the Service is parked. The
-// second value says why there are none.
+// k8sWorkloadPods finds the pods behind <name>, the route every reader of a
+// workload takes (env-of, files-of, the mounts): the Service's selector, or
+// the receipt's when the Service is parked. The second value says why there
+// are none.
 func k8sWorkloadPods(ns, name string) ([]k8sWorkloadPod, string) {
-	var svc struct {
-		Metadata struct {
-			Annotations map[string]string `json:"annotations"`
-		} `json:"metadata"`
-		Spec struct {
-			Selector map[string]string `json:"selector"`
-		} `json:"spec"`
-	}
-	if code, err := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/services/"+name, nil, &svc); err != nil || code != 200 {
+	sel, _, err := k8sWorkloadSelector(ns, name)
+	if err != nil {
 		return nil, fmt.Sprintf("no Service %q in %s", name, ns)
-	}
-	sel := svc.Spec.Selector
-	if raw := svc.Metadata.Annotations[k8sParkedAnn]; raw != "" {
-		var r k8sReceipt
-		if json.Unmarshal([]byte(raw), &r) == nil && len(r.Selector) > 0 {
-			sel = r.Selector
-		}
 	}
 	if len(sel) == 0 {
 		return nil, fmt.Sprintf("Service %q selects no pod", name)
 	}
-	var pods struct {
-		Items []k8sWorkloadPod `json:"items"`
-	}
-	if code, err := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/pods?labelSelector="+url.QueryEscape(labelSelector(sel)), nil, &pods); err != nil || code != 200 {
+	pods, _, err := k8sPodsSelected(ns, sel)
+	if err != nil {
 		return nil, fmt.Sprintf("cannot list the pods behind %q", name)
 	}
-	if len(pods.Items) == 0 {
+	if len(pods) == 0 {
 		return nil, fmt.Sprintf("no pod behind %q", name)
 	}
-	return pods.Items, ""
+	return pods, ""
 }
 
 // k8sWorkloadClaim resolves <volume> against the pods behind <name>: the
@@ -1167,70 +1125,83 @@ func sweepMountHelpers() {
 	}
 }
 
+// dockerSweepMountHelpers reaps the helpers of dead sessions: the containers
+// (Compose, plain), and on a manager the services and the secrets that carry
+// their passwords. A helper parks nothing, so each is only live or gone.
 func dockerSweepMountHelpers() {
-	f := `{"label":["` + mountLabel + `=1"]}`
-	var clist []struct {
-		Id     string            `json:"Id"`
-		Labels map[string]string `json:"Labels"`
-	}
-	if _, err := dockerAPI("GET", "/containers/json?all=1&filters="+urlEscape(f), nil, &clist); err == nil {
-		for _, c := range clist {
-			if !sessionLive(c.Labels[sessionOwnerLabel]) {
-				_, _ = dockerAPI("DELETE", "/containers/"+c.Id+"?force=1", nil, nil)
-			}
+	sweep(func() []sweepItem {
+		list, err := dockerContainersLabelled(mountLabel)
+		if err != nil {
+			return nil
 		}
-	}
+		items := make([]sweepItem, 0, len(list))
+		for _, c := range list {
+			id, session := c.Id, c.Labels[sessionOwnerLabel]
+			items = append(items, sweepItem{
+				live: func() bool { return sessionLive(session) },
+				drop: func() { _, _ = dockerAPI("DELETE", "/containers/"+id+"?force=1", nil, nil) },
+			})
+		}
+		return items
+	})
 	if !swarmManager() {
 		return
-	}
-	var slist []struct {
-		ID   string `json:"ID"`
-		Spec struct {
-			Labels map[string]string `json:"Labels"`
-		} `json:"Spec"`
-	}
-	if _, err := dockerAPI("GET", "/services?filters="+urlEscape(f), nil, &slist); err == nil {
-		for _, s := range slist {
-			if !sessionLive(s.Spec.Labels[sessionOwnerLabel]) {
-				_, _ = dockerAPI("DELETE", "/services/"+s.ID, nil, nil)
-			}
-		}
 	}
 	// The helpers' secrets, by the same filter: one whose service is gone (the
 	// pass above, an unmount, a create that failed after the secret was made)
 	// has nobody left to read it. One still in use refuses to go, and comes
 	// back next pass.
-	var secrets []struct {
-		ID   string `json:"ID"`
-		Spec struct {
-			Labels map[string]string `json:"Labels"`
-		} `json:"Spec"`
-	}
-	if _, err := dockerAPI("GET", "/secrets?filters="+urlEscape(f), nil, &secrets); err == nil {
-		for _, s := range secrets {
-			if !sessionLive(s.Spec.Labels[sessionOwnerLabel]) {
-				_, _ = dockerAPI("DELETE", "/secrets/"+s.ID, nil, nil)
-			}
-		}
+	for _, kind := range []string{"services", "secrets"} {
+		sweep(swarmMountObjects(kind))
 	}
 }
 
-func k8sSweepMountHelpers(ns string) {
-	var list struct {
-		Items []struct {
-			Metadata struct {
-				Name        string            `json:"name"`
-				Annotations map[string]string `json:"annotations"`
-			} `json:"metadata"`
-		} `json:"items"`
-	}
-	if _, err := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/pods?labelSelector="+url.QueryEscape(mountLabel+"=1"), nil, &list); err != nil {
-		return
-	}
-	for _, p := range list.Items {
-		if !sessionLive(p.Metadata.Annotations[sessionOwnerLabel]) {
-			_, _ = k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/services/"+p.Metadata.Name, nil, nil)
-			_, _ = k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/pods/"+p.Metadata.Name, nil, nil)
+// swarmMountObjects is the mount helpers' services, or their secrets, as the
+// sweep sees them.
+func swarmMountObjects(kind string) sweepTarget {
+	return func() []sweepItem {
+		list, err := swarmObjectsLabelled(kind, mountLabel)
+		if err != nil {
+			return nil
 		}
+		items := make([]sweepItem, 0, len(list))
+		for _, s := range list {
+			id, session := s.ID, s.Spec.Labels[sessionOwnerLabel]
+			items = append(items, sweepItem{
+				live: func() bool { return sessionLive(session) },
+				drop: func() { _, _ = dockerAPI("DELETE", "/"+kind+"/"+id, nil, nil) },
+			})
+		}
+		return items
 	}
+}
+
+// k8sSweepMountHelpers reaps the helper pods of dead sessions, each with the
+// Service in front of it.
+func k8sSweepMountHelpers(ns string) {
+	sweep(func() []sweepItem {
+		var list struct {
+			Items []struct {
+				Metadata struct {
+					Name        string            `json:"name"`
+					Annotations map[string]string `json:"annotations"`
+				} `json:"metadata"`
+			} `json:"items"`
+		}
+		if _, err := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/pods?labelSelector="+url.QueryEscape(mountLabel+"=1"), nil, &list); err != nil {
+			return nil
+		}
+		items := make([]sweepItem, 0, len(list.Items))
+		for _, p := range list.Items {
+			name, session := p.Metadata.Name, p.Metadata.Annotations[sessionOwnerLabel]
+			items = append(items, sweepItem{
+				live: func() bool { return sessionLive(session) },
+				drop: func() {
+					_, _ = k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/services/"+name, nil, nil)
+					_, _ = k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/pods/"+name, nil, nil)
+				},
+			})
+		}
+		return items
+	})
 }

@@ -85,6 +85,11 @@ func daemonReady(ok bool) {
 	_ = f.Close()
 }
 
+// daemonStartWait is how long the launcher waits for the daemon it just
+// spawned to signal ready: the daemon has to dial the first cluster before it
+// does, so this outlasts one dial timeout and little more.
+const daemonStartWait = 15 * time.Second
+
 // startDaemonDetached re-execs plug as the DETACHED GLOBAL daemon (new session)
 // and blocks until it signals ready (a byte on the pipe) or fails (EOF). Called by
 // coreRun when no daemon is up. The daemon serves ALL clusters, so no key is
@@ -125,7 +130,7 @@ func startDaemonDetached(_ config) error {
 		logf.Close()
 	}
 
-	_ = r.SetReadDeadline(time.Now().Add(15 * time.Second))
+	_ = r.SetReadDeadline(time.Now().Add(daemonStartWait))
 	buf := make([]byte, 1)
 	if n, _ := r.Read(buf); n == 1 {
 		return nil // ready

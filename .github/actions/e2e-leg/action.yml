@@ -1,0 +1,134 @@
+name: e2e leg preamble
+description: >-
+  Everything an e2e leg needs before its first cell, on any of the four runner
+  shapes (ubuntu, macos, windows, ubuntu-arm): the JRE, the prebuilt client
+  bundle, the pip cache, the last published launchers, the tailnet, and the
+  macOS resolver handed back. Called by _e2e.yml after the checkout (a local
+  action needs the checkout to exist first), so the leg's clock and the
+  checkout itself stay in the workflow.
+
+inputs:
+  family:
+    description: compose, k8s or swarm; names the tailnet node with the leg
+    required: true
+  tailscale-client-id:
+    description: the Tailscale OAuth client id (tag:ci)
+    required: true
+  tailscale-client-secret:
+    description: its secret
+    required: true
+  launchers:
+    description: >-
+      "true" downloads the last published launchers for the compat cell. The
+      arm64 leg does not run that cell and skips the artifact.
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    # Two attempts, because one failure here took a whole leg with it and had
+    # nothing to do with this repository: setup-java downloads the JDK from
+    # Adoptium and verifies its signature, and that verification failed once
+    # ("Failed to verify signature for Temurin 21.0.12"), leaving the leg
+    # without Java and every cell after it red. A download that fails its own
+    # signature check is a transient upstream fault, not a state to reason
+    # about, so it is retried once rather than diagnosed. The JRE is pinned
+    # because the runners' ambient Java differs by OS; no maven cache, nothing
+    # builds here.
+    - uses: actions/setup-java@v6
+      id: java
+      continue-on-error: true
+      with:
+        distribution: temurin
+        java-version: '21'
+    - uses: actions/setup-java@v6
+      if: steps.java.outcome == 'failure'
+      with:
+        distribution: temurin
+        java-version: '21'
+    # Building the four language clients used to be the single biggest slice of
+    # a leg: 493s of a 769s setup on Windows, paid again by each of the three
+    # Windows legs for bytes that were identical. build-clients does it once
+    # (see scripts/ci/build-clients.sh); this leg takes delivery.
+    #
+    # Go is not set up here: nothing on a leg compiles when the bundle is
+    # present. The fallback in e2e-matrix.sh uses whichever Go the runner image
+    # ships, which is the right cost for a case that should not happen.
+    - uses: actions/download-artifact@v7
+      with:
+        name: e2e-clients
+        path: e2e-clients
+    # Python is the one client that cannot be shared: psycopg2-binary and
+    # grpcio are compiled wheels. It costs 42s, and unlike the npm cache, which
+    # pointed at ~/.npm and therefore NEVER hit on Windows (npm caches in
+    # %LocalAppData% there), this one is right on all three. One path per OS;
+    # actions/cache ignores the ones that do not exist. The architecture is in
+    # the key so the arm64 leg never restores amd64 wheels.
+    - uses: actions/cache@v6
+      with:
+        path: |
+          ~/.cache/pip
+          ~/Library/Caches/pip
+          ~\AppData\Local\pip\Cache
+        key: pip-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('e2e/clients/python/requirements.txt') }}
+        restore-keys: pip-${{ runner.os }}-${{ runner.arch }}-
+    # The last published launchers, for the compat cell. Before the tailnet on
+    # purpose: on macOS the step right after joining has no public DNS for a
+    # moment (see below), and an artifact download is what died there first.
+    - uses: actions/download-artifact@v7
+      if: inputs.launchers == 'true'
+      with:
+        name: latest-launchers
+        path: latest-launchers
+    # The tailnet node's name must be a DNS label, so it is built from the
+    # runner's own OS and architecture rather than from its label (which can
+    # carry anything). One rule for every leg: plug-<family>-<alias>-<run>-<attempt>;
+    # the clusters are plug-<family>-<run>-<attempt>-<a|b|ka|kb|sa|sb>.
+    - id: alias
+      shell: bash
+      run: |
+        case "$RUNNER_OS/$RUNNER_ARCH" in
+          Linux/ARM64) alias=ubuntu-arm ;;
+          Linux/*)     alias=ubuntu ;;
+          macOS/*)     alias=macos ;;
+          Windows/*)   alias=windows ;;
+          *) echo "::error::unexpected runner $RUNNER_OS/$RUNNER_ARCH"; exit 1 ;;
+        esac
+        echo "alias=$alias" >> "$GITHUB_OUTPUT"
+    # v4 is a rewrite in JavaScript. v3 built Tailscale from source on macOS,
+    # which dragged in actions/checkout@v4.2.2 (Node 20) and `brew install
+    # coreutils` (untrusted tap): both CI warnings came from this one step.
+    - name: Join the tailnet
+      uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
+      with:
+        oauth-client-id: ${{ inputs.tailscale-client-id }}
+        oauth-secret: ${{ inputs.tailscale-client-secret }}
+        tags: tag:ci
+        hostname: plug-${{ inputs.family }}-${{ steps.alias.outputs.alias }}-${{ github.run_id }}-${{ github.run_attempt }}
+        args: --accept-dns=false # reach the cluster by tailnet IP; don't let Tailscale drive DNS
+    # And v4 points macOS at MagicDNS on its own once the tunnel is up
+    # (networksetup -setdnsservers Ethernet 100.100.100.100, plus a search
+    # domain). --accept-dns=false does not stop it: the flag tells the client
+    # not to touch DNS, the action then does it anyway, afterwards. That
+    # resolver serves the tailnet and nothing else here, so every public name
+    # stopped resolving and the step right below died with ENOTFOUND fetching
+    # an artifact, before plug was even installed. We reach the cluster by
+    # tailnet IP, so hand the resolver straight back. "Ethernet" is the
+    # service name the action itself hardcodes.
+    - name: Take macOS DNS back from Tailscale
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        sudo networksetup -setdnsservers Ethernet empty
+        sudo networksetup -setsearchdomains Ethernet empty
+        sudo dscacheutil -flushcache || true # belt and braces, not the assertion
+        # Prove it through getaddrinfo, which is what the next action resolves
+        # with. Without this the symptom surfaces one step later, as someone
+        # else's ENOTFOUND.
+        for _ in $(seq 1 10); do
+          python3 -c "import socket; socket.getaddrinfo('api.github.com', 443)" 2>/dev/null && exit 0
+          sleep 1
+        done
+        echo "public DNS is still broken after handing the resolver back"
+        exit 1

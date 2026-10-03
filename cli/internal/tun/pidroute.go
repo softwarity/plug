@@ -1,3 +1,5 @@
+//go:build darwin || windows
+
 package tun
 
 import (
@@ -12,14 +14,16 @@ import (
 // and when the app connect()s a fake IP the daemon attributes the flow to a
 // cluster by walking the connecting process's parent chain up to the `plug -p X`
 // launcher that started it. Bare names stay transparent; a process we cannot
-// attribute (detached via setsid, or a chain broken by PID recycling) is refused
-// — "refuse en cas de doute" (a hard RST, never a wrong-cluster route).
+// attribute (detached via setsid, or a chain broken by PID recycling) is refused:
+// "refuse en cas de doute" (a hard RST, never a wrong-cluster route).
 //
-// This file is the attribution CORE, kept pure so it is fully unit-tested. On
-// macOS it is LIVE: multiDial (router_darwin.go) feeds it into the global daemon's
-// datapath, validated on two real clusters. Windows shares this core and the
-// per-OS primitives (pidroute_windows.go) but not yet the N-tunnel daemon — that
-// SYSTEM service is the remaining step; the single-cluster path calls none of this.
+// This file is the attribution CORE, kept pure so it is fully unit-tested.
+// multiDial (router.go) feeds it into the shared datapath on the two platforms
+// that have one: the macOS global daemon and the Windows SYSTEM service, each
+// over the OS's own primitives (pidroute_darwin.go, pidroute_windows.go).
+// Linux runs one datapath per launch and never attributes a flow, which is why
+// this file is not built there; its Linux primitives (pidroute_linux.go) wait
+// for the day it does.
 
 // The multicluster case is the only one left with a type: a clusterRouter
 // interface and a staticRouter that always answered its one key used to sit here,

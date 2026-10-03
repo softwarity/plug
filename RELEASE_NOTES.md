@@ -2,6 +2,31 @@
 
 ## NEXT RELEASE
 
+### The audit's structural lot, and one notice that now reaches you
+
+- `check-update` on the agent always answered "current": the comparison it
+  made was between two values that could not differ. It answers "available
+  <tag>" when a newer release exists, as its contract said, so the update
+  notice plug prints at the end of a session now appears when it should.
+- Upstream resolvers that answer SERVFAIL or REFUSED no longer win the race
+  against a healthy one: plug waits for the next server and keeps the failed
+  answer only as the last resort.
+- Downloads from an agent are capped at 256 MB with a clear message, and the
+  resolver's caches are bounded.
+
+Developer-facing, with no change in behaviour: one sweep for every backend
+of the agent (signposts, mount helpers, lingers on Docker, Swarm and
+Kubernetes share the same rules in one place) and one point of exit for its
+verbs (`runVerb` runs a verb in-process for an embedding gateway); one
+version parser in the CLI, `exposeSession` and `mountSession` instead of
+nested closures, dead code and copies removed, the macOS DNS override as a
+type with a test that needs no root; the e2e chain written once as a
+reusable workflow with a composite action, one reusable cluster workflow for
+the three families, and the e2e script split into a library and one file per
+cell, the environment cell becoming seven steps so a failure names its
+assertion; the documentation site with colour tokens, an automatic CSP, unit
+tests, a lint with the accessibility rules, and a 9 kB icon font subset.
+
 ---
 
 ## 2.21.3

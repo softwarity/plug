@@ -1,29 +1,30 @@
 #!/usr/bin/env bash
 # Bring up the e2e "cluster", KUBERNETES FLAVOR, on this runner and keep it
-# alive — the k8s twin of cluster-serve.sh, used by .github/workflows/k8s-for.yml.
-# A kind cluster stands in for the real thing: upstream Kubernetes in a Docker
-# container, NodePorts published on the runner via e2e/kind-config.yaml, so a
-# remote runner on the tailnet reaches the agent at <tailnet-ip>:2222 and the
-# gateway at :18090 — the exact contract of the compose cluster.
+# alive: the k8s twin of cluster-serve.sh, used by .github/workflows/k8s-for.yml
+# (through _cluster.yml). A kind cluster stands in for the real thing: upstream
+# Kubernetes in a Docker container, NodePorts published on the runner via
+# e2e/kind-config.yaml, so a remote runner on the tailnet reaches the agent at
+# <tailnet-ip>:2222 and the gateway at :18090, the exact contract of the
+# compose cluster.
 #
 # The agent is applied from deploy/plug-k8s.yaml, the PUBLISHED manifest
 # (ServiceAccount, the full namespace-scoped RBAC: Services, Endpoints,
 # EndpointSlices, Deployments, pods and pods/exec, PVC reads; NodePort) with
-# only the image swapped to the branch-built :e2e, so every push blesses the
-# file users deploy. The per-leg agents (previous release, crash-test) get that
-# same Role and RoleBinding, extracted from the manifest below, so no copy of
-# it can drift. The services come from e2e/k8s.cluster.yaml (same names/ports
-# as compose).
+# only the image swapped to softwarity/plug:e2e, which is the image ci.yml
+# published for this commit (pulled by the workflow, never built here), so
+# every push blesses the file users deploy. The per-leg agents (previous
+# release, crash-test) get that same Role and RoleBinding, extracted from the
+# manifest below, so no copy of it can drift. The services come from
+# e2e/k8s.cluster.yaml (same names/ports as compose).
 #
-# Idles for PLUG_CLUSTER_TTL seconds; the caller cancels the run earlier.
+# Idles while the caller run lives (scripts/ci/idle-until-caller-done.sh),
+# PLUG_CLUSTER_TTL being the backstop.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/../.." && pwd)"
-ttl="${PLUG_CLUSTER_TTL:-1800}"
+# shellcheck source=scripts/ci/build-e2e-images.sh
+. "$root/scripts/ci/build-e2e-images.sh"
 
-docker image inspect softwarity/plug:e2e >/dev/null 2>&1 || {
-  echo "softwarity/plug:e2e missing — run the 'Load the agent image' step first" >&2
-  exit 1
-}
+require_agent_image
 
 # Pinned, checksummed and retried, because this binary is written as ROOT into
 # /usr/local/bin and then run, and it sat on the critical path of the three k8s
@@ -52,17 +53,14 @@ kind version
 echo "=== create the kind cluster ==="
 kind create cluster --config "$root/e2e/kind-config.yaml" --wait 120s
 
-echo "=== build + load the local service images ==="
+build_service_images
 cd "$root/e2e"
-for svc in grpc prober flaky gateway chaos; do
-  docker build -q -t "plug-e2e/$svc:e2e" -f "services/$svc/Dockerfile" . >/dev/null
-done
-docker build -q -t plug-e2e/wsserver:e2e -f services/websocket/Dockerfile . >/dev/null
+echo "=== load them into kind ==="
 kind load docker-image softwarity/plug:e2e \
   plug-e2e/grpc:e2e plug-e2e/wsserver:e2e plug-e2e/prober:e2e \
   plug-e2e/flaky:e2e plug-e2e/gateway:e2e plug-e2e/chaos:e2e
 
-echo "=== deploy the agent (the PUBLISHED manifest, branch image) ==="
+echo "=== deploy the agent (the PUBLISHED manifest, this commit's image) ==="
 # This rewrite is the only thing standing between the three k8s legs and a run
 # that proves nothing about the branch. Piping sed straight into kubectl could
 # not say whether it had done anything: sed exits 0 when it substitutes nothing,
@@ -145,10 +143,7 @@ done
 # to the branch image: it is pulled from the registry as the previous release,
 # which is the whole point (an agent one release behind retargeting itself).
 echo "=== deploy the per-leg previous-release agents (update cells) ==="
-# The image is resolved, not pinned, see scripts/ci/previous-release.sh.
-PREV_RELEASE="$(bash "$root/scripts/ci/previous-release.sh")" || exit 1
-echo "previous release = $PREV_RELEASE"
-export PREV_RELEASE
+resolve_previous_release
 envsubst '$PREV_RELEASE' < "$root/e2e/k8s.prev-agents.yaml" | kubectl apply -f -
 
 echo "=== deploy the per-leg crash-test agents + chaos (resilience, lease) ==="
@@ -166,10 +161,10 @@ PLUG_CLUSTER_IDENT="${PLUG_CLUSTER_IDENT:-solo}" \
   envsubst '$PLUG_CLUSTER_IDENT' < k8s.cluster.yaml | kubectl apply -f -
 
 echo "=== wait for every deployment ==="
-# One rollout status per deployment — NOT `kubectl wait --all`, which checks
+# One rollout status per deployment, NOT `kubectl wait --all`, which checks
 # sequentially: one stuck deployment eats the whole timeout and the rest get
 # reported "timed out" unchecked (that red herring cost a run). On failure,
-# dump what actually happened before dying — the runner (and the cluster's
+# dump what actually happened before dying: the runner (and the cluster's
 # state) is gone right after.
 failed=""
 for d in $(kubectl get deploy -o name); do
@@ -181,7 +176,7 @@ for ns in $leg_namespaces; do
 done
 kubectl get deploy,svc -o wide
 if [ -n "$failed" ]; then
-  echo "=== NOT READY:$failed — diagnostic dump ===" >&2
+  echo "=== NOT READY:$failed, diagnostic dump ===" >&2
   kubectl get pods -o wide >&2
   for p in $(kubectl get pods --field-selector=status.phase!=Running -o name; \
              kubectl get pods -o json | jq -r '.items[] | select([.status.containerStatuses[]? | .ready] | all | not) | "pod/\(.metadata.name)"'); do
@@ -192,8 +187,8 @@ if [ -n "$failed" ]; then
 fi
 
 echo "=== kubectl port-forward as a transport (the zero-exposed-port path) ==="
-# The legs reach the agent through the NodePort; the OTHER documented way in —
-# a port-forward riding the API server, gated by kubeconfig RBAC — is proven
+# The legs reach the agent through the NodePort; the OTHER documented way in,
+# a port-forward riding the API server, gated by kubeconfig RBAC, is proven
 # here on every push: the forwarded port must serve the agent's ssh contract.
 kubectl port-forward svc/plug 2223:2222 >/dev/null 2>&1 &
 pf=$!
@@ -201,7 +196,7 @@ ok=""
 for _ in $(seq 1 15); do
   v="$(ssh -n -p 2223 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
         -o LogLevel=ERROR -o BatchMode=yes -o ConnectTimeout=3 get@127.0.0.1 version 2>/dev/null || true)"
-  [ -n "$v" ] && { echo "port-forward OK — agent answers through it (version: $v)"; ok=1; break; }
+  [ -n "$v" ] && { echo "port-forward OK: agent answers through it (version: $v)"; ok=1; break; }
   sleep 2
 done
 kill "$pf" 2>/dev/null || true

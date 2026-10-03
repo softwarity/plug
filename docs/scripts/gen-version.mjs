@@ -3,10 +3,6 @@
 // moving `:latest`. Run by the `build`/`start` npm scripts, so it fires on every
 // build (local and CI). CI must check out with fetch-depth: 0 so the tags are
 // present.
-//
-// It used to also emit src/assets/version.json for a runtime fetch. Nothing read
-// it: the only consumer, VersionService, was injected nowhere and so never even
-// constructed, and the pinning below already puts the tag where it shows.
 import { execSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -19,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 // In CI there is no fallback: a missing tag there means the checkout is
 // shallow (fetch-depth: 0 is required), and the build fails rather than
 // publishing a stale pin in silence.
-const FALLBACK = '2.20.2';
+const FALLBACK = '2.21.3';
 
 function latestTag() {
   try {

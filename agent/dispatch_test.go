@@ -5,28 +5,26 @@ import (
 	"testing"
 )
 
-// dispatch is where EVERY command arriving from the network lands: the SSH
+// routeVerb is where EVERY command arriving from the network lands: the SSH
 // session hands it `SSH_ORIGINAL_COMMAND` and it decides what the agent does to
-// the cluster. Nothing exercised it, because both of its exits leave the
-// process. The gap was not theoretical: replacing nameRe with ^.*$ (accept any
-// name at all, including one that k8s would reject or that carries a dot and
-// aims at another namespace) left the entire agent suite green.
+// the cluster. Nothing exercised it while both of its exits left the process.
+// The gap was not theoretical: replacing nameRe with ^.*$ (accept any name at
+// all, including one that k8s would reject or that carries a dot and aims at
+// another namespace) left the entire agent suite green.
 //
 // These tests cover the REFUSALS only. A name that passes validation goes on to
 // talk to Docker, Swarm or Kubernetes, which is the e2e families' job; what
 // belongs here is the boundary itself, and the boundary is only visible when it
 // says no.
 
-// exitReply is what a refusal looks like once the exiting is taken away.
-type exitReply struct{ said string }
-
-// refusalFor runs dispatch with both exits swapped for a panic, and returns what
-// the agent would have replied. An empty string means dispatch ACCEPTED the
-// command and walked on into the orchestrator, which for these inputs is the
-// failure being guarded against.
+// refusalFor runs the verb in-process (runVerb, the entry point an embedder
+// has) and returns what the agent would have replied. An empty string means
+// the command was ACCEPTED and walked on into the orchestrator, which for
+// these inputs is the failure being guarded against.
 func refusalFor(t *testing.T, cmd ...string) string {
 	t.Helper()
-	return verbReply(t, func() { dispatch(cmd) })
+	reply, _ := runVerb(cmd)
+	return reply
 }
 
 func TestServeNameRefusesNamesTheClusterWouldNotAccept(t *testing.T) {
@@ -151,5 +149,18 @@ func TestSelfUpdateChecksItsShape(t *testing.T) {
 func TestAnEmptyCommandIsTurnedAway(t *testing.T) {
 	if said := refusalFor(t); !strings.Contains(said, "there is no shell") {
 		t.Errorf("an empty command was not turned away, the agent said %q", said)
+	}
+}
+
+// runVerb is the in-process entry point an embedder has instead of re-executing
+// the binary: the exit code tells a protocol answer (stdout, 0, including an
+// "error:" refusal) from a fatal (stderr, 1), which is the one distinction the
+// subprocess path makes with its two streams.
+func TestRunVerbReportsTheStreamAsTheCode(t *testing.T) {
+	if reply, code := runVerb([]string{"unknown-verb"}); code != 0 || !strings.HasPrefix(reply, "error: unknown command") {
+		t.Errorf("a refusal is a protocol answer: want code 0 and an error line, got %d %q", code, reply)
+	}
+	if reply, code := runVerb(nil); code != 1 || !strings.Contains(reply, "there is no shell") {
+		t.Errorf("an empty command is a fatal: want code 1 and the no-shell line, got %d %q", code, reply)
 	}
 }

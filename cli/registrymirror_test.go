@@ -44,12 +44,9 @@ func TestTheRegistryMirrorsStillAgree(t *testing.T) {
 		"registryTagsWithin": "different time budgets, documented in cli/registry.go",
 		"registryTags":       "different time budgets, documented in cli/registry.go",
 		"releaseNewerThan":   "opposite default on an unparsable version, unreachable from the CLI path",
+		"tagHint":            "the CLI sorts through its one version parser (version.go); same order",
 	}
 	pinned := map[string]string{
-		// same walk, `for i := 0; i < 3` against `for i := range`
-		"versionLess": "f3ec39e0f0dbb22c",
-		// same parse, one returns a zero literal where the other returns the zero value
-		"parseExactRelease": "b4db1d3d333aa32c",
 		// same scan, the guard is inverted and the loop body reordered
 		"parseNextLink": "aa7635862c15ddcd",
 		// same split, one accumulates into a Builder and the other slices

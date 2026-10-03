@@ -40,77 +40,129 @@ var nxLimiter = newLogLimiter(30 * time.Second)
 const checkTTL = 5 * time.Second
 
 // newNameChecker builds the pre-mint existence check: ask every current
-// transport — present in ANY cluster → mint. When nobody can answer (no
-// transport yet, old agents), mint as plug always did — a fake IP whose
+// transport, present in ANY cluster means mint. When nobody can answer (no
+// transport yet, old agents), mint as plug always did: a fake IP whose
 // connect is refused with a log, never a hang.
 func newNameChecker(dialers func() []Dialer, log logfn) nameChecker {
-	type verdict struct {
-		found bool
-		until time.Time
+	return newNameCache(dialers, log).check
+}
+
+// nameVerdict is one remembered answer, good until its deadline.
+type nameVerdict struct {
+	found bool
+	until time.Time
+}
+
+// verdictCacheMax bounds the verdicts remembered. Every bare name any process
+// on the machine asks about lands here (a Docker Desktop VM forwards its
+// containers' unknown lookups to the host resolver, which is us), and a daemon
+// that runs for weeks kept every one of them for ever. Each verdict is dead
+// after checkTTL anyway, so at the bound the expired ones are forgotten; a
+// burst of fresh names that fills it alone is forgotten whole, which costs one
+// re-ask per name and nothing else.
+const verdictCacheMax = 4096
+
+// nameCache is the state behind a nameChecker: the verdicts, and the questions
+// on the wire.
+//
+// inflight is a lookup already on the wire, so N concurrent questions about
+// ONE name cost one round trip instead of N.
+//
+// The cache alone does not cover this: it only helps once an answer is
+// back. Windows asks about the same name several times AT ONCE (its search
+// suffix turns `svc` into a query for `svc.plug` and one for `svc`, both
+// landing on this same key) and its resolver re-sends after about a second
+// while nothing has answered yet. Each of those used to open its own
+// session and wait out the agent's budget, and an ABSENT name costs that
+// budget in full by definition: the agent cannot say "no" before it has
+// finished looking. Stacked up, they outlasted what the client would wait;
+// one leg gave up resolving after 8s on a name plug decides in under two.
+type nameCache struct {
+	dialers func() []Dialer
+	log     logfn
+	now     func() time.Time // time.Now, replaceable by a test
+
+	mu       sync.Mutex
+	cache    map[string]nameVerdict
+	inflight map[string]*nameFlight
+}
+
+type nameFlight struct {
+	done  chan struct{}
+	found bool
+}
+
+func newNameCache(dialers func() []Dialer, log logfn) *nameCache {
+	return &nameCache{
+		dialers:  dialers,
+		log:      log,
+		now:      time.Now,
+		cache:    map[string]nameVerdict{},
+		inflight: map[string]*nameFlight{},
 	}
-	// A lookup already on the wire, so N concurrent questions about ONE name
-	// cost one round trip instead of N.
-	//
-	// The cache alone does not cover this: it only helps once an answer is
-	// back. Windows asks about the same name several times AT ONCE — its search
-	// suffix turns `svc` into a query for `svc.plug` and one for `svc`, both
-	// landing on this same key, and its resolver re-sends after about a second
-	// while nothing has answered yet. Each of those used to open its own
-	// session and wait out the agent's budget, and an ABSENT name costs that
-	// budget in full by definition: the agent cannot say "no" before it has
-	// finished looking. Stacked up, they outlasted what the client would wait —
-	// one leg gave up resolving after 8s on a name plug decides in under two.
-	type flight struct {
-		done  chan struct{}
-		found bool
+}
+
+// check answers "should this bare name be minted?".
+func (c *nameCache) check(name string) bool {
+	c.mu.Lock()
+	if v, hit := c.cache[name]; hit && c.now().Before(v.until) {
+		c.mu.Unlock()
+		return v.found
 	}
-	var mu sync.Mutex
-	cache := map[string]verdict{}
-	inflight := map[string]*flight{}
-	return func(name string) bool {
-		mu.Lock()
-		if v, hit := cache[name]; hit && time.Now().Before(v.until) {
-			mu.Unlock()
-			return v.found
-		}
-		if f, busy := inflight[name]; busy {
-			mu.Unlock()
-			<-f.done
-			return f.found
-		}
-		f := &flight{done: make(chan struct{})}
-		inflight[name] = f
-		mu.Unlock()
+	if f, busy := c.inflight[name]; busy {
+		c.mu.Unlock()
+		<-f.done
+		return f.found
+	}
+	f := &nameFlight{done: make(chan struct{})}
+	c.inflight[name] = f
+	c.mu.Unlock()
 
-		started := time.Now()
-		var resolvers []clusterNameResolver
-		for _, d := range dialers() {
-			if cr, is := d.(clusterNameResolver); is {
-				resolvers = append(resolvers, cr)
-			}
+	started := c.now()
+	var resolvers []clusterNameResolver
+	for _, d := range c.dialers() {
+		if cr, is := d.(clusterNameResolver); is {
+			resolvers = append(resolvers, cr)
 		}
-		found, answered := askEveryCluster(resolvers, name)
-		took := time.Since(started)
+	}
+	found, answered := askEveryCluster(resolvers, name)
+	took := c.now().Sub(started)
 
-		// Nobody could answer (no transport yet, an agent too old): mint, as
-		// plug always did, and do NOT cache a verdict we never got.
-		result := true
-		mu.Lock()
-		delete(inflight, name)
-		if answered {
-			result = found
-			cache[name] = verdict{found: found, until: time.Now().Add(checkTTL)}
+	// Nobody could answer (no transport yet, an agent too old): mint, as
+	// plug always did, and do NOT cache a verdict we never got.
+	result := true
+	c.mu.Lock()
+	delete(c.inflight, name)
+	if answered {
+		result = found
+		if len(c.cache) >= verdictCacheMax {
+			c.purge()
 		}
-		mu.Unlock()
+		c.cache[name] = nameVerdict{found: found, until: c.now().Add(checkTTL)}
+	}
+	c.mu.Unlock()
 
-		if answered && !found && nxLimiter.allow(name) {
-			// The duration is here because it is the number that decides
-			// whether a slow NXDOMAIN is the agent thinking or the link.
-			log.f("tun: %s is in no connected cluster — NXDOMAIN in %s (repeats hidden 30s)", name, took.Round(time.Millisecond))
+	if answered && !found && nxLimiter.allow(name) {
+		// The duration is here because it is the number that decides
+		// whether a slow NXDOMAIN is the agent thinking or the link.
+		c.log.f("tun: %s is in no connected cluster - NXDOMAIN in %s (repeats hidden 30s)", name, took.Round(time.Millisecond))
+	}
+	f.found = result
+	close(f.done)
+	return result
+}
+
+// purge forgets the expired verdicts, or all of them when the live ones alone
+// fill the cache. Caller holds c.mu.
+func (c *nameCache) purge() {
+	now := c.now()
+	for n, v := range c.cache {
+		if !now.Before(v.until) {
+			delete(c.cache, n)
 		}
-		f.found = result
-		close(f.done)
-		return result
+	}
+	if len(c.cache) >= verdictCacheMax {
+		c.cache = map[string]nameVerdict{}
 	}
 }
 
@@ -132,6 +184,15 @@ func newNameChecker(dialers func() []Dialer, log logfn) nameChecker {
 // A cluster holding the name ends it immediately. Otherwise every answer is
 // waited for, because "nobody has it" and "nobody could answer" lead to different
 // decisions upstream, and only counting the replies tells them apart.
+//
+// Bounded, though: each question is an SSH session on the cluster's tunnel, and
+// every bare name any process on the machine looks up asks one of every
+// cluster. A burst of unknown names (a VM forwarding its containers' lookups,
+// a tool probing a wordlist) multiplied by the clusters attached is the one
+// way plug can open sessions faster than the agents close them. askSlots caps
+// the questions on the wire machine-wide; a question past the cap waits its
+// turn rather than piling on, and the OS resolver's own timeout is what bounds
+// that wait.
 func askEveryCluster(resolvers []clusterNameResolver, name string) (found, answered bool) {
 	if len(resolvers) == 0 {
 		return false, false
@@ -140,7 +201,9 @@ func askEveryCluster(resolvers []clusterNameResolver, name string) (found, answe
 	replies := make(chan reply, len(resolvers))
 	for _, cr := range resolvers {
 		go func(cr clusterNameResolver) {
+			askSlots <- struct{}{}
 			f, ok := cr.ResolveInCluster(name)
+			<-askSlots
 			replies <- reply{f, ok}
 		}(cr)
 	}
@@ -158,3 +221,13 @@ func askEveryCluster(resolvers []clusterNameResolver, name string) (found, answe
 	}
 	return false, answered
 }
+
+// askSlots is the cap on cluster questions in flight, machine-wide: one token
+// per question on the wire. A var so a test can shrink it and watch the cap
+// hold.
+var askSlots = make(chan struct{}, askMax)
+
+// askMax: enough for a busy workstation's genuine burst (a project start-up
+// resolving a dozen services against three clusters), far below what a VM's
+// lookup storm would open.
+const askMax = 32

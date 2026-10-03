@@ -62,10 +62,7 @@ func doctorOS(add func(check)) {
 	if out, err := exec.Command("sc", "query", tun.ServiceName).Output(); err == nil {
 		running = strings.Contains(string(out), "RUNNING")
 	}
-	sessions := 0
-	for _, key := range tun.ActiveClusters() {
-		sessions += tun.LiveClients(key)
-	}
+	sessions := liveSessions()
 	if base, err := registry.OpenKey(registry.LOCAL_MACHINE,
 		`SOFTWARE\Policies\Microsoft\Windows NT\DNSClient\DnsPolicyConfig`, registry.READ); err == nil {
 		stale := false

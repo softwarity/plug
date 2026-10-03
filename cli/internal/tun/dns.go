@@ -365,6 +365,14 @@ const upstreamStagger = 200 * time.Millisecond
 // so the extra queries only exist when the first one is slow. First usable reply
 // wins and the rest are abandoned, which is what a resolver is expected to do
 // when it is given several servers precisely so one may fail.
+//
+// Usable means answered, not merely replied. A SERVFAIL or a REFUSED is what a
+// resolver says when it cannot do the job (a VPN's server asked about a name
+// outside its view, a forwarder with no upstream of its own), and it says it
+// fast: taken as the answer, it masked a healthy server asked a moment later.
+// Such a reply counts as no reply while servers remain, and is the fallback
+// once none do, so the client still hears what the last server said rather than
+// an invented failure.
 func raceUpstreams(servers []string, stagger time.Duration, ask func(string) []byte) []byte {
 	if len(servers) == 0 {
 		return nil
@@ -380,14 +388,18 @@ func raceUpstreams(servers []string, stagger time.Duration, ask func(string) []b
 	}
 	launch()
 
+	var failed []byte // the last SERVFAIL/REFUSED, in case nobody does better
 	t := time.NewTimer(stagger)
 	defer t.Stop()
 	for answered := 0; answered < len(servers); {
 		select {
 		case r := <-replies:
 			answered++
-			if r != nil {
+			if r != nil && !serverFailed(r) {
 				return r
+			}
+			if r != nil {
+				failed = r
 			}
 			// One said no. Bring the next in immediately rather than waiting out
 			// the stagger it no longer needs to share.
@@ -402,7 +414,18 @@ func raceUpstreams(servers []string, stagger time.Duration, ask func(string) []b
 			}
 		}
 	}
-	return nil
+	return failed
+}
+
+// serverFailed reports whether a reply is a SERVFAIL (rcode 2) or a REFUSED
+// (rcode 5): the server could not or would not answer, as opposed to an answer
+// of any kind, NXDOMAIN included, which is a verdict about the name.
+func serverFailed(r []byte) bool {
+	if len(r) < 12 {
+		return false
+	}
+	rcode := r[3] & 0x0f
+	return rcode == 2 || rcode == 5
 }
 
 // ask sends q to one server and returns its reply, or nil.

@@ -25,6 +25,12 @@ const globalKey = "@global"
 // after globalKey's longer grace once no cluster has any client at all.
 const tunnelGrace = 20 * time.Second
 
+// clusterReadyWait is how long a launch waits for the daemon to have its
+// cluster's tunnel up before running the command anyway. Short of the dial
+// timeout on purpose: a cluster that is down is reported by the session
+// itself, with the daemon's recorded reason, not by a launcher that hung.
+const clusterReadyWait = 12 * time.Second
+
 var tunnelIdleSince = map[string]time.Time{}
 
 // Clusters whose agent refused every key we have, and when it last said so. The
@@ -114,11 +120,6 @@ func (d *dialSet) running(key string) bool {
 	return d.in[key]
 }
 
-// reconcileOnce opens a tunnel for each active cluster missing one and closes tunnels
-// whose cluster no longer has a live client. Each open/close flips the cluster's ready
-// marker so `plug -p X <cmd>` can wait for its own tunnel. Shared by macOS and Windows
-// (both hold ONE datapath + a tunnel per active cluster; only the process model — a
-// detached daemon vs an SCM service — differs).
 // dialOutcome carries a finished dial back to the goroutine that owns `tunnels`.
 // Every map in this file is touched by the reconcile goroutine and only by it;
 // the dial itself is all that runs elsewhere.
@@ -133,10 +134,17 @@ var (
 	dialOut = make(chan dialOutcome, 32)
 )
 
-// reconcileOnce with wait=true dials inline, which is what the FIRST call wants:
-// the daemon signals ready once the cluster that started it has its tunnel, so a
-// `plug <cmd>` waiting behind it does not race the first connect. Every later
-// call comes from the ticker and passes false.
+// reconcileOnce opens a tunnel for each active cluster missing one and closes
+// tunnels whose cluster no longer has a live client. Each open/close flips the
+// cluster's ready marker so `plug -p X <cmd>` can wait for its own tunnel.
+// Shared by macOS and Windows (both hold ONE datapath + a tunnel per active
+// cluster; only the process model, a detached daemon vs an SCM service,
+// differs).
+//
+// It dials inline (wait=true), which is what the FIRST call wants: the daemon
+// signals ready once the cluster that started it has its tunnel, so a `plug
+// <cmd>` waiting behind it does not race the first connect. Every later call
+// comes from the ticker, through reconcile with wait=false.
 func reconcileOnce(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transport) {
 	reconcile(ct, tunnels, true)
 }
@@ -230,12 +238,12 @@ func reconcile(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transport, 
 	}
 }
 
-// reconcileLoop re-syncs the tunnel set with the active clusters. It polls often so a
-// just-registered client's tunnel opens near-instantly (that open is what the launcher
-// waits on); tunnelGrace, not the tick, governs how long an idle tunnel lives.
 // reconcileLoop keeps the tunnel set matching the live clusters until stop is
-// closed. It returns a channel closed when the loop has REALLY finished, which
-// the teardown must wait on before touching `tunnels`.
+// closed. It polls often so a just-registered client's tunnel opens
+// near-instantly (that open is what the launcher waits on); tunnelGrace, not
+// the tick, governs how long an idle tunnel lives. It returns a channel closed
+// when the loop has REALLY finished, which the teardown must wait on before
+// touching `tunnels`.
 //
 // Closing stop is not enough: a tick already in flight can sit inside
 // dialTunnel for the whole dial timeout, and it writes to the map on the way
@@ -321,15 +329,16 @@ func liveSessions() int {
 }
 
 // waitClusterReady blocks until the daemon has the tunnel up for this cluster,
-// then gets out of the way. It gives up after twelve seconds and starts anyway:
-// a session that cannot reach the cluster yet is still worth running, and the
-// alternative is refusing to start over a tunnel that may be seconds away.
+// then gets out of the way. It gives up after clusterReadyWait and starts
+// anyway: a session that cannot reach the cluster yet is still worth running,
+// and the alternative is refusing to start over a tunnel that may be seconds
+// away.
 //
 // The daemon records WHY it could not open the tunnel (agent unreachable, host
 // key, and so on). Saying it here is what turns "not ready" into something the
 // person can act on; without it every failure looked the same.
 func waitClusterReady(key string) {
-	deadline := time.Now().Add(12 * time.Second)
+	deadline := time.Now().Add(clusterReadyWait)
 	for time.Now().Before(deadline) {
 		if tun.ClusterReady(key) {
 			return

@@ -15,8 +15,9 @@ interface Section {
   flat?: boolean;
   rows: Row[];
 }
+// A limit of what has been demonstrated, never of what plug does: every hole
+// is the grid's "partial" state, so it carries no severity of its own.
 interface Hole {
-  sev: 'no' | 'warn';
   t: string;
   d: string;
 }
@@ -24,24 +25,21 @@ interface Hole {
 @Component({
   selector: 'app-coverage',
   imports: [RouterLink],
-  preserveWhitespaces: true,
   styles: [
     `
       .lead { max-width: 66ch; }
-      .snap { font-family: 'Courier New', Consolas, monospace; font-size: 0.8rem; color: var(--text-muted); margin: 4px 0 0; }
+      .snap { font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-muted); margin: 4px 0 0; }
 
       .legend { display: flex; flex-wrap: wrap; gap: 16px; margin: 18px 0 6px; font-size: 0.82rem; }
       .legend span { display: inline-flex; align-items: center; gap: 7px; color: var(--text-muted); }
       .dot { width: 15px; height: 15px; border-radius: 50%; display: inline-grid; place-items: center;
-             font-size: 10px; font-weight: 700; color: #0d1117; }
+             font-size: 10px; font-weight: 700; color: var(--text-on-accent); }
       .d-ok { background: var(--cov-ok); } .d-warn { background: var(--cov-warn); }
       .d-no { background: var(--cov-no); } .d-na { background: var(--cov-na); color: var(--text-primary); }
 
       .holes { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; margin: 12px 0 8px; }
-      .hole { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 10px;
-              padding: 14px 16px; position: relative; overflow: hidden; }
-      .hole::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--sev); }
-      .hole .n { font-family: 'Courier New', Consolas, monospace; font-size: 0.7rem; color: var(--text-muted); }
+      .hole { border-radius: 10px; position: relative; overflow: hidden; }
+      .hole::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--cov-warn); }
       .hole .t { font-weight: 600; margin: 3px 0 6px; color: var(--text-primary); font-size: 0.92rem; }
       .hole .d { font-size: 0.83rem; color: var(--text-secondary); line-height: 1.45; }
 
@@ -65,25 +63,25 @@ interface Hole {
          names every status cell with it. It must still look like the plain cell
          it always was: the global 'table th' rule bolds it and paints it, undo
          both here. */
-      th.feat { font-family: 'Courier New', Consolas, monospace; font-size: 0.83rem; color: var(--text-primary);
+      th.feat { font-family: var(--font-mono); font-size: 0.83rem; color: var(--text-primary);
                 white-space: normal; max-width: 44ch; font-weight: 400; background: none; }
       th.feat.sub { color: var(--text-secondary); padding-left: 22px; position: relative; }
       th.feat.sub::before { content: '↳'; position: absolute; left: 8px; color: var(--text-muted); }
       td.note { color: var(--text-secondary); font-size: 0.83rem; white-space: normal; min-width: 22ch; }
-      table.cov tbody tr:hover td, table.cov tbody tr:hover th { background: rgba(163, 113, 247, 0.05); }
+      table.cov tbody tr:hover td, table.cov tbody tr:hover th { background: var(--accent-purple-faint); }
 
       .cell { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 7px;
-              font-family: 'Courier New', Consolas, monospace; font-weight: 700; font-size: 0.95rem; }
+              font-family: var(--font-mono); font-weight: 700; font-size: 0.95rem; }
 
       /* The glyph in a status cell is a picture of the state, not the state: a
          screen reader used to read this grid as "!", "-", "✕". The real word
          rides along in here, out of sight and out of the layout. */
       .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
                  overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
-      .st-ok .cell { background: rgba(63, 185, 80, 0.14); color: var(--cov-ok); }
-      .st-warn .cell { background: rgba(210, 153, 34, 0.16); color: var(--cov-warn); }
-      .st-no .cell { background: rgba(248, 81, 73, 0.15); color: var(--cov-no); }
-      .st-na .cell { background: rgba(139, 148, 158, 0.12); color: var(--cov-na); }
+      .st-ok .cell { background: var(--accent-green-bg); color: var(--cov-ok); }
+      .st-warn .cell { background: var(--accent-yellow-bg); color: var(--cov-warn); }
+      .st-no .cell { background: var(--accent-red-bg); color: var(--cov-no); }
+      .st-na .cell { background: var(--text-muted-bg); color: var(--cov-na); }
 
       :host { --cov-ok: var(--accent-green); --cov-warn: var(--accent-yellow); --cov-no: var(--accent-red); --cov-na: var(--text-muted); }
     `,
@@ -150,7 +148,7 @@ interface Hole {
       </p>
       <div class="holes">
         @for (h of holes; track h.t) {
-          <div class="hole" [style.--sev]="h.sev === 'no' ? 'var(--cov-no)' : 'var(--cov-warn)'">
+          <div class="card hole">
             <div class="t">{{ h.t }}</div>
             <div class="d">{{ h.d }}</div>
           </div>
@@ -189,13 +187,10 @@ export class CoverageComponent {
 
   protected readonly holes: Hole[] = [
     {
-      sev: 'warn',
       t: 'Linux and Windows under a real corporate VPN client',
       d: 'What a VPN does to DNS is proven in CI on all three OSes: the selftest fabricates an extra adapter carrying a resolver that knows a name nothing else knows, and asserts plug follows it - and follows it back down when the VPN goes away. What that cell does NOT fabricate is a domain-scoped resolver, the split-DNS every corporate client pushes, and that is the gap a real client found on macOS in September: a session broke the VPN\'s own names for a month before anyone connected the two. macOS reads those scopes now; Linux and Windows do not, so a real corporate client there is still unproven - split-tunnel routing, NRPT rules pushed by policy, MTU, and clients that intercept DNS on a loopback address.',
-
     },
     {
-      sev: 'warn',
       t: 'Load, and laptop sleep/wake',
       d: 'Duration itself is covered now: a weekly soak holds one session for four hours against the PUBLISHED image, with traffic that re-resolves the name and opens a fresh connection every couple of seconds, and it asserts a trend rather than a threshold - memory, open descriptors and thread count must not climb between the first half of the run and the second, and every round must answer. What it does not do is LOAD: one connection at a time and short requests, so high connection counts and big transfers remain unexercised. Nor laptop sleep/wake, which no CI runner can perform.',
     },

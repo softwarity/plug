@@ -21,7 +21,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -325,15 +324,23 @@ func askSelfUpdate(cfg config, want string) string {
 	return out
 }
 
+// agentRollWait bounds the wait for a redeployed agent to answer with its new
+// version, polled every agentRollPoll: an image pull plus a rolling restart on
+// a slow node is most of a minute, and the poll is one dial each time.
+const (
+	agentRollWait = 90 * time.Second
+	agentRollPoll = 3 * time.Second
+)
+
 // waitNewVersion polls the agent version while its redeploy rolls, and returns
 // the first version that differs from before (early exit), or before after the
 // timeout — the caller words that case honestly (already newest, or a pinned
 // tag: the poll cannot tell those apart, only the registry knows).
 func waitNewVersion(cfg config, before string) string {
 	info("waiting for the new agent to come up…")
-	deadline := time.Now().Add(90 * time.Second)
+	deadline := time.Now().Add(agentRollWait)
 	for time.Now().Before(deadline) {
-		time.Sleep(3 * time.Second)
+		time.Sleep(agentRollPoll)
 		v, err := agentVersion(cfg)
 		if err != nil {
 			continue // mid-roll — keep waiting
@@ -406,7 +413,7 @@ func updateLauncher(cfg config, remote string) error {
 	if err != nil {
 		return fmt.Errorf("downloading %s: %v", shortVersion(remote), err)
 	}
-	if len(data) < 1<<20 || !looksLikeBinary(data) {
+	if len(data) < minBinarySize || !looksLikeBinary(data) {
 		return fmt.Errorf("downloaded launcher looks invalid (%d bytes)", len(data))
 	}
 	// Hash AND signature, because of what happens a few lines below: these bytes
@@ -486,7 +493,7 @@ func launcherFollow(local, remote string) (replace bool, why string) {
 	if local == remote {
 		return false, fmt.Sprintf("launcher already matches the agent (%s)", shortVersion(local))
 	}
-	if semverOK(local) && semverOK(remote) && semverLess(remote, local) {
+	if releaseLess(remote, local) {
 		return true, fmt.Sprintf("following this cluster DOWN: launcher v%s → v%s — its agent is the reference; "+
 			"update against a newer cluster to move back up", local, remote)
 	}
@@ -545,13 +552,12 @@ func replaceBinaryFile(target string, data []byte, grant func(string)) error {
 	return nil
 }
 
-// regrantPrivilege re-applies what the install granted — a fresh file has none
-// of it. One sudo on unix (prompted only when a terminal is there to answer);
-// on Windows there is nothing to re-grant: the service's binPath still points
-// at this exe, and the service starts on demand — the next session runs the
-// new binary.
-// regrantPrivilege re-grants what the launcher needs, on the file at path, which
-// is the NEW binary before it is moved into place (see replaceBinary).
+// regrantPrivilege re-applies what the install granted, on the file at path,
+// which is the NEW binary before it is moved into place (see replaceBinary): a
+// fresh file has none of it. One sudo on unix (prompted only when a terminal
+// is there to answer); on Windows there is nothing to re-grant: the service's
+// binPath still points at this exe, and the service starts on demand, so the
+// next session runs the new binary.
 //
 // No shell. It used to build a command string and run it through `sudo sh -c`,
 // interpolating the path between single quotes: an install path containing an
@@ -594,45 +600,6 @@ func runSudo(args ...string) bool {
 	c := exec.Command("sudo", args...)
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return c.Run() == nil
-}
-
-// semverOK reports whether s is a released x.y.z version (dev builds are not).
-func semverOK(s string) bool {
-	_, ok := semverParse(s)
-	return ok
-}
-
-// semverLess reports a < b, numerically per part — false when either side is
-// not a release (never act on a comparison that means nothing).
-func semverLess(a, b string) bool {
-	va, oka := semverParse(a)
-	vb, okb := semverParse(b)
-	if !oka || !okb {
-		return false
-	}
-	for i := range va {
-		if va[i] != vb[i] {
-			return va[i] < vb[i]
-		}
-	}
-	return false
-}
-
-func semverParse(s string) ([3]int, bool) {
-	var v [3]int
-	s, _, _ = strings.Cut(s, "+") // released builds carry +<rev> metadata ("2.2.0+3503368")
-	parts := strings.Split(s, ".")
-	if len(parts) != 3 {
-		return v, false
-	}
-	for i, p := range parts {
-		n, err := strconv.Atoi(p)
-		if err != nil || n < 0 {
-			return v, false
-		}
-		v[i] = n
-	}
-	return v, true
 }
 
 // updateTargetWord renders the requested target for the one line printed before

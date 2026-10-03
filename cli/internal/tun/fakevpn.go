@@ -99,7 +99,7 @@ func (r *probeResolver) serve() {
 		}
 		r.asked.Add(1)
 		name, ip := r.name, r.ip
-		if asked, _ := parseName(buf[:n], 12); len(buf) > 12 {
+		if asked, _ := parseName(buf[:n], 12); n > 12 {
 			r.mu.Lock()
 			if x, ok := r.extra[strings.ToLower(strings.TrimSuffix(asked, "."))]; ok {
 				name, ip = strings.TrimSuffix(asked, "."), x
@@ -176,10 +176,7 @@ type vpnRig struct {
 // resolveThroughPlug asks plug's own stub, through the TUN, exactly as a child
 // process would. Returns the address, or "" when the name does not resolve.
 func resolveThroughPlug(dnsIP, name string, timeout time.Duration) string {
-	res := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-		var d net.Dialer
-		return d.DialContext(ctx, network, net.JoinHostPort(dnsIP, "53"))
-	}}
+	res := dnsResolverAt(dnsIP)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	ips, err := res.LookupIP(ctx, "ip4", name)
@@ -233,9 +230,10 @@ func waitFor(budget time.Duration, cond func() bool) bool {
 }
 
 // probeVPNFollowing runs the whole probe against the LIVE datapath: plug is up,
-// its stub is answering, and the machine's resolvers move under it.
+// its stub is answering, and the machine's resolvers move under it. Three acts:
+// the VPN arrives, it declares a scope of its own, it goes away.
 //
-// original is what plug captured at start-up — the resolvers to come back to.
+// original is what plug captured at start-up, the resolvers to come back to.
 //
 // Teardown goes through addUndo rather than defer: this probe leaves an address
 // (and an adapter on Windows) on the machine, and a defer does not run when a
@@ -253,127 +251,167 @@ func probeVPNFollowing(up *upstreamDNS, dnsIP string, original []string, addUndo
 	}
 	addUndo(resolver.close)
 
+	p := &vpnProbe{
+		up:       up,
+		dnsIP:    dnsIP,
+		rig:      rig,
+		resolver: resolver,
+		want:     net.JoinHostPort(rig.resolverAddr, "53"),
+		log:      log,
+	}
+	if err := p.probeArrival(); err != nil {
+		return err
+	}
+	if err := p.probeScope(); err != nil {
+		return err
+	}
+	return p.probeDeparture(original)
+}
+
+// vpnProbe is one run of the probe: the rig faking the VPN, the resolver it
+// brings, and the address plug must be seen forwarding to.
+type vpnProbe struct {
+	up       *upstreamDNS
+	dnsIP    string
+	rig      *vpnRig
+	resolver *probeResolver
+	want     string // the fake resolver, as upstreamDNS names it
+	log      logfn
+}
+
+// following reports whether plug forwards dotted names to the fake resolver.
+func (p *vpnProbe) following() bool { return p.up.primary() == p.want }
+
+// probeArrival: the VPN comes up, plug follows it, and the name only the VPN's
+// resolver knows resolves through plug's stub.
+func (p *vpnProbe) probeArrival() error {
 	// Before anything moves, probeName must NOT resolve. Two things would make the
 	// proof worthless and both are silent: a network that answers wildcards, and a
 	// leftover fake VPN from an earlier run. Fail here, with the reason, rather
 	// than pass later for the wrong reason.
-	if got := resolveThroughPlug(dnsIP, probeName, 3*time.Second); got != "" {
-		return fmt.Errorf("vpn probe: %s already resolves to %s before the fake VPN is up — "+
+	if got := resolveThroughPlug(p.dnsIP, probeName, 3*time.Second); got != "" {
+		return fmt.Errorf("vpn probe: %s already resolves to %s before the fake VPN is up - "+
 			"this resolver answers names that do not exist, so the probe cannot prove plug moved", probeName, got)
 	}
-	log.f("vpn probe: %s does not resolve yet (as it must not) — bringing the fake VPN up on %s",
-		probeName, rig.resolverAddr)
+	p.log.f("vpn probe: %s does not resolve yet (as it must not) - bringing the fake VPN up on %s",
+		probeName, p.rig.resolverAddr)
 
 	// The VPN comes up.
-	want := net.JoinHostPort(rig.resolverAddr, "53")
-	if err := holdUntil(30*time.Second, rig.announce, func() bool { return up.primary() == want }); err != nil {
-		return fmt.Errorf("vpn probe: plug did not follow — still forwarding to %v, expected %s. "+
+	if err := holdUntil(30*time.Second, p.rig.announce, p.following); err != nil {
+		return fmt.Errorf("vpn probe: plug did not follow - still forwarding to %v, expected %s. "+
 			"The system was told to use %s; plug kept the servers it captured at start-up (%v)",
-			up.all(), want, rig.resolverAddr, err)
+			p.up.all(), p.want, p.rig.resolverAddr, err)
 	}
-	log.f("vpn probe: plug followed — forwarding dotted names to %v", up.all())
+	p.log.f("vpn probe: plug followed - forwarding dotted names to %v", p.up.all())
 
 	// What doctor will report has to move too: it reads the published record, and
 	// a record that goes stale is exactly the failure it exists to catch.
-	if pub := CurrentUpstreams(); len(pub) == 0 || pub[0] != want {
-		return fmt.Errorf("vpn probe: the datapath forwards to %s but published %v — "+
-			"`plug doctor` would report the wrong resolver", want, pub)
+	if pub := CurrentUpstreams(); len(pub) == 0 || pub[0] != p.want {
+		return fmt.Errorf("vpn probe: the datapath forwards to %s but published %v - "+
+			"`plug doctor` would report the wrong resolver", p.want, pub)
 	}
 
 	// The proof: a name only the fake resolver knows, resolved through plug's stub.
-	if got := resolveThroughPlug(dnsIP, probeName, 5*time.Second); got != probeIP {
-		return fmt.Errorf("vpn probe: %s resolved to %q through plug, want %s — "+
+	if got := resolveThroughPlug(p.dnsIP, probeName, 5*time.Second); got != probeIP {
+		return fmt.Errorf("vpn probe: %s resolved to %q through plug, want %s - "+
 			"plug names the right resolver but does not reach it", probeName, got, probeIP)
 	}
-	if n := resolver.asked.Load(); n == 0 {
-		return fmt.Errorf("vpn probe: %s resolved to %s but the fake resolver was never asked — "+
+	if n := p.resolver.asked.Load(); n == 0 {
+		return fmt.Errorf("vpn probe: %s resolved to %s but the fake resolver was never asked - "+
 			"the answer came from somewhere else", probeName, probeIP)
 	}
-	log.f("vpn probe: %s → %s through the stub, from the VPN's resolver (%d queries) — the internal name works",
-		probeName, probeIP, resolver.asked.Load())
+	p.log.f("vpn probe: %s -> %s through the stub, from the VPN's resolver (%d queries) - the internal name works",
+		probeName, probeIP, p.resolver.asked.Load())
+	return nil
+}
 
-	// The scoped half, where the OS has one. A real client does not replace the
-	// machine's resolvers: it adds a resolver FOR ITS DOMAIN and leaves the rest
-	// alone. plug read only the ordinary servers for as long as it ran on macOS,
-	// so a session sent the VPN's own names to a resolver that had never heard
-	// of them - the day this cost is in the 2.15.2 notes. The rig declares the
-	// scope with the machine's ordinary resolvers back in place, and the probe
-	// asserts both halves at once: the scoped name reaches the VPN's resolver,
-	// and the ordinary servers are still what everything else goes to.
-	if rig.scope != nil {
-		if !rig.scopeWhileUp {
-			if err := rig.restore(); err != nil {
-				return fmt.Errorf("vpn probe: put the machine's resolvers back before the scope: %w", err)
-			}
-		}
-		resolver.also(scopeName, net.ParseIP(scopeIP))
-		askedBefore := resolver.asked.Load()
-		// What proves the scope was READ: the name is routed to it. With the
-		// ordinary resolvers back, that also means the primary is not the VPN's;
-		// with the VPN still up (Windows) the primary IS the VPN's, and the proof
-		// is that the scoped table names the resolver on its own account.
-		scoped := func() bool {
-			if up.serversFor(scopeName)[0] != want {
-				return false
-			}
-			return rig.scopeWhileUp || up.primary() != want
-		}
-		if err := holdUntil(30*time.Second, rig.scope, scoped); err != nil {
-			return fmt.Errorf("vpn probe: the fake VPN declared *.%s as its own, but plug routes %s to %v "+
-				"with ordinary servers %v - the scope was not read (%v)", scopeDomain, scopeName, up.serversFor(scopeName), up.all(), err)
-		}
-		if got := resolveThroughPlug(dnsIP, scopeName, 5*time.Second); got != scopeIP {
-			return fmt.Errorf("vpn probe: %s resolved to %q through plug, want %s - "+
-				"plug names the scope's resolver but does not reach it (routes %s to %v; ordinary %v; the scope's resolver was asked %d times)",
-				scopeName, got, scopeIP, scopeName, up.serversFor(scopeName), up.all(), resolver.asked.Load()-askedBefore)
-		}
-		if resolver.asked.Load() == askedBefore {
-			return fmt.Errorf("vpn probe: %s resolved to %s but the scope's resolver was never asked", scopeName, scopeIP)
-		}
-		log.f("vpn probe: *.%s → the VPN's resolver, everything else → %v: the scoped name works beside the ordinary ones",
-			scopeDomain, up.all())
-		// With the VPN still up the scoped name falls back to the VPN's resolver
-		// as the primary, which is the same address: the proof that the SCOPE
-		// went is that the scoped table no longer names it, read directly.
-		unscoped := func() bool {
-			u := up
-			u.mu.RLock()
-			defer u.mu.RUnlock()
-			return pickScoped(scopeName, u.scoped, nil) == nil
-		}
-		if err := holdUntil(30*time.Second, rig.unscope, unscoped); err != nil {
-			return fmt.Errorf("vpn probe: the scope went away but plug still routes %s to %v (%v)", scopeName, up.serversFor(scopeName), err)
-		}
-		log.f("vpn probe: the scope went away and %s goes to the ordinary servers again", scopeName)
-		if !rig.scopeWhileUp {
-			// Back to the "VPN replaced the resolvers" state, for the going-away
-			// test below to mean what it says.
-			if err := holdUntil(30*time.Second, rig.announce, func() bool { return up.primary() == want }); err != nil {
-				return fmt.Errorf("vpn probe: could not re-announce the fake VPN after the scope test: %w", err)
-			}
-		}
-	} else {
-		log.f("vpn probe: this OS has no domain-scoped resolvers (resolv.conf knows none): the scope half is not run here")
+// probeScope: the scoped half, where the OS has one. A real client does not
+// replace the machine's resolvers: it adds a resolver FOR ITS DOMAIN and leaves
+// the rest alone. plug read only the ordinary servers for as long as it ran on
+// macOS, so a session sent the VPN's own names to a resolver that had never
+// heard of them - the day this cost is in the 2.15.2 notes. The rig declares the
+// scope with the machine's ordinary resolvers back in place, and the probe
+// asserts both halves at once: the scoped name reaches the VPN's resolver, and
+// the ordinary servers are still what everything else goes to.
+func (p *vpnProbe) probeScope() error {
+	if p.rig.scope == nil {
+		p.log.f("vpn probe: this OS has no domain-scoped resolvers (resolv.conf knows none): the scope half is not run here")
+		return nil
 	}
+	if !p.rig.scopeWhileUp {
+		if err := p.rig.restore(); err != nil {
+			return fmt.Errorf("vpn probe: put the machine's resolvers back before the scope: %w", err)
+		}
+	}
+	p.resolver.also(scopeName, net.ParseIP(scopeIP))
+	askedBefore := p.resolver.asked.Load()
+	// What proves the scope was READ: the name is routed to it. With the
+	// ordinary resolvers back, that also means the primary is not the VPN's;
+	// with the VPN still up (Windows) the primary IS the VPN's, and the proof
+	// is that the scoped table names the resolver on its own account.
+	scoped := func() bool {
+		if p.up.serversFor(scopeName)[0] != p.want {
+			return false
+		}
+		return p.rig.scopeWhileUp || !p.following()
+	}
+	if err := holdUntil(30*time.Second, p.rig.scope, scoped); err != nil {
+		return fmt.Errorf("vpn probe: the fake VPN declared *.%s as its own, but plug routes %s to %v "+
+			"with ordinary servers %v - the scope was not read (%v)", scopeDomain, scopeName, p.up.serversFor(scopeName), p.up.all(), err)
+	}
+	if got := resolveThroughPlug(p.dnsIP, scopeName, 5*time.Second); got != scopeIP {
+		return fmt.Errorf("vpn probe: %s resolved to %q through plug, want %s - "+
+			"plug names the scope's resolver but does not reach it (routes %s to %v; ordinary %v; the scope's resolver was asked %d times)",
+			scopeName, got, scopeIP, scopeName, p.up.serversFor(scopeName), p.up.all(), p.resolver.asked.Load()-askedBefore)
+	}
+	if p.resolver.asked.Load() == askedBefore {
+		return fmt.Errorf("vpn probe: %s resolved to %s but the scope's resolver was never asked", scopeName, scopeIP)
+	}
+	p.log.f("vpn probe: *.%s -> the VPN's resolver, everything else -> %v: the scoped name works beside the ordinary ones",
+		scopeDomain, p.up.all())
+	// With the VPN still up the scoped name falls back to the VPN's resolver
+	// as the primary, which is the same address: the proof that the SCOPE
+	// went is that the scoped table no longer names it, read directly.
+	unscoped := func() bool {
+		u := p.up
+		u.mu.RLock()
+		defer u.mu.RUnlock()
+		return pickScoped(scopeName, u.scoped, nil) == nil
+	}
+	if err := holdUntil(30*time.Second, p.rig.unscope, unscoped); err != nil {
+		return fmt.Errorf("vpn probe: the scope went away but plug still routes %s to %v (%v)", scopeName, p.up.serversFor(scopeName), err)
+	}
+	p.log.f("vpn probe: the scope went away and %s goes to the ordinary servers again", scopeName)
+	if !p.rig.scopeWhileUp {
+		// Back to the "VPN replaced the resolvers" state, for the going-away
+		// test to mean what it says.
+		if err := holdUntil(30*time.Second, p.rig.announce, p.following); err != nil {
+			return fmt.Errorf("vpn probe: could not re-announce the fake VPN after the scope test: %w", err)
+		}
+	}
+	return nil
+}
 
-	// The VPN goes away. Following it up and never following it down is the same
-	// bug seen from the other side: dotted names would keep going to a resolver
-	// that is no longer reachable, which fails slowly instead of failing.
-	if err := holdUntil(30*time.Second, rig.restore, func() bool { return up.primary() != want }); err != nil {
-		return fmt.Errorf("vpn probe: the fake VPN went away but plug still forwards to %v — "+
-			"lookups now go to a resolver that is gone (%v)", up.all(), err)
+// probeDeparture: the VPN goes away. Following it up and never following it
+// down is the same bug seen from the other side: dotted names would keep going
+// to a resolver that is no longer reachable, which fails slowly instead of
+// failing. original is what plug must come back to.
+func (p *vpnProbe) probeDeparture(original []string) error {
+	if err := holdUntil(30*time.Second, p.rig.restore, func() bool { return !p.following() }); err != nil {
+		return fmt.Errorf("vpn probe: the fake VPN went away but plug still forwards to %v - "+
+			"lookups now go to a resolver that is gone (%v)", p.up.all(), err)
 	}
 	if len(original) > 0 {
 		back := net.JoinHostPort(original[0], "53")
-		if up.primary() != back {
+		if p.up.primary() != back {
 			return fmt.Errorf("vpn probe: after the fake VPN went away plug forwards to %v, "+
-				"expected the machine's own %s", up.all(), back)
+				"expected the machine's own %s", p.up.all(), back)
 		}
 	}
-	// And the internal name is gone with it — the negative side of the same fact.
-	if got := resolveThroughPlug(dnsIP, probeName, 3*time.Second); got != "" {
+	// And the internal name is gone with it: the negative side of the same fact.
+	if got := resolveThroughPlug(p.dnsIP, probeName, 3*time.Second); got != "" {
 		return fmt.Errorf("vpn probe: %s still resolves to %s after the fake VPN went away", probeName, got)
 	}
-	log.f("vpn probe: the fake VPN went away — back to %v, and %s stopped resolving", up.all(), probeName)
+	p.log.f("vpn probe: the fake VPN went away - back to %v, and %s stopped resolving", p.up.all(), probeName)
 	return nil
 }

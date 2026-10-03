@@ -23,12 +23,14 @@
             "scripts": [],
             "allowedCommonJsDependencies": [
               "prismjs",
-              "prismjs/components/prism-typescript",
               "prismjs/components/prism-bash",
               "prismjs/components/prism-json",
-              "prismjs/components/prism-markup",
+              "prismjs/components/prism-typescript",
               "prismjs/components/prism-yaml"
-            ]
+            ],
+            "security": {
+              "autoCsp": true
+            }
           },
           "configurations": {
             "production": {
@@ -60,11 +62,30 @@
             }
           },
           "defaultConfiguration": "development"
+        },
+        "test": {
+          "builder": "@angular/build:unit-test",
+          "options": {
+            "tsConfig": "tsconfig.spec.json",
+            "buildTarget": "doc-site:build:development"
+          }
+        },
+        "lint": {
+          "builder": "@angular-eslint/builder:lint",
+          "options": {
+            "lintFilePatterns": [
+              "src/**/*.ts",
+              "src/**/*.html",
+              "scripts/**/*.mjs",
+              "*.mjs"
+            ]
+          }
         }
       }
     }
   },
   "cli": {
-    "analytics": false
+    "analytics": false,
+    "schematicCollections": ["angular-eslint"]
   }
 }

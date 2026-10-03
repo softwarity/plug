@@ -72,7 +72,7 @@ func ensureVersion(v string, cfg config) (*os.File, error) {
 	// project plug is launching — would be running with it. ~30ms for 9MB.
 	att, derr := fetchDigest(cfg, osArch)
 	want := att.sha256
-	if fi, err := os.Stat(bin); err == nil && fi.Size() > 1<<20 && derr == nil {
+	if fi, err := os.Stat(bin); err == nil && fi.Size() > minBinarySize && derr == nil {
 		f, herr := openVerified(bin, want)
 		switch {
 		case herr == nil:
@@ -92,7 +92,7 @@ func ensureVersion(v string, cfg config) (*os.File, error) {
 			// mean the same bytes: a mismatch there is corruption or tampering
 			// and is worth saying out loud. A dev or branch build legitimately
 			// covers different bytes over time — re-fetching is routine.
-			if releaseVersionRe.MatchString(shortVersion(v)) {
+			if _, published := parseVersion(v); published {
 				info("WARNING the cached v%s does not match what the agent serves — discarding it and fetching again.\n"+
 					"      A published release names one build, so this is corruption or tampering, not a new version.", v)
 			}
@@ -108,7 +108,7 @@ func ensureVersion(v string, cfg config) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(data) < 1<<20 || !looksLikeBinary(data) {
+	if len(data) < minBinarySize || !looksLikeBinary(data) {
 		return nil, fmt.Errorf("downloaded binary looks invalid (%d bytes)", len(data))
 	}
 	got := fmt.Sprintf("%x", sha256.Sum256(data))
@@ -219,10 +219,10 @@ func cmdVersion(args []string) {
 // stderr, tty only (stdout stays a bare value — scripts and doctor exec it),
 // and never over the network (version's instant/offline contract).
 func warnStaleLauncher() {
-	if !isTTY(os.Stderr) || !semverOK(version) {
+	if !isTTY(os.Stderr) || !isRelease(version) {
 		return // piped, or a dev build — a developer, not the audience
 	}
-	if max := maxCachedRelease(); max != "" && semverLess(version, max) {
+	if max := maxCachedRelease(); max != "" && releaseLess(version, max) {
 		info("a cluster already served v%s — this launcher is v%s; plug update aligns it", shortVersion(max), shortVersion(version))
 	}
 }
@@ -236,7 +236,7 @@ func maxCachedRelease() string {
 	}
 	best := ""
 	for _, e := range entries {
-		if e.IsDir() && semverOK(e.Name()) && (best == "" || semverLess(best, e.Name())) {
+		if e.IsDir() && isRelease(e.Name()) && (best == "" || releaseLess(best, e.Name())) {
 			best = e.Name()
 		}
 	}
@@ -598,6 +598,14 @@ func getDownloadFromAgent(cfg config, osArch, label string) ([]byte, error) {
 	return data, rerr
 }
 
+// maxDownloadSize caps what readWithProgress accumulates in memory. A plug
+// binary is ~9MB and wintun.dll under one; the agent streams with no length
+// up front, so without a cap a misbehaving or hostile peer could have the
+// launcher grow until the machine swapped. Generous, so a build that gets
+// fatter never trips it. Var, not const, so the test does not have to stream
+// that much; never reassigned outside tests.
+var maxDownloadSize int64 = 256 << 20
+
 // readWithProgress reads r to EOF. When animate is set it draws an indeterminate
 // progress bar + byte count on stderr and holds the final line briefly;
 // otherwise it prints one plain line. The total size is unknown (the agent just
@@ -611,6 +619,9 @@ func readWithProgress(r io.Reader, label string, animate bool) ([]byte, error) {
 	var frame int
 	var last time.Time
 	start := time.Now()
+	// One byte past the cap, so that reaching it is told apart from a transfer
+	// that ends exactly there.
+	r = io.LimitReader(r, maxDownloadSize+1)
 	for {
 		n, err := r.Read(chunk)
 		if n > 0 {
@@ -627,6 +638,10 @@ func readWithProgress(r io.Reader, label string, animate bool) ([]byte, error) {
 		if err != nil {
 			return buf.Bytes(), err
 		}
+	}
+	if int64(buf.Len()) > maxDownloadSize {
+		return nil, fmt.Errorf("the %s download exceeded %s and was abandoned: a plug binary is a few MB, so this is not one",
+			label, humanBytes(maxDownloadSize))
 	}
 	if animate {
 		// Keep the bar visible for a minimum duration even when the transfer was
@@ -682,6 +697,14 @@ func humanBytes(n int64) string {
 	}
 }
 
+// minBinarySize is the smallest thing plug accepts as a core or a launcher.
+// A real build is ~9MB; what falls under a megabyte is an error page, a
+// truncated transfer or an empty file, and the magic check alone would pass
+// the first bytes of any of them.
+const minBinarySize = 1 << 20
+
+// looksLikeBinary reports whether data starts like an executable for one of
+// the platforms plug ships on.
 func looksLikeBinary(data []byte) bool {
 	magics := [][]byte{
 		{0x7f, 'E', 'L', 'F'},    // linux

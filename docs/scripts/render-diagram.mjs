@@ -1,7 +1,7 @@
 // Renders the animated About diagram (SMIL SVG) into video-ready frames, by
-// SEEKING the animation frame by frame (svg.setCurrentTime) — deterministic,
+// SEEKING the animation frame by frame (svg.setCurrentTime) - deterministic,
 // not a screen capture. The deploy-doc workflow runs it on every Pages deploy
-// and publishes the results under /plug/media/ (mp4, gif, hero png) — the
+// and publishes the results under /plug/media/ (mp4, gif, hero png) - the
 // media are never committed. To run it locally without installing anything,
 // use the official Playwright image, with ffmpeg in a second throwaway
 // container:
@@ -14,6 +14,11 @@
 //     -movflags +faststart /work/media/about-diagram.mp4
 //
 // (GIF and the hero PNG: see docs/media/README.md.)
+//
+// `document` below lives inside page.evaluate() callbacks, which Playwright
+// runs IN the browser page, not in this Node process: for the linter it is a
+// browser global, declared here rather than in the Node config.
+/* global document */
 import { chromium } from 'playwright';
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';

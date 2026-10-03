@@ -1,20 +1,21 @@
 @use '@angular/material' as mat;
 @use 'styles/prism-catppuccin-mocha';
 
-// Material 3 Theme - violet palette to match Softwarity look
+// Material 3 Theme - violet palette to match Softwarity look.
+// The site is dark and only dark: the palette below is hard-coded, so the
+// scheme is declared once here (form controls, scrollbars and the Material
+// system tokens follow it) instead of a light default flipped by a body class.
 html {
   @include mat.theme((color: mat.$violet-palette));
-  color-scheme: light;
-
-  & body.dark-mode {
-    color-scheme: dark;
-  }
+  color-scheme: dark;
 }
 
 :root {
   --bg-gradient: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
   --bg-primary: #161b22;
   --bg-secondary: #21262d;
+  // The darkest ink, for text drawn ON an accent (a filled button, a legend dot).
+  --text-on-accent: #0d1117;
   --text-primary: #e6edf3;
   --text-secondary: #c9d1d9;
   --text-muted: #8b949e;
@@ -29,6 +30,44 @@ html {
   --accent-red: #f85149;
   --accent-yellow: #d29922;
   --border-color: #30363d;
+
+  // Translucent washes of the accents, on three steps: `faint` for a row hover
+  // (5%), `tint` for a panel or a hover (8%) and `bg` for a filled chip or a
+  // status cell (14%). They used to be seventeen rgba() literals copied by hand
+  // across six files, each spelling the accent's channels again: a token that
+  // moved left every wash behind. Derived from the accent, so they follow it.
+  --accent-blue-faint: color-mix(in srgb, var(--accent-blue) 5%, transparent);
+  --accent-blue-tint: color-mix(in srgb, var(--accent-blue) 8%, transparent);
+  --accent-purple-faint: color-mix(in srgb, var(--accent-purple) 5%, transparent);
+  --accent-purple-tint: color-mix(in srgb, var(--accent-purple) 8%, transparent);
+  --accent-purple-bg: color-mix(in srgb, var(--accent-purple) 14%, transparent);
+  --accent-green-bg: color-mix(in srgb, var(--accent-green) 14%, transparent);
+  --accent-yellow-tint: color-mix(in srgb, var(--accent-yellow) 8%, transparent);
+  --accent-yellow-bg: color-mix(in srgb, var(--accent-yellow) 14%, transparent);
+  --accent-red-tint: color-mix(in srgb, var(--accent-red) 8%, transparent);
+  --accent-red-bg: color-mix(in srgb, var(--accent-red) 14%, transparent);
+  --text-muted-bg: color-mix(in srgb, var(--text-muted) 14%, transparent);
+
+  // One monospace stack for everything that is code: inline code, the Prism
+  // blocks, file names, the coverage grid and the diagram labels. Five
+  // different stacks used to coexist, two of them naming fonts the site never
+  // loads. `ui-monospace` is the platform's own (SF Mono, Cascadia, ...).
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+}
+
+// Animation is a courtesy, not information: every transition on the site is a
+// hover or focus wash. A reader who asked the OS for less motion gets the end
+// state at once.
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 // Material Symbols glyph class (the Google css2 stylesheet ships only the @font-face, not this
@@ -59,7 +98,7 @@ html, body {
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  font-family: var(--font-sans);
   background: var(--bg-gradient);
   background-attachment: fixed;
   color: var(--text-primary);
@@ -78,7 +117,7 @@ a {
 
 // Inline `code` (not inside a <pre>) - keep the original GitHub-dark style
 :not(pre) > code:not([class*='language-']) {
-  font-family: 'Courier New', Consolas, monospace;
+  font-family: var(--font-mono);
   background-color: var(--bg-secondary);
   padding: 2px 6px;
   border-radius: 4px;
@@ -102,6 +141,13 @@ h3 {
   color: var(--text-primary);
 }
 
+h4 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin: 18px 0 8px 0;
+  color: var(--text-primary);
+}
+
 p {
   margin: 0 0 16px 0;
   color: var(--text-secondary);
@@ -118,7 +164,7 @@ ul {
 
 .callout {
   border-left: 4px solid var(--accent-blue);
-  background-color: rgba(88, 166, 255, 0.08);
+  background-color: var(--accent-blue-tint);
   padding: 12px 16px;
   margin: 16px 0;
   border-radius: 0 6px 6px 0;
@@ -126,17 +172,41 @@ ul {
 
   &.warn {
     border-left-color: var(--accent-yellow);
-    background-color: rgba(210, 153, 34, 0.08);
+    background-color: var(--accent-yellow-tint);
   }
 
   &.danger {
     border-left-color: var(--accent-red);
-    background-color: rgba(248, 81, 73, 0.08);
+    background-color: var(--accent-red-tint);
   }
 
   strong {
     color: var(--text-primary);
   }
+}
+
+// A card: a panel on the secondary background. The five components that
+// each redrew it (.dir, .feature-card, .support, .cmp-note, .hole) now add the
+// class and keep only what differs - a grid, a hover, a coloured edge.
+.card {
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 14px 16px;
+  color: var(--text-secondary);
+
+  strong {
+    color: var(--text-primary);
+  }
+}
+
+// A note: a card holding a paragraph of small print.
+.note {
+  @extend .card;
+  padding: 12px 15px;
+  margin: 0 0 24px;
+  font-size: 0.88rem;
+  line-height: 1.5;
 }
 
 table {
@@ -167,6 +237,6 @@ table {
   }
 
   tbody tr:hover {
-    background-color: rgba(88, 166, 255, 0.04);
+    background-color: var(--accent-blue-faint);
   }
 }

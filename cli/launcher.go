@@ -4,9 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"regexp"
 	"runtime"
-	"strconv"
 	"strings"
 	"syscall"
 )
@@ -196,9 +194,9 @@ func finalizeInProcess(cfg config, opts options) config {
 // feature it is and what to do, instead of an opaque exit 127.
 func checkAgentCompat(remote string, opts options) {
 	// -s is a 2.0.0 feature. A released agent from before it (major < 2) dictates
-	// a core that would exec "-s" as the command — an opaque exit 127. Refuse with
-	// the remedy instead. (dev/unversioned agents parse as -1 and are assumed new.)
-	if maj := coreMajor(remote); len(opts.exposes) > 0 && maj >= 0 && maj < 2 {
+	// a core that would exec "-s" as the command: an opaque exit 127. Refuse with
+	// the remedy instead. (dev/unversioned agents do not parse and are assumed new.)
+	if len(opts.exposes) > 0 && versionBefore(remote, 2, 0) {
 		fatal("the cluster agent reports v%s, which predates -s (needs plug ≥ 2.0.0).\n"+
 			"Upgrade the agent (redeploy the softwarity/plug image), then run again.", remote)
 	}
@@ -330,37 +328,6 @@ func execCore(core *os.File, argv, env []string, remote string) {
 	}
 }
 
-// releaseVersionRe matches the versions whose build metadata is redundant: a
-// released x.y(.z). "dev" is not one — without its revision it names every build
-// of every branch, which is the whole reason the suffix exists.
-// A published release, flavour included: 2.12.0 and 2.12.0-hosted are both
-// releases, and the second is not a branch build. Reading it as one turned a
-// digest mismatch on a published image from "corruption or tampering, say so"
-// into a silent re-download, and dropped the flavour from every version this
-// prints.
-//
-// Deliberately NOT the same as exactReleaseRe, which stays flavour-free: that
-// one picks the newest release to retarget a cluster to, and a hosted tag is not
-// a newer version of a standalone one - it is a different product built from the
-// same commit. Letting it win there would point a cluster at an image whose
-// client has no `update`.
-var releaseVersionRe = regexp.MustCompile(`^\d+\.\d+(\.\d+)?(-[a-z][a-z0-9]*)?$`)
-
-// shortVersion renders a version for a HUMAN. A release tag already designates
-// one commit, so "2.4.0+983761c" only makes the version harder to read wherever
-// it shows; a branch build keeps its revision, which is the only thing telling
-// two of them apart. Releases have been stamped bare since 2.4.1, so this is
-// what makes an agent from before that read the same as one from after.
-//
-// Display only. Anywhere a version IDENTIFIES something — the core cache
-// directory, any comparison — the full string is what counts.
-func shortVersion(v string) string {
-	if base, _, ok := strings.Cut(v, "+"); ok && releaseVersionRe.MatchString(base) {
-		return base
-	}
-	return v
-}
-
 // The first version whose CORE reads PLUG_CORE_KEY. Below it the launcher must
 // not hand off, or the profile's key stops at the exec. Bump this at release
 // time if the feature ships under a different number.
@@ -375,49 +342,4 @@ func coreDropsProfileKey(coreVer, profileKey string) bool {
 		return false // nothing to drop
 	}
 	return versionBefore(coreVer, profileKeyCoreMajor, profileKeyCoreMinor)
-}
-
-// versionBefore reports whether a RELEASED agent version predates maj.min.
-// Non-semver versions ("dev+<rev>", "") are assumed current — a dev image is
-// always built from a branch at least as new as this launcher.
-func versionBefore(v string, maj, min int) bool {
-	parts := strings.SplitN(v, ".", 3)
-	if len(parts) < 2 {
-		return false
-	}
-	M, err1 := strconv.Atoi(parts[0])
-	m, err2 := strconv.Atoi(parts[1])
-	if err1 != nil || err2 != nil {
-		return false
-	}
-	return M < maj || (M == maj && m < min)
-}
-
-// coreMajor parses the leading major version from an agent version string, or
-// -1 when it is not a released semver ("dev+<rev>", "", …) — those are assumed
-// to be recent builds that understand -s.
-func coreMajor(v string) int {
-	i := strings.IndexByte(v, '.')
-	if i <= 0 {
-		return -1
-	}
-	n, err := strconv.Atoi(v[:i])
-	if err != nil {
-		return -1
-	}
-	return n
-}
-
-// coreMinor parses the minor version the same way (-1 when unparseable —
-// treated as a recent build, like coreMajor).
-func coreMinor(v string) int {
-	parts := strings.SplitN(v, ".", 3)
-	if len(parts) < 2 {
-		return -1
-	}
-	n, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return -1
-	}
-	return n
 }

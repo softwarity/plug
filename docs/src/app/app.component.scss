@@ -61,6 +61,7 @@
 .logo {
   height: 48px;
   width: auto;
+  aspect-ratio: 563 / 558;
 }
 
 .title-block {
@@ -107,10 +108,10 @@
   border-radius: 6px;
   color: var(--text-secondary);
   font-size: 14px;
-  transition: all 0.2s;
+  transition: background-color 0.2s, border-color 0.2s, color 0.2s;
 
   &:hover {
-    background-color: rgba(88, 166, 255, 0.1);
+    background-color: var(--accent-blue-tint);
     border-color: var(--accent-blue);
     color: var(--text-primary);
     text-decoration: none;
@@ -174,16 +175,16 @@
   color: var(--text-secondary);
   font-size: 14px;
   border: 1px solid transparent;
-  transition: all 0.15s;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
 
   &:hover {
-    background-color: rgba(88, 166, 255, 0.08);
+    background-color: var(--accent-blue-tint);
     color: var(--text-primary);
     text-decoration: none;
   }
 
   &.active {
-    background-color: rgba(163, 113, 247, 0.12);
+    background-color: var(--accent-purple-bg);
     border-color: var(--accent-purple);
     color: var(--text-primary);
   }
@@ -214,9 +215,12 @@
 
 // Focused by script after every navigation, never by Tab, so the ring would
 // appear on each page change around the whole column. Suppressed for THAT case
-// only: :focus-visible still draws it if a keyboard ever lands here, and the
-// announcement a screen reader makes comes from the route title, not the ring.
-.content:focus {
+// only: a bare `:focus` would have removed the ring for a keyboard too, and
+// the comment claimed otherwise. `:not(:focus-visible)` is the actual
+// distinction - the browser draws the ring when focus came from the keyboard,
+// and this rule only reaches the programmatic case. The announcement a screen
+// reader makes comes from the route title, not the ring.
+.content:focus:not(:focus-visible) {
   outline: none;
 }
 
@@ -249,6 +253,7 @@
 .footer-logo {
   height: 20px;
   width: auto;
+  aspect-ratio: 563 / 558;
 }
 
 @media (max-width: 900px) {

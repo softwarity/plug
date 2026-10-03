@@ -5,7 +5,6 @@ package tun
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -32,18 +31,21 @@ func checkPriv() error {
 
 // configure brings the utun up as a point-to-point link, routes the instance's
 // /24 into it, and repoints the SYSTEM resolver at dnsIP through the
-// SystemConfiguration dynamic store — NOT /etc/resolv.conf, which macOS ignores
+// SystemConfiguration dynamic store, NOT /etc/resolv.conf, which macOS ignores
 // (getaddrinfo resolves via mDNSResponder/SystemConfiguration). We override the
 // PRIMARY network service's State:.../DNS ServerAddresses; that resolver is
 // non-scoped, so it answers bare single-label cluster names too. The dynamic
-// store is volatile (a reboot or network change resets it) — the crash-safety we
+// store is volatile (a reboot or network change resets it), the crash-safety we
 // want. cleanup restores the captured dict (or removes ours if there was none).
 //
 // macOS has no mount namespace, so this repoint is global for the session
 // (privResolv is empty; the child runs directly). Machine-wide DNS is what the
-// PID-at-connect multicluster model uses anyway — one resolver hands out fake
-// IPs and the owning cluster is resolved at connect() (see route_darwin's
-// resolvConf note) — proven simultaneously in CI.
+// PID-at-connect multicluster model uses anyway: one resolver hands out fake
+// IPs and the owning cluster is resolved at connect() (see the resolvConf note
+// below), proven simultaneously in CI.
+//
+// The repoint itself, and the watchdog that keeps it in place, live in
+// macDNSOverride; this function only sequences them around the route.
 func configure(_ any, _ int, ifname, cidr, dnsIP string, up *upstreamDNS, log logfn) ([]string, string, func(), error) {
 	for _, cmd := range [][]string{
 		{"ifconfig", ifname, "inet", "10.99.99.1", "10.99.99.2", "up"},
@@ -58,80 +60,186 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 
 	svc, err := primaryService()
 	if err != nil {
-		log.f("tun[mac]: no primary network service (%v) — cluster names may not resolve", err)
+		log.f("tun[mac]: no primary network service (%v) - cluster names may not resolve", err)
 		return nil, "", delRoute, nil
 	}
 
-	dnsKey := "State:/Network/Service/" + svc + "/DNS"
-	restore, upstreams, _ := readDNSDict(dnsKey)
-	// A dict already pointing at plug is a previous session's leftover, not the
-	// state to return to. Restoring it on exit would hand the breakage on; an
-	// EMPTY restore removes the key instead, and configd recomposes the service's
-	// DNS from its own sources (DHCP, the VPN) - the state the machine would be in
-	// had plug never run. See poisonedByPlug.
-	if poisonedByPlug(upstreams) {
-		log.f("tun[mac]: the primary service's DNS already pointed at a plug resolver (a previous " +
-			"session's leftover) - it will be dropped rather than restored at teardown")
-		restore, upstreams = "", nil
+	o := newMacDNSOverride(svc, dnsIP, up, log)
+	upstreams := o.apply()
+	// Make mDNSResponder pick up the new resolvers and drop any stale (negative) cache.
+	flushDNS()
+
+	stopWatch := make(chan struct{})
+	watchDone := make(chan struct{})
+	go func() {
+		defer close(watchDone)
+		o.watch(stopWatch)
+	}()
+
+	cleanup := func() {
+		close(stopWatch)
+		<-watchDone // never re-assert after the restore below
+		o.restore()
+		flushDNS()
+		delRoute()
 	}
+	return upstreams, "", cleanup, nil
+}
+
+// flushDNS makes mDNSResponder re-read the resolver configuration and drop its
+// cache, stale negatives included.
+func flushDNS() {
+	_ = run("dscacheutil", "-flushcache")
+	_ = run("killall", "-HUP", "mDNSResponder")
+}
+
+// macDNSOverride is plug's hold on the machine's resolver: the three
+// dynamic-store keys it writes for the primary service (the service's State:
+// and Setup: dicts and the global one), the two files (/etc/resolver/plug and
+// /etc/resolv.conf), and what each held before so the teardown can put it back.
+// An empty restore script means the key was absent, and absent is what it goes
+// back to: configd then recomposes the service's DNS from its own sources, the
+// state the machine would be in had plug never run.
+//
+// Which service is primary is not settled once and for all (see moveTo), so the
+// service-bound keys and their restores are fields rather than constants: the
+// watchdog re-targets them when the primary changes, and restore() follows
+// whatever they name by then.
+type macDNSOverride struct {
+	dnsIP string
+	up    *upstreamDNS
+	log   logfn
+
+	svc           string
+	dnsKey        string // State:/Network/Service/<svc>/DNS: configd's composition input
+	setupKey      string // Setup:/Network/Service/<svc>/DNS: the manual entry, PERSISTENT
+	stateRestore  string // rebuilds the State: dict at teardown, "" to remove it
+	setupRestore  string // same for Setup:
+	globalRestore string // same for State:/Network/Global/DNS, never re-targeted
+	resolvSnap    string // snapshotResolv() token for /etc/resolv.conf
+}
+
+// globalDNSKey is what the composite default resolver is built from, and what
+// configd renders /etc/resolv.conf from. Not service-bound: it stays through a
+// primary change.
+const globalDNSKey = "State:/Network/Global/DNS"
+
+func newMacDNSOverride(svc, dnsIP string, up *upstreamDNS, log logfn) *macDNSOverride {
+	o := &macDNSOverride{dnsIP: dnsIP, up: up, log: log}
+	o.target(svc)
+	return o
+}
+
+// target binds the service-bound keys to svc.
+func (o *macDNSOverride) target(svc string) {
+	o.svc = svc
+	o.dnsKey = "State:/Network/Service/" + svc + "/DNS"
+	o.setupKey = "Setup:/Network/Service/" + svc + "/DNS"
+}
+
+// dict is the scutil script that makes a DNS dict plug's own: our resolver, and
+// a ".plug" search domain.
+//
+// OURS ALONE. Not the network's search domains with ours appended, and a day
+// was lost to the difference. Search domains only ever matter for a BARE
+// name, and during a session a bare name is a cluster service: the network's
+// `lan` or `corp.example` has no business being tried against it. It is not
+// harmless either. mDNSResponder does not always keep the whole list - on a
+// machine whose override lands interface-scoped it configured "count: 1",
+// the first entry only - so with the network's domain ahead of ours, ours was
+// the one dropped, `odb` was never tried as `odb.plug`, and every process
+// joining a cluster service by name died on a connect timeout. It had worked
+// for weeks on that machine because the box announced no domain then and
+// ours was alone: this makes "alone" the rule instead of the luck. Putting
+// ours FIRST was tried and rejected: it changed how dotted public names were
+// walked and broke them. The network's list is captured for the teardown and
+// handed back untouched.
+//
+// The SearchDomains matter for BARE single-label names: macOS does not send an
+// unqualified name to a resolver that has no search domain (it treats it as
+// mDNS/.local), so on a network without one, a headless CI runner say,
+// "my-service" never reaches us. With "plug" appended, getaddrinfo also tries
+// "my-service.plug", which lands here and answerDNS strips back to the bare
+// name. Same mechanism as the Windows NRPT suffix.
+func (o *macDNSOverride) dict() string {
+	return "d.init\nd.add ServerAddresses * " + o.dnsIP + "\nd.add SearchDomains * " + searchSuffix + "\n"
+}
+
+// holdsOurs reports whether the dict at key is exactly plug's: our resolver
+// and nothing else. Anything else means configd re-derived it under us.
+func (o *macDNSOverride) holdsOurs(key string) (servers []string, ok bool) {
+	_, cur, _ := readDNSDict(key)
+	return cur, len(cur) == 1 && cur[0] == o.dnsIP
+}
+
+// capture reads the dict at key for the teardown and returns its servers. A
+// dict already pointing at plug is a previous session's leftover, not the state
+// to return to. Restoring it on exit would hand the breakage on; an EMPTY
+// restore removes the key instead. See poisonedByPlug. what names the key in
+// the log line, "" to say nothing.
+func (o *macDNSOverride) capture(key, what string) (restore string, servers []string) {
+	restore, servers, _ = readDNSDict(key)
+	if poisonedByPlug(servers) {
+		if what != "" {
+			o.log.f("tun[mac]: %s already pointed at a plug resolver (a previous "+
+				"session's leftover) - it will be dropped rather than restored at teardown", what)
+		}
+		return "", nil
+	}
+	return restore, servers
+}
+
+// follow forwards dotted names to real when the machine's resolvers moved.
+// cur is what the system just published on one of our keys, which is the only
+// moment the machine's real resolvers are visible on a platform where we
+// overwrite them, and we are about to overwrite them again.
+func (o *macDNSOverride) follow(cur []string, why string) {
+	if real := systemServers(cur, o.dnsIP); len(real) > 0 && !o.up.same(real) {
+		o.up.set(real)
+		o.log.f("tun[mac]: %s - forwarding dotted names to %v", why, real)
+	}
+}
+
+// apply takes the resolver over: captures what the primary service, its manual
+// entry and the global key hold, writes plug's dict on all three, registers the
+// ".plug" scoped resolver file and repoints /etc/resolv.conf. Returns the
+// upstreams for dotted names: the service's own servers, or its manual ones.
+// The caller flushes the cache afterwards; this never does, so a test can run
+// it against a fake store without restarting the machine's resolver.
+func (o *macDNSOverride) apply() (upstreams []string) {
+	o.stateRestore, upstreams = o.capture(o.dnsKey, "the primary service's DNS")
 	// The VPN's own resolvers, for the VPN's own names. Read alongside the
 	// primary rather than instead of it: the primary still answers for the rest
 	// of the world, and the two must not be confused for each other.
-	if scopes := scopedResolvers(dnsIP); len(scopes) > 0 {
-		up.setScoped(scopes)
+	if scopes := scopedResolvers(o.dnsIP); len(scopes) > 0 {
+		o.up.setScoped(scopes)
 		for _, sc := range scopes {
-			log.f("tun[mac]: *.%s resolves through %v (a domain-scoped resolver, kept as the system had it)", sc.domain, sc.addrs)
+			o.log.f("tun[mac]: *.%s resolves through %v (a domain-scoped resolver, kept as the system had it)", sc.domain, sc.addrs)
 		}
 	}
 
-	// Become the primary resolver AND advertise a ".plug" search domain (keeping the
-	// user's existing ones). Override ServerAddresses with dnsIP — dotted names still
-	// work, answerDNS forwards them to the captured upstream. The SearchDomains matter
-	// for BARE single-label names: macOS does not send an unqualified name to a
-	// resolver that has no search domain (it treats it as mDNS/.local), so on a network
-	// without one — e.g. a headless CI runner — "my-service" never reaches us. With
-	// "plug" appended, getaddrinfo also tries "my-service.plug", which lands here and
-	// answerDNS strips back to the bare name. Same mechanism as the Windows NRPT suffix.
-	//
-	// OURS ALONE. Not the network's search domains with ours appended, and a day
-	// was lost to the difference. Search domains only ever matter for a BARE
-	// name, and during a session a bare name is a cluster service: the network's
-	// `lan` or `corp.example` has no business being tried against it. It is not
-	// harmless either. mDNSResponder does not always keep the whole list - on a
-	// machine whose override lands interface-scoped it configured "count: 1",
-	// the first entry only - so with the network's domain ahead of ours, ours was
-	// the one dropped, `odb` was never tried as `odb.plug`, and every process
-	// joining a cluster service by name died on a connect timeout. It had worked
-	// for weeks on that machine because the box announced no domain then and
-	// ours was alone: this makes "alone" the rule instead of the luck. Putting
-	// ours FIRST was tried and rejected: it changed how dotted public names were
-	// walked and broke them. The network's list is captured for the teardown and
-	// handed back untouched.
-	searchList := []string{searchSuffix}
-	set := "d.init\nd.add ServerAddresses * " + dnsIP + "\nd.add SearchDomains * " + strings.Join(searchList, " ") + "\n"
-	if err := scutilSet(dnsKey, set); err != nil {
-		log.f("tun[mac]: could not repoint system DNS (%v) — cluster names may not resolve", err)
+	// Become the primary resolver AND advertise a ".plug" search domain (see
+	// dict). Override ServerAddresses with dnsIP: dotted names still work,
+	// answerDNS forwards them to the captured upstream.
+	if err := scutilSet(o.dnsKey, o.dict()); err != nil {
+		o.log.f("tun[mac]: could not repoint system DNS (%v) - cluster names may not resolve", err)
 	}
 
 	// MANUALLY configured DNS servers live in Setup:/Network/Service/<svc>/DNS, and
-	// the composite resolver prefers Setup: over State: — so with manual DNS (a very
+	// the composite resolver prefers Setup: over State:. So with manual DNS (a very
 	// common dev setup) our State: override loses its ServerAddresses and libresolv
-	// clients keep querying the user's servers → NXDOMAIN on cluster names. Go's
+	// clients keep querying the user's servers: NXDOMAIN on cluster names. Go's
 	// darwin resolver IS libresolv (it ignores both /etc/resolver and resolv.conf),
 	// which is why only go clients failed while getaddrinfo languages resolved via
-	// /etc/resolver/plug. Repoint Setup: too when it defines servers (restored on
-	// teardown; crash net in SaveDNSBackup/RestoreOrphanDNS).
-	setupKey := "Setup:/Network/Service/" + svc + "/DNS"
-	setupRestore, setupServers, _ := readDNSDict(setupKey)
+	// /etc/resolver/plug. Repoint Setup: too (restored on teardown; crash net in
+	// SaveDNSBackup/RestoreOrphanDNS).
+	//
 	// A Setup: entry already pointing at plug is a previous session's leftover,
 	// and Setup: is PERSISTENT: putting it back at teardown would pin the
 	// person's manual DNS to a dead resolver across reboots. Same rule as the
 	// State: dict above; an empty restore removes the entry instead.
-	if poisonedByPlug(setupServers) {
-		log.f("tun[mac]: the service's manual (Setup:) DNS already pointed at a plug resolver (a previous " +
-			"session's leftover) - it will be dropped rather than restored at teardown")
-		setupRestore, setupServers = "", nil
-	}
+	var setupServers []string
+	o.setupRestore, setupServers = o.capture(o.setupKey, "the service's manual (Setup:) DNS")
 	// ALWAYS written, not only when the person had typed servers in by hand -
 	// and a day was lost to that condition. With no Setup: entry, configd
 	// composes the service's resolver from State: alone, and on a machine in
@@ -148,11 +256,8 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 	// nearly all of them - the resolver the hand-configured ones had by luck.
 	// Restored on teardown like the rest: an entry we created is removed, one
 	// we replaced is put back.
-	setupOverridden := true
-	list := []string{searchSuffix}
-	setupSet := "d.init\nd.add ServerAddresses * " + dnsIP + "\nd.add SearchDomains * " + strings.Join(list, " ") + "\n"
-	if err := scutilSet(setupKey, setupSet); err != nil {
-		log.f("tun[mac]: could not repoint the service's Setup: DNS (%v) — getaddrinfo may not reach plug", err)
+	if err := scutilSet(o.setupKey, o.dict()); err != nil {
+		o.log.f("tun[mac]: could not repoint the service's Setup: DNS (%v) - getaddrinfo may not reach plug", err)
 	}
 	if len(upstreams) == 0 && len(setupServers) > 0 {
 		upstreams = setupServers // the manual servers are the real upstream for dotted names
@@ -161,253 +266,208 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 	// Write the GLOBAL DNS key too. On some setups (headless runners at least) the
 	// per-service override lands interface-SCOPED, leaving no usable DEFAULT
 	// resolver: getaddrinfo then burns a fixed ~5s per single-label lookup (mDNS
-	// detour) before falling through to the .plug scoped resolver — measured
+	// detour) before falling through to the .plug scoped resolver, measured
 	// 5.03s/5.02s on the runners, which is exactly what killed every client with a
 	// 5s timeout. Global/DNS is what the composite default resolver is built from;
 	// writing it makes plug's DNS answer FIRST (~ms). Volatile like the rest of
 	// State:, watched by the watchdog, restored on teardown, crash-netted below.
-	globalDNSKey := "State:/Network/Global/DNS"
-	globalRestore, globalServers, _ := readDNSDict(globalDNSKey)
-	// Same trap, and this is the key that actually bit: Global/DNS is what
-	// configd renders /etc/resolv.conf from, so a leftover here breaks dig, curl,
-	// Node, Go and every static-resolver client machine-wide while getaddrinfo
-	// keeps working - the "internet half works" that took a day to see.
-	if poisonedByPlug(globalServers) {
-		log.f("tun[mac]: the global DNS already pointed at a plug resolver (a previous session's " +
-			"leftover) - it will be dropped rather than restored at teardown")
-		globalRestore = ""
-	}
-	if err := scutilSet(globalDNSKey, set); err != nil {
-		log.f("tun[mac]: could not set the global DNS (%v) — single-label lookups may be slow", err)
+	//
+	// Same leftover trap, and this is the key that actually bit: Global/DNS is
+	// what configd renders /etc/resolv.conf from, so a leftover here breaks dig,
+	// curl, Node, Go and every static-resolver client machine-wide while
+	// getaddrinfo keeps working - the "internet half works" that took a day to see.
+	o.globalRestore, _ = o.capture(globalDNSKey, "the global DNS")
+	if err := scutilSet(globalDNSKey, o.dict()); err != nil {
+		o.log.f("tun[mac]: could not set the global DNS (%v) - single-label lookups may be slow", err)
 	}
 
 	// Also register a DOMAIN-scoped resolver for ".plug" via /etc/resolver. When the
 	// primary-service override lands INTERFACE-scoped (a headless runner, some VPN
-	// setups), macOS won't send a general getaddrinfo query to it — but it DOES use a
+	// setups), macOS won't send a general getaddrinfo query to it, but it DOES use a
 	// domain-scoped resolver for a matching name. Paired with the "plug" search domain
 	// above, getaddrinfo tries "<name>.plug", which this routes to us; answerDNS strips
 	// it. Mirrors the Windows NRPT rule.
-	_ = os.MkdirAll(filepath.Dir(resolverPath), 0o755)
-	_ = os.WriteFile(resolverPath, []byte("nameserver "+dnsIP+"\n"), 0o644)
+	o.writeResolverFile()
 
 	// Also point /etc/resolv.conf at us. getaddrinfo (node/python/java) already
-	// resolves via the scoped resolver above, but a program with its OWN resolver —
-	// Go's pure-Go resolver, used by CGO_ENABLED=0 static binaries — reads only this
+	// resolves via the scoped resolver above, but a program with its OWN resolver,
+	// Go's pure-Go resolver, used by CGO_ENABLED=0 static binaries, reads only this
 	// file, and would otherwise NXDOMAIN on cluster names against the original
 	// upstream. The crash net is in SaveDNSBackup / RestoreOrphanDNS.
-	resolvSnap := snapshotResolv()
-	writeResolv(dnsIP)
+	o.resolvSnap = snapshotResolv()
+	writeResolv(o.dnsIP)
 
 	// Known limit, accepted: without a usable DEFAULT resolver (headless runners
 	// at least), mDNSResponder tries a bare "my-service" over mDNS (.local) FIRST
 	// and only falls to the ".plug" search domain after a fixed ~5s (measured
-	// 5.02s±0.01 while plug's own DNS answered in 25ms). Fighting that inside
+	// 5.02s +/- 0.01 while plug's own DNS answered in 25ms). Fighting that inside
 	// mDNSResponder failed three ways (Global/DNS write, resolv.conf, and the
-	// AlwaysAppendSearchDomains pref — measured inoperative), so Go children are
+	// AlwaysAppendSearchDomains pref, measured inoperative), so Go children are
 	// instead routed to the pure-Go resolver via GODEBUG (see goResolverEnv);
 	// getaddrinfo clients absorb the one-time stall with their own retries.
-
-	// Make mDNSResponder pick up the new resolvers and drop any stale (negative) cache.
-	flushDNS := func() {
-		_ = run("dscacheutil", "-flushcache")
-		_ = run("killall", "-HUP", "mDNSResponder")
-	}
-	flushDNS()
-
-	// Watchdog: the State: DNS dict is VOLATILE — configd re-derives it on network
-	// events (a DHCP lease renewal, a reachability change), silently replacing our
-	// override while the daemon lives. One overwrite would leave every subsequent
-	// session without cluster DNS until `plug down`. So re-assert the override
-	// whenever it goes missing — the DNS sibling of the transport's self-heal.
-	//
-	// Re-assert QUIETLY when possible. Flushing the cache + HUPping mDNSResponder
-	// on every re-assert turned a chatty configd (a locationd Wi-Fi-scan loop
-	// re-publishing the DHCP lease ~2/min, observed live) into a resolver that
-	// restarts all day — which intermittently failed UNRELATED lookups
-	// machine-wide. The Service key is only an INPUT to the composite config: as
-	// long as Global (and Setup, when overridden) still point at us, what
-	// resolution consumes never changed, so rewrite the input without touching the
-	// resolver. A flush is due only when the EFFECTIVE config diverged — and even
-	// then coalesced through flushGate.
-	stopWatch := make(chan struct{})
-	watchDone := make(chan struct{})
-	go func() {
-		defer close(watchDone)
-		t := time.NewTicker(3 * time.Second)
-		defer t.Stop()
-		gate := flushGate{window: 30 * time.Second}
-		quiet := newLogLimiter(5 * time.Minute)
-		for {
-			select {
-			case <-stopWatch:
-				return
-			case <-t.C:
-				// WHICH service is primary is not settled once and for all. A
-				// laptop that wakes, joins another network or drops a corporate
-				// VPN gets a NEW primary service, and the old one's DNS dict —
-				// which is where we faithfully keep writing — stops being what
-				// resolution consumes. Everything then looks healthy from here:
-				// the key we watch still holds our IP, so the checks below pass
-				// and nothing is logged, while single-label names quietly go to
-				// the DHCP resolver and come back NXDOMAIN, machine-wide, until
-				// the daemon is restarted. Re-resolve it every tick, and move.
-				if cur, cerr := primaryService(); cerr == nil && cur != svc {
-					log.f("tun[mac]: the primary network service changed (%s → %s) — moving the DNS override; "+
-						"cluster names resolved through the old one until now", svc, cur)
-					if restore != "" {
-						_ = scutilSet(dnsKey, restore) // hand the old service back
-					}
-					if setupRestore != "" {
-						_ = scutilSet(setupKey, setupRestore)
-					} else {
-						_ = scutilRemove(setupKey)
-					}
-					svc = cur
-					dnsKey = "State:/Network/Service/" + svc + "/DNS"
-					setupKey = "Setup:/Network/Service/" + svc + "/DNS"
-					var newSetupServers []string
-					var newServers []string
-					restore, newServers, _ = readDNSDict(dnsKey)
-					// Same rule as at startup: the new primary's dict may be a
-					// leftover of ours too, and must not become the restore.
-					if poisonedByPlug(newServers) {
-						restore, newServers = "", nil
-					}
-					// The new primary's OWN servers, read before we overwrite
-					// them — this is the VPN's resolver when a VPN just came up,
-					// and the only moment it is visible: a second later this key
-					// holds our address. Forwarding kept going to the servers
-					// captured at startup, so internal names died the moment the
-					// VPN that serves them appeared or went away.
-					if real := systemServers(newServers, dnsIP); len(real) > 0 && !up.same(real) {
-						up.set(real)
-						log.f("tun[mac]: forwarding dotted names to %v (the new primary's resolver)", real)
-					}
-					setupRestore, newSetupServers, _ = readDNSDict(setupKey)
-					if poisonedByPlug(newSetupServers) {
-						setupRestore = "" // a leftover of ours on the new primary too: drop, do not restore
-					}
-					setupOverridden = true // same rule as at startup: Setup: is always ours during a session
-					set = "d.init\nd.add ServerAddresses * " + dnsIP + "\nd.add SearchDomains * " +
-						searchSuffix + "\n"
-					setupSet = set
-					// The teardown below follows: it restores whatever dnsKey now
-					// names. The on-disk crash net still snapshots the service
-					// that was primary at startup, so a HARD crash after a move
-					// leaves the new service pointed at us — `plug doctor` calls
-					// that out (a plug resolver with no session) and `plug down`
-					// clears it.
-					gate.request()
-				}
-				input := false     // Service key — configd's composition input only
-				effective := false // what resolution consumes: Global, Setup, the files
-				if _, cur, _ := readDNSDict(dnsKey); len(cur) != 1 || cur[0] != dnsIP {
-					// cur is what the system just published HERE — the only moment
-					// the machine's real resolvers are visible on a platform where
-					// we overwrite them, and we are about to overwrite them again.
-					//
-					// The block above catches a VPN, which brings its own service.
-					// This one catches what it cannot: the primary service is
-					// STABLE across a Wi-Fi change (one service per hardware port,
-					// whatever the SSID), so joining another network moves the
-					// resolvers without moving the service. Everything looked
-					// healthy — the key we watch holds our IP, nothing is logged —
-					// while dotted names kept being forwarded to the resolver of a
-					// network this machine had left. configd republishes the DHCP
-					// lease on this key ~2/min, so the new one lands within a tick.
-					if real := systemServers(cur, dnsIP); len(real) > 0 && !up.same(real) {
-						up.set(real)
-						log.f("tun[mac]: the system nameservers changed — forwarding dotted names to %v", real)
-					}
-					_ = scutilSet(dnsKey, set)
-					input = true
-				}
-				// A VPN that comes up or goes away mid-session moves its scoped
-				// resolver with it, and neither block above sees that: the primary
-				// service does not change and its dict does not either. Re-read the
-				// scopes every tick; setScoped is cheap and the table is small.
-				up.setScoped(scopedResolvers(dnsIP))
-				if _, cur, _ := readDNSDict(globalDNSKey); len(cur) != 1 || cur[0] != dnsIP {
-					_ = scutilSet(globalDNSKey, set)
-					effective = true
-				}
-				if setupOverridden {
-					if _, cur, _ := readDNSDict(setupKey); len(cur) != 1 || cur[0] != dnsIP {
-						// Manually configured DNS wins over the DHCP/VPN ones, so
-						// when the user retypes them mid-session those are the real
-						// upstreams. (Only while we are already overriding this key:
-						// a user who had none at startup and adds some later is not
-						// followed — the key is never read in that case.)
-						if real := systemServers(cur, dnsIP); len(real) > 0 && !up.same(real) {
-							up.set(real)
-							log.f("tun[mac]: the manually configured nameservers changed — forwarding dotted names to %v", real)
-						}
-						_ = scutilSet(setupKey, setupSet)
-						effective = true
-					}
-				}
-				if b, err := os.ReadFile(resolverPath); err != nil || string(b) != "nameserver "+dnsIP+"\n" {
-					_ = os.WriteFile(resolverPath, []byte("nameserver "+dnsIP+"\n"), 0o644)
-					effective = true
-				}
-				if b, err := os.ReadFile(resolvConf); err != nil || !strings.Contains(string(b), dnsIP) {
-					writeResolv(dnsIP)
-					effective = true
-				}
-				if effective {
-					gate.request()
-				}
-				if gate.due(time.Now()) {
-					flushDNS()
-					log.f("tun[mac]: effective DNS config was replaced — re-asserted (cache flushed)")
-				} else if (input || effective) && quiet.allow("reassert") {
-					log.f("tun[mac]: system DNS override was replaced (configd event?) — re-asserted quietly (repeats hidden 5m)")
-				}
-			}
-		}
-	}()
-
-	cleanup := func() {
-		close(stopWatch)
-		<-watchDone // never re-assert after the restore below
-		restoreResolv(resolvSnap)
-		_ = os.Remove(resolverPath)
-		if restore != "" {
-			_ = scutilSet(dnsKey, restore) // put the original DNS dict back
-		} else {
-			_ = scutilRemove(dnsKey) // there was none — drop ours
-		}
-		if globalRestore != "" {
-			_ = scutilSet(globalDNSKey, globalRestore)
-		} else {
-			_ = scutilRemove(globalDNSKey) // configd will recompose it from the services
-		}
-		if setupRestore != "" {
-			_ = scutilSet(setupKey, setupRestore) // put the manual DNS back
-		} else {
-			_ = scutilRemove(setupKey) // there was none: leave none, or DHCP would stay overridden by an empty entry
-		}
-		flushDNS()
-		delRoute()
-	}
-	return upstreams, "", cleanup, nil
+	return upstreams
 }
 
-// primaryService returns the id of the primary network service — the one whose
-// DNS resolves bare names — from the dynamic store.
-func primaryService() (string, error) {
-	out, err := scutil("show State:/Network/Global/IPv4\nquit\n")
-	if err != nil {
-		return "", err
+// resolverFileBody is what /etc/resolver/plug must hold.
+func (o *macDNSOverride) resolverFileBody() string { return "nameserver " + o.dnsIP + "\n" }
+
+func (o *macDNSOverride) writeResolverFile() {
+	_ = os.MkdirAll(filepath.Dir(resolverPath), 0o755)
+	_ = os.WriteFile(resolverPath, []byte(o.resolverFileBody()), 0o644)
+}
+
+// moveTo hands the old primary service its DNS back and takes the new one over.
+//
+// WHICH service is primary is not settled once and for all. A laptop that
+// wakes, joins another network or drops a corporate VPN gets a NEW primary
+// service, and the old one's DNS dict, which is where we faithfully kept
+// writing, stops being what resolution consumes. Everything then looks healthy
+// from here: the key we watch still holds our IP, so reassert passes and
+// nothing is logged, while single-label names quietly go to the DHCP resolver
+// and come back NXDOMAIN, machine-wide, until the daemon is restarted.
+//
+// The Global key is not touched: it is not service-bound, and its restore
+// stays what was captured at startup. The on-disk crash net still snapshots
+// the service that was primary at startup, so a HARD crash after a move leaves
+// the new service pointed at us: `plug doctor` calls that out (a plug resolver
+// with no session) and `plug down` clears it.
+func (o *macDNSOverride) moveTo(svc string) {
+	o.log.f("tun[mac]: the primary network service changed (%s -> %s) - moving the DNS override; "+
+		"cluster names resolved through the old one until now", o.svc, svc)
+	if o.stateRestore != "" {
+		_ = scutilSet(o.dnsKey, o.stateRestore) // hand the old service back
 	}
-	for _, line := range strings.Split(out, "\n") {
-		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "PrimaryService :"); ok {
-			if s := strings.TrimSpace(v); s != "" {
-				return s, nil
+	if o.setupRestore != "" {
+		_ = scutilSet(o.setupKey, o.setupRestore)
+	} else {
+		_ = scutilRemove(o.setupKey)
+	}
+	o.target(svc)
+	// Same rule as at startup: the new primary's dict may be a leftover of ours
+	// too, and must not become the restore. Quietly: the move itself was said.
+	var servers []string
+	o.stateRestore, servers = o.capture(o.dnsKey, "")
+	// The new primary's OWN servers, read before we overwrite them: this is the
+	// VPN's resolver when a VPN just came up, and the only moment it is visible;
+	// a second later this key holds our address. Forwarding kept going to the
+	// servers captured at startup, so internal names died the moment the VPN
+	// that serves them appeared or went away.
+	o.follow(servers, "the new primary's resolver")
+	o.setupRestore, _ = o.capture(o.setupKey, "")
+	// The keys themselves are written by the reassert that follows, which finds
+	// neither holding our dict.
+}
+
+// reassert puts plug's dict back on every key or file that lost it. input says
+// the Service key was rewritten: configd's composition INPUT only, which does
+// not by itself change what resolution consumes. effective says something
+// resolution reads (Global, Setup, the files) was replaced, and the cache is
+// due a flush.
+//
+// Re-assert QUIETLY when possible. Flushing the cache + HUPping mDNSResponder
+// on every re-assert turned a chatty configd (a locationd Wi-Fi-scan loop
+// re-publishing the DHCP lease ~2/min, observed live) into a resolver that
+// restarts all day, which intermittently failed UNRELATED lookups
+// machine-wide. As long as Global (and Setup) still point at us, what
+// resolution consumes never changed, so rewrite the input without touching the
+// resolver.
+func (o *macDNSOverride) reassert() (input, effective bool) {
+	if cur, ok := o.holdsOurs(o.dnsKey); !ok {
+		// moveTo catches a VPN, which brings its own service. This catches what
+		// it cannot: the primary service is STABLE across a Wi-Fi change (one
+		// service per hardware port, whatever the SSID), so joining another
+		// network moves the resolvers without moving the service. Everything
+		// looked healthy (the key we watch holds our IP, nothing is logged)
+		// while dotted names kept being forwarded to the resolver of a network
+		// this machine had left. configd republishes the DHCP lease on this key
+		// ~2/min, so the new one lands within a tick.
+		o.follow(cur, "the system nameservers changed")
+		_ = scutilSet(o.dnsKey, o.dict())
+		input = true
+	}
+	// A VPN that comes up or goes away mid-session moves its scoped resolver
+	// with it, and neither moveTo nor the block above sees that: the primary
+	// service does not change and its dict does not either. Re-read the scopes
+	// every tick; setScoped is cheap and the table is small.
+	o.up.setScoped(scopedResolvers(o.dnsIP))
+	if _, ok := o.holdsOurs(globalDNSKey); !ok {
+		_ = scutilSet(globalDNSKey, o.dict())
+		effective = true
+	}
+	if cur, ok := o.holdsOurs(o.setupKey); !ok {
+		// Manually configured DNS wins over the DHCP/VPN ones, so when the user
+		// retypes them mid-session those are the real upstreams.
+		o.follow(cur, "the manually configured nameservers changed")
+		_ = scutilSet(o.setupKey, o.dict())
+		effective = true
+	}
+	if b, err := os.ReadFile(resolverPath); err != nil || string(b) != o.resolverFileBody() {
+		o.writeResolverFile()
+		effective = true
+	}
+	if b, err := os.ReadFile(resolvConf); err != nil || !strings.Contains(string(b), o.dnsIP) {
+		writeResolv(o.dnsIP)
+		effective = true
+	}
+	return input, effective
+}
+
+// watch is the watchdog: the State: DNS dict is VOLATILE, configd re-derives it
+// on network events (a DHCP lease renewal, a reachability change), silently
+// replacing our override while the daemon lives. One overwrite would leave
+// every subsequent session without cluster DNS until `plug down`. So re-assert
+// the override whenever it goes missing, the DNS sibling of the transport's
+// self-heal. A flush is due only when the EFFECTIVE config diverged, and even
+// then coalesced through flushGate. Returns when stop closes.
+func (o *macDNSOverride) watch(stop <-chan struct{}) {
+	t := time.NewTicker(3 * time.Second)
+	defer t.Stop()
+	gate := flushGate{window: 30 * time.Second}
+	quiet := newLogLimiter(5 * time.Minute)
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			// Re-resolve the primary every tick, and move (see moveTo).
+			if cur, cerr := primaryService(); cerr == nil && cur != o.svc {
+				o.moveTo(cur)
+				gate.request()
+			}
+			input, effective := o.reassert()
+			if effective {
+				gate.request()
+			}
+			if gate.due(time.Now()) {
+				flushDNS()
+				o.log.f("tun[mac]: effective DNS config was replaced - re-asserted (cache flushed)")
+			} else if (input || effective) && quiet.allow("reassert") {
+				o.log.f("tun[mac]: system DNS override was replaced (configd event?) - re-asserted quietly (repeats hidden 5m)")
 			}
 		}
 	}
-	return "", fmt.Errorf("no PrimaryService in State:/Network/Global/IPv4")
+}
+
+// restore puts everything back: the files, then the three keys, each to what
+// it held (or to nothing). The caller flushes the cache afterwards.
+func (o *macDNSOverride) restore() {
+	restoreResolv(o.resolvSnap)
+	_ = os.Remove(resolverPath)
+	if o.stateRestore != "" {
+		_ = scutilSet(o.dnsKey, o.stateRestore) // put the original DNS dict back
+	} else {
+		_ = scutilRemove(o.dnsKey) // there was none: drop ours
+	}
+	if o.globalRestore != "" {
+		_ = scutilSet(globalDNSKey, o.globalRestore)
+	} else {
+		_ = scutilRemove(globalDNSKey) // configd will recompose it from the services
+	}
+	if o.setupRestore != "" {
+		_ = scutilSet(o.setupKey, o.setupRestore) // put the manual DNS back
+	} else {
+		_ = scutilRemove(o.setupKey) // there was none: leave none, or DHCP would stay overridden by an empty entry
+	}
 }
 
 // poisonedByPlug reports whether a captured DNS dict already points at a plug
@@ -436,59 +496,6 @@ func poisonedByPlug(servers []string) bool {
 	return false
 }
 
-// readDNSDict reads the DNS dict at key and returns (a) a scutil script that
-// rebuilds it verbatim (d.init + d.add lines) for restore, and (b) its
-// ServerAddresses — plug's upstream for dotted names. Both are empty if the key
-// is absent. It parses scutil's show output: scalars ("Key : value") and arrays
-// ("Key : <array> { N : value ... }").
-func readDNSDict(key string) (restore string, servers, search []string) {
-	out, err := scutil("show " + key + "\nquit\n")
-	if err != nil || strings.Contains(out, "No such key") {
-		return "", nil, nil
-	}
-	var b strings.Builder
-	b.WriteString("d.init\n")
-	var curKey string
-	var arr []string
-	inArray := false
-	flushArray := func() {
-		if curKey == "" {
-			return
-		}
-		b.WriteString("d.add " + curKey + " * " + strings.Join(arr, " ") + "\n")
-		if curKey == "ServerAddresses" {
-			servers = append(servers, arr...)
-		}
-		if curKey == "SearchDomains" {
-			search = append(search, arr...)
-		}
-		curKey, arr, inArray = "", nil, false
-	}
-	for _, raw := range strings.Split(out, "\n") {
-		line := strings.TrimSpace(raw)
-		switch {
-		case line == "" || strings.HasPrefix(line, "<dictionary>"):
-			continue
-		case strings.Contains(line, ": <array> {"):
-			curKey = strings.TrimSpace(strings.SplitN(line, ":", 2)[0])
-			arr, inArray = nil, true
-		case line == "}":
-			if inArray {
-				flushArray()
-			}
-		case inArray:
-			if p := strings.SplitN(line, ":", 2); len(p) == 2 {
-				arr = append(arr, strings.TrimSpace(p[1]))
-			}
-		default: // scalar "Key : value"
-			if p := strings.SplitN(line, ":", 2); len(p) == 2 {
-				b.WriteString("d.add " + strings.TrimSpace(p[0]) + " " + strings.TrimSpace(p[1]) + "\n")
-			}
-		}
-	}
-	return b.String(), servers, search
-}
-
 // scopedResolvers reads every network service that carries a DOMAIN-SCOPED
 // resolver: a VPN's, typically. macOS keeps them out of the primary service on
 // purpose, so the machine resolves the VPN's names through the VPN and everything
@@ -501,17 +508,8 @@ func readDNSDict(key string) (restore string, servers, search []string) {
 // which is why this lists the pattern rather than a known key. A service whose
 // ServerAddresses are plug's own is skipped: that is the one we overwrote.
 func scopedResolvers(own string) []scopedUpstream {
-	out, err := scutil("list State:/Network/Service/.*/DNS\nquit\n")
-	if err != nil {
-		return nil
-	}
 	var scopes []scopedUpstream
-	for _, line := range strings.Split(out, "\n") {
-		_, key, ok := strings.Cut(line, "= ")
-		if !ok {
-			continue
-		}
-		key = strings.TrimSpace(key)
+	for _, key := range listDNSKeys() {
 		servers, domains := readScopedDict(key)
 		real := systemServers(servers, own)
 		if len(real) == 0 {
@@ -524,76 +522,13 @@ func scopedResolvers(own string) []scopedUpstream {
 	return scopes
 }
 
-// readScopedDict returns a DNS dict's servers and its SupplementalMatchDomains.
-// A dict with no match domains is an ordinary resolver and yields none, which is
-// what keeps the primary service - and its plain SearchDomains, which are a
-// different thing - out of the scoped table.
-func readScopedDict(key string) (servers, domains []string) {
-	out, err := scutil("show " + key + "\nquit\n")
-	if err != nil || strings.Contains(out, "No such key") {
-		return nil, nil
-	}
-	var curKey string
-	inArray := false
-	for _, raw := range strings.Split(out, "\n") {
-		line := strings.TrimSpace(raw)
-		switch {
-		case strings.Contains(line, ": <array> {"):
-			curKey = strings.TrimSpace(strings.SplitN(line, ":", 2)[0])
-			inArray = true
-		case line == "}":
-			inArray = false
-		case inArray:
-			if p := strings.SplitN(line, ":", 2); len(p) == 2 {
-				v := strings.TrimSpace(p[1])
-				switch curKey {
-				case "ServerAddresses":
-					servers = append(servers, v)
-				case "SupplementalMatchDomains":
-					domains = append(domains, v)
-				}
-			}
-		}
-	}
-	return servers, domains
-}
-
-// scutil pipes a batch script into scutil (root; the plug core runs under sudo),
-// used for dynamic-store reads and edits. A var so a test can stand a fake
-// store behind the readers (poisonedKeys, PoisonedViews) and describe the
-// machine it wants instead of reading the one it runs on.
-var scutil = func(script string) (string, error) {
-	cmd := exec.Command(HelperPath("scutil"))
-	cmd.Stdin = strings.NewReader(script)
-	out, err := cmd.CombinedOutput()
-	return string(out), err
-}
-
-// scutilSet writes the dictionary accumulated by build (d.init/d.add lines) into
-// key of the dynamic store.
-// A var, like its neighbour below, so the orphan recovery can be tested. That
-// path repairs the resolver of the WHOLE MACHINE after a daemon dies without
-// unwinding, and nothing exercised it: the order it replays the three backups
-// in is the difference between a working resolver and one pointing at a dead
-// address, and no test could see that order.
-var scutilSet = func(key, build string) error {
-	_, err := scutil(build + "set " + key + "\nquit\n")
-	return err
-}
-
-// scutilRemove deletes key from the dynamic store.
-var scutilRemove = func(key string) error {
-	_, err := scutil("remove " + key + "\nquit\n")
-	return err
-}
-
 // resolvConf is macOS's /etc/resolv.conf. getaddrinfo ignores it (it resolves via
-// SystemConfiguration), but a program with its OWN resolver — notably Go's pure-Go
-// resolver, used by CGO_ENABLED=0 static binaries, common in clusters — reads only
-// this file. Pointing it at plug's DNS is machine-wide, like the scutil override —
+// SystemConfiguration), but a program with its OWN resolver (notably Go's pure-Go
+// resolver, used by CGO_ENABLED=0 static binaries, common in clusters) reads only
+// this file. Pointing it at plug's DNS is machine-wide, like the scutil override,
 // which is what the PID-at-connect multicluster model wants anyway: one resolver
 // hands out fake IPs, and the owning cluster is resolved at connect() by process
-// ancestry (as on Windows) — proven simultaneously in CI.
+// ancestry (as on Windows), proven simultaneously in CI.
 var resolvConf = "/etc/resolv.conf" // overridable in tests
 
 // resolverPath is the domain-scoped resolver file for ".plug" (see configure).
@@ -603,9 +538,6 @@ var resolvConf = "/etc/resolv.conf" // overridable in tests
 // neither `plug down` nor a reboot cleared.
 var resolverPath = "/etc/resolver/" + searchSuffix // overridable in tests
 
-// snapshotResolv captures /etc/resolv.conf as a restorable token: "L\n<target>" for
-// a symlink (the usual case — it points at /var/run/resolv.conf), "F\n<content>" for
-// a regular file, or "N" if absent.
 // flushGate coalesces DNS cache flushes: request() marks one pending, due()
 // releases at most one per window. The first request after a quiet period fires
 // immediately; a configd storm collapses into one flush per window instead of a
@@ -627,6 +559,9 @@ func (g *flushGate) due(now time.Time) bool {
 	return true
 }
 
+// snapshotResolv captures /etc/resolv.conf as a restorable token: "L\n<target>" for
+// a symlink (the usual case: it points at /var/run/resolv.conf), "F\n<content>" for
+// a regular file, or "N" if absent.
 func snapshotResolv() string {
 	if target, err := os.Readlink(resolvConf); err == nil {
 		return "L\n" + target
@@ -678,8 +613,8 @@ func loadDNSBackup(path string) (dnsKey, restore string, err error) {
 	return dnsKey, restore, nil
 }
 
-// restoreDNSBackup replays the backup at path — re-applying the saved DNS dict, or
-// removing our override if the service had none — then deletes the backup file.
+// restoreDNSBackup replays the backup at path (re-applying the saved DNS dict, or
+// removing our override if the service had none), then deletes the backup file.
 func restoreDNSBackup(path string) error {
 	dnsKey, restore, err := loadDNSBackup(path)
 	if err != nil {
@@ -693,9 +628,6 @@ func restoreDNSBackup(path string) error {
 	return os.Remove(path)
 }
 
-// SaveDNSBackup snapshots the current primary-service DNS into the cluster's
-// backup file so a kill -9 of the daemon can be repaired. Call BEFORE the DNS is
-// overridden (StartDatapath).
 // SystemResolvers reports the resolvers this machine sends dotted names to when
 // NO session is running: the addresses configured on the primary service.
 //
@@ -714,8 +646,11 @@ func SystemResolvers() []string {
 	return servers
 }
 
+// SaveDNSBackup snapshots the current primary-service DNS into the cluster's
+// backup file so a kill -9 of the daemon can be repaired. Call BEFORE the DNS is
+// overridden (StartDatapath).
 func SaveDNSBackup(key string) error {
-	// Snapshot /etc/resolv.conf too — configure() restores it on a clean exit, this
+	// Snapshot /etc/resolv.conf too: configure() restores it on a clean exit, this
 	// is the net for a crashed daemon (restored by RestoreOrphanDNS).
 	_ = os.WriteFile(resolvBackupPath(key), []byte(snapshotResolv()), 0o644)
 	svc, err := primaryService()
@@ -742,8 +677,8 @@ func SaveDNSBackup(key string) error {
 	return persistDNSBackup(backupPath(key), dnsKey, restore)
 }
 
-// RestoreOrphanDNS restores a leftover DNS backup — a crashed daemon left the
-// system resolver pointed at a dead address — and removes it. No-op if none. Call
+// RestoreOrphanDNS restores a leftover DNS backup (a crashed daemon left the
+// system resolver pointed at a dead address) and removes it. No-op if none. Call
 // only while holding the leader lock, so any backup present can only be an orphan.
 func RestoreOrphanDNS(key string) {
 	if b, err := os.ReadFile(resolvBackupPath(key)); err == nil {
@@ -759,7 +694,7 @@ func RestoreOrphanDNS(key string) {
 	}
 	if _, err := os.Stat(backupPath(key)); err == nil {
 		_ = restoreDNSBackup(backupPath(key))
-		// Drop our Global/DNS override too — with the service dicts restored,
+		// Drop our Global/DNS override too: with the service dicts restored,
 		// configd recomposes the correct global from them.
 		_ = scutilRemove("State:/Network/Global/DNS")
 		return

@@ -916,6 +916,78 @@ func k8sServe(name string, pairs []portPair) {
 	}
 }
 
+// k8sWorkloadSelector is what finds the pods behind <name>: the Service's own
+// selector, or, when the Service is parked (it points at the agent then), the
+// ORIGINAL selector its receipt saved. An empty selector with a nil error is a
+// Service that selects nothing and whose receipt names nothing either. One
+// lookup for env-of, files-of and the mounts, which used to carry three copies
+// of it.
+func k8sWorkloadSelector(ns, name string) (sel map[string]string, code int, err error) {
+	var svc struct {
+		Metadata struct {
+			Annotations map[string]string `json:"annotations"`
+		} `json:"metadata"`
+		Spec struct {
+			Selector map[string]string `json:"selector"`
+		} `json:"spec"`
+	}
+	code, err = k8sAPI("GET", "/api/v1/namespaces/"+ns+"/services/"+name, nil, &svc)
+	if err != nil || code != 200 {
+		if err == nil {
+			err = fmt.Errorf("the API answered %d", code)
+		}
+		return nil, code, err
+	}
+	sel = svc.Spec.Selector
+	if raw := svc.Metadata.Annotations[k8sParkedAnn]; raw != "" {
+		var r k8sReceipt
+		if json.Unmarshal([]byte(raw), &r) == nil && len(r.Selector) > 0 {
+			sel = r.Selector
+		}
+	}
+	return sel, code, nil
+}
+
+// k8sWorkloadPod is the sliver of a pod the readers of a workload need: its
+// name and phase, the node it runs on, its volumes, and per container the
+// name, the environment and the mounts.
+type k8sWorkloadPod struct {
+	Metadata struct {
+		Name string `json:"name"`
+	} `json:"metadata"`
+	Status struct {
+		Phase string `json:"phase"`
+	} `json:"status"`
+	Spec struct {
+		NodeName   string      `json:"nodeName"`
+		Volumes    []k8sVolume `json:"volumes"`
+		Containers []struct {
+			Name string `json:"name"`
+			Env  []struct {
+				Name      string          `json:"name"`
+				Value     string          `json:"value"`
+				ValueFrom json.RawMessage `json:"valueFrom"`
+			} `json:"env"`
+			VolumeMounts []k8sMount `json:"volumeMounts"`
+		} `json:"containers"`
+	} `json:"spec"`
+}
+
+// k8sPodsSelected lists the pods a selector matches.
+func k8sPodsSelected(ns string, sel map[string]string) ([]k8sWorkloadPod, int, error) {
+	var pods struct {
+		Items []k8sWorkloadPod `json:"items"`
+	}
+	code, err := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/pods?labelSelector="+url.QueryEscape(labelSelector(sel)), nil, &pods)
+	if err != nil || code != 200 {
+		if err == nil {
+			err = fmt.Errorf("the API answered %d", code)
+		}
+		return nil, code, err
+	}
+	return pods.Items, code, nil
+}
+
 // k8sRestoreParked undoes a takeover on one Service: re-patch its original
 // selector+ports from the receipt annotation, and drop the annotation. Reports
 // whether the Service was parked at all.
@@ -991,106 +1063,148 @@ func k8sUnserve(name string) {
 	answer("ok") // restored, or never ours to begin with
 }
 
+// k8sServiceRec is a Service as the list endpoint reports it: what the sweep
+// and the serve-time reap read.
+type k8sServiceRec struct {
+	Metadata struct {
+		Name        string            `json:"name"`
+		Labels      map[string]string `json:"labels"`
+		Annotations map[string]string `json:"annotations"`
+	} `json:"metadata"`
+	Spec struct {
+		Selector map[string]string `json:"selector"`
+		Ports    json.RawMessage   `json:"ports"`
+	} `json:"spec"`
+}
+
+// k8sServices lists the namespace's Services matching selector, all of them
+// when it is empty.
+func k8sServices(ns, selector string) ([]k8sServiceRec, error) {
+	path := "/api/v1/namespaces/" + ns + "/services"
+	if selector != "" {
+		path += "?labelSelector=" + url.QueryEscape(selector)
+	}
+	var list struct {
+		Items []k8sServiceRec `json:"items"`
+	}
+	_, err := k8sAPI("GET", path, nil, &list)
+	return list.Items, err
+}
+
+// k8sGC sweeps the namespace's Services: the plug-created ones (label) whose
+// session is gone are set to linger or reaped, the REAL ones a session parked
+// (receipt annotation) are restored. One un-filtered list serves both. The
+// rules are the sweep's (sweep.go); what is here is how a Service reads and
+// acts.
+//
+// k8sNoteEndpointsGrant is NOT called here any more: this runs every minute
+// (sweepOrchestrators), and the note belongs to boot (gc), as it says.
 func k8sGC() {
 	ns := k8sNamespace()
-	var list struct {
-		Items []struct {
-			Metadata struct {
-				Name        string            `json:"name"`
-				Labels      map[string]string `json:"labels"`
-				Annotations map[string]string `json:"annotations"`
-			} `json:"metadata"`
-			Spec struct {
-				Selector map[string]string `json:"selector"`
-				Ports    json.RawMessage   `json:"ports"`
-			} `json:"spec"`
-		} `json:"items"`
-	}
-	// One un-filtered list serves both sweeps: parked REAL Services (annotation —
-	// restore them) and plug-created ones (label — delete them).
-	if _, err := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/services", nil, &list); err != nil {
-		gcNote("cannot list Services in %s (%v) — leftovers from crashed sessions were NOT swept", ns, err)
-		return
-	}
-	now := time.Now()
-	for _, s := range list.Items {
+	sweep(func() []sweepItem {
+		list, err := k8sServices(ns, "")
+		if err != nil {
+			gcNote("cannot list Services in %s (%v): leftovers from crashed sessions were NOT swept", ns, err)
+			return nil
+		}
+		return k8sServiceItems(ns, list)
+	})
+}
+
+// sweepExpiredK8sLingers is the serve-time reap, Swarm's twin: the lingering
+// Services past their grace, and nothing else (see sweepExpiredServiceLingers).
+func sweepExpiredK8sLingers(ns string) {
+	sweep(lingering(func() []sweepItem {
+		list, err := k8sServices(ns, k8sManaged+"=plug")
+		if err != nil {
+			return nil
+		}
+		return k8sServiceItems(ns, list)
+	}))
+}
+
+// k8sServiceItems is the Services as the sweep sees them: two kinds, told
+// apart by the label.
+func k8sServiceItems(ns string, list []k8sServiceRec) []sweepItem {
+	items := make([]sweepItem, 0, len(list))
+	for _, s := range list {
+		name, ann, sel, ports := s.Metadata.Name, s.Metadata.Annotations, s.Spec.Selector, s.Spec.Ports
 		if s.Metadata.Labels[k8sManaged] == "plug" {
-			// Same first rule as the Swarm gc: a lingering Service within its
-			// grace keeps its ClusterIP warm across even an agent restart —
-			// sweeping it would kill the address the linger exists to keep.
-			// The linger rule comes FIRST, as in dockerGC: within the grace the
-			// Service stays whoever stamped it, past it it goes.
-			if stamp := s.Metadata.Annotations[lingerLabel]; stamp != "" {
-				if !lingerExpired(stamp, now) {
-					continue
-				}
-				k8sDropName(ns, s.Metadata.Name)
-				continue
-			}
-			// The label says "a plug Service", never "MY plug Service". With one
-			// agent that was the same sentence; with a replica booting beside
-			// three that are serving, it is the difference between sweeping this
-			// pod's leftovers and cutting a colleague's session off mid-request.
-			// Without an owner (this pod never learnt its address) the port is
-			// asked, as the serve path asks it: see k8sServiceSessionLive.
-			if k8sServiceSessionLive(s.Metadata.Annotations[sessionOwnerLabel], k8sTargetPort(s.Spec.Ports), sessionLive, agentPortLive) {
-				continue
-			}
-			// A session that does not answer is not a session that is gone.
-			// This sweep runs at BOOT, and the commonest reason a boot finds
-			// owners that do not answer is that the agent itself just restarted:
-			// the owner is this pod's previous address, and the session is ten
-			// seconds away from reconnecting and re-arming the name. Deleting
-			// here handed that re-arm a fresh ClusterIP, and every caller that
-			// had cached the old one (CoreDNS TTL, connection pools) lost it.
-			// Linger instead, exactly as a clean unserve does: the address
-			// stays, the endpoints go (so the name refuses connections rather
-			// than swallowing them), and the re-arm takes the Service over in
-			// place. Nobody comes back within the grace: the next sweep drops
-			// it, by the rule above.
-			if err := k8sLingerName(ns, s.Metadata.Name); err != nil {
-				gcNoteOnce("k8s-linger:"+s.Metadata.Name, "Service %s/%s: its session does not answer and it could not be set to linger (%v); dropping it", ns, s.Metadata.Name, err)
-				k8sDropName(ns, s.Metadata.Name)
-			}
+			// A plug-created name. The label says "a plug Service", never "MY
+			// plug Service". With one agent that was the same sentence; with a
+			// replica booting beside three that are serving, it is the
+			// difference between sweeping this pod's leftovers and cutting a
+			// colleague's session off mid-request. Without an owner (this pod
+			// never learnt its address) the port is asked, as the serve path
+			// asks it: see k8sServiceSessionLive.
+			items = append(items, sweepItem{
+				stamp: ann[lingerLabel],
+				live: func() bool {
+					return k8sServiceSessionLive(ann[sessionOwnerLabel], k8sTargetPort(ports), sessionLive, agentPortLive)
+				},
+				drop: func() { k8sDropName(ns, name) },
+				// A session that does not answer is not a session that is gone.
+				// The commonest reason a boot sweep finds owners that do not
+				// answer is that the agent itself just restarted: the owner is
+				// this pod's previous address, and the session is ten seconds
+				// away from reconnecting and re-arming the name. Deleting here
+				// handed that re-arm a fresh ClusterIP, and every caller that had
+				// cached the old one (CoreDNS TTL, connection pools) lost it.
+				// Linger instead, exactly as a clean unserve does: the address
+				// stays, the endpoints go (so the name refuses connections rather
+				// than swallowing them), and the re-arm takes the Service over in
+				// place. Nobody comes back within the grace: the next sweep drops
+				// it, by the linger rule.
+				retire: func() {
+					if err := k8sLingerName(ns, name); err != nil {
+						gcNoteOnce("k8s-linger:"+name, "Service %s/%s: its session does not answer and it could not be set to linger (%v); dropping it", ns, name, err)
+						k8sDropName(ns, name)
+					}
+				},
+			})
 			continue
 		}
-		// A parked REAL Service. Restoring it is no longer reserved to the agent
-		// that parked it: the receipt names its owner, and an owner that no longer
-		// answers is gone for good (scaled down, rescheduled, replaced), so the
-		// workload it left parked is anyone's to put back. One that still answers
-		// is serving right now, and used to be restored from under itself by any
-		// sibling that happened to boot.
-		if sessionLive(k8sReceiptOwner(s.Metadata.Annotations[k8sParkedAnn])) {
+		// A REAL Service, parked or not. Restoring it is no longer reserved to
+		// the agent that parked it: the receipt names its owner, and an owner
+		// that no longer answers is gone for good (scaled down, rescheduled,
+		// replaced), so the workload it left parked is anyone's to put back.
+		// One that still answers is serving right now, and used to be restored
+		// from under itself by any sibling that happened to boot. It is never
+		// dropped: restored in place, it stays what it was.
+		key := "k8s:" + ns + "/" + name
+		items = append(items, sweepItem{
+			key:  key,
+			live: func() bool { return sessionLive(k8sReceiptOwner(ann[k8sParkedAnn])) },
 			// Serving right now: make sure it is the only one answering. A
 			// session parked by an agent that did not yet drop the controller's
 			// slice (or could not, RBAC) is repaired here, within the minute.
-			k8sDropControllerSlices(ns, s.Metadata.Name)
-			continue
-		}
-		// No receipt means there is nothing to restore FROM, which used to end the
-		// matter and leave a repointed Service down for good. It only ends the
-		// restore: a selector still carrying this agent's mark is an orphan of a
-		// session that died, and that much can be undone without a receipt.
-		//
-		// A restore that FAILS is said, once per Service and per boot: the error
-		// used to be dropped, so an unreadable receipt, or a patch the API
-		// refused, left the Service pointing at a dead session every minute for
-		// ever, with nothing in the log naming it. The receipt stays (nothing
-		// here removes it), so the next sweep retries.
-		key := "k8s:" + ns + "/" + s.Metadata.Name
-		parked, err := k8sRestoreParked(ns, s.Metadata.Name, s.Metadata.Annotations, s.Spec.Selector)
-		switch {
-		case err != nil:
-			gcNoteOnce(key, "Service %s/%s stays parked, pointing at a session that no longer answers: %v "+
-				"- the sweep retries every minute; its receipt is the %s annotation", ns, s.Metadata.Name, err, k8sParkedAnn)
-		case parked:
-			gcNoteRecovered(key, "Service %s/%s restored, after an earlier failure", ns, s.Metadata.Name)
-		default:
-			k8sReclaimOrphanSelector(ns, s.Metadata.Name, s.Spec.Selector)
-		}
+			serving: func() { k8sDropControllerSlices(ns, name) },
+			// No receipt means there is nothing to restore FROM, which used to
+			// end the matter and leave a repointed Service down for good. It
+			// only ends the restore: a selector still carrying this agent's mark
+			// is an orphan of a session that died, and that much can be undone
+			// without a receipt.
+			//
+			// A restore that FAILS is said, once per Service and per boot: the
+			// error used to be dropped, so an unreadable receipt, or a patch the
+			// API refused, left the Service pointing at a dead session every
+			// minute for ever, with nothing in the log naming it. The receipt
+			// stays (nothing here removes it), so the next sweep retries.
+			restore: func() (string, error) {
+				parked, err := k8sRestoreParked(ns, name, ann, sel)
+				switch {
+				case err != nil:
+					return "", fmt.Errorf("Service %s/%s stays parked, pointing at a session that no longer answers: %v "+
+						"- the sweep retries every minute; its receipt is the %s annotation", ns, name, err, k8sParkedAnn)
+				case parked:
+					return fmt.Sprintf("Service %s/%s restored, after an earlier failure", ns, name), nil
+				}
+				k8sReclaimOrphanSelector(ns, name, sel)
+				return "", nil
+			},
+		})
 	}
-	// k8sNoteEndpointsGrant is NOT called here any more: this runs every minute
-	// (sweepOrchestrators), and the note belongs to boot (gc), as it says.
+	return items
 }
 
 // k8sClient is the API client, built once.
@@ -1104,12 +1218,19 @@ func k8sGC() {
 // and a cached one stops working mid-session. The CA does not rotate on that
 // timescale, and when it does the pod is restarted with it.
 var k8sClient = sync.OnceValue(func() *http.Client {
+	return &http.Client{
+		Timeout:   20 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: k8sTLSConfig()},
+	}
+})
+
+// k8sTLSConfig is what both the REST client above and the exec handshake
+// (k8sExecDial, a raw connection) trust: the ServiceAccount's CA, read once.
+// The exec path used to read and parse it again on every exec.
+var k8sTLSConfig = sync.OnceValue(func() *tls.Config {
 	pool := x509.NewCertPool()
 	if ca, err := os.ReadFile(k8sSA + "/ca.crt"); err == nil {
 		pool.AppendCertsFromPEM(ca)
 	}
-	return &http.Client{
-		Timeout:   20 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}},
-	}
+	return &tls.Config{RootCAs: pool}
 })

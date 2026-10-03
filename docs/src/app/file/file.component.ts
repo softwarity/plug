@@ -10,10 +10,7 @@ import {
   viewChild,
 } from '@angular/core';
 import { MatIconModule } from '@angular/material/icon';
-import Prism from 'prismjs';
-import 'prismjs/components/prism-yaml';
-import 'prismjs/components/prism-bash';
-import 'prismjs/components/prism-json';
+import { Prism } from '../prism';
 
 export type FileState = 'collapsed' | 'opened' | 'expanded';
 
@@ -147,7 +144,7 @@ export type FileState = 'collapsed' | 'opened' | 'expanded';
         cursor: pointer;
       }
       .hdr:hover {
-        background: rgba(163, 113, 247, 0.08);
+        background: var(--accent-purple-tint);
       }
       .toggle:focus-visible {
         outline: 2px solid var(--accent-purple);
@@ -161,7 +158,7 @@ export type FileState = 'collapsed' | 'opened' | 'expanded';
         height: 20px;
       }
       .name {
-        font-family: ui-monospace, Menlo, Consolas, monospace;
+        font-family: var(--font-mono);
         font-size: 0.85rem;
         font-weight: 600;
         color: var(--text-primary);
@@ -253,7 +250,7 @@ export type FileState = 'collapsed' | 'opened' | 'expanded';
       }
       .more:hover {
         color: var(--text-primary);
-        background: rgba(163, 113, 247, 0.08);
+        background: var(--accent-purple-tint);
       }
       .more mat-icon {
         font-size: 16px;

@@ -10,14 +10,12 @@ import (
 	"time"
 )
 
-// checkSystemResolver is a BEST-EFFORT proof that the macOS system resolver
-// (dscacheutil → mDNSResponder, the getaddrinfo path) resolves a single-label
-// name to a fake IP — i.e. the DNS repoint is effective. It NEVER fails the
-// selftest: the datapath is already proven by the round-trip above, whereas the
-// repoint depends on the machine's DNS config and on mDNSResponder sending bare
-// single-label names to the primary resolver, which a headless CI runner handles
-// differently than a real desktop. Each dscacheutil call is time-bounded so a
-// non-resolving name can't hang the test.
+// checkSystemResolver proves that the macOS system resolver (dscacheutil ->
+// mDNSResponder, the getaddrinfo path) resolves a single-label name to a fake
+// IP, i.e. that the DNS repoint is effective. It FAILS the selftest when it
+// does not, and the paragraph before the error says why that tolerance went.
+// Each dscacheutil call is time-bounded so a non-resolving name can't hang the
+// test.
 func checkSystemResolver(name string, log logfn) error {
 	for i := 0; i < 3; i++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

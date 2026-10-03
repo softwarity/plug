@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -26,11 +25,9 @@ func swarmSelfUpdate(self selfInfo, decide func(string) (string, string, string)
 			retargetImageOnly(self.image), self.service)
 	}
 	var s struct {
-		ID      string `json:"ID"`
-		Version struct {
-			Index int `json:"Index"`
-		} `json:"Version"`
-		Spec map[string]any `json:"Spec"`
+		ID      string         `json:"ID"`
+		Version swarmVersion   `json:"Version"`
+		Spec    map[string]any `json:"Spec"`
 	}
 	if _, err := dockerAPI("GET", "/services/"+self.service, nil, &s); err != nil {
 		answer("error: reading service %s: %v", self.service, err)
@@ -60,7 +57,7 @@ func swarmSelfUpdate(self selfInfo, decide func(string) (string, string, string)
 	}
 	fu, _ := tt["ForceUpdate"].(float64)
 	tt["ForceUpdate"] = int(fu) + 1
-	if _, err := dockerAPI("POST", "/services/"+s.ID+"/update?version="+strconv.Itoa(s.Version.Index), s.Spec, nil); err != nil {
+	if _, err := dockerAPI("POST", serviceUpdatePath(s.ID, s.Version), s.Spec, nil); err != nil {
 		answer("error: updating service %s: %v", self.service, err)
 	}
 	answer("updating service %s — %s, and the task rolls", self.service, note)
@@ -68,17 +65,31 @@ func swarmSelfUpdate(self selfInfo, decide func(string) (string, string, string)
 
 // swarmManager reports whether this node can create Swarm services (a manager).
 // When it can, the signpost is a SERVICE (joins non-attachable overlays too),
-// not a standalone container.
+// not a standalone container. A daemon that cannot answer is read as "not a
+// manager", as it always was.
 func swarmManager() bool {
+	manager, _ := swarmControl()
+	return manager
+}
+
+// swarmControl is the /info probe behind swarmManager, remembered once it has
+// answered: every Docker verb asks it, some twice, and the sweep twice a
+// minute, for a fact that changes only when the node is promoted or demoted.
+// Only a success is kept (memoize), so a daemon that was unreachable when the
+// serve process booted is asked again on the next pass. A var so the fake
+// Engine can forget the answer when a test turns Swarm on mid-way.
+var swarmControl = memoize(swarmControlProbe)
+
+func swarmControlProbe() (bool, error) {
 	var info struct {
 		Swarm struct {
 			ControlAvailable bool `json:"ControlAvailable"`
 		} `json:"Swarm"`
 	}
 	if _, err := dockerAPI("GET", "/info", nil, &info); err != nil {
-		return false
+		return false, err
 	}
-	return info.Swarm.ControlAvailable
+	return info.Swarm.ControlAvailable, nil
 }
 
 // swarmNameOwner returns the NON-signpost Swarm service that already owns name
@@ -126,7 +137,9 @@ func swarmNameOwner(name string, self selfInfo) *swarmOwner {
 		} `json:"Spec"`
 	}
 	if _, err := dockerAPI("GET", "/services", nil, &list); err != nil {
-		return nil // can't tell — Verify is the backstop
+		// Cannot tell: the name is served as if no service owned it, and a real
+		// owner then shares it in DNS rather than being parked (see nameOwners).
+		return nil
 	}
 	for _, s := range list {
 		if s.Spec.Labels[signpostLabel] == "1" {
@@ -194,6 +207,10 @@ func swarmWorkloadOwner(name string, self selfInfo) *swarmOwner {
 	return own
 }
 
+// swarmServe runs the signpost as a Swarm SERVICE. A service joins the stack's
+// overlay whether or not it is `attachable`, the whole reason this backend
+// exists, and carries the alias there, relaying to the agent TASK that holds
+// the session (relayTarget), never to the service VIP that would spread it.
 func swarmServe(name string, pairs []portPair, self selfInfo) {
 	// Two refusals used to stand here: more than one replica, and global mode.
 	// Both existed because the signpost relayed to the service VIP, which load
@@ -213,16 +230,14 @@ func swarmServe(name string, pairs []portPair, self selfInfo) {
 	// Serving is the moment the agent runs code anyway: reap the lingers whose
 	// grace has passed, THIS name's included — if ours expired, the GET below
 	// sees nothing and a fresh create (fresh VIP) is the honest outcome.
-	sweepExpiredServiceLingers()
+	sweepExpiredServiceLingers(self.owner())
 	// A signpost service already carrying this name may belong to a LIVE
 	// session — its relay port still answers on this agent — and then the name
 	// is taken; a dead port is a crashed session's leftover, swept below.
 	var sp struct {
-		ID      string `json:"ID"`
-		Version struct {
-			Index uint64 `json:"Index"`
-		} `json:"Version"`
-		Spec struct {
+		ID      string       `json:"ID"`
+		Version swarmVersion `json:"Version"`
+		Spec    struct {
 			Labels       map[string]string `json:"Labels"`
 			TaskTemplate struct {
 				ContainerSpec struct {
@@ -332,8 +347,7 @@ func swarmServe(name string, pairs []portPair, self selfInfo) {
 		// The VIP is kept by updating in place. Swarm requires the version we
 		// read the service at, which is also the concurrency guard: if anything
 		// touched it since, this fails rather than clobbering.
-		path := fmt.Sprintf("/services/%s/update?version=%d", sp.ID, sp.Version.Index)
-		if _, err := dockerAPI("POST", path, spec, nil); err != nil {
+		if _, err := dockerAPI("POST", serviceUpdatePath(sp.ID, sp.Version), spec, nil); err != nil {
 			answer("error: updating the %s signpost service: %v", name, err)
 		}
 	} else if _, err := dockerAPI("POST", "/services/create", spec, nil); err != nil {

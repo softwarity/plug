@@ -1,3 +1,5 @@
+//go:build darwin || windows
+
 package tun
 
 // What the attribution may remember between two flows, and what it must not.

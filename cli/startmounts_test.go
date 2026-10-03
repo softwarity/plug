@@ -61,9 +61,9 @@ func installFakeSMB(t *testing.T) *fakeSMB {
 	return s
 }
 
-// mountSession is a fakeSession whose cluster dials answer at once, the way
+// fakeMountSession is a fakeSession whose cluster dials answer at once, the way
 // a helper that is up does.
-func mountSession(reply func(string) (string, error)) *fakeSession {
+func fakeMountSession(reply func(string) (string, error)) *fakeSession {
 	f := newFakeSession(reply)
 	f.dial = func(string) (net.Conn, error) {
 		a, b := net.Pipe()
@@ -83,7 +83,7 @@ func TestStartMountsMountsTheWorkloadsVolumesByDefault(t *testing.T) {
 	sandboxHome(t)
 	tmp := sandboxTemp(t)
 	smb := installFakeSMB(t)
-	f := mountSession(mountAgent)
+	f := fakeMountSession(mountAgent)
 	installFakeSession(t, f)
 	cfg := config{host: "agent.example", port: "2222", exposes: exposeSpecs("geo:80:3000")}
 
@@ -160,7 +160,7 @@ func TestStartMountsHonoursThePolicyAndTheExplicitMounts(t *testing.T) {
 	sandboxHome(t)
 	sandboxTemp(t)
 	smb := installFakeSMB(t)
-	f := mountSession(mountAgent)
+	f := fakeMountSession(mountAgent)
 	installFakeSession(t, f)
 	at := filepath.Join(t.TempDir(), "srv", "data")
 	cfg := config{host: "agent.example", port: "2222", exposes: exposeSpecs("geo:80:3000"),
@@ -189,7 +189,7 @@ func TestStartMountsHonoursThePolicyAndTheExplicitMounts(t *testing.T) {
 	}
 
 	// Off entirely: nothing to do, nothing dialled.
-	g := mountSession(mountAgent)
+	g := fakeMountSession(mountAgent)
 	installFakeSession(t, g)
 	off, err := startMounts(config{exposes: exposeSpecs("geo:80:3000"), mountPolicy: parseNoMount("")})
 	if err != nil {
@@ -208,7 +208,7 @@ func TestStartMountsWithNothingToMount(t *testing.T) {
 	sandboxTemp(t)
 	installFakeSMB(t)
 	for _, reply := range []string{"volumes", "error: unknown command \"volumes-of\""} {
-		f := mountSession(func(cmd string) (string, error) {
+		f := fakeMountSession(func(cmd string) (string, error) {
 			if cmd == "volumes-of geo" {
 				return reply, nil
 			}
@@ -251,7 +251,7 @@ func TestStartMountsUndoesEverythingWhenOneMountFails(t *testing.T) {
 		smb := installFakeSMB(t)
 		savedBind := mountForwardBind
 		t.Cleanup(func() { mountForwardBind = savedBind })
-		f := mountSession(mountAgent)
+		f := fakeMountSession(mountAgent)
 		installFakeSession(t, f)
 		// The first volume mounts; the second fails.
 		mounts := 0

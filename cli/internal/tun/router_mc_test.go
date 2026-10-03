@@ -5,7 +5,9 @@ package tun
 import (
 	"net"
 	"os"
+	"strconv"
 	"testing"
+	"time"
 )
 
 // localSocket opens a real local TCP connection and returns its source port +
@@ -120,5 +122,36 @@ func TestPinnedNameRoutesToItsCluster(t *testing.T) {
 	pinCache = map[string]pinEntry{}
 	if k, ok := pinnedCluster("plug-mnt-web-1234abcd"); ok {
 		t.Fatalf("a dead client's pin was honoured: %q", k)
+	}
+}
+
+// The per-name pin verdicts are taken for every name any process looks up,
+// before any account check, and were kept for ever. At the bound the stale
+// ones go; a verdict recomputed is a directory scan, a map that only grows is
+// a leak in a daemon that runs for weeks.
+func TestStalePinVerdictsAreForgottenAtTheBound(t *testing.T) {
+	old := graftDir
+	graftDir = t.TempDir()
+	defer func() { graftDir = old }()
+	saved := pinCache
+	defer func() { pinCache = saved }()
+
+	stale := time.Now().Add(-2 * pinTTL)
+	pinCache = map[string]pinEntry{}
+	for i := 0; i < pinCacheMax; i++ {
+		pinCache["name-"+strconv.Itoa(i)] = pinEntry{at: stale}
+	}
+	pinnedCluster("one-more")
+	if n := len(pinCache); n != 1 {
+		t.Errorf("%d verdicts kept past the bound with every TTL elapsed, want the one just taken", n)
+	}
+	// Fresh verdicts that fill the bound by themselves are dropped whole rather
+	// than kept.
+	for i := 0; i < pinCacheMax; i++ {
+		pinCache["fresh-"+strconv.Itoa(i)] = pinEntry{at: time.Now()}
+	}
+	pinnedCluster("over")
+	if n := len(pinCache); n > pinCacheMax {
+		t.Errorf("%d verdicts kept, more than the bound %d", n, pinCacheMax)
 	}
 }

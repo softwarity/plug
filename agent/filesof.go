@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
-	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -40,14 +39,18 @@ func filesReplyJSON(paths []string, tar []byte) string {
 	return string(b)
 }
 
-// k8sVolume and k8sMount are the slivers of a pod spec projectableMounts reads:
-// which volumes carry secret/configMap/projected content, and where each is
+// k8sVolume and k8sMount are the slivers of a pod spec the readers of a
+// workload use: which volumes carry secret/configMap/projected content
+// (projectableMounts), which carry a claim (pickClaim), and where each is
 // mounted.
 type k8sVolume struct {
 	Name      string          `json:"name"`
 	Secret    json.RawMessage `json:"secret"`
 	ConfigMap json.RawMessage `json:"configMap"`
 	Projected json.RawMessage `json:"projected"`
+	PVC       *struct {
+		ClaimName string `json:"claimName"`
+	} `json:"persistentVolumeClaim"`
 }
 
 type k8sMount struct {
@@ -274,7 +277,7 @@ var swarmSecretsPatience = 15 * time.Second
 // the service was actually running (then a nil tarball means "nothing to
 // read", not "not yet").
 func swarmReadSecretsOnce(service string) (tarball []byte, sawRunning bool) {
-	filter := `{"service":["` + service + `"],"desired-state":["running"]}`
+	filter := dockerFilters(map[string][]string{"service": {service}, "desired-state": {"running"}})
 	var tasks []struct {
 		Status struct {
 			State           string `json:"State"`
@@ -283,7 +286,7 @@ func swarmReadSecretsOnce(service string) (tarball []byte, sawRunning bool) {
 			} `json:"ContainerStatus"`
 		} `json:"Status"`
 	}
-	if code, err := dockerAPI("GET", "/tasks?filters="+url.QueryEscape(filter), nil, &tasks); err != nil || code != 200 {
+	if code, err := dockerAPI("GET", "/tasks?filters="+filter, nil, &tasks); err != nil || code != 200 {
 		return nil, true // an API that cannot answer is not a task that is starting
 	}
 	for _, t := range tasks {
@@ -389,48 +392,15 @@ func tarFromFiles(files map[string][]byte) []byte {
 // files are a best-effort addition to the environment, never the thing that
 // fails a session.
 func k8sFilesOf(ns, name string) ([]string, []byte) {
-	var svc struct {
-		Metadata struct {
-			Annotations map[string]string `json:"annotations"`
-		} `json:"metadata"`
-		Spec struct {
-			Selector map[string]string `json:"selector"`
-		} `json:"spec"`
-	}
-	if code, err := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/services/"+name, nil, &svc); err != nil || code != 200 {
+	sel, _, err := k8sWorkloadSelector(ns, name)
+	if err != nil || len(sel) == 0 {
 		return nil, nil
 	}
-	sel := svc.Spec.Selector
-	if raw := svc.Metadata.Annotations[k8sParkedAnn]; raw != "" {
-		var r k8sReceipt
-		if json.Unmarshal([]byte(raw), &r) == nil && len(r.Selector) > 0 {
-			sel = r.Selector
-		}
-	}
-	if len(sel) == 0 {
+	pods, _, err := k8sPodsSelected(ns, sel)
+	if err != nil {
 		return nil, nil
 	}
-	var pods struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-			Status struct {
-				Phase string `json:"phase"`
-			} `json:"status"`
-			Spec struct {
-				Volumes    []k8sVolume `json:"volumes"`
-				Containers []struct {
-					Name         string     `json:"name"`
-					VolumeMounts []k8sMount `json:"volumeMounts"`
-				} `json:"containers"`
-			} `json:"spec"`
-		} `json:"items"`
-	}
-	if code, err := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/pods?labelSelector="+url.QueryEscape(labelSelector(sel)), nil, &pods); err != nil || code != 200 {
-		return nil, nil
-	}
-	for _, p := range pods.Items {
+	for _, p := range pods {
 		if p.Status.Phase != "Running" || len(p.Spec.Containers) == 0 {
 			continue
 		}

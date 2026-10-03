@@ -194,7 +194,7 @@ func doctorLocal(add func(check)) {
 			if runtime.GOOS == "windows" {
 				name += ".exe"
 			}
-			if fi, err := os.Stat(filepath.Join(versionsDir(), e.Name(), name)); err == nil && fi.Size() > 1<<20 {
+			if fi, err := os.Stat(filepath.Join(versionsDir(), e.Name(), name)); err == nil && fi.Size() > minBinarySize {
 				vers = append(vers, e.Name())
 			} else {
 				broken = append(broken, e.Name())
@@ -267,7 +267,6 @@ const resolveStall = 2 * time.Second
 // while the datapath is healthy, the OS resolver is not delivering the stub's
 // answers, and no amount of Docker configuration will change it.
 func doctorResolution(add func(check)) {
-	const name = "name resolution"
 	start := time.Now()
 	_, err := net.LookupHost(resolveProbeHost)
 	took := time.Since(start)

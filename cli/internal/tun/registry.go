@@ -185,25 +185,22 @@ func clientAccounts(key string) map[string]bool {
 // parses an entry name as a number skips it without being taught to.
 const keyFileSuffix = ".key"
 
-// ClusterKeyFile is the profile key a live client of this cluster registered,
-// "" when none did. The daemon asks, because it dials on their behalf and the
-// identity is theirs, not its own.
+// ClusterKeyFileFrom is the profile key a live client of this cluster
+// registered, "" when none did, and the MARKER the key came from. The daemon
+// asks, because it dials on their behalf and the identity is theirs, not its
+// own.
 //
 // First live marker wins. Two profiles pointing at the same host:port with
 // different keys are the same cluster to the daemon, which holds one tunnel for
 // it; picking either is what "one tunnel per cluster" already means, and the
 // agent decides anyway.
-func ClusterKeyFile(key string) string {
-	kf, _ := ClusterKeyFileFrom(key)
-	return kf
-}
-
-// ClusterKeyFileFrom also names the MARKER the key came from, which is what lets
-// a caller ask the operating system who registered that client. The path inside
-// the sidecar was written by the client and says only what the client chose to
-// say; the marker's ownership is recorded by the system and cannot be claimed.
-// On Windows that difference is the whole guard, since the daemon there runs as
-// the machine account and would otherwise open any file a user named.
+//
+// The marker is what lets a caller ask the operating system who registered
+// that client. The path inside the sidecar was written by the client and says
+// only what the client chose to say; the marker's ownership is recorded by the
+// system and cannot be claimed. On Windows that difference is the whole guard,
+// since the daemon there runs as the machine account and would otherwise open
+// any file a user named.
 func ClusterKeyFileFrom(key string) (keyFile, marker string) {
 	entries, err := os.ReadDir(clientsDir(key))
 	if err != nil {
@@ -458,7 +455,7 @@ func UnpinNames(key string, pid int) {
 func pinnedCluster(name string) (string, bool) {
 	name = strings.ToLower(name)
 	pinMu.Lock()
-	if e, ok := pinCache[name]; ok && time.Since(e.at) < 5*time.Second {
+	if e, ok := pinCache[name]; ok && time.Since(e.at) < pinTTL {
 		pinMu.Unlock()
 		return e.key, e.key != ""
 	}
@@ -490,6 +487,9 @@ scan:
 		}
 	}
 	pinMu.Lock()
+	if len(pinCache) >= pinCacheMax {
+		purgePins(time.Now())
+	}
 	pinCache[name] = pinEntry{key: key, at: time.Now()}
 	pinMu.Unlock()
 	return key, key != ""
@@ -498,6 +498,29 @@ scan:
 type pinEntry struct {
 	key string
 	at  time.Time
+}
+
+// pinTTL is how long a per-name verdict is kept; pinCacheMax bounds how many.
+// Every name any process on the machine looks up lands here (the answer is
+// taken BEFORE any account check), and a daemon that runs for weeks kept them
+// all. At the bound the stale ones go, and if that is not enough, all of them:
+// a verdict recomputed is a directory scan, a map that only grows is a leak.
+const (
+	pinTTL      = 5 * time.Second
+	pinCacheMax = 4096
+)
+
+// purgePins drops every verdict older than pinTTL, or everything when the
+// fresh ones alone still fill the cache. Caller holds pinMu.
+func purgePins(now time.Time) {
+	for n, e := range pinCache {
+		if now.Sub(e.at) >= pinTTL {
+			delete(pinCache, n)
+		}
+	}
+	if len(pinCache) >= pinCacheMax {
+		pinCache = map[string]pinEntry{}
+	}
 }
 
 var (

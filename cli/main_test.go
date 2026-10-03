@@ -64,6 +64,39 @@ func TestDownloadProgressBar(t *testing.T) {
 	}
 }
 
+// The agent streams the binary with no length up front, and the launcher used
+// to accumulate whatever arrived: a peer that never stopped sending would have
+// grown this process until the machine swapped. The cap ends the read with a
+// message that says what happened, not with an out-of-memory kill.
+func TestADownloadPastTheCapIsAbandonedWithAWord(t *testing.T) {
+	saved := maxDownloadSize
+	maxDownloadSize = 64 * 1024
+	t.Cleanup(func() { maxDownloadSize = saved })
+
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	data, rerr := readWithProgress(&endlessReader{}, "v9.9.9", false)
+	w.Close()
+	os.Stderr = old
+	_, _ = io.ReadAll(r)
+
+	if rerr == nil || !strings.Contains(rerr.Error(), "exceeded") {
+		t.Fatalf("an endless stream was accepted: err=%v, %d bytes kept", rerr, len(data))
+	}
+	if data != nil {
+		t.Errorf("%d bytes handed back with the refusal; nothing should be", len(data))
+	}
+}
+
+// endlessReader never reaches EOF.
+type endlessReader struct{}
+
+func (endlessReader) Read(p []byte) (int, error) { return len(p), nil }
+
 func TestHumanBytes(t *testing.T) {
 	cases := []struct {
 		n    int64

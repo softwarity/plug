@@ -1,4 +1,4 @@
-import { Component, CUSTOM_ELEMENTS_SCHEMA, ElementRef, viewChild } from '@angular/core';
+import { Component, CUSTOM_ELEMENTS_SCHEMA, ElementRef, inject, viewChild } from '@angular/core';
 import { NavigationEnd, Router, RouterOutlet, RouterLink, RouterLinkActive } from '@angular/router';
 import { filter } from 'rxjs/operators';
 import { MatIconModule, MatIconRegistry } from '@angular/material/icon';
@@ -25,7 +25,9 @@ interface DocLink {
 export class AppComponent {
   private readonly content = viewChild<ElementRef<HTMLElement>>('content');
 
-  constructor(iconRegistry: MatIconRegistry, router: Router) {
+  constructor() {
+    const iconRegistry = inject(MatIconRegistry);
+    const router = inject(Router);
     // Use Material Symbols (loaded in index.html) as the default glyph set for every <mat-icon>.
     iconRegistry.setDefaultFontSetClass('material-symbols-outlined');
 

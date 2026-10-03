@@ -67,6 +67,15 @@ jobs:
           python3 -m pip install --quiet pyyaml
           python3 scripts/ci/check-doc-snippets.py
 
+      # The site's own checks, before its build: the template lint carries the
+      # accessibility rules, and the tests cover the file widget and the
+      # script that pins the manifests to the release. Both run headless.
+      - name: Lint and test the site
+        working-directory: docs
+        run: |
+          npm run lint
+          npm test
+
       - name: Build doc-site for GitHub Pages
         working-directory: docs
         run: npm run build -- --base-href /plug/

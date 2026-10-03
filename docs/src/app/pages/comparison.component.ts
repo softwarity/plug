@@ -1,11 +1,10 @@
 import { Component } from '@angular/core';
-import { MatIconModule } from '@angular/material/icon';
 import { RouterLink } from '@angular/router';
+import { CtaComponent } from '../cta/cta.component';
 
 @Component({
   selector: 'app-comparison',
-  imports: [MatIconModule, RouterLink],
-  preserveWhitespaces: true,
+  imports: [CtaComponent, RouterLink],
   styles: [
     `
       .cmp {
@@ -59,7 +58,7 @@ import { RouterLink } from '@angular/router';
       }
       .cmp th:nth-child(2),
       .cmp td:nth-child(2) {
-        background: rgba(163, 113, 247, 0.08);
+        background: var(--accent-purple-tint);
         color: var(--text-primary);
       }
       /* Where plug is ahead. Declared AFTER the column rule on purpose: both have
@@ -67,7 +66,7 @@ import { RouterLink } from '@angular/router';
          column's purple rather than fighting it. Only cells that are ahead on a
          fact stated in the same row - nothing here is highlighted for emphasis. */
       .cmp td.win {
-        background: rgba(63, 185, 80, 0.14);
+        background: var(--accent-green-bg);
         color: var(--text-primary);
         font-weight: 600;
       }
@@ -75,37 +74,6 @@ import { RouterLink } from '@angular/router';
         color: var(--text-muted);
         font-size: 0.78rem;
         margin: -10px 0 18px;
-      }
-      .cmp-note {
-        color: var(--text-secondary);
-        font-size: 0.88rem;
-        line-height: 1.5;
-        background: var(--bg-secondary);
-        border: 1px solid var(--border-color);
-        border-radius: 8px;
-        padding: 12px 15px;
-        margin: 0 0 24px;
-      }
-      .cmp-note strong {
-        color: var(--text-primary);
-      }
-      .cta {
-        margin: 4px 0 8px;
-      }
-      .cta a {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        padding: 10px 18px;
-        border-radius: 8px;
-        background: var(--accent-purple);
-        color: #0d1117;
-        font-weight: 600;
-        text-decoration: none;
-      }
-      .cta a:hover {
-        text-decoration: none;
-        filter: brightness(1.08);
       }
     `,
   ],
@@ -155,14 +123,14 @@ import { RouterLink } from '@angular/router';
 
     <p class="cmp-legend">Green marks whichever tool is ahead on the fact stated in that row - including when it is not plug, and both of them when two are ahead of the third. Rows where all three are level are left plain.</p>
 
-    <p class="cmp-note">
+    <p class="note">
       <strong>Why plug:</strong> it behaves the same whichever backend provisions the name, and a
       developer needs nothing but the cluster's address - no Kubernetes tooling, no account in the
       cluster. The setup lives once in the cluster instead of on every desk, which is also why it
       works where a kubeconfig does not exist at all: Docker, Compose, Swarm.
     </p>
 
-    <p class="cmp-note">
+    <p class="note">
       <strong>And there is nothing to point at.</strong> Both of the others work by substitution:
       you name an existing workload and they stand in its place, which is why they need a target and
       a dialog to pick it. plug ADDS a member to the cluster, so you declare a name and that is the
@@ -172,7 +140,7 @@ import { RouterLink } from '@angular/router';
       it back on the way out.
     </p>
 
-    <p class="cmp-note">
+    <p class="note">
       <strong>Where they are ahead:</strong> both authenticate through your kubeconfig and its RBAC,
       where plug on its own trusts whoever reaches the agent (see the
       <a routerLink="/security">security model</a>, and <a routerLink="/meerkat">Meerkat</a> for
@@ -180,9 +148,7 @@ import { RouterLink } from '@angular/router';
       header or a path. And both are older, with IDE extensions and a larger community.
     </p>
 
-    <p class="cta">
-      <a routerLink="/getting-started">Set it up <mat-icon aria-hidden="true" style="font-size:18px;width:18px;height:18px">arrow_forward</mat-icon></a>
-    </p>
+    <app-cta link="/getting-started">Set it up</app-cta>
   `,
 })
 export class ComparisonComponent {}

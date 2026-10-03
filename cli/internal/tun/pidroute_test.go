@@ -1,11 +1,8 @@
-//go:build !windows
+//go:build darwin || windows
 
 package tun
 
-import (
-	"os"
-	"testing"
-)
+import "testing"
 
 func TestWalkToCluster(t *testing.T) {
 	// Synthetic ancestry: 100 (app's child) → 42 (plug -p B) → 7 (shell) → 1.
@@ -61,29 +58,5 @@ func TestWalkToClusterRecycledPID(t *testing.T) {
 	}
 	if key, ok := walkToCluster(100, ppidOf, startOf, clusterForPID); ok {
 		t.Fatalf("recycled ancestor must refuse, got %q — a misroute", key)
-	}
-}
-
-func TestProcStartSelf(t *testing.T) {
-	// The real per-OS procStart must return a positive, readable stamp for us.
-	st, ok := procStart(os.Getpid())
-	if !ok {
-		mustWorkInCI(t, ok, "procStart")
-		return
-	}
-	if st <= 0 {
-		t.Fatalf("procStart(self) = %d, want > 0", st)
-	}
-}
-
-func TestPpidOfSelf(t *testing.T) {
-	// The real per-OS ppidOf must agree with the runtime for our own process.
-	ppid, ok := ppidOf(os.Getpid())
-	if !ok {
-		mustWorkInCI(t, ok, "ppidOf")
-		return
-	}
-	if ppid != os.Getppid() {
-		t.Fatalf("ppidOf(self) = %d, want %d", ppid, os.Getppid())
 	}
 }

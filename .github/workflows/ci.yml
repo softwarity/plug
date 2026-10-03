@@ -13,6 +13,11 @@ name: CI
 on:
   push:
     branches: ["**"]
+  # Kept for FORK pull requests only, where no push reaches this repository.
+  # A PR from a branch of this repository already has its push run, and the
+  # pull_request run doubled it: two pipelines per commit, the second of which
+  # skipped the clusters anyway. Every root job below carries the gate (a
+  # trigger cannot filter on the head repository); what `needs` them follows.
   pull_request:
   workflow_dispatch: # manual e2e-over-the-mesh run
 
@@ -39,6 +44,7 @@ jobs:
   # records its real PASS/FAIL as an artifact the `platforms` job reads back.
   test:
     name: Test (${{ matrix.os }})
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     strategy:
       fail-fast: false
       matrix:
@@ -110,22 +116,18 @@ jobs:
         with:
           name: plat-test-${{ matrix.os }}
           path: plat/*.txt
-          # 30 days, not 1: the release gate re-reads these markers to decide
-          # whether a tagged commit is publishable, and a tag can be cut days
-          # after the commit. Expired markers would fail the gate closed for a
-          # reason that has nothing to do with the code. They are 170 bytes.
-          retention-days: 30
+          # One day: the only reader is the `platforms` job of THIS run (the
+          # release is an approval on a green run, not a re-read of markers).
+          retention-days: 1
       - uses: actions/upload-artifact@v7
         if: always() && steps.up_plat_test.outcome == 'failure'
         with:
           overwrite: true
           name: plat-test-${{ matrix.os }}
           path: plat/*.txt
-          # 30 days, not 1: the release gate re-reads these markers to decide
-          # whether a tagged commit is publishable, and a tag can be cut days
-          # after the commit. Expired markers would fail the gate closed for a
-          # reason that has nothing to do with the code. They are 170 bytes.
-          retention-days: 30
+          # One day: the only reader is the `platforms` job of THIS run (the
+          # release is an approval on a green run, not a re-read of markers).
+          retention-days: 1
 
   # The visible cross-platform proof: build plug natively on each OS and loop real
   # traffic through a real TUN device BY NAME (no agent, no Docker). macOS/Linux
@@ -177,21 +179,21 @@ jobs:
         with:
           name: plat-selftest-${{ matrix.os }}
           path: cli/plat/*.txt
-          retention-days: 30 # the release gate re-reads them; see plat-test above
+          retention-days: 1 # read by this run's `platforms` job only; see plat-test above
       - uses: actions/upload-artifact@v7
         if: always() && steps.up_plat_selftest.outcome == 'failure'
         with:
           overwrite: true
           name: plat-selftest-${{ matrix.os }}
           path: cli/plat/*.txt
-          retention-days: 30 # the release gate re-reads them; see plat-test above
+          retention-days: 1 # read by this run's `platforms` job only; see plat-test above
 
   # One-glance platform grid in the run Summary, built from the REAL per-OS
   # results each job recorded rather than from job statuses.
   platforms:
     name: Platform coverage
     needs: [test, selftest]
-    if: always()
+    if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository)
     runs-on: ubuntu-latest
     # The verdict the image gate reads, built from the MARKERS. Kept that way now
     # that no job may fail quietly: a marker records what happened even when a job
@@ -277,10 +279,6 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  # The three e2e families must run the SAME cells, in the same order, under the
-  # same names — that is the only way three jobs read as a comparison instead of
-  # three separate stories. Drift is silent, so it is checked here rather than
-  # noticed months later. No `needs`: it costs seconds and should fail early.
   # The number, and what it is worth. It runs after the tests rather than beside
   # them because it has nothing of its own to compute: it merges what they
   # already measured. `needs` names both producers so a missing profile is a
@@ -293,7 +291,7 @@ jobs:
   coverage:
     name: Coverage
     needs: [test, build]
-    if: always()
+    if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -352,11 +350,15 @@ jobs:
           retention-days: 7
 
   ci-shape:
-    name: The three e2e blocks are identical
+    name: The e2e chain, its cell files and the job names agree
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - run: bash scripts/ci/check-common-block.sh
+      # The chain is written once (_e2e.yml), so the three families cannot
+      # drift from each other; what can still drift is the cell list against
+      # its files, and the names the other scripts read (see the script).
+      - run: bash scripts/ci/check-e2e-cells.sh
       # The cluster idle loop decides which caller job ends it from the corr id;
       # a wrong family or attempt there means six runners held to their TTL.
       - run: IDLE_SELFTEST=1 bash scripts/ci/idle-until-caller-done.sh
@@ -375,6 +377,7 @@ jobs:
   # wait would only push the legs' start out.
   build-clients:
     name: Build the e2e clients (once, for every leg)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -486,8 +489,8 @@ jobs:
   image:
     name: Publish the tested images (standalone + hosted)
     # Publish ONLY once EVERY test has passed — unit tests, the TUN selftests on
-    # all three OSes, and the full mesh e2e on BOTH cluster families (compose
-    # and kubernetes: protocol matrix + multicluster + takeover, ×3 OS each). An
+    # all three OSes, and the full mesh e2e on the THREE cluster families
+    # (compose, kind and swarm: the same chain, ×3 OS each, plus arm64). An
     # image must never ship from a commit the e2e didn't bless. A fully green
     # MANUAL dispatch publishes too ("a manual build is a whole build").
     # main publishes `latest` (+ the `main` tag); ANY OTHER branch publishes ONLY
@@ -859,17 +862,14 @@ jobs:
             echo "- built from ${TESTED::7}, tagged $TAG on the notes commit $(git rev-parse --short HEAD)"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # The e2e that native-Linux Docker can't give us: run plug NATIVELY on each OS
-  # against a REAL cluster, reaching services BY NAME over a Tailscale mesh (the
-  # cluster can't be Linux containers on a mac/win runner, so it runs ONCE on its
-  # own Linux run and every client joins it). THREE FAMILIES of clusters, same
-  # e2e chain against each: compose-for.yml (docker compose), k8s-for.yml (kind
-  # — real upstream Kubernetes, the agent from the published deploy/plug-k8s.yaml)
-  # and swarm-for.yml (single-node Swarm — the agent as a Swarm service on a
-  # non-attachable overlay). Part of CI, not a separate workflow; runs on EVERY
-  # branch push (so any branch gets its full mesh-blessed image). Off PRs — it's
-  # heavy and needs the Tailscale/Docker secrets, absent on fork PRs. Needs
-  # TAILSCALE_CLIENT_ID/SECRET.
+  # The clusters for the mesh e2e (see _e2e.yml for the e2e itself). THREE
+  # FAMILIES, the same chain against each: compose-for.yml (docker compose),
+  # k8s-for.yml (kind, real upstream Kubernetes, the agent from the published
+  # deploy/plug-k8s.yaml) and swarm-for.yml (a single-node Swarm, the agent as
+  # a Swarm service on a non-attachable overlay), all three facades over
+  # _cluster.yml. Part of CI, not a separate workflow; runs on EVERY branch
+  # push (so any branch gets its full mesh-blessed image). Off PRs: it is heavy
+  # and needs the Tailscale/Docker secrets, absent on fork PRs.
   #
   # This job only DISPATCHES the cluster workflows; the e2e legs then wait for
   # those clusters to come up inside their own setup step. It is gated on the
@@ -886,7 +886,7 @@ jobs:
     # joins the tailnet. Making the dispatch wait for the build serialised two
     # things that have no reason to be in sequence.
     # Gated on the selftest, which is 3 minutes and decides the run: a red
-    # selftest means the image is never published, and until now the nine e2e
+    # selftest means the image is never published, and until now the ten e2e
     # legs ran their 20 minutes on six clusters anyway, for a run already lost.
     # fail-fast stays off INSIDE the matrices, so one OS failing still shows
     # what the others do; this only stops dispatching clusters for a run the
@@ -1006,7 +1006,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       actions: write # cancel the run when a leg fails
-    timeout-minutes: 30
+    # Longer than the longest leg (30 minutes on k8s and swarm) plus the wait
+    # for a runner: at 30 this watcher could expire before the legs it watches.
+    timeout-minutes: 40
     steps:
       - name: Cancel the run when an e2e leg fails
         shell: bash
@@ -1033,733 +1035,100 @@ jobs:
             sleep 15
           done
 
+  # The mesh e2e, ONE chain written in _e2e.yml and run four times: the three
+  # cluster families over the three OSes, and the arm64 client on the compose
+  # clusters. The four jobs below differ only by what they pass. Each keeps
+  # its own key because `needs` is how kill-<family> waits for EXACTLY the legs
+  # that use its clusters, and `needs` cannot name a subset of a matrix.
+  #
+  # Off PRs: start-cluster is, so these are skipped with it (the secrets are
+  # absent on a fork PR, and the run is heavy). Each carries `needs: test`, so
+  # nothing is ever exercised against code whose unit tests are red.
+  #
+  # The job names the other readers rely on: abort-on-fail selects the legs by
+  # `^e2e-` on the job name (a called workflow's jobs are named
+  # "<caller> / <job>", so the key here is the prefix); image and the kill
+  # jobs `needs` these keys; scripts/ci/check-e2e-cells.sh asserts all of it.
   e2e-compose:
-    name: e2e-compose (${{ matrix.os }}, by name over the mesh)
     needs: [test, start-cluster, build-clients]
-    runs-on: ${{ matrix.os }}
-    # Read-only, and the checkout does not keep the token either (see the first
-    # steps). A leg runs pip, third-party images and a plug binary installed
-    # from the cluster, with nothing to write back: it is abort-on-fail that
-    # cancels the run when a leg fails, and no `gh` runs on a leg.
     permissions:
       contents: read
-    timeout-minutes: 25 # a hung cell must not run the job (and the cluster) for hours
-    env:
-      # What CELL_MAX may spend: kept in step with timeout-minutes below by
-      # check-common-block.sh, because a stale copy would give a late cell a
-      # watchdog that rings after the job is already dead - which is the bug it
-      # exists to fix.
-      PLUG_JOB_MINUTES: "25"
-      A: plug-cluster-${{ github.run_id }}-${{ github.run_attempt }}-a
-      B: plug-cluster-${{ github.run_id }}-${{ github.run_attempt }}-b
-      AGENT_IMAGE: docker.io/softwarity/plug:sha-${{ needs.start-cluster.outputs.short_sha }}-amd64
-      # Where the shared client bundle lands (relative to the workspace, so Git
-      # Bash on Windows reads it the same way every other shell does).
-      PREBUILT_CLIENTS: e2e-clients
-    strategy:
-      fail-fast: false # one OS failing must not cancel the others
-      matrix:
-        # The same three OSes as e2e-swarm and e2e-k8s, and that is the point:
-        # three matrices of three legs running one identical block read as a
-        # comparison. A fourth leg here made compose look like a different test.
-        # The arm64 client lives in e2e-arm64 — it asks an ARCHITECTURE question,
-        # not a cluster-family one.
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        # `alias` names the tailnet node; a Tailscale hostname must be a DNS
-        # label, so it is carried by the matrix rather than computed from the
-        # runner label (GitHub expressions have no replace()).
-        include:
-          - os: ubuntu-latest
-            alias: ubuntu
-          - os: macos-latest
-            alias: macos
-          - os: windows-latest
-            alias: windows
-    steps:
-      # FIRST, before the checkout: the cell watchdog in e2e-matrix.sh budgets
-      # a late cell from what is left of the job, and "the job" starts here,
-      # not at the end of a setup that waits up to ten minutes for a cluster.
-      - name: Start the job clock (the cell watchdog budgets from it)
-        shell: bash
-        run: echo "PLUG_JOB_T0=$(date +%s)" >> "$GITHUB_ENV"
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0 # the compat cell decides by ANCESTRY (launcher rev vs fix commit)
-          persist-credentials: false # nothing after this step talks to git; see `permissions`
-      # Retried once: see the note on the same action in build-clients. Adoptium's
-      # signature verification failed there and cost a whole leg.
-      - uses: actions/setup-java@v6 # pin the JRE — the runners' ambient Java differs by OS; no maven cache, nothing builds here
-        id: java
-        continue-on-error: true
-        with:
-          distribution: temurin
-          java-version: '21'
-      - uses: actions/setup-java@v6
-        if: steps.java.outcome == 'failure'
-        with:
-          distribution: temurin
-          java-version: '21'
-      # Building the four language clients used to be the single biggest slice of
-      # a leg — 493s of a 769s setup on Windows, paid again by each of the three
-      # Windows legs for bytes that were identical. build-clients does it once
-      # (see scripts/ci/build-clients.sh); this leg takes delivery.
-      #
-      # Go is not set up here any more: nothing on a leg compiles when the
-      # bundle is present. The fallback in e2e-matrix.sh uses whichever Go the
-      # runner image ships, which is the right cost for a case that should not
-      # happen.
-      - uses: actions/download-artifact@v7
-        with:
-          name: e2e-clients
-          path: e2e-clients
-      # Python is the one client that cannot be shared: psycopg2-binary and
-      # grpcio are compiled wheels. It costs 42s, and unlike the npm cache —
-      # which pointed at ~/.npm and therefore NEVER hit on Windows, where npm
-      # caches in %LocalAppData% — this one is right on all three.
-      - uses: actions/cache@v6
-        with:
-          # One path per OS; actions/cache ignores the ones that do not exist.
-          path: |
-            ~/.cache/pip
-            ~/Library/Caches/pip
-            ~\AppData\Local\pip\Cache
-          key: pip-${{ runner.os }}-${{ hashFiles('e2e/clients/python/requirements.txt') }}
-          restore-keys: pip-${{ runner.os }}-
-      # v4 is a rewrite in JavaScript. v3 built Tailscale from source on macOS,
-      # which dragged in actions/checkout@v4.2.2 (Node 20) and `brew install
-      # coreutils` (untrusted tap): both CI warnings came from this one step.
-      - name: Join the tailnet
-        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
-        with:
-          oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
-          tags: tag:ci
-          hostname: plug-${{ matrix.alias }}-${{ github.run_id }}-${{ github.run_attempt }}
-          args: --accept-dns=false # reach the cluster by tailnet IP; don't let Tailscale drive DNS
-      # And v4 points macOS at MagicDNS on its own once the tunnel is up
-      # (networksetup -setdnsservers Ethernet 100.100.100.100, plus a search
-      # domain). --accept-dns=false does not stop it: the flag tells the client
-      # not to touch DNS, the action then does it anyway, afterwards. That
-      # resolver serves the tailnet and nothing else here, so every public name
-      # stopped resolving and the step right below died with ENOTFOUND fetching
-      # an artifact, before plug was even installed. We reach the cluster by
-      # tailnet IP, so hand the resolver straight back. "Ethernet" is the
-      # service name the action itself hardcodes.
-      - name: Take macOS DNS back from Tailscale
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          sudo networksetup -setdnsservers Ethernet empty
-          sudo networksetup -setsearchdomains Ethernet empty
-          sudo dscacheutil -flushcache || true # belt and braces, not the assertion
-          # Prove it through getaddrinfo, which is what the next action resolves
-          # with. Without this the symptom surfaces one step later, as someone
-          # else's ENOTFOUND.
-          for i in $(seq 1 10); do
-            python3 -c "import socket; socket.getaddrinfo('api.github.com', 443)" 2>/dev/null && exit 0
-            sleep 1
-          done
-          echo "public DNS is still broken after handing the resolver back"
-          exit 1
-      - uses: actions/download-artifact@v7 # the last published launchers, for the compat cell
-        with:
-          name: latest-launchers
-          path: latest-launchers
-      # One family per step so each shows its own green/red in the run view. The
-      # setup step installs plug FROM the cluster + builds the clients and records
-      # the shared state ($RUNNER_TEMP) the family steps read back. A failing
-      # cell STOPS its leg: the cells after it are skipped (grey, not green),
-      # the leg concludes red within seconds and abort-on-fail cancels the whole
-      # run, the nine other legs included - where `if: always()` used to carry a
-      # leg red at minute 5 through twenty more minutes of cells before anyone
-      # could act on it. What a red run shows is the failing leg's red cell and
-      # whatever the others had reached by then. The cells most likely to trip on
-      # a timing (takeover, orphan, resilience) come right after env, before the
-      # 8-minute protocol matrix, for the same reason: a flake should cost
-      # minutes, not a run. The compat step closes the set: the last published
-      # launcher must still drive THIS branch's core (the inter-version channel).
-      # ── THE COMMON BLOCK ─────────────────────────────────────────────────
-      # Identical, to the character, in e2e-compose, e2e-swarm and e2e-k8s: the
-      # same cells, in the same order, under the same names. That is the point.
-      # These assertions are about PLUG, and plug must behave the same whichever
-      # backend provisions the name — so seeing three identical lists side by
-      # side is what makes a family-specific divergence visible at a glance.
-      #
-      # The names say what is ASSERTED, never how the backend does it: "park the
-      # deployed service" is one test, whether the script stops a container,
-      # scales a service to 0 or repoints a Service. Naming the mechanism made
-      # three identical tests look like three different ones.
-      #
-      # scripts/ci/check-common-block.sh fails the build if the three drift, and
-      # it compares EVERY step that runs something, not merely this block. So
-      # there is no place for a cell one family needs and the others do not: the
-      # guard would refuse it. That is the strictness working, not a gap. A real
-      # need for one is the moment to teach that script where the block ends,
-      # deliberately, rather than to work around it here.
-      - name: Setup — install plug from the cluster + build clients
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh setup "$A" "$B" 2222
-      - name: Env passthrough
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh env "$A" "$B" 2222
-      - name: Takeover — park the deployed service, serve ours, restore it
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh takeover "$A" "$B" 2222
-      - name: Orphaned takeover, session killed with no unserve (the workload comes back without an agent restart)
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh orphan "$A" "$B" 2222
-      - name: Resilience — agent restarted mid-session (self-heal, boot-gc, re-park)
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh resilience "$A" "$B" 2222
-      - name: Live mount — the workload's volumes, automatic and explicit, read and written
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh mount "$A" "$B" 2222
-      - name: Protocol matrix (4 langs × 8 protocols)
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh matrix "$A" "$B" 2222
-      - name: Multicluster (simultaneous)
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh multicluster "$A" "$B" 2222
-      - name: Container member, an unmodified image in the cluster (--dockerrun)
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh dockerrun "$A" "$B" 2222
-      - name: Key mount, the profile's own key carried into the sidecar (--dockerrun)
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh keymount "$A" "$B" 2222
-      - name: Outage recovery
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh outage "$A" "$B" 2222
-      - name: Expose — serve a local port to the cluster (-s)
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh expose "$A" "$B" 2222
-      - name: Expose, named port — plug picks it, {PORT} carries it into the command
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh exposevar "$A" "$B" 2222
-      - name: Gateway callback (external → published gateway → sink)
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh gateway "$A" "$B" 2222
-      - name: Collision — a name already taken is refused
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh collision "$A" "$B" 2222
-      - name: Name lease — a swept signpost must not free a live name
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh lease "$A" "$B" 2222
-      - name: Same cluster port — two names, both reachable
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh sameport "$A" "$B" 2222
-      - name: Multi-port — one name, three cluster ports
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh multiport "$A" "$B" 2222
-      - name: Launcher compat — latest published launcher, this branch's core
-        shell: bash
-        run: bash scripts/ci/compat-launcher.sh "$A" 2222
-      - name: Update — plug update verb + launcher path (per-leg agent)
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh update "$A" "$B" 2222
-      - name: Update — <tag> refuses an unpublished tag, and an agent too old
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh updatetag "$A" "$B" 2222
-      - name: Update — the background check finds it, the next launch says it
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh updatenotify "$A" "$B" 2222
-      - name: Update — a release agent retargets to the newest release
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh updatejump "$A" "$B" 2222
-  # The arm64 client. This asks an ARCHITECTURE question — does a NATIVE arm64
-  # plug reach cluster services by name — not a cluster-family one. It used to be
-  # a fourth leg of e2e-compose, which made three matrices that should read as
-  # one comparison look like two identical blocks and an odd one out.
+    uses: ./.github/workflows/_e2e.yml
+    with:
+      family: compose
+      label: by name over the mesh
+      legs: '["ubuntu-latest", "macos-latest", "windows-latest"]'
+      cluster_a: plug-compose-${{ github.run_id }}-${{ github.run_attempt }}-a
+      cluster_b: plug-compose-${{ github.run_id }}-${{ github.run_attempt }}-b
+      minutes: 25
+      short_sha: ${{ needs.start-cluster.outputs.short_sha }}
+    secrets:
+      TAILSCALE_CLIENT_ID: ${{ secrets.TAILSCALE_CLIENT_ID }}
+      TAILSCALE_CLIENT_SECRET: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
+  # compose's 25 + the extra wait for the kind rollout; a hung cell must still
+  # not run the cluster for hours.
+  e2e-k8s:
+    needs: [test, start-cluster, build-clients]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/_e2e.yml
+    with:
+      family: k8s
+      label: the same chain on kind
+      legs: '["ubuntu-latest", "macos-latest", "windows-latest"]'
+      cluster_a: plug-k8s-${{ github.run_id }}-${{ github.run_attempt }}-ka
+      cluster_b: plug-k8s-${{ github.run_id }}-${{ github.run_attempt }}-kb
+      minutes: 30
+      short_sha: ${{ needs.start-cluster.outputs.short_sha }}
+    secrets:
+      TAILSCALE_CLIENT_ID: ${{ secrets.TAILSCALE_CLIENT_ID }}
+      TAILSCALE_CLIENT_SECRET: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
+  e2e-swarm:
+    needs: [test, start-cluster, build-clients]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/_e2e.yml
+    with:
+      family: swarm
+      label: the same chain on swarm
+      legs: '["ubuntu-latest", "macos-latest", "windows-latest"]'
+      cluster_a: plug-swarm-${{ github.run_id }}-${{ github.run_attempt }}-sa
+      cluster_b: plug-swarm-${{ github.run_id }}-${{ github.run_attempt }}-sb
+      minutes: 30
+      short_sha: ${{ needs.start-cluster.outputs.short_sha }}
+    secrets:
+      TAILSCALE_CLIENT_ID: ${{ secrets.TAILSCALE_CLIENT_ID }}
+      TAILSCALE_CLIENT_SECRET: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
+  # The arm64 client. This asks an ARCHITECTURE question (does a NATIVE arm64
+  # plug reach cluster services by name), not a cluster-family one. It used to
+  # be a fourth leg of e2e-compose, which made three matrices that should read
+  # as one comparison look like two identical blocks and an odd one out.
   #
   # linux/arm64 has been built and published on every release since the
   # multi-arch image existed, and nothing ever ran it: every leg was amd64.
   #
-  # It borrows the compose cluster — the lightest — and owns its own names: the
+  # It borrows the compose clusters (the lightest) and owns its own names: the
   # cells that create names through -s derive them from $leg, which tells the
-  # architectures apart (before that, this leg claimed exposed-linux and took the
-  # amd64 leg down with it, measured). What it does NOT run are the cells bound
-  # to services the CLUSTER declares per leg — flaky-<leg>, tko-<leg>, res-*,
-  # prev-agent-<leg> — which exist for linux/mac/win only. A fourth set would
-  # double the Linux load on a shared cluster to re-prove AGENT behaviour, and
-  # the agent is the same amd64 container whatever the client's architecture.
+  # architectures apart (before that, this leg claimed exposed-linux and took
+  # the amd64 leg down with it, measured). `full: false` is the subset it runs,
+  # and _e2e.yml says which cells that leaves out and why.
   e2e-arm64:
-    name: e2e-arm64 (a native arm64 client, on the compose cluster)
     needs: [test, start-cluster, build-clients]
-    runs-on: ubuntu-24.04-arm
     permissions:
-      contents: read # read-only and no persisted token, as on every leg (see e2e-compose)
-    timeout-minutes: 25
-    env:
-      # What CELL_MAX may spend: kept in step with timeout-minutes below by
-      # check-common-block.sh, because a stale copy would give a late cell a
-      # watchdog that rings after the job is already dead - which is the bug it
-      # exists to fix.
-      PLUG_JOB_MINUTES: "25"
-      A: plug-cluster-${{ github.run_id }}-${{ github.run_attempt }}-a
-      B: plug-cluster-${{ github.run_id }}-${{ github.run_attempt }}-b
-      AGENT_IMAGE: docker.io/softwarity/plug:sha-${{ needs.start-cluster.outputs.short_sha }}-amd64
-      PREBUILT_CLIENTS: e2e-clients
-    steps:
-      - name: Start the job clock (the cell watchdog budgets from it)
-        shell: bash
-        run: echo "PLUG_JOB_T0=$(date +%s)" >> "$GITHUB_ENV"
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-      # Retried once: see the note on the same action in build-clients.
-      - uses: actions/setup-java@v6
-        id: java
-        continue-on-error: true
-        with:
-          distribution: temurin
-          java-version: '21'
-      - uses: actions/setup-java@v6
-        if: steps.java.outcome == 'failure'
-        with:
-          distribution: temurin
-          java-version: '21'
-      - uses: actions/download-artifact@v7
-        with:
-          name: e2e-clients
-          path: e2e-clients
-      - uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cache/pip
-          key: pip-${{ runner.os }}-arm64-${{ hashFiles('e2e/clients/python/requirements.txt') }}
-          restore-keys: pip-${{ runner.os }}-arm64-
-      - name: Join the tailnet
-        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
-        with:
-          oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
-          tags: tag:ci
-          hostname: plug-ubuntu-arm-${{ github.run_id }}-${{ github.run_attempt }}
-          args: --accept-dns=false # reach the cluster by tailnet IP; don't let Tailscale drive DNS
-      - name: Setup — install plug from the cluster + build clients
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh setup "$A" "$B" 2222
-      - name: Env passthrough
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh env "$A" "$B" 2222
-      - name: Protocol matrix (4 langs × 8 protocols)
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh matrix "$A" "$B" 2222
-      - name: Multicluster (simultaneous)
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh multicluster "$A" "$B" 2222
-      # No --dockerrun cell here, and the reason is the image rather than the
-      # feature. AGENT_IMAGE is the CLUSTER's image, tagged -amd64; this leg is
-      # an arm64 runner, and the multi-arch tag does not exist yet at this point
-      # of the pipeline - the promotion job that merges the manifest runs after
-      # these legs. The three families cover the cell on their ubuntu legs.
-      - name: Expose — serve a local port to the cluster (-s)
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh expose "$A" "$B" 2222
-      - name: Expose, named port — plug picks it, {PORT} carries it into the command
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh exposevar "$A" "$B" 2222
-      - name: Gateway callback (external → published gateway → sink)
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh gateway "$A" "$B" 2222
-      - name: Collision — a name already taken is refused
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh collision "$A" "$B" 2222
-      - name: Name lease — a swept signpost must not free a live name
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh lease "$A" "$B" 2222
-      - name: Same cluster port — two names, both reachable
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh sameport "$A" "$B" 2222
-      - name: Multi-port — one name, three cluster ports
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh multiport "$A" "$B" 2222
-
-  e2e-k8s:
-    name: e2e-k8s (${{ matrix.os }}, same chain on kind)
-    needs: [test, start-cluster, build-clients]
-    runs-on: ${{ matrix.os }}
-    permissions:
-      contents: read # read-only and no persisted token, as on every leg (see e2e-compose)
-    timeout-minutes: 30 # compose's 25 + the extra wait for the kind rollout — a hung cell must still not run the cluster for hours
-    env:
-      # What CELL_MAX may spend: kept in step with timeout-minutes below by
-      # check-common-block.sh, because a stale copy would give a late cell a
-      # watchdog that rings after the job is already dead - which is the bug it
-      # exists to fix.
-      PLUG_JOB_MINUTES: "30"
-      A: plug-k8s-${{ github.run_id }}-${{ github.run_attempt }}-ka
-      B: plug-k8s-${{ github.run_id }}-${{ github.run_attempt }}-kb
-      AGENT_IMAGE: docker.io/softwarity/plug:sha-${{ needs.start-cluster.outputs.short_sha }}-amd64
-      # Where the shared client bundle lands (relative to the workspace, so Git
-      # Bash on Windows reads it the same way every other shell does).
-      PREBUILT_CLIENTS: e2e-clients
-    strategy:
-      fail-fast: false # one OS failing must not cancel the others
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    steps:
-      - name: Start the job clock (the cell watchdog budgets from it)
-        shell: bash
-        run: echo "PLUG_JOB_T0=$(date +%s)" >> "$GITHUB_ENV"
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-      # Retried once: see the note on the same action in build-clients. Adoptium's
-      # signature verification failed there and cost a whole leg.
-      - uses: actions/setup-java@v6 # pin the JRE — the runners' ambient Java differs by OS; no maven cache, nothing builds here
-        id: java
-        continue-on-error: true
-        with:
-          distribution: temurin
-          java-version: '21'
-      - uses: actions/setup-java@v6
-        if: steps.java.outcome == 'failure'
-        with:
-          distribution: temurin
-          java-version: '21'
-      # Building the four language clients used to be the single biggest slice of
-      # a leg — 493s of a 769s setup on Windows, paid again by each of the three
-      # Windows legs for bytes that were identical. build-clients does it once
-      # (see scripts/ci/build-clients.sh); this leg takes delivery.
-      #
-      # Go is not set up here any more: nothing on a leg compiles when the
-      # bundle is present. The fallback in e2e-matrix.sh uses whichever Go the
-      # runner image ships, which is the right cost for a case that should not
-      # happen.
-      - uses: actions/download-artifact@v7
-        with:
-          name: e2e-clients
-          path: e2e-clients
-      # Python is the one client that cannot be shared: psycopg2-binary and
-      # grpcio are compiled wheels. It costs 42s, and unlike the npm cache —
-      # which pointed at ~/.npm and therefore NEVER hit on Windows, where npm
-      # caches in %LocalAppData% — this one is right on all three.
-      - uses: actions/cache@v6
-        with:
-          # One path per OS; actions/cache ignores the ones that do not exist.
-          path: |
-            ~/.cache/pip
-            ~/Library/Caches/pip
-            ~\AppData\Local\pip\Cache
-          key: pip-${{ runner.os }}-${{ hashFiles('e2e/clients/python/requirements.txt') }}
-          restore-keys: pip-${{ runner.os }}-
-      - uses: actions/download-artifact@v7 # the last published launchers, for the compat cell
-        with:
-          name: latest-launchers
-          path: latest-launchers
-      - name: Join the tailnet
-        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
-        with:
-          oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
-          tags: tag:ci
-          hostname: plug-k8s-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
-          args: --accept-dns=false # reach the cluster by tailnet IP; don't let Tailscale drive DNS
-      # And v4 points macOS at MagicDNS on its own once the tunnel is up
-      # (networksetup -setdnsservers Ethernet 100.100.100.100, plus a search
-      # domain). --accept-dns=false does not stop it: the flag tells the client
-      # not to touch DNS, the action then does it anyway, afterwards. That
-      # resolver serves the tailnet and nothing else here, so every public name
-      # stopped resolving and the step right below died with ENOTFOUND fetching
-      # an artifact, before plug was even installed. We reach the cluster by
-      # tailnet IP, so hand the resolver straight back. "Ethernet" is the
-      # service name the action itself hardcodes.
-      - name: Take macOS DNS back from Tailscale
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          sudo networksetup -setdnsservers Ethernet empty
-          sudo networksetup -setsearchdomains Ethernet empty
-          sudo dscacheutil -flushcache || true # belt and braces, not the assertion
-          # Prove it through getaddrinfo, which is what the next action resolves
-          # with. Without this the symptom surfaces one step later, as someone
-          # else's ENOTFOUND.
-          for i in $(seq 1 10); do
-            python3 -c "import socket; socket.getaddrinfo('api.github.com', 443)" 2>/dev/null && exit 0
-            sleep 1
-          done
-          echo "public DNS is still broken after handing the resolver back"
-          exit 1
-      # ── THE COMMON BLOCK ─────────────────────────────────────────────────
-      # Identical, to the character, in e2e-compose, e2e-swarm and e2e-k8s: the
-      # same cells, in the same order, under the same names. That is the point.
-      # These assertions are about PLUG, and plug must behave the same whichever
-      # backend provisions the name — so seeing three identical lists side by
-      # side is what makes a family-specific divergence visible at a glance.
-      #
-      # The names say what is ASSERTED, never how the backend does it: "park the
-      # deployed service" is one test, whether the script stops a container,
-      # scales a service to 0 or repoints a Service. Naming the mechanism made
-      # three identical tests look like three different ones.
-      #
-      # scripts/ci/check-common-block.sh fails the build if the three drift, and
-      # it compares EVERY step that runs something, not merely this block. So
-      # there is no place for a cell one family needs and the others do not: the
-      # guard would refuse it. That is the strictness working, not a gap. A real
-      # need for one is the moment to teach that script where the block ends,
-      # deliberately, rather than to work around it here.
-      - name: Setup — install plug from the cluster + build clients
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh setup "$A" "$B" 2222
-      - name: Env passthrough
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh env "$A" "$B" 2222
-      - name: Takeover — park the deployed service, serve ours, restore it
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh takeover "$A" "$B" 2222
-      - name: Orphaned takeover, session killed with no unserve (the workload comes back without an agent restart)
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh orphan "$A" "$B" 2222
-      - name: Resilience — agent restarted mid-session (self-heal, boot-gc, re-park)
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh resilience "$A" "$B" 2222
-      - name: Live mount — the workload's volumes, automatic and explicit, read and written
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh mount "$A" "$B" 2222
-      - name: Protocol matrix (4 langs × 8 protocols)
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh matrix "$A" "$B" 2222
-      - name: Multicluster (simultaneous)
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh multicluster "$A" "$B" 2222
-      - name: Container member, an unmodified image in the cluster (--dockerrun)
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh dockerrun "$A" "$B" 2222
-      - name: Key mount, the profile's own key carried into the sidecar (--dockerrun)
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh keymount "$A" "$B" 2222
-      - name: Outage recovery
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh outage "$A" "$B" 2222
-      - name: Expose — serve a local port to the cluster (-s)
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh expose "$A" "$B" 2222
-      - name: Expose, named port — plug picks it, {PORT} carries it into the command
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh exposevar "$A" "$B" 2222
-      - name: Gateway callback (external → published gateway → sink)
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh gateway "$A" "$B" 2222
-      - name: Collision — a name already taken is refused
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh collision "$A" "$B" 2222
-      - name: Name lease — a swept signpost must not free a live name
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh lease "$A" "$B" 2222
-      - name: Same cluster port — two names, both reachable
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh sameport "$A" "$B" 2222
-      - name: Multi-port — one name, three cluster ports
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh multiport "$A" "$B" 2222
-      - name: Launcher compat — latest published launcher, this branch's core
-        shell: bash
-        run: bash scripts/ci/compat-launcher.sh "$A" 2222
-      - name: Update — plug update verb + launcher path (per-leg agent)
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh update "$A" "$B" 2222
-      - name: Update — <tag> refuses an unpublished tag, and an agent too old
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh updatetag "$A" "$B" 2222
-      - name: Update — the background check finds it, the next launch says it
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh updatenotify "$A" "$B" 2222
-      - name: Update — a release agent retargets to the newest release
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh updatejump "$A" "$B" 2222
-  e2e-swarm:
-    name: e2e-swarm (${{ matrix.os }}, same chain on swarm)
-    needs: [test, start-cluster, build-clients]
-    runs-on: ${{ matrix.os }}
-    permissions:
-      contents: read # read-only and no persisted token, as on every leg (see e2e-compose)
-    timeout-minutes: 30
-    env:
-      # What CELL_MAX may spend: kept in step with timeout-minutes below by
-      # check-common-block.sh, because a stale copy would give a late cell a
-      # watchdog that rings after the job is already dead - which is the bug it
-      # exists to fix.
-      PLUG_JOB_MINUTES: "30"
-      A: plug-swarm-${{ github.run_id }}-${{ github.run_attempt }}-sa
-      B: plug-swarm-${{ github.run_id }}-${{ github.run_attempt }}-sb
-      AGENT_IMAGE: docker.io/softwarity/plug:sha-${{ needs.start-cluster.outputs.short_sha }}-amd64
-      # Where the shared client bundle lands (relative to the workspace, so Git
-      # Bash on Windows reads it the same way every other shell does).
-      PREBUILT_CLIENTS: e2e-clients
-    strategy:
-      fail-fast: false # one OS failing must not cancel the others
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    steps:
-      - name: Start the job clock (the cell watchdog budgets from it)
-        shell: bash
-        run: echo "PLUG_JOB_T0=$(date +%s)" >> "$GITHUB_ENV"
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-      # Retried once: see the note on the same action in build-clients. Adoptium's
-      # signature verification failed there and cost a whole leg.
-      - uses: actions/setup-java@v6 # pin the JRE — the runners' ambient Java differs by OS; no maven cache, nothing builds here
-        id: java
-        continue-on-error: true
-        with:
-          distribution: temurin
-          java-version: '21'
-      - uses: actions/setup-java@v6
-        if: steps.java.outcome == 'failure'
-        with:
-          distribution: temurin
-          java-version: '21'
-      # Building the four language clients used to be the single biggest slice of
-      # a leg — 493s of a 769s setup on Windows, paid again by each of the three
-      # Windows legs for bytes that were identical. build-clients does it once
-      # (see scripts/ci/build-clients.sh); this leg takes delivery.
-      #
-      # Go is not set up here any more: nothing on a leg compiles when the
-      # bundle is present. The fallback in e2e-matrix.sh uses whichever Go the
-      # runner image ships, which is the right cost for a case that should not
-      # happen.
-      - uses: actions/download-artifact@v7
-        with:
-          name: e2e-clients
-          path: e2e-clients
-      # Python is the one client that cannot be shared: psycopg2-binary and
-      # grpcio are compiled wheels. It costs 42s, and unlike the npm cache —
-      # which pointed at ~/.npm and therefore NEVER hit on Windows, where npm
-      # caches in %LocalAppData% — this one is right on all three.
-      - uses: actions/cache@v6
-        with:
-          # One path per OS; actions/cache ignores the ones that do not exist.
-          path: |
-            ~/.cache/pip
-            ~/Library/Caches/pip
-            ~\AppData\Local\pip\Cache
-          key: pip-${{ runner.os }}-${{ hashFiles('e2e/clients/python/requirements.txt') }}
-          restore-keys: pip-${{ runner.os }}-
-      - uses: actions/download-artifact@v7 # the last published launchers, for the compat cell
-        with:
-          name: latest-launchers
-          path: latest-launchers
-      - name: Join the tailnet
-        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
-        with:
-          oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
-          tags: tag:ci
-          hostname: plug-swarm-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
-          args: --accept-dns=false # reach the cluster by tailnet IP; don't let Tailscale drive DNS
-      # And v4 points macOS at MagicDNS on its own once the tunnel is up
-      # (networksetup -setdnsservers Ethernet 100.100.100.100, plus a search
-      # domain). --accept-dns=false does not stop it: the flag tells the client
-      # not to touch DNS, the action then does it anyway, afterwards. That
-      # resolver serves the tailnet and nothing else here, so every public name
-      # stopped resolving and the step right below died with ENOTFOUND fetching
-      # an artifact, before plug was even installed. We reach the cluster by
-      # tailnet IP, so hand the resolver straight back. "Ethernet" is the
-      # service name the action itself hardcodes.
-      - name: Take macOS DNS back from Tailscale
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          sudo networksetup -setdnsservers Ethernet empty
-          sudo networksetup -setsearchdomains Ethernet empty
-          sudo dscacheutil -flushcache || true # belt and braces, not the assertion
-          # Prove it through getaddrinfo, which is what the next action resolves
-          # with. Without this the symptom surfaces one step later, as someone
-          # else's ENOTFOUND.
-          for i in $(seq 1 10); do
-            python3 -c "import socket; socket.getaddrinfo('api.github.com', 443)" 2>/dev/null && exit 0
-            sleep 1
-          done
-          echo "public DNS is still broken after handing the resolver back"
-          exit 1
-      # ── THE COMMON BLOCK ─────────────────────────────────────────────────
-      # Identical, to the character, in e2e-compose, e2e-swarm and e2e-k8s: the
-      # same cells, in the same order, under the same names. That is the point.
-      # These assertions are about PLUG, and plug must behave the same whichever
-      # backend provisions the name — so seeing three identical lists side by
-      # side is what makes a family-specific divergence visible at a glance.
-      #
-      # The names say what is ASSERTED, never how the backend does it: "park the
-      # deployed service" is one test, whether the script stops a container,
-      # scales a service to 0 or repoints a Service. Naming the mechanism made
-      # three identical tests look like three different ones.
-      #
-      # scripts/ci/check-common-block.sh fails the build if the three drift, and
-      # it compares EVERY step that runs something, not merely this block. So
-      # there is no place for a cell one family needs and the others do not: the
-      # guard would refuse it. That is the strictness working, not a gap. A real
-      # need for one is the moment to teach that script where the block ends,
-      # deliberately, rather than to work around it here.
-      - name: Setup — install plug from the cluster + build clients
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh setup "$A" "$B" 2222
-      - name: Env passthrough
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh env "$A" "$B" 2222
-      - name: Takeover — park the deployed service, serve ours, restore it
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh takeover "$A" "$B" 2222
-      - name: Orphaned takeover, session killed with no unserve (the workload comes back without an agent restart)
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh orphan "$A" "$B" 2222
-      - name: Resilience — agent restarted mid-session (self-heal, boot-gc, re-park)
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh resilience "$A" "$B" 2222
-      - name: Live mount — the workload's volumes, automatic and explicit, read and written
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh mount "$A" "$B" 2222
-      - name: Protocol matrix (4 langs × 8 protocols)
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh matrix "$A" "$B" 2222
-      - name: Multicluster (simultaneous)
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh multicluster "$A" "$B" 2222
-      - name: Container member, an unmodified image in the cluster (--dockerrun)
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh dockerrun "$A" "$B" 2222
-      - name: Key mount, the profile's own key carried into the sidecar (--dockerrun)
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh keymount "$A" "$B" 2222
-      - name: Outage recovery
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh outage "$A" "$B" 2222
-      - name: Expose — serve a local port to the cluster (-s)
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh expose "$A" "$B" 2222
-      - name: Expose, named port — plug picks it, {PORT} carries it into the command
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh exposevar "$A" "$B" 2222
-      - name: Gateway callback (external → published gateway → sink)
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh gateway "$A" "$B" 2222
-      - name: Collision — a name already taken is refused
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh collision "$A" "$B" 2222
-      - name: Name lease — a swept signpost must not free a live name
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh lease "$A" "$B" 2222
-      - name: Same cluster port — two names, both reachable
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh sameport "$A" "$B" 2222
-      - name: Multi-port — one name, three cluster ports
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh multiport "$A" "$B" 2222
-      - name: Launcher compat — latest published launcher, this branch's core
-        shell: bash
-        run: bash scripts/ci/compat-launcher.sh "$A" 2222
-      - name: Update — plug update verb + launcher path (per-leg agent)
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh update "$A" "$B" 2222
-      - name: Update — <tag> refuses an unpublished tag, and an agent too old
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh updatetag "$A" "$B" 2222
-      - name: Update — the background check finds it, the next launch says it
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh updatenotify "$A" "$B" 2222
-      - name: Update — a release agent retargets to the newest release
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh updatejump "$A" "$B" 2222
+      contents: read
+    uses: ./.github/workflows/_e2e.yml
+    with:
+      family: compose
+      label: a native arm64 client, on the compose clusters
+      legs: '["ubuntu-24.04-arm"]'
+      cluster_a: plug-compose-${{ github.run_id }}-${{ github.run_attempt }}-a
+      cluster_b: plug-compose-${{ github.run_id }}-${{ github.run_attempt }}-b
+      minutes: 25
+      short_sha: ${{ needs.start-cluster.outputs.short_sha }}
+      full: false
+    secrets:
+      TAILSCALE_CLIENT_ID: ${{ secrets.TAILSCALE_CLIENT_ID }}
+      TAILSCALE_CLIENT_SECRET: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
   kill-compose:
     name: kill compose clusters
     # e2e-arm64 runs on the SAME compose clusters and starts later, because the
@@ -1773,34 +1142,16 @@ jobs:
       actions: write # cancel the cluster runs
       contents: read
     steps:
-      # No checkout here, so pass --repo explicitly, otherwise the cancel silently
-      # fails and the cluster runs sleep out their full TTL.
-      #
-      # `|| true` used to hide exactly the failure the --repo fix was about. A
-      # 403 from a narrowed token, a 502, an id the dispatch never recorded: all
-      # four outcomes looked the same from outside, a green step, while the
-      # cluster kept a runner out of a 20-runner pool for the rest of its TTL.
-      # Only "it had already finished" is normal here; the rest gets annotated,
-      # and the job still passes so a stuck cancel never reds a good pipeline.
+      # A checkout for one script: the cancel, and what to say when it does not
+      # cancel (scripts/ci/kill-clusters.sh, shared by the three kill jobs).
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          for pair in "${{ needs.start-cluster.outputs.cluster_id_a }}:compose-a" \
-                      "${{ needs.start-cluster.outputs.cluster_id_b }}:compose-b"; do
-            id="${pair%%:*}"; who="${pair##*:}"
-            if [ -z "$id" ]; then
-              echo "::warning::no run id was recorded for the $who cluster: if it was dispatched, nothing cancels it and it holds a runner until its TTL expires"
-            elif out="$(gh run cancel "$id" --repo "${{ github.repository }}" 2>&1)"; then
-              echo "cancelled the $who cluster, run $id"
-            else
-              case "$out" in
-                *"Cannot cancel a workflow run that is completed"*)
-                  echo "the $who cluster (run $id) had already finished" ;;
-                *)
-                  echo "::warning::could not cancel the $who cluster, run $id: $out. It holds a runner until its TTL expires." ;;
-              esac
-            fi
-          done
+          A: ${{ needs.start-cluster.outputs.cluster_id_a }}
+          B: ${{ needs.start-cluster.outputs.cluster_id_b }}
+        run: bash scripts/ci/kill-clusters.sh "$A:compose-a" "$B:compose-b"
 
   kill-k8s:
     name: kill k8s clusters
@@ -1813,25 +1164,14 @@ jobs:
     steps:
       # Same shape as kill-compose, and for the same reason: a cancel that fails
       # must not look like a cancel that worked. These two idle for 2100s.
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          for pair in "${{ needs.start-cluster.outputs.k8s_id_a }}:k8s-a" \
-                      "${{ needs.start-cluster.outputs.k8s_id_b }}:k8s-b"; do
-            id="${pair%%:*}"; who="${pair##*:}"
-            if [ -z "$id" ]; then
-              echo "::warning::no run id was recorded for the $who cluster: if it was dispatched, nothing cancels it and it holds a runner until its TTL expires"
-            elif out="$(gh run cancel "$id" --repo "${{ github.repository }}" 2>&1)"; then
-              echo "cancelled the $who cluster, run $id"
-            else
-              case "$out" in
-                *"Cannot cancel a workflow run that is completed"*)
-                  echo "the $who cluster (run $id) had already finished" ;;
-                *)
-                  echo "::warning::could not cancel the $who cluster, run $id: $out. It holds a runner until its TTL expires." ;;
-              esac
-            fi
-          done
+          A: ${{ needs.start-cluster.outputs.k8s_id_a }}
+          B: ${{ needs.start-cluster.outputs.k8s_id_b }}
+        run: bash scripts/ci/kill-clusters.sh "$A:k8s-a" "$B:k8s-b"
 
   kill-swarm:
     name: kill swarm clusters
@@ -1844,22 +1184,11 @@ jobs:
     steps:
       # Same shape as kill-compose, and for the same reason: a cancel that fails
       # must not look like a cancel that worked. These two idle for 2100s.
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          for pair in "${{ needs.start-cluster.outputs.swarm_id_a }}:swarm-a" \
-                      "${{ needs.start-cluster.outputs.swarm_id_b }}:swarm-b"; do
-            id="${pair%%:*}"; who="${pair##*:}"
-            if [ -z "$id" ]; then
-              echo "::warning::no run id was recorded for the $who cluster: if it was dispatched, nothing cancels it and it holds a runner until its TTL expires"
-            elif out="$(gh run cancel "$id" --repo "${{ github.repository }}" 2>&1)"; then
-              echo "cancelled the $who cluster, run $id"
-            else
-              case "$out" in
-                *"Cannot cancel a workflow run that is completed"*)
-                  echo "the $who cluster (run $id) had already finished" ;;
-                *)
-                  echo "::warning::could not cancel the $who cluster, run $id: $out. It holds a runner until its TTL expires." ;;
-              esac
-            fi
-          done
+          A: ${{ needs.start-cluster.outputs.swarm_id_a }}
+          B: ${{ needs.start-cluster.outputs.swarm_id_b }}
+        run: bash scripts/ci/kill-clusters.sh "$A:swarm-a" "$B:swarm-b"

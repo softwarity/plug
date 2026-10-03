@@ -3,8 +3,11 @@
 #   version                    print the agent version
 #   install                    emit a self-contained installer (all binaries embedded;
 #                              the script picks yours with uname)
+#   install-windows, install.sh  the Windows installer script
+#   wintun[-amd64|-arm64]      stream the WinTUN driver DLL
+#   digest <os>-<arch>|wintun[-arch]  the sha256 and release signature of that file
 #   <os>-<arch> (uname)        stream that raw CLI binary on stdout
-# Nothing else — no shell, ever.
+# Nothing else: no shell, ever.
 # set -f: SSH_ORIGINAL_COMMAND comes from the anonymous "get" account, so its
 # content is attacker-controlled. The unquoted `set -- $cmd` below is there for
 # the word splitting (verb + argument), but it also globs: a command of "*"

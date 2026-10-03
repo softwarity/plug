@@ -5,7 +5,6 @@ import { CodeComponent } from '../code/code.component';
 @Component({
   selector: 'app-troubleshooting',
   imports: [CodeComponent, RouterLink],
-  preserveWhitespaces: true,
   template: `
     <h2>Troubleshooting</h2>
 
@@ -92,11 +91,11 @@ import { CodeComponent } from '../code/code.component';
       killing what ran in them</strong>, so the session stays alive, invisible, and reachable by no
       window. When the holder is one of yours, plug shows you what it is and offers to free it:
     </p>
-    <pre><code>[plug] that name is served by another session of yours:
+    <app-code lang="text">[plug] that name is served by another session of yours:
         PID 24939, started 12m ago
         dir: /home/you/projects/web
         cmd: -s web:8080:PORT npm run dev
-[plug] stop it and take the name? [Y/n]:</code></pre>
+[plug] stop it and take the name? [Y/n]:</app-code>
     <p>
       Answering yes asks that session to stop - its command ends, the name is released and
       <strong>whatever it had parked is restored</strong> - then yours takes the name. The question

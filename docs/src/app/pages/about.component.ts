@@ -1,11 +1,12 @@
 import { Component } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { CodeComponent } from '../code/code.component';
+import { CtaComponent } from '../cta/cta.component';
 import { MatIconModule } from '@angular/material/icon';
 
 @Component({
   selector: 'app-about',
-  imports: [CodeComponent, RouterLink, MatIconModule],
+  imports: [CodeComponent, CtaComponent, RouterLink, MatIconModule],
   styles: [
     `
       .diagram {
@@ -34,16 +35,8 @@ import { MatIconModule } from '@angular/material/icon';
         margin: 0 0 28px;
       }
       .dir {
-        padding: 14px 16px;
-        background-color: var(--bg-secondary);
-        border: 1px solid var(--border-color);
-        border-radius: 8px;
         font-size: 0.9rem;
         line-height: 1.5;
-        color: var(--text-secondary);
-      }
-      .dir strong {
-        color: var(--text-primary);
       }
       .dir-tag {
         display: inline-block;
@@ -56,12 +49,12 @@ import { MatIconModule } from '@angular/material/icon';
         margin-bottom: 8px;
       }
       .dir-tag.out {
-        color: #a371f7;
-        background: rgba(163, 113, 247, 0.14);
+        color: var(--accent-purple);
+        background: var(--accent-purple-bg);
       }
       .dir-tag.in {
         color: var(--accent-green);
-        background: rgba(63, 185, 80, 0.14);
+        background: var(--accent-green-bg);
       }
 
       .features {
@@ -74,16 +67,12 @@ import { MatIconModule } from '@angular/material/icon';
         display: flex;
         flex-direction: column;
         gap: 6px;
-        padding: 14px 16px;
-        background-color: var(--bg-secondary);
-        border: 1px solid var(--border-color);
-        border-radius: 8px;
         text-decoration: none;
-        transition: all 0.15s;
+        transition: border-color 0.15s, background-color 0.15s, transform 0.15s;
       }
       .feature-card:hover {
         border-color: var(--accent-purple);
-        background-color: rgba(163, 113, 247, 0.1);
+        background-color: var(--accent-purple-tint);
         text-decoration: none;
         transform: translateY(-1px);
       }
@@ -106,38 +95,9 @@ import { MatIconModule } from '@angular/material/icon';
       .feature-desc code {
         font-size: 0.85em;
       }
-      .cta {
-        margin: 4px 0 8px;
-      }
       .support {
-        color: var(--text-secondary);
-        font-size: 0.88rem;
-        line-height: 1.55;
-        background: var(--bg-secondary);
-        border: 1px solid var(--border-color);
-        border-radius: 8px;
-        padding: 12px 15px;
         margin: 22px 0 8px;
       }
-      .support strong {
-        color: var(--text-primary);
-      }
-      .cta a {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        padding: 10px 18px;
-        border-radius: 8px;
-        background: var(--accent-purple);
-        color: #0d1117;
-        font-weight: 600;
-        text-decoration: none;
-      }
-      .cta a:hover {
-        text-decoration: none;
-        filter: brightness(1.08);
-      }
-
     `,
   ],
   template: `
@@ -179,14 +139,14 @@ import { MatIconModule } from '@angular/material/icon';
     </p>
 
     <div class="dirs">
-      <div class="dir">
+      <div class="card dir">
         <span class="dir-tag out">outbound</span><br />
         <strong>Reach the cluster by name.</strong> Your process addresses
         <code>postgres</code>, <code>my-service:8080</code> - the same names any workload inside
         uses. No port-forwards, no <code>localhost:PORT</code> mappings. Only consuming (a DB
         tool, a one-off script)? That's <code>plug -c</code>.
       </div>
-      <div class="dir">
+      <div class="card dir">
         <span class="dir-tag in">inbound</span><br />
         <strong>Be reachable by name.</strong> With <code>-s</code>, a name you serve is reachable
         from inside the cluster - a gateway, another service, or a browser through the ingress lands
@@ -202,32 +162,32 @@ import { MatIconModule } from '@angular/material/icon';
 
     <h3>What you get</h3>
     <section class="features">
-      <a routerLink="/how-it-works" class="feature-card">
+      <a routerLink="/how-it-works" class="card feature-card">
         <mat-icon class="feature-icon">dns</mat-icon>
         <span class="feature-title">Names, resolved cluster-side</span>
         <span class="feature-desc">Address <code>my-service:8080</code> by its real name - no <code>localhost:PORT</code> mappings, no <code>/etc/hosts</code> edits.</span>
       </a>
-      <a routerLink="/how-it-works" class="feature-card">
+      <a routerLink="/how-it-works" class="card feature-card">
         <mat-icon class="feature-icon">all_inclusive</mat-icon>
         <span class="feature-title">Every runtime, unchanged</span>
         <span class="feature-desc">Traffic is captured at the IP layer, so your app's socket is never touched - Node, the JVM, Python, <strong>Go</strong>, curl, gRPC, DB drivers all just work.</span>
       </a>
-      <a routerLink="/how-it-works" class="feature-card">
+      <a routerLink="/how-it-works" class="card feature-card">
         <mat-icon class="feature-icon">swap_horiz</mat-icon>
         <span class="feature-title">Reachable from the cluster</span>
         <span class="feature-desc"><code>-s</code> publishes a local port under a cluster name - a gateway or workload reaches your process, for the session. A deployed service owning the name is <strong>parked</strong> meanwhile, restored on exit.</span>
       </a>
-      <a routerLink="/profiles" class="feature-card">
+      <a routerLink="/profiles" class="card feature-card">
         <mat-icon class="feature-icon">hub</mat-icon>
         <span class="feature-title">Several clusters at once</span>
         <span class="feature-desc">Run the same process against two clusters in parallel - each session stays isolated.</span>
       </a>
-      <a routerLink="/swarm" class="feature-card">
+      <a routerLink="/swarm" class="card feature-card">
         <mat-icon class="feature-icon">devices</mat-icon>
         <span class="feature-title">Linux · macOS · Windows</span>
         <span class="feature-desc">Native on all three (no WSL2 needed); a multi-arch <code>amd64</code>/<code>arm64</code> agent image.</span>
       </a>
-      <a routerLink="/security" class="feature-card">
+      <a routerLink="/security" class="card feature-card">
         <mat-icon class="feature-icon">shield</mat-icon>
         <span class="feature-title">Honest security model</span>
         <span class="feature-desc">Deliberately auth-less, for trusted dev clusters - read the model before deploying.</span>
@@ -244,11 +204,9 @@ import { MatIconModule } from '@angular/material/icon';
       <a routerLink="/comparison">Side by side, including where they are ahead</a>.
     </p>
 
-    <p class="cta">
-      <a routerLink="/getting-started">Set it up <mat-icon aria-hidden="true" style="font-size:18px;width:18px;height:18px">arrow_forward</mat-icon></a>
-    </p>
+    <app-cta link="/getting-started">Set it up</app-cta>
 
-    <p class="support">
+    <p class="note support">
       <strong>plug is free, and there is no paid tier planned.</strong> If it saves you the afternoon
       it was built to save, you can
       <a href="https://github.com/sponsors/softwarity" target="_blank" rel="noopener">sponsor its

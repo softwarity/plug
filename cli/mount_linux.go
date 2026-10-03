@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"path/filepath"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -19,18 +18,6 @@ import (
 //
 // The child runs under a mount-namespace shim (tun.Run); the mount is made
 // here, before the child exists, in the namespace it will clone from.
-
-func mountSupported() error { return nil }
-
-func mountBindAddr() string { return "127.0.0.1:0" }
-
-func mountUsesForward() bool { return true }
-
-// autoMountPath is where an automatic mount goes: under the session
-// directory, at its cluster path.
-func autoMountPath(dir, clusterPath string) string {
-	return filepath.Join(dir, filepath.FromSlash(clusterPath))
-}
 
 func mountSMBShare(t mountTarget, path string) (string, error) {
 	if err := ensureMountpoint(path); err != nil {
@@ -83,10 +70,3 @@ func mountedAt(path string) bool {
 	}
 	return st.Dev != parent.Dev
 }
-
-// pinMountName / unpinMountNames: nothing to pin here. The helper's name is
-// dialled by this process through its own forward, never by the kernel
-// through the machine's datapath (see mount_windows.go).
-func pinMountName(config, string) {}
-
-func unpinMountNames(config) {}

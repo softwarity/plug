@@ -22,9 +22,9 @@ package main
 // prefix before copying in one direction, which is not the same function with a
 // parameter added.
 //
-// So the copies are compared. This is what check-common-block.sh does for the
-// three e2e blocks, for the same reason: drift is silent, and nothing else fails
-// when it happens.
+// So the copies are compared, for the same reason the CI checks its e2e cell
+// list against the chain (scripts/ci/check-e2e-cells.sh): drift is silent, and
+// nothing else fails when it happens.
 
 import (
 	"os"

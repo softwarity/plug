@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -30,22 +29,11 @@ func TestVolumeArgShape(t *testing.T) {
 }
 
 // dispatch refuses a malformed mount-volume before any backend is asked. The
-// answer is captured the way dispatch_test does: answer is a var.
+// answer is captured the way dispatch_test does: the verb runs in-process.
 const hexPass = "0123456789abcdef0123456789abcdef01234567"
 
 func TestMountVerbsValidateBeforeActing(t *testing.T) {
-	var got string
-	old := answer
-	answer = func(format string, a ...any) { got = fmt.Sprintf(format, a...); panic("answered") }
-	defer func() { answer = old }()
-	try := func(cmd ...string) string {
-		got = ""
-		func() {
-			defer func() { recover() }()
-			dispatch(cmd)
-		}()
-		return got
-	}
+	try := func(cmd ...string) string { return refusalFor(t, cmd...) }
 	for _, c := range [][]string{
 		{"mount-volume"},
 		{"mount-volume", "web"},
@@ -220,7 +208,7 @@ func TestPickClaim(t *testing.T) {
 			ClaimName string `json:"claimName"`
 		}{ClaimName: n}
 	}
-	vols := []k8sClaimVolume{
+	vols := []k8sVolume{
 		{Name: "data", PVC: claim("geoserver-data")},
 		{Name: "cfg"},
 	}
@@ -503,12 +491,7 @@ func TestDataVolumePathsAndReply(t *testing.T) {
 	if volumesReply(got) != "volumes /data /var/lib/postgresql/data" || volumesReply(nil) != "volumes" {
 		t.Fatalf("reply = %q / %q", volumesReply(got), volumesReply(nil))
 	}
-	var answered string
-	old := answer
-	answer = func(format string, a ...any) { answered = fmt.Sprintf(format, a...); panic("answered") }
-	defer func() { answer = old }()
-	func() { defer func() { recover() }(); dispatch([]string{"volumes-of", "Bad Name"}) }()
-	if !strings.HasPrefix(answered, "error: ") {
+	if answered := refusalFor(t, "volumes-of", "Bad Name"); !strings.HasPrefix(answered, "error: ") {
 		t.Fatalf("a bad name must be refused: %q", answered)
 	}
 }
@@ -541,14 +524,8 @@ func TestMountStatusLine(t *testing.T) {
 	if statusLine("running", "") != "status running" || statusLine("pending", "no suitable node") != "status pending: no suitable node" {
 		t.Fatal("statusLine")
 	}
-	var answered string
-	old := answer
-	answer = func(format string, a ...any) { answered = fmt.Sprintf(format, a...); panic("answered") }
-	defer func() { answer = old }()
 	for _, c := range [][]string{{"mount-status"}, {"mount-status", "web", "data"}, {"mount-status", "Web", "data", "40000"}, {"mount-status", "web", "data", "x"}} {
-		answered = ""
-		func() { defer func() { recover() }(); dispatch(c) }()
-		if !strings.HasPrefix(answered, "error: ") {
+		if answered := refusalFor(t, c...); !strings.HasPrefix(answered, "error: ") {
 			t.Errorf("%v: expected a refusal, got %q", c, answered)
 		}
 	}

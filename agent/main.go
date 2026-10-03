@@ -63,6 +63,10 @@ import (
 // call it: it calls Start (serve.go) for the server, and re-execs ITSELF with a
 // hidden verb for the subprocess side, the way plug's own launcher does.
 func Main() {
+	// The argv modes end through fatal, which no longer leaves the process by
+	// itself (see verbExit): this is where their line is printed and the process
+	// ends, exactly as before.
+	defer exitOnVerbExit()
 	args := os.Args[1:]
 	if len(args) > 0 {
 		switch args[0] {
@@ -131,21 +135,98 @@ func Preflight() error {
 		"  Full stack files: " + docURL(docHome))
 }
 
-// A var, not a func, so a test can watch dispatch REFUSE something. Both exits
-// leave the process, which made the validator that guards every command arriving
-// from the network the one part of the agent no test could reach: nameRe could be
-// widened to ^.*$ and the whole suite stayed green.
-var fatal = func(format string, a ...any) {
-	fmt.Fprintf(os.Stderr, format+"\n", a...)
-	os.Exit(1)
+// verbExit is how a verb ends: the one line it says, and the code the process
+// leaves with. answer and fatal raise it as a panic rather than calling os.Exit
+// where they stand, so that the ONE place that owns the process decides what
+// to do with it: dispatch prints the line and exits, as the subprocess verbs
+// always did; runVerb hands it back to a caller in the same process; and a
+// sweep running inside a gateway has its recover (runQuietly) absorb it, where
+// an os.Exit from the depth of a restore would have taken the gateway down.
+//
+// It also used to be the reason both exits were vars: the only way a test could
+// watch dispatch REFUSE something was to swap them for a panic, and the
+// validator guarding every command from the network was otherwise unreachable
+// (nameRe could be widened to ^.*$ and the suite stayed green). The panic is
+// the mechanism now, so the tests use the real one.
+type verbExit struct {
+	reply string
+	code  int
 }
 
-// answer prints the one-line protocol reply the CLI parses, and exits 0 — the
-// reply itself carries success or failure ("error: …"), so the SSH exit status
-// stays out of the contract (old CLIs never call us; old shells said 127).
-var answer = func(format string, a ...any) {
-	fmt.Printf(format+"\n", a...)
-	os.Exit(0)
+// String is what a recover that merely logs the value (runQuietly) prints.
+func (e verbExit) String() string { return e.reply }
+
+// fatal ends the process with one line on stderr and exit code 1: the argv
+// modes' refusal (a bad signpost command line, no orchestrator at preflight).
+func fatal(format string, a ...any) {
+	panic(verbExit{reply: fmt.Sprintf(format, a...), code: 1})
+}
+
+// answer is the one-line protocol reply the CLI parses, on stdout, exit 0: the
+// reply itself carries success or failure ("error: ..."), so the SSH exit
+// status stays out of the contract (old CLIs never call us; old shells said
+// 127). It never returns: every line after an answer() is unreachable, and the
+// verbs are written that way.
+func answer(format string, a ...any) {
+	panic(verbExit{reply: fmt.Sprintf(format, a...), code: 0})
+}
+
+// captureVerb runs fn and reports how it ended: through answer or fatal
+// (exited true, and what it said), or by returning on its own (exited false,
+// which no verb does). Any other panic is not a verb ending and goes on up.
+func captureVerb(fn func()) (e verbExit, exited bool) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		ve, ok := r.(verbExit)
+		if !ok {
+			panic(r)
+		}
+		e, exited = ve, true
+	}()
+	fn()
+	return e, false
+}
+
+// exitWith leaves the process the way the verbs always have: the line on
+// stdout for an answer, on stderr for a fatal, then the code.
+func exitWith(e verbExit) {
+	if e.code == 0 {
+		fmt.Println(e.reply)
+	} else {
+		fmt.Fprintln(os.Stderr, e.reply)
+	}
+	os.Exit(e.code)
+}
+
+// exitOnVerbExit is deferred by whatever owns the process: Main, and the one
+// goroutine (signpost's accept loop) that may call fatal on its own. A verbExit
+// raised below it ends the process as exitWith says; any other panic keeps its
+// trace.
+func exitOnVerbExit() {
+	if r := recover(); r != nil {
+		e, ok := r.(verbExit)
+		if !ok {
+			panic(r)
+		}
+		exitWith(e)
+	}
+}
+
+// runVerb runs one command, as it arrives in SSH_ORIGINAL_COMMAND, in THIS
+// process, and returns what the agent answers and the exit code it would have
+// ended with, instead of ending. It is the entry point for a caller that embeds
+// the agent and does not want to re-execute a binary per verb; the subprocess
+// path (dispatch) is this plus the exit.
+//
+// reply is one line without its newline. code 0 means the reply is the
+// protocol answer (stdout), including "error: ..." refusals; code 1 means a
+// fatal (stderr): an empty command, which has no protocol answer.
+func runVerb(cmd []string) (reply string, code int) {
+	e, _ := captureVerb(func() { routeVerb(cmd) })
+	return e.reply, e.code
 }
 
 // A DNS label the way BOTH backends accept it: RFC 1035 (leading letter) so a
@@ -165,8 +246,17 @@ func resolveArgOK(cmd []string) bool {
 	return len(cmd) == 2 && hostRe.MatchString(cmd[1])
 }
 
-// dispatch is the entry point for every command arriving over SSH. It validates
-// and routes; the work of each verb lives in its own function below.
+// dispatch is the subprocess entry point for every command arriving over SSH:
+// the verb runs, and the process leaves with its one line and its code. The
+// only os.Exit a verb ever reaches is the one in here.
+func dispatch(cmd []string) {
+	if e, exited := captureVerb(func() { routeVerb(cmd) }); exited {
+		exitWith(e)
+	}
+}
+
+// routeVerb validates and routes; the work of each verb lives in its own
+// function below.
 //
 // It used to hold all seven bodies inline, at 60 cyclomatic complexity and 250
 // lines, so reading what `resolve` does meant scrolling past everything `info`
@@ -174,7 +264,7 @@ func resolveArgOK(cmd []string) bool {
 // function with the same statements in the same order. What it buys is that the
 // VALIDATION, which is what stands between the network and the cluster, is now
 // visible in one screen instead of being interleaved with six implementations.
-func dispatch(cmd []string) {
+func routeVerb(cmd []string) {
 	if len(cmd) == 0 {
 		fatal("plug-agent: this user runs the tunnel and the -s verbs; there is no shell")
 	}
@@ -232,13 +322,21 @@ func doServeName(cmd []string) {
 			answer("error: %q is not <cluster-port>:<agent-port>", pp)
 		}
 		for _, p := range []string{c, a} {
-			if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 {
+			if !portArgOK(p) {
 				answer("error: %q is not a valid port", p)
 			}
 		}
 		pairs = append(pairs, portPair{cluster: c, agent: a})
 	}
 	serveName(name, pairs)
+}
+
+// portArgOK is the shape every verb accepts a port in: a decimal in 1..65535,
+// nothing around it (Atoi refuses a space, and it must). One rule for the five
+// verbs that take one, so none of them drifts to accepting port 0.
+func portArgOK(p string) bool {
+	n, err := strconv.Atoi(p)
+	return err == nil && n >= 1 && n <= 65535
 }
 
 func doUnserveName(cmd []string) {
@@ -249,7 +347,7 @@ func doUnserveName(cmd []string) {
 	}
 	mine := ""
 	if len(cmd) == 3 {
-		if n, err := strconv.Atoi(cmd[2]); err != nil || n < 1 || n > 65535 {
+		if !portArgOK(cmd[2]) {
 			answer("error: %q is not a valid port", cmd[2])
 		}
 		mine = cmd[2]
@@ -282,15 +380,7 @@ func doInfo(cmd []string) {
 	// itself (plug update's client-side lookup) — best-effort: an agent
 	// that cannot tell simply omits the field and the CLI falls back to
 	// asking this agent to do the lookup.
-	img := ""
-	switch {
-	case k8sAvailable():
-		_, _, img, _, _ = k8sAgentDeployment()
-	case dockerAvailable():
-		if self, err := dockerSelf(); err == nil {
-			img = self.image
-		}
-	}
+	img := selfImage()
 	// Who the Host recognised behind this connection's key, passed in by the
 	// server process (PLUG_WHO) because a verb runs in another process and
 	// cannot ask the Host anything. Empty when the key names no person,
@@ -359,29 +449,41 @@ func doCheckUpdate(cmd []string) {
 	// An agent that predates this answers `unknown command`, which the CLI
 	// already treats as "no answer" — so old clusters keep today's silence
 	// rather than breaking.
-	{
-		img := ""
-		switch {
-		case k8sAvailable():
-			_, _, img, _, _ = k8sAgentDeployment()
-		case dockerAvailable():
-			if self, err := dockerSelf(); err == nil {
-				img = self.image
-			}
-		}
-		if img == "" {
-			answer("error: this agent cannot name its own image")
-		}
-		target, _, note := retarget(img)
-		if target == "" || target == img || retargetImageOnly(target) == retargetImageOnly(img) {
-			answer("current")
-		}
-		_, _, tag := parseImageRef(target)
-		if note != "" {
-			answer("available %s (%s)", tag, note)
-		}
-		answer("available %s", tag)
+	img := selfImage()
+	if img == "" {
+		answer("error: this agent cannot name its own image")
 	}
+	// retarget has already asked the registry and decided: the plan says
+	// whether there is somewhere to go. It used to be asked again, twice, to
+	// compare the resolution of target with the resolution of img, which is
+	// three listings of the registry for one question and, since both resolve
+	// to the same newest release, an equality that always held.
+	target, plan, note := retarget(img)
+	if plan != planRetarget {
+		answer("current")
+	}
+	_, _, tag := parseImageRef(target)
+	if note != "" {
+		answer("available %s (%s)", tag, note)
+	}
+	answer("available %s", tag)
+}
+
+// selfImage is the image this deployment runs the agent from, as the
+// orchestrator names it: the agent's Deployment on Kubernetes, its own
+// container's Config.Image on Docker. "" when the agent cannot tell, which the
+// callers treat as "no image", never as a failure.
+func selfImage() string {
+	switch {
+	case k8sAvailable():
+		_, _, img, _, _ := k8sAgentDeployment()
+		return img
+	case dockerAvailable():
+		if self, err := dockerSelf(); err == nil {
+			return self.image
+		}
+	}
+	return ""
 }
 
 func doResolve(cmd []string) {
@@ -624,11 +726,10 @@ const (
 	versionFile      = "/opt/plug/VERSION"
 )
 
-// portPair is one of a name's exposures: the port workloads dial, and the
-// sshd-allocated agent port the signpost relays it to.
-// portPair is one exposure: the cluster port a caller dials, the agent port the
-// session's forward answers on, and, when a deployed Service is being taken
-// over, the NAME that Service already gave the port. That name has to be kept:
+// portPair is one of a name's exposures: the cluster port a caller dials, the
+// sshd-allocated agent port the session's forward answers on (and the signpost
+// relays to), and, when a deployed Service is being taken over, the NAME that
+// Service already gave the port. That name has to be kept:
 // an Ingress and the ingress controller's own endpoint matching refer to a
 // Service port by its name, and renaming it to plug's own "p<port>" left them
 // with no backend (the parked Service reachable through kube-proxy, which routes
@@ -698,7 +799,6 @@ func takeNameLease(name, port string) {
 	_ = os.WriteFile(filepath.Join(nameLeaseDir, name), []byte(body), 0o600)
 }
 
-// heldBy describes the session holding a name, for a refusal message. The agent
 // nameHeldRefusal is the one refusal a client PARSES rather than just prints:
 // heldPort in cli/servedmark.go looks for "agent port " inside it to decide
 // whether the session holding the name is one of yours, and therefore whether it
@@ -708,6 +808,7 @@ func takeNameLease(name, port string) {
 // this way (parkedContainersLabel and its neighbours).
 const nameHeldRefusal = "error: %q is already exposed by another live session (%s) - one -s per name at a time"
 
+// heldBy describes the session holding a name, for a refusal message. The agent
 // port alone answers "is it taken"; the origin answers "by whom", which is the
 // question the person reading it actually has. Silent when the lease predates
 // this (an older agent wrote it) rather than inventing a source.
@@ -779,17 +880,6 @@ func serveName(name string, pairs []portPair) {
 		"Mount /var/run/docker.sock on it (Compose/Swarm), or apply the Kubernetes RBAC (deploy/plug-k8s.yaml)")
 }
 
-// unserveName releases a name — and everything releasing it implies: the
-// signpost goes, and whatever the session parked comes back.
-//
-// mine is the agent port the CALLER believes it holds the name on, and it is
-// checked because holding a name is not forever. A laptop that sleeps past the
-// keepalive loses its forward; the lease then names a dead port, so the next
-// session to ask is granted the name — correctly. When the first laptop wakes
-// and is eventually stopped, its teardown would otherwise delete the signpost
-// the SECOND session is serving and restore a workload that session had parked,
-// leaving it running and silently unreachable. A caller that sends no port, or
-// a name nothing is leased for, is trusted: that is the pre-lease behaviour.
 // unserveMayAct reports whether a caller releasing a name may act on it. held
 // is what the lease records, mine is the port the caller believes it holds the
 // name on. Trusting an empty either side keeps the pre-lease behaviour: no
@@ -799,6 +889,17 @@ func unserveMayAct(held, mine string) bool {
 	return held == "" || mine == "" || held == mine
 }
 
+// unserveName releases a name, and everything releasing it implies: the
+// signpost goes, and whatever the session parked comes back.
+//
+// mine is the agent port the CALLER believes it holds the name on, and it is
+// checked because holding a name is not forever. A laptop that sleeps past the
+// keepalive loses its forward; the lease then names a dead port, so the next
+// session to ask is granted the name, correctly. When the first laptop wakes
+// and is eventually stopped, its teardown would otherwise delete the signpost
+// the SECOND session is serving and restore a workload that session had parked,
+// leaving it running and silently unreachable. A caller that sends no port, or
+// a name nothing is leased for, is trusted: that is the pre-lease behaviour.
 func unserveName(name, mine string) {
 	if !unserveMayAct(leaseHolder(name), mine) {
 		answer("ok reassigned") // another session owns it now — touch nothing
@@ -871,10 +972,6 @@ func selfUpdate(decide func(string) (string, string, string)) {
 
 // ---- signpost: the process inside the alias-bearing container ----
 
-// signpost relays <:port> to <target> (the agent, by container name — resolved
-// per-connection so it survives agent restarts). It is the whole job of the
-// signpost container: carry the DNS alias, hand the bytes to the agent's sshd
-// remote-forward listener.
 // How stubborn a signpost is about a failing Accept before it gives up: enough
 // to ride out a burst of transient errors, few enough that a listener which is
 // truly gone still terminates the process (and, on Swarm, gets restarted).
@@ -883,6 +980,10 @@ const (
 	signpostAcceptBackoff = 200 * time.Millisecond
 )
 
+// signpost relays <:port> to <target> (the agent, by container name, resolved
+// per-connection so it survives agent restarts). It is the whole job of the
+// signpost container: carry the DNS alias, hand the bytes to the agent's
+// remote-forward listener.
 func signpost(pairs []string) {
 	for i := 0; i+1 < len(pairs); i += 2 {
 		port, target := pairs[i], pairs[i+1]
@@ -892,6 +993,9 @@ func signpost(pairs []string) {
 		}
 		fmt.Printf("signpost: :%s -> %s\n", port, target)
 		go func() {
+			// fatal below ends the process from this goroutine, which Main's own
+			// recover cannot see.
+			defer exitOnVerbExit()
 			// A signpost carries a name for a whole session — and, since one
 			// signpost serves ALL of a name's ports, every port of it. Accept
 			// can fail transiently (ECONNABORTED on a peer that vanished
@@ -1295,7 +1399,10 @@ func nameOwners(name string, nets []string) []owner {
 		} `json:"NetworkSettings"`
 	}
 	if _, err := dockerAPI("GET", "/containers/json", nil, &list); err != nil {
-		return nil // can't tell — let Verify be the backstop
+		// Cannot tell: the name is served as if nobody owned it. A real owner
+		// is then not parked but shares the name in DNS round-robin, which the
+		// session notices as a name that answers one request in two.
+		return nil
 	}
 	var owners []owner
 	for _, c := range list {
@@ -1355,21 +1462,33 @@ type swarmOwner struct {
 	isAgent  bool // is this agent's own service (swarmOwnerIsAgent): never parked
 }
 
+// swarmVersion is a Swarm object's version as the Engine reports it, and as an
+// update must quote it back: the optimistic lock on every service update. One
+// type, because it was read as an int in two places and a uint64 in two others,
+// and the Engine's own type is uint64.
+type swarmVersion struct {
+	Index uint64 `json:"Index"`
+}
+
+// serviceUpdatePath is the update endpoint for a service at the version it
+// was read at.
+func serviceUpdatePath(idOrName string, v swarmVersion) string {
+	return "/services/" + idOrName + "/update?version=" + strconv.FormatUint(v.Index, 10)
+}
+
 // scaleService sets a Swarm service's replica count, round-tripping the full
 // Spec (the update API replaces the whole Spec — a partial one would strip
 // fields) at the version the read returned.
 func scaleService(idOrName string, replicas int) error {
 	var s struct {
-		Version struct {
-			Index int `json:"Index"`
-		} `json:"Version"`
-		Spec map[string]any `json:"Spec"`
+		Version swarmVersion   `json:"Version"`
+		Spec    map[string]any `json:"Spec"`
 	}
 	if _, err := dockerAPI("GET", "/services/"+idOrName, nil, &s); err != nil {
 		return err
 	}
 	s.Spec["Mode"] = map[string]any{"Replicated": map[string]any{"Replicas": replicas}}
-	_, err := dockerAPI("POST", "/services/"+idOrName+"/update?version="+strconv.Itoa(s.Version.Index), s.Spec, nil)
+	_, err := dockerAPI("POST", serviceUpdatePath(idOrName, s.Version), s.Spec, nil)
 	return err
 }
 
@@ -1382,10 +1501,6 @@ func signpostArgs(pairs []portPair, target string) []string {
 	return args
 }
 
-// restoreContainerParked restarts whatever a previous session's signpost parked
-// (its receipt label), then removes that signpost. No signpost → nothing to do.
-// Restore-then-delete keeps the name resolving throughout: the real containers
-// come back while the signpost still answers, then the signpost goes.
 // agentPortLive reports whether something still listens on an agent-side port
 // of THIS container — i.e. the session owning an existing signpost is alive.
 // The sshd bind used to BE the collision check (one fixed port per name); with
@@ -1422,6 +1537,10 @@ func signpostOwner(labels map[string]string, cmd []string) string {
 	return signpostRelay(cmd)
 }
 
+// restoreContainerParked restarts whatever a previous session's signpost parked
+// (its receipt label), then removes that signpost. No signpost: nothing to do.
+// Restore-then-delete keeps the name resolving throughout: the real containers
+// come back while the signpost still answers, then the signpost goes.
 func restoreContainerParked(name string) error {
 	var insp struct {
 		Config struct {
@@ -1472,10 +1591,6 @@ func restartParkedContainers(receipt string) []string {
 	return failed
 }
 
-// swarmServe runs the signpost as a Swarm SERVICE. A service joins the stack's
-// overlay whether or not it is `attachable` — the whole reason this backend
-// exists - and carries the alias there, relaying to the agent TASK that holds
-// the session (relayTarget), never to the service VIP that would spread it.
 // pinnedImage returns img pinned to the digest the LOCAL engine knows for its
 // repository (repo@sha256:…), or img unchanged when it has none (an image built
 // locally, never pulled). Swarm-specific on purpose: a bare tag in a service
@@ -1520,90 +1635,38 @@ func digestFor(img string, repoDigests []string) string {
 	return ""
 }
 
-// restoreServiceParked scales back whatever a previous session's signpost
-// service parked (its receipt labels), then removes that signpost. Scale-back
-// first, delete second — the name keeps resolving throughout.
 // ---- linger: an unserved name keeps its address warm for a relaunch ----
 //
-// Callers cache a name's address for as long as the DNS said they may — and
+// Callers cache a name's address for as long as the DNS said they may, and
 // Docker's embedded DNS says 600 seconds, hard-coded. A gateway on a resolver
 // that honours TTLs (Netty does) keeps dialling the old address for up to ten
-// minutes after every Ctrl-C→relaunch, because deleting and recreating the
+// minutes after every Ctrl-C and relaunch, because deleting and recreating the
 // signpost hands the name a fresh VIP. No TTL on plug's side can shorten a TTL
 // served by Docker; the only fix that reaches every caller is an address that
 // does not change. So a cleanly-unserved signpost is no longer deleted: it
-// LINGERS — still resolving, refusing connections like any stopped service —
-// and the next serve of that name takes it over in place, address intact.
+// LINGERS, still resolving, refusing connections like any stopped service, and
+// the next serve of that name takes it over in place, address intact.
 //
 // Only Swarm services and Kubernetes Services can linger: both can be retargeted
 // in place. A plain container's relay target is baked into its entrypoint, so a
-// new session means a new container and there is nothing to keep — that shape
+// new session means a new container and there is nothing to keep: that shape
 // keeps today's delete (and Docker's own IPAM often re-hands the same IP).
 //
 // A signpost carrying a parking receipt never lingers: deleting it is what
 // scales the parked workload back up, and an address is not worth a deployed
 // service left at zero replicas.
-
-// lingerGrace is how long an unserved name stays warm before the GC reaps it.
-// Derived, not felt: it must outlive the 600s TTL Docker's DNS handed to every
-// caller — otherwise the linger protects nothing — and fifteen minutes gives
-// margin without keeping dead names resolving for hours.
-const lingerGrace = 15 * time.Minute
-
-// lingerLabel stamps WHEN the name was unserved (unix seconds) — as a Swarm
-// service label, and verbatim as a k8s annotation key.
-const lingerLabel = "plug.linger.since"
-
-func lingerStamp() string { return strconv.FormatInt(time.Now().Unix(), 10) }
-
-// lingerExpired reports whether a stamp is past the grace. Empty means "not
-// lingering" (a live session's signpost, or a crash leftover — the GC's other
-// rules own those). An unreadable stamp reads as expired: reaping is the honest
-// direction for a label something has mangled.
-func lingerExpired(stamp string, now time.Time) bool {
-	if stamp == "" {
-		return false
-	}
-	n, err := strconv.ParseInt(stamp, 10, 64)
-	if err != nil {
-		return true
-	}
-	return now.Sub(time.Unix(n, 0)) > lingerGrace
-}
-
-// sweepExpiredServiceLingers reaps every lingering signpost past its grace —
-// called from serve, because boot is the only other moment the agent runs any
-// code, and an agent that never restarts must not keep dead names resolving
-// for ever. One label-filtered list; best-effort like the gc.
-func sweepExpiredServiceLingers() {
-	var slist []struct {
-		ID   string `json:"ID"`
-		Spec struct {
-			Labels map[string]string `json:"Labels"`
-		} `json:"Spec"`
-	}
-	f := `{"label":["` + signpostLabel + `=1"]}`
-	if _, err := dockerAPI("GET", "/services?filters="+urlEscape(f), nil, &slist); err != nil {
-		return
-	}
-	now := time.Now()
-	for _, s := range slist {
-		if lingerExpired(s.Spec.Labels[lingerLabel], now) {
-			_, _ = dockerAPI("DELETE", "/services/"+s.ID, nil, nil)
-		}
-	}
-}
+//
+// The grace, the stamp and the rule that reaps a stamp past its grace are the
+// sweep's (sweep.go): they apply to both backends alike.
 
 // markServiceLinger stamps the signpost service instead of deleting it. The
 // update round-trips the FULL spec (Docker's update replaces, not merges) with
 // only the label added.
 func markServiceLinger(name string) error {
 	var s struct {
-		ID      string `json:"ID"`
-		Version struct {
-			Index uint64 `json:"Index"`
-		} `json:"Version"`
-		Spec map[string]any `json:"Spec"`
+		ID      string         `json:"ID"`
+		Version swarmVersion   `json:"Version"`
+		Spec    map[string]any `json:"Spec"`
 	}
 	if code, err := dockerAPI("GET", "/services/"+signpostName(name), nil, &s); err != nil {
 		if code == 404 || code == 503 {
@@ -1617,10 +1680,13 @@ func markServiceLinger(name string) error {
 	}
 	labels[lingerLabel] = lingerStamp()
 	s.Spec["Labels"] = labels
-	_, err := dockerAPI("POST", fmt.Sprintf("/services/%s/update?version=%d", s.ID, s.Version.Index), s.Spec, nil)
+	_, err := dockerAPI("POST", serviceUpdatePath(s.ID, s.Version), s.Spec, nil)
 	return err
 }
 
+// restoreServiceParked scales back whatever a previous session's signpost
+// service parked (its receipt labels), then removes that signpost. Scale-back
+// first, delete second: the name keeps resolving throughout.
 func restoreServiceParked(name string) error {
 	var s struct {
 		Spec struct {
@@ -1669,55 +1735,6 @@ func scaleBackParkedService(labels map[string]string) error {
 	return scaleService(svc, n)
 }
 
-// dockerGC sweeps, at agent boot, THIS agent's own orphaned signposts (an agent
-// restart leaves its sessions' signposts running). A signpost is ours if its
-// owner label is our current name OR its owner container no longer exists — the
-// latter covers Swarm, where the agent's container name churns on restart, so
-// the old signposts' owner never equals the new name but their owner container
-// is gone. This leaves a CO-LOCATED other agent's live signposts (owner still
-// running) untouched — the pure-shared-network scan used to wipe those.
-// gcNote reports a boot-gc failure on stderr — the container's log, which is
-// where anyone hunting "why is my service still scaled to 0" will look. gc is
-// best-effort by design (a crashed session's leftovers), but best-effort must
-// not mean invisible: its whole job is restoring workloads a dead session
-// parked.
-func gcNote(format string, a ...any) {
-	fmt.Fprintf(os.Stderr, "plug-agent gc: "+format+"\n", a...)
-}
-
-// gcNoted remembers what the sweep already said, by receipt, for the life of
-// this process. The sweep runs every minute (sweepPeriodically) and a restore
-// that fails keeps failing until someone acts, so the same line would otherwise
-// fill the log once a minute and bury everything else. One line when it starts
-// failing, one when it recovers, and the receipt stays in place in between.
-var (
-	gcNotedMu sync.Mutex
-	gcNoted   = map[string]bool{}
-)
-
-// gcNoteOnce says it the first time only, per key and per boot.
-func gcNoteOnce(key, format string, a ...any) {
-	gcNotedMu.Lock()
-	seen := gcNoted[key]
-	gcNoted[key] = true
-	gcNotedMu.Unlock()
-	if !seen {
-		gcNote(format, a...)
-	}
-}
-
-// gcNoteRecovered closes a gcNoteOnce: said only when there was a failure to
-// close, so an ordinary restore stays as quiet as it always was.
-func gcNoteRecovered(key, format string, a ...any) {
-	gcNotedMu.Lock()
-	seen := gcNoted[key]
-	delete(gcNoted, key)
-	gcNotedMu.Unlock()
-	if seen {
-		gcNote(format, a...)
-	}
-}
-
 // ownerAlive reports whether the owner agent still exists. Off a Swarm manager
 // (swarm=false) only containers can be owners AND /services/* answers 503, so we
 // must NOT consult serviceExists there — otherwise its non-404 makes ownerAlive
@@ -1731,10 +1748,6 @@ func ownerAlive(name string, swarm bool) bool {
 		return true
 	}
 	return swarm && serviceExists(name)
-}
-
-func urlEscape(s string) string {
-	return strings.NewReplacer("{", "%7B", "}", "%7D", `"`, "%22", "[", "%5B", "]", "%5D", ",", "%2C", ":", "%3A", "=", "%3D").Replace(s)
 }
 
 // ---- kubernetes backend (RBAC applied — part of deploy/plug-k8s.yaml) ----
@@ -1842,27 +1855,4 @@ func selectorPatch(target, current map[string]string) map[string]any {
 		p[k] = v
 	}
 	return p
-}
-
-// sweepExpiredK8sLingers is the serve-time reap, Swarm's twin: an agent that
-// never restarts must not keep dead names resolving for ever.
-func sweepExpiredK8sLingers(ns string) {
-	var list struct {
-		Items []struct {
-			Metadata struct {
-				Name        string            `json:"name"`
-				Labels      map[string]string `json:"labels"`
-				Annotations map[string]string `json:"annotations"`
-			} `json:"metadata"`
-		} `json:"items"`
-	}
-	if _, err := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/services?labelSelector="+urlEscape(k8sManaged+"=plug"), nil, &list); err != nil {
-		return
-	}
-	now := time.Now()
-	for _, s := range list.Items {
-		if stamp := s.Metadata.Annotations[lingerLabel]; stamp != "" && lingerExpired(stamp, now) {
-			k8sDropName(ns, s.Metadata.Name)
-		}
-	}
 }

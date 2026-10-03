@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Print the release BEFORE the newest published one — the version a developer
+# Print the release BEFORE the newest published one: the version a developer
 # who is one update behind is running.
 #
 # The e2e needs an agent on some earlier release to prove `plug update` rolls a
@@ -48,11 +48,6 @@ while [ "$page" -le 25 ]; do
     | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$')"
   [ -n "$found" ] && releases="$releases$found
 "
-  # Stop on the API's own end-of-list marker. Asking for one page too many is a
-  # 404, which curl -f turns into the "registry unreachable" exit above: a paging
-  # detail would read as an outage and take the six clusters down with it.
-  # Matched with sed, not `grep -q`, whose early exit makes `tr` die of SIGPIPE
-  # and the pipeline return 141 under `pipefail` even on a match.
   # Two releases is the whole question, so stop at two. Draining the list read
   # every page whether or not the answer was already in hand: page 1 carries both
   # releases today, so that was one extra anonymous request per cluster, six

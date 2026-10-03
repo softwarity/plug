@@ -172,7 +172,7 @@ func applyUpdate(cfg config, tag string) {
 //     carrying both in one string.
 func updateNotice(available string) string {
 	const how = "run `plug update` to take it (plug config update=auto to apply it for you, =none to stop saying it)"
-	if _, ok := parseExactRelease(available); ok {
+	if isRelease(available) {
 		return fmt.Sprintf("agent update available: v%s — %s", available, how)
 	}
 	return fmt.Sprintf("the agent follows %q and that tag now points at a different image — %s", available, how)

@@ -72,12 +72,9 @@ docker stack deploy -c plug-stack.yml plug</app-code>
       nothing else - the agent <code>version</code>, a named binary (<code>&lt;os&gt;-&lt;arch&gt;</code>),
       the <code>wintun</code> driver DLL for Windows, and two installers: <code>install</code> for
       Linux/macOS (binaries <strong>embedded</strong>, picked with <code>uname</code>) and
-      <code>install-windows</code> (a Git Bash script):
+      <code>install-windows</code> (a Git Bash script). The one-liners that call them, per OS,
+      are on <a routerLink="/getting-started">Getting started</a>, where they are kept.
     </p>
-    <app-code lang="bash"># the agent regenerates its host key each start (not a secret here), so skip the check
-cluster=&lt;host&gt;
-ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@$cluster install | sh   # install (Linux/macOS)
-ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get@$cluster install-windows | bash -s -- $cluster 2222   # install (Windows, Git Bash)</app-code>
     <p>
       The version baked into the image (and stamped into every binary) is what the
       <a routerLink="/profiles">launcher</a> asks for to run the matching version. Released images

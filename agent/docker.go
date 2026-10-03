@@ -11,6 +11,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -216,14 +217,13 @@ func dockerAPI(method, path string, body any, out any) (int, error) {
 	return readAPIReply(resp.StatusCode, resp.Status, data, out, true)
 }
 
-// containerID finds THIS container's real id from the cgroup/mountinfo the
-// kernel exposes — authoritative, unlike the hostname (which a stack can
-// override, and which would then GET a DIFFERENT container's inspect). Falls
 // containerIDFromMount reads THIS container's id from the Docker-bind-mounted
-// paths in mountinfo (`…/containers/<id>/{resolv.conf,hostname,hosts}`). The
-// segment is anchored on `/containers/<64-hex>/`, NOT any 64-hex — the overlay
-// layer hashes elsewhere in mountinfo are also 64-hex and must not be picked.
-// "" when the pattern isn't present (returns to the hostname).
+// paths in mountinfo (`…/containers/<id>/{resolv.conf,hostname,hosts}`), which
+// the kernel exposes and is therefore authoritative, unlike the hostname (a
+// stack can override it, and the inspect would then be a DIFFERENT
+// container's). The segment is anchored on `/containers/<64-hex>/`, NOT any
+// 64-hex: the overlay layer hashes elsewhere in mountinfo are also 64-hex and
+// must not be picked. "" when the pattern isn't present (the hostname stands).
 func containerIDFromMount() string {
 	b, err := os.ReadFile("/proc/self/mountinfo")
 	if err != nil {
@@ -235,10 +235,39 @@ func containerIDFromMount() string {
 	return ""
 }
 
-// dockerSelf identifies OUR container. A var holding dockerSelfInspect so a test
-// can hand the backends an identity directly: the real one asks the daemon
-// about THIS process's hostname, which no fake Engine can answer for.
-var dockerSelf = dockerSelfInspect
+// dockerSelf identifies OUR container. A var so a test can hand the backends an
+// identity directly: the real one asks the daemon about THIS process's
+// hostname, which no fake Engine can answer for.
+//
+// Remembered once it has answered: a verb asks it two or three times (the
+// witness, the serve, the self-update), the serve process once a minute, and
+// the container an agent runs in does not change under it. Only a SUCCESS is
+// kept: the serve process lives for weeks, and a daemon that hiccups at boot
+// must not leave every later sweep unable to identify the agent.
+var dockerSelf = memoize(dockerSelfInspect)
+
+// memoize returns f with its first successful answer kept for every later
+// call. A failure is returned and NOT kept, so the next call asks again.
+func memoize[T any](f func() (T, error)) func() (T, error) {
+	var (
+		mu  sync.Mutex
+		val T
+		ok  bool
+	)
+	return func() (T, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if ok {
+			return val, nil
+		}
+		v, err := f()
+		if err != nil {
+			return v, err
+		}
+		val, ok = v, true
+		return val, nil
+	}
+}
 
 // dockerSelfInspect is that lookup. The hostname is the short container id by
 // default and resolves directly — the proven path. Only if that GET fails (a
@@ -427,23 +456,16 @@ func containerServe(name string, pairs []portPair, self selfInfo) {
 		},
 		"NetworkingConfig": map[string]any{"EndpointsConfig": map[string]any{nets[0]: endpoints[nets[0]]}},
 	}
-	var created struct {
-		Id string `json:"Id"`
-	}
-	if _, err := dockerAPI("POST", "/containers/create?name="+signpostName(name), body, &created); err != nil {
-		answer("error: creating the %s signpost: %v", name, err)
-	}
 	// The alias must exist on EVERY network the agent is on (workloads may look
 	// from any of them).
-	for _, n := range nets[1:] {
-		if _, err := dockerAPI("POST", "/networks/"+n+"/connect",
-			map[string]any{"Container": created.Id, "EndpointConfig": endpoints[n]}, nil); err != nil {
-			_, _ = dockerAPI("DELETE", "/containers/"+created.Id+"?force=1", nil, nil)
-			answer("error: attaching the %s signpost to %s: %v", name, n, err)
-		}
-	}
-	if _, err := dockerAPI("POST", "/containers/"+created.Id+"/start", nil, nil); err != nil {
-		_, _ = dockerAPI("DELETE", "/containers/"+created.Id+"?force=1", nil, nil)
+	id, step, network, err := createAttachedContainer(signpostName(name), body, nets[1:], endpoints)
+	switch {
+	case err == nil:
+	case step == stepCreate:
+		answer("error: creating the %s signpost: %v", name, err)
+	case step == stepAttach:
+		answer("error: attaching the %s signpost to %s: %v", name, network, err)
+	default:
 		answer("error: starting the %s signpost: %v", name, err)
 	}
 	// Park AFTER the signpost is live: a brief both-in-DNS overlap is benign
@@ -454,7 +476,7 @@ func containerServe(name string, pairs []portPair, self selfInfo) {
 			for _, r := range owners[:i] { // roll the partial park back
 				_, _ = dockerAPI("POST", "/containers/"+r.id+"/start", nil, nil)
 			}
-			_, _ = dockerAPI("DELETE", "/containers/"+created.Id+"?force=1", nil, nil)
+			_, _ = dockerAPI("DELETE", "/containers/"+id+"?force=1", nil, nil)
 			answer("error: parking %q (stopping %s): %v", name, o.name, err)
 		}
 	}
@@ -462,6 +484,44 @@ func containerServe(name string, pairs []portPair, self selfInfo) {
 		answer("dynamic parked")
 	}
 	answer("dynamic")
+}
+
+// createStep names where createAttachedContainer stopped, so the caller can
+// phrase its refusal: the signpost and the mount helper say different things
+// about the same failure.
+type createStep int
+
+const (
+	stepCreate createStep = iota
+	stepAttach
+	stepStart
+)
+
+// createAttachedContainer creates a container (its first network in the body's
+// HostConfig and NetworkingConfig), joins it to every further network with the
+// given endpoint config, and starts it. Past the create, a failure removes the
+// container before returning: a container that exists and does not run, or
+// runs on half its networks, would carry a name it cannot answer for. Returns
+// the id, or the step that failed, the network of a failed attach, and why.
+func createAttachedContainer(name string, body map[string]any, more []string, endpoints map[string]any) (id string, step createStep, network string, err error) {
+	var created struct {
+		Id string `json:"Id"`
+	}
+	if _, err := dockerAPI("POST", "/containers/create?name="+name, body, &created); err != nil {
+		return "", stepCreate, "", err
+	}
+	for _, n := range more {
+		if _, err := dockerAPI("POST", "/networks/"+n+"/connect",
+			map[string]any{"Container": created.Id, "EndpointConfig": endpoints[n]}, nil); err != nil {
+			_, _ = dockerAPI("DELETE", "/containers/"+created.Id+"?force=1", nil, nil)
+			return "", stepAttach, n, err
+		}
+	}
+	if _, err := dockerAPI("POST", "/containers/"+created.Id+"/start", nil, nil); err != nil {
+		_, _ = dockerAPI("DELETE", "/containers/"+created.Id+"?force=1", nil, nil)
+		return "", stepStart, "", err
+	}
+	return created.Id, 0, "", nil
 }
 
 func dockerUnserve(name string) {
@@ -482,6 +542,60 @@ func dockerUnserve(name string) {
 	answer("ok")
 }
 
+// dockerFilters renders a Docker list filter as the API's query value: the
+// JSON object of name to values that /containers/json, /services, /tasks and
+// /secrets take, escaped for the URL. One renderer, because the filters used
+// to be concatenated by hand at five sites with a partial escaper beside the
+// standard one, and a label value with a character the escaper did not know
+// would have listed nothing, silently.
+func dockerFilters(f map[string][]string) string {
+	b, _ := json.Marshal(f)
+	return url.QueryEscape(string(b))
+}
+
+// dockerContainerRec is a container as GET /containers/json lists it.
+type dockerContainerRec struct {
+	Id     string            `json:"Id"`
+	Names  []string          `json:"Names"`
+	Labels map[string]string `json:"Labels"`
+}
+
+// swarmObjectRec is a service or a secret as its list endpoint reports it:
+// both carry their name and labels in a Spec.
+type swarmObjectRec struct {
+	ID   string `json:"ID"`
+	Spec struct {
+		Name   string            `json:"Name"`
+		Labels map[string]string `json:"Labels"`
+	} `json:"Spec"`
+}
+
+// dockerContainersLabelled lists every container, running or not, carrying
+// label=1: the signposts, or the mount helpers.
+func dockerContainersLabelled(label string) ([]dockerContainerRec, error) {
+	var list []dockerContainerRec
+	_, err := dockerAPI("GET", "/containers/json?all=1&filters="+dockerFilters(map[string][]string{"label": {label + "=1"}}), nil, &list)
+	return list, err
+}
+
+// swarmObjectsLabelled lists the services (kind "services") or the secrets
+// (kind "secrets") carrying label=1. Only answered on a manager: off one the
+// endpoint says 503, which the callers treat as "nothing to sweep".
+func swarmObjectsLabelled(kind, label string) ([]swarmObjectRec, error) {
+	var list []swarmObjectRec
+	_, err := dockerAPI("GET", "/"+kind+"?filters="+dockerFilters(map[string][]string{"label": {label + "=1"}}), nil, &list)
+	return list, err
+}
+
+// dockerGC sweeps, at agent boot and every minute after, THIS agent's own
+// orphaned signposts (an agent restart leaves its sessions' signposts running).
+// A signpost is ours if its owner label is our current name OR its owner
+// container no longer exists: the latter covers Swarm, where the agent's
+// container name churns on restart, so the old signposts' owner never equals
+// the new name but their owner container is gone. This leaves a CO-LOCATED
+// other agent's live signposts (owner still running) untouched; the
+// pure-shared-network scan used to wipe those. The rules are the sweep's
+// (sweep.go); what is here is how a signpost reads and acts on each backend.
 func dockerGC() {
 	self, err := dockerSelf()
 	if err != nil {
@@ -490,108 +604,110 @@ func dockerGC() {
 	}
 	mine := self.owner()
 	swarm := swarmManager()
-	f := `{"label":["` + signpostLabel + `=1"]}`
-	// Standalone-container signposts.
-	var clist []struct {
-		Id     string            `json:"Id"`
-		Names  []string          `json:"Names"`
-		Labels map[string]string `json:"Labels"`
-	}
-	if _, err := dockerAPI("GET", "/containers/json?all=1&filters="+urlEscape(f), nil, &clist); err == nil {
-		for _, c := range clist {
-			// Before ownership: is anyone still USING it? The owner label names a
-			// role, so every replica of one deployment reads its siblings' live
-			// signposts as "mine" and would sweep them at boot - restoring what
-			// their sessions parked while those sessions are still serving it.
-			if sessionLive(c.Labels[sessionOwnerLabel]) {
-				continue
-			}
-			o := c.Labels[signpostOwnerLabel]
-			if o == mine || !ownerAlive(o, swarm) {
-				// An orphaned signpost's receipt is a takeover that never got
-				// restored (the session died with the agent) — restore it now,
-				// then sweep the signpost.
-				//
-				// Restore FIRST, and only then the signpost: the receipt lives
-				// in its labels, which is the rule restoreContainerParked keeps
-				// and this sweep used to break. It deleted the signpost on a
-				// failed restart as well, and since it runs every minute, one
-				// passing daemon error left a workload stopped with nothing
-				// anywhere saying a session had stopped it. The signpost stays,
-				// the next sweep retries, and the log says so once.
-				sp := c.Id[:12]
-				if len(c.Names) > 0 {
-					sp = strings.TrimPrefix(c.Names[0], "/")
-				}
-				if failed := restartParkedContainers(c.Labels[parkedContainersLabel]); len(failed) > 0 {
-					gcNoteOnce("container:"+c.Id, "could not restart %s while cleaning up the %s signpost - keeping it "+
-						"so its receipt survives; the sweep retries every minute, or start them by hand",
-						strings.Join(failed, ", "), sp)
-					continue
-				}
-				gcNoteRecovered("container:"+c.Id, "restarted what the %s signpost had parked, after an earlier failure", sp)
-				_, _ = dockerAPI("DELETE", "/containers/"+c.Id+"?force=1", nil, nil)
-			}
-		}
-	}
+	sweep(dockerSignpostContainers(mine, swarm))
 	// Swarm-service signposts (only reachable on a manager).
-	if !swarm {
-		return
+	if swarm {
+		sweep(dockerSignpostServices(mine))
 	}
-	var slist []struct {
-		ID   string `json:"ID"`
-		Spec struct {
-			Name   string            `json:"Name"`
-			Labels map[string]string `json:"Labels"`
-		} `json:"Spec"`
-	}
-	if _, err := dockerAPI("GET", "/services?filters="+urlEscape(f), nil, &slist); err == nil {
-		now := time.Now()
-		for _, s := range slist {
-			// The linger rule comes FIRST, before ownership: a lingering
-			// signpost is holding an ADDRESS warm, and an agent restart renames
-			// the owner — judged by the owner rule alone it would read as an
-			// orphan and be swept, killing the very address the linger exists to
-			// keep. Within the grace it stays, whoever stamped it; past the
-			// grace it goes, whoever stamped it.
-			if stamp := s.Spec.Labels[lingerLabel]; stamp != "" {
-				if !lingerExpired(stamp, now) {
-					continue
-				}
-				_, _ = dockerAPI("DELETE", "/services/"+s.ID, nil, nil)
-				continue
-			}
-			// A sibling task's session, same as the container shape above: its
-			// forward answers on the overlay, and the owner label cannot tell it
-			// apart from ours because both tasks report the same service.
-			if sessionLive(s.Spec.Labels[sessionOwnerLabel]) {
-				continue
-			}
-			o := s.Spec.Labels[signpostOwnerLabel]
-			if o == mine || !ownerAlive(o, swarm) {
-				// Same rule as the container shape above, and as
-				// restoreServiceParked: the receipt is in the signpost's labels,
-				// so a scale-back that failed keeps the signpost for the next
-				// sweep rather than leaving a service at zero replicas with
-				// nothing recording that a session put it there.
-				if err := scaleBackParkedService(s.Spec.Labels); err != nil { // undo the orphan's takeover
-					gcNoteOnce("service:"+s.ID, "could not scale %q back up while cleaning up the %s signpost (%v) - keeping it "+
-						"so its receipt survives; the sweep retries every minute, or scale it by hand",
-						s.Spec.Labels[parkedServiceLabel], s.Spec.Name, err)
-					continue
-				}
-				gcNoteRecovered("service:"+s.ID, "scaled %q back up, after an earlier failure", s.Spec.Labels[parkedServiceLabel])
-				_, _ = dockerAPI("DELETE", "/services/"+s.ID, nil, nil)
-				// The secrets stashed at park are the parked service's, and it
-				// is running again: drop them, as restoreServiceParked does. The
-				// stash is keyed by the served name, which the label carries
-				// whole (the object's name may have been cut to fit).
-				if n := signpostServedName(s.Spec.Name, s.Spec.Labels); n != "" {
-					_ = os.Remove(swarmSecretStash(n))
-				}
-			}
+}
+
+// dockerSignpostContainers is the standalone-container signposts as the sweep
+// sees them. A container never lingers: its relay target is baked into its
+// entrypoint, so there is no address worth keeping.
+func dockerSignpostContainers(mine string, swarm bool) sweepTarget {
+	return func() []sweepItem {
+		list, err := dockerContainersLabelled(signpostLabel)
+		if err != nil {
+			return nil
 		}
+		items := make([]sweepItem, 0, len(list))
+		for _, c := range list {
+			sp := c.Id[:12]
+			if len(c.Names) > 0 {
+				sp = strings.TrimPrefix(c.Names[0], "/")
+			}
+			id, owner, session, receipt := c.Id, c.Labels[signpostOwnerLabel], c.Labels[sessionOwnerLabel], c.Labels[parkedContainersLabel]
+			items = append(items, sweepItem{
+				key:  "container:" + id,
+				live: func() bool { return sessionLive(session) },
+				held: func() bool { return owner != mine && ownerAlive(owner, swarm) },
+				// An orphaned signpost's receipt is a takeover that never got
+				// restored (the session died with the agent): restore it now,
+				// and the sweep removes the signpost only once that succeeded.
+				restore: func() (string, error) {
+					if failed := restartParkedContainers(receipt); len(failed) > 0 {
+						return "", fmt.Errorf("could not restart %s while cleaning up the %s signpost - keeping it "+
+							"so its receipt survives; the sweep retries every minute, or start them by hand",
+							strings.Join(failed, ", "), sp)
+					}
+					return fmt.Sprintf("restarted what the %s signpost had parked, after an earlier failure", sp), nil
+				},
+				drop: func() { _, _ = dockerAPI("DELETE", "/containers/"+id+"?force=1", nil, nil) },
+			})
+		}
+		return items
 	}
+}
+
+// dockerSignpostServices is the Swarm-service signposts as the sweep sees them:
+// the shape that lingers (its VIP is worth keeping), whose receipt is a scaled
+// service, and whose park left a secret stash to drop with the signpost.
+func dockerSignpostServices(mine string) sweepTarget {
+	return func() []sweepItem {
+		list, err := swarmObjectsLabelled("services", signpostLabel)
+		if err != nil {
+			return nil
+		}
+		items := make([]sweepItem, 0, len(list))
+		for _, s := range list {
+			id, name, labels := s.ID, s.Spec.Name, s.Spec.Labels
+			owner, session, parked := labels[signpostOwnerLabel], labels[sessionOwnerLabel], labels[parkedServiceLabel]
+			remove := func() { _, _ = dockerAPI("DELETE", "/services/"+id, nil, nil) }
+			items = append(items, sweepItem{
+				key:   "service:" + id,
+				stamp: labels[lingerLabel],
+				// A sibling task's session, same as the container shape: its
+				// forward answers on the overlay, and the owner label cannot tell
+				// it apart from ours because both tasks report the same service.
+				live: func() bool { return sessionLive(session) },
+				held: func() bool { return owner != mine && ownerAlive(owner, true) },
+				// Same rule as restoreServiceParked: the receipt is in the
+				// signpost's labels, so a scale-back that failed keeps the
+				// signpost for the next sweep rather than leaving a service at
+				// zero replicas with nothing recording that a session put it there.
+				restore: func() (string, error) {
+					if err := scaleBackParkedService(labels); err != nil {
+						return "", fmt.Errorf("could not scale %q back up while cleaning up the %s signpost (%v) - keeping it "+
+							"so its receipt survives; the sweep retries every minute, or scale it by hand",
+							parked, name, err)
+					}
+					return fmt.Sprintf("scaled %q back up, after an earlier failure", parked), nil
+				},
+				drop: remove,
+				retire: func() {
+					remove()
+					// The secrets stashed at park are the parked service's, and
+					// it is running again: drop them, as restoreServiceParked
+					// does. The stash is keyed by the served name, which the
+					// label carries whole (the object's name may have been cut
+					// to fit).
+					if n := signpostServedName(name, labels); n != "" {
+						_ = os.Remove(swarmSecretStash(n))
+					}
+				},
+			})
+		}
+		return items
+	}
+}
+
+// sweepExpiredServiceLingers reaps every lingering signpost service past its
+// grace, and nothing else: called from a serve, because boot and the minute
+// ticker are the only other moments the agent runs any code, and the name
+// being served may be the one whose grace just ran out (then the create that
+// follows gets a fresh VIP, which is the honest outcome).
+func sweepExpiredServiceLingers(mine string) {
+	sweep(lingering(dockerSignpostServices(mine)))
 }
 
 // containerExists reports whether a container named `name` is present (running

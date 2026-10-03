@@ -34,10 +34,17 @@
   <meta name="twitter:image" content="https://softwarity.github.io/plug/media/about-diagram-og.png">
 
   <link rel="icon" type="image/svg+xml" href="https://www.softwarity.io/img/softwarity.svg">
-  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
-  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,400,0,0" rel="stylesheet">
+  <!-- The only web font is the icon set, and only the glyphs the site draws:
+       icon_names (alphabetical, as Google Fonts requires) turns a 300 kB font
+       into a few kilobytes. Every <mat-icon> name in src/ must be in this list
+       or it renders as its name in plain text. Roboto is gone: it was fourth
+       in the body font stack, after the system fonts that every platform has,
+       so it was downloaded and never drawn. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,400,0,0&icon_names=account_tree,all_inclusive,arrow_forward,autorenew,check,check_circle,chevron_right,compare_arrows,content_copy,devices,dns,download,error_outline,expand_less,expand_more,hub,inventory_2,map,menu_book,public,rocket_launch,schedule,settings,shield,shield_person,smart_toy,swap_horiz,sync_alt,table_chart,terminal,troubleshoot&display=block" rel="stylesheet">
 </head>
-<body class="dark-mode">
+<body>
   <app-root></app-root>
 </body>
 </html>

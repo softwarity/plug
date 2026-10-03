@@ -42,7 +42,7 @@ import (
 // The host needs no privilege here. Nothing creates a TUN on this machine: the
 // capabilities are granted by docker, inside the sidecar.
 
-// dockerRunResolv is what the user's container gets as its resolver. It is a
+// dockerRunResolvName is what the user's container gets as its resolver. It is a
 // mounted FILE rather than --dns, which docker refuses outright in this network
 // mode ("conflicting options: dns and the network mode").
 const dockerRunResolvName = "resolv.conf"
@@ -300,6 +300,11 @@ func dockerServerArch() (string, error) {
 	return arch, nil
 }
 
+// sidecarReadyWait bounds the wait for the sidecar's tunnel to come up: the
+// image is local by then (the pull is checked first), so this is one dial to
+// the agent plus the container's start.
+const sidecarReadyWait = 30 * time.Second
+
 // startDockerSidecar brings up the container that holds the datapath and returns
 // its name plus a teardown.
 //
@@ -339,7 +344,7 @@ func startDockerSidecar(cfg config, network string, plugFlags []string) (string,
 	}
 	stop := func() { _ = dockerCommand("rm", "-f", name).Run() }
 
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(sidecarReadyWait)
 	for time.Now().Before(deadline) {
 		if dockerCommand("exec", name, "test", "-f", "/tmp/plug-ready").Run() == nil {
 			return name, stop, nil
@@ -638,12 +643,13 @@ func dockerMountConfig(cfg config, exposes []string) config {
 func dockerMountFlags() ([]string, func()) {
 	var flags, made []string
 	for _, m := range dockerMounts {
-		host, port, err := net.SplitHostPort(m.target.local)
+		// Only the port: the forward is on this host's loopback, which the
+		// daemon reaches as dockerHostAddr.
+		_, port, err := net.SplitHostPort(m.target.local)
 		if err != nil {
 			info("mount %s: %v", m.spec, err)
 			continue
 		}
-		_ = host // the forward is on this host's loopback; the daemon reaches it as dockerHostAddr
 		name := "plug-vol-" + recordName(m.spec.name + ":" + m.spec.volume + ":" + port)[:16]
 		opts := fmt.Sprintf("port=%s,username=%s,password=%s,vers=3.0,uid=0,gid=0,file_mode=0664,dir_mode=0775,noperm,nobrl",
 			port, m.target.user, m.target.pass)
