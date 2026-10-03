@@ -1,7 +1,12 @@
 package main
 
 import (
+	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -181,24 +186,68 @@ func TestTheLauncherIsNotReplacedByAnIdenticalBuild(t *testing.T) {
 	updateLauncher(config{host: "127.0.0.1", port: "1"}, "9.9.9")
 }
 
-// And a digest the agent cannot give must NOT block the update: unknown is not
-// "identical", so it falls through and replaces as before.
-func TestAnUnavailableDigestStillReplaces(t *testing.T) {
-	saved := fetchDigest
-	fetchDigest = func(config, string) (coreAttestation, error) { return coreAttestation{}, errUnavailableTest }
-	defer func() { fetchDigest = saved }()
+// The launcher is replaced ONLY when the agent announced a digest the bytes hash
+// to AND the release signature over that hash checks out. Nothing else: not a
+// missing digest, not a missing signature, not a signature from somebody else.
+//
+// The test this replaces asserted the opposite. "A digest the agent cannot give
+// must NOT block the update" was the policy, and the code honoured it by
+// skipping the hash and the signature and handing the result setuid root. It
+// never called updateLauncher, so it would have stayed green through any change
+// to that function, including the one that mattered. This one goes through
+// updateLauncher with every brick injected, and watches whether replaceBinary
+// is reached.
+func TestTheLauncherIsReplacedOnlyWithADigestAndASignature(t *testing.T) {
+	priv, restoreKey := testKey(t)
+	defer restoreKey()
 
-	if replace, _ := launcherFollow("2.9.3", "2.9.4"); !replace {
-		t.Fatal("a version change must still ask to replace")
-	}
-	// The decision to fall through lives in updateLauncher's guard: with no
-	// digest, it cannot conclude "same bytes" and must go on to download.
-	if want, err := fetchDigest(config{}, "x"); err == nil || want.sha256 != "" {
-		t.Errorf("the stub must report no digest, got %q / %v", want, err)
+	// What the agent "serves": big enough to pass the size floor, and shaped
+	// like an executable so only the attestation decides.
+	served := make([]byte, 2<<20)
+	copy(served, []byte{0x7f, 'E', 'L', 'F'})
+	sum := fmt.Sprintf("%x", sha256.Sum256(served))
+	osArch := runtime.GOOS + "-" + runtime.GOARCH
+
+	savedDigest, savedDownload, savedReplace, savedAnswers := fetchDigest, getDownload, replaceBinary, launcherAnswersVersion
+	defer func() {
+		fetchDigest, getDownload, replaceBinary, launcherAnswersVersion = savedDigest, savedDownload, savedReplace, savedAnswers
+	}()
+	getDownload = func(config, string, string) ([]byte, error) { return served, nil }
+	launcherAnswersVersion = func(string) string { return "" }
+
+	_, attacker, _ := ed25519.GenerateKey(rand.Reader)
+	for _, c := range []struct {
+		name    string
+		att     coreAttestation
+		derr    error
+		replace bool
+		fails   bool // an error back from updateLauncher (tampering), as opposed to a quiet refusal (age)
+	}{
+		{"no digest at all", coreAttestation{}, errors.New("digest unavailable"), false, false},
+		{"a digest and no signature", coreAttestation{sha256: sum}, nil, false, false},
+		{"a digest and a stranger's signature", coreAttestation{sha256: sum, sig: signed(attacker, osArch, sum)}, nil, false, true},
+		{"a digest that is not what arrived", coreAttestation{sha256: strings.Repeat("a", 64), sig: signed(priv, osArch, strings.Repeat("a", 64))}, nil, false, true},
+		{"a digest and the release signature", coreAttestation{sha256: sum, sig: signed(priv, osArch, sum)}, nil, true, false},
+	} {
+		att, derr := c.att, c.derr
+		fetchDigest = func(config, string) (coreAttestation, error) { return att, derr }
+		replaced := false
+		replaceBinary = func(_ string, data []byte, _ func(string)) error {
+			replaced = true
+			if !bytes.Equal(data, served) {
+				t.Errorf("%s: replaceBinary was handed bytes other than the ones admitted", c.name)
+			}
+			return nil
+		}
+		err := updateLauncher(config{host: "127.0.0.1", port: "1"}, "9.9.9")
+		if replaced != c.replace {
+			t.Errorf("%s: replaced = %v, want %v", c.name, replaced, c.replace)
+		}
+		if (err != nil) != c.fails {
+			t.Errorf("%s: err = %v, want an error: %v", c.name, err, c.fails)
+		}
 	}
 }
-
-var errUnavailableTest = errors.New("digest unavailable")
 
 // The store guard has to cover the path that RUNS the cached binary, not only
 // the path that writes it.

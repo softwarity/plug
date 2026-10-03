@@ -15,20 +15,29 @@ import (
 // on the machine open it. On unix there is nothing to add: guardUserPath already
 // compares the real owner, because the daemon keeps the user's real uid.
 func guardKeyPath(path string) {
+	if err := keyPathError(path); err != nil {
+		fatal("%v", err)
+	}
+}
+
+// keyPathError is guardKeyPath as a value, for the daemon and the MCP server
+// (see refusal.go). nil means the key may be opened.
+func keyPathError(path string) error {
 	if runtime.GOOS != "windows" || path == "" {
-		return
+		return nil
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
-		fatal("plug: %s is not a usable path (%v)", path, err)
+		return refuse("plug: %s is not a usable path (%v)", path, err)
 	}
 	fi, err := os.Lstat(abs)
 	if err != nil {
-		return // absent is the caller's problem to report, not a privilege question
+		return nil // absent is the caller's problem to report, not a privilege question
 	}
 	if why := keyPathRefusal(abs, fi.Mode(), systemRootsForKeyGuard()); why != "" {
-		fatal("plug: refusing to read %s as a key: %s", abs, why)
+		return refuse("plug: refusing to read %s as a key: %s", abs, why)
 	}
+	return nil
 }
 
 // keyPathRefusal is the decision behind that guard, kept here without a build tag

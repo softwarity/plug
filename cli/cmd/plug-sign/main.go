@@ -11,10 +11,15 @@
 // The statement it signs is the one cli/release_sig.go verifies. The two must
 // agree exactly, which is why the format lives in a comment in both places:
 //
-//	plug-core-v1\n<os>-<arch>\n<sha256 hex>\n
+//	plug-core-v1\n<label>\n<sha256 hex>\n
 //
-// The version is deliberately absent: an embedder announces its own version
-// while serving these binaries, so binding it would refuse every launch there.
+// The label is the os-arch for a plug-<os>-<arch> binary, and the file's own
+// name without its extension for anything else named on the command line: the
+// WinTUN driver is signed as wintun-amd64 and wintun-arm64, which no core can
+// ever be called, so a signature issued for the driver never vouches for a
+// binary, nor the reverse. The version is deliberately absent: an embedder
+// announces its own version while serving these binaries, so binding it would
+// refuse every launch there.
 package main
 
 import (
@@ -28,11 +33,11 @@ import (
 )
 
 func main() {
-	if len(os.Args) != 4 {
-		fmt.Fprintln(os.Stderr, "usage: plug-sign <key file> <bin dir> <version>")
+	if len(os.Args) < 4 {
+		fmt.Fprintln(os.Stderr, "usage: plug-sign <key file> <bin dir> <version> [<file>...]")
 		os.Exit(2)
 	}
-	keyFile, binDir, version := os.Args[1], os.Args[2], strings.TrimSpace(os.Args[3])
+	keyFile, binDir, version, extra := os.Args[1], os.Args[2], strings.TrimSpace(os.Args[3]), os.Args[4:]
 
 	raw, err := os.ReadFile(keyFile)
 	if err != nil {
@@ -58,18 +63,7 @@ func main() {
 			continue
 		}
 		osArch := strings.TrimSuffix(strings.TrimPrefix(name, "plug-"), ".exe")
-		path := filepath.Join(binDir, name)
-		data, err := os.ReadFile(path)
-		if err != nil {
-			fail("cannot read %s: %v", path, err)
-		}
-		sum := fmt.Sprintf("%x", sha256.Sum256(data))
-		stmt := "plug-core-v1\n" + osArch + "\n" + sum + "\n"
-		sig := base64.StdEncoding.EncodeToString(ed25519.Sign(priv, []byte(stmt)))
-		if err := os.WriteFile(path+".sig", []byte(sig+"\n"), 0o644); err != nil {
-			fail("cannot write the signature for %s: %v", name, err)
-		}
-		fmt.Printf("plug-sign: %s %s\n", name, sum[:12])
+		sign(priv, filepath.Join(binDir, name), osArch)
 		signed++
 	}
 	// A release that silently signed nothing would publish an image whose core the
@@ -78,7 +72,30 @@ func main() {
 	if signed == 0 {
 		fail("no plug-<os>-<arch> binary found in %s: the release would ship unsigned", binDir)
 	}
-	fmt.Printf("plug-sign: signed %d binaries for %s\n", signed, version)
+	// The files named explicitly (the WinTUN DLLs): each one MUST be there. A
+	// driver the build forgot to fetch would otherwise ship unsigned, and the
+	// launcher would then refuse to refresh it on every Windows machine.
+	for _, path := range extra {
+		label := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+		sign(priv, path, label)
+	}
+	fmt.Printf("plug-sign: signed %d binaries and %d other files for %s\n", signed, len(extra), version)
+}
+
+// sign writes <path>.sig, the release signature over the statement naming label
+// and the file's sha256.
+func sign(priv ed25519.PrivateKey, path, label string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fail("cannot read %s: %v", path, err)
+	}
+	sum := fmt.Sprintf("%x", sha256.Sum256(data))
+	stmt := "plug-core-v1\n" + label + "\n" + sum + "\n"
+	sig := base64.StdEncoding.EncodeToString(ed25519.Sign(priv, []byte(stmt)))
+	if err := os.WriteFile(path+".sig", []byte(sig+"\n"), 0o644); err != nil {
+		fail("cannot write the signature for %s: %v", path, err)
+	}
+	fmt.Printf("plug-sign: %s (%s) %s\n", filepath.Base(path), label, sum[:12])
 }
 
 func fail(format string, a ...any) {

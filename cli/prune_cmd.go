@@ -60,6 +60,10 @@ func cmdPrune() {
 	// that no longer looks at it: clear it here, unconditionally. Every version
 	// in there is by definition one no cluster is served from any more.
 	if old := legacyVersionsDir(); old != "" {
+		// Removed as euid 0 on macOS, under a $HOME the caller chose: the same
+		// guard uninstall puts in front of the same directory, or a symlink there
+		// would make this a root RemoveAll of anything.
+		guardUserPath(old)
 		if entries, err := os.ReadDir(old); err == nil && len(entries) > 0 {
 			freed := dirSize(old)
 			if err := os.RemoveAll(old); err != nil {

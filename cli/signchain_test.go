@@ -49,8 +49,15 @@ func TestTheSignerAndTheVerifierAgree(t *testing.T) {
 		}
 	}
 	const version = "2.13.0+abc1234"
+	// And the driver DLLs, named explicitly: they live outside the bin dir and
+	// are signed under their own name, which no core label can ever equal.
+	dll := filepath.Join(dir, "wintun-amd64.dll")
+	dllBody := []byte("MZ a driver")
+	if err := os.WriteFile(dll, dllBody, 0o644); err != nil {
+		t.Fatal(err)
+	}
 
-	out, err := exec.Command("go", "run", "./cmd/plug-sign", keyFile, binDir, version).CombinedOutput()
+	out, err := exec.Command("go", "run", "./cmd/plug-sign", keyFile, binDir, version, dll).CombinedOutput()
 	if err != nil {
 		t.Fatalf("the signer failed: %v\n%s", err, out)
 	}
@@ -70,6 +77,20 @@ func TestTheSignerAndTheVerifierAgree(t *testing.T) {
 		if err := verifyCore(att, osArch, sum); err != nil {
 			t.Errorf("the launcher refuses what the release workflow signed for %s: %v", name, err)
 		}
+	}
+	sig, err := os.ReadFile(dll + ".sig")
+	if err != nil {
+		t.Fatalf("the signer wrote no signature for the driver: %v", err)
+	}
+	sum := fmt.Sprintf("%x", sha256.Sum256(dllBody))
+	att := coreAttestation{sha256: sum, sig: strings.TrimSpace(string(sig))}
+	if err := verifyCore(att, "wintun-amd64", sum); err != nil {
+		t.Errorf("the launcher refuses the driver the release workflow signed: %v", err)
+	}
+	// The driver's signature names the driver, so it vouches for no core: a
+	// windows-amd64 binary with the DLL's bytes would still be refused.
+	if err := verifyCore(att, "windows-amd64", sum); err == nil {
+		t.Error("a signature issued for wintun-amd64 was accepted for a windows-amd64 core")
 	}
 }
 

@@ -147,3 +147,46 @@ func verifyCore(att coreAttestation, osArch, measured string) error {
 	}
 	return nil
 }
+
+// admitPrivilegedBytes is the ONE decision made before bytes fetched from an
+// agent are handed privilege, and both installers make it: ensureVersion, whose
+// core is cached and then executed as root (macOS) or with ambient capabilities
+// (Linux), and updateLauncher, whose download overwrites plug itself and is then
+// re-granted setuid or CAP_SYS_ADMIN. The launcher used to decide on its own,
+// and decided differently: an agent that could not announce a digest was taken
+// as a reason to skip every check and install anyway, which turned `plug update
+// -H 127.0.0.1` against a fake agent into a setuid root binary of the caller's
+// choosing. One function, so the two cannot drift apart again.
+//
+// It takes what the agent answered to the digest verb and whether it answered
+// at all (derr), the label the signature must name (an os-arch for a core, a
+// driver name for wintun), and the hash the CALLER measured from the bytes it
+// holds. Three refusals, in order:
+//
+//   - no attestation (derr): nothing to check is a refusal, never a pass;
+//   - the bytes do not hash to what was announced: corrupt or substituted;
+//   - the signature, through verifyCore: absent is errUnsignedCore, which a
+//     caller may word as "too old" and stop on without dying; anything else is
+//     tampering and there is nothing to carry on with.
+//
+// what names the bytes in the message ("v2.3.0", "wintun.dll").
+func admitPrivilegedBytes(att coreAttestation, derr error, label, measured, what string) error {
+	if derr != nil {
+		return digestRefusal(derr, what)
+	}
+	if att.sha256 != measured {
+		return fmt.Errorf("the downloaded %s does not hash to what the agent announced.\n"+
+			"      announced %s\n      received  %s\n"+
+			"      refusing to install it", what, att.sha256, measured)
+	}
+	return verifyCore(att, label, measured)
+}
+
+// digestRefusal is the answer to an agent that could not say what the bytes
+// must hash to. Said once, here, so that every installer refuses in the same
+// words and none quietly keeps a fall-through.
+func digestRefusal(derr error, what string) error {
+	return fmt.Errorf("the agent could not tell what %s should hash to (%v).\n"+
+		"      plug verifies a binary before giving it privilege, and will not skip that.\n"+
+		"      Redeploy the softwarity/plug image so the agent can answer", what, derr)
+}

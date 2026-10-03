@@ -31,8 +31,14 @@ import (
 
 func cmdUpdate(args []string) {
 	var profile, host, port, want string
+	var force bool
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
+		case "--force":
+			// The agent refuses to move a deployment to a release OLDER than
+			// the one it runs unless told that this is meant: a rollback is a
+			// deliberate act, not a typo in a tag.
+			force = true
 		case "-p", "--profile":
 			profile = flagValue(args, &i)
 		case "-H", "--host":
@@ -45,7 +51,7 @@ func cmdUpdate(args []string) {
 			// latest, main, feat-09 — and the agent checks it exists before
 			// repointing anything.
 			if strings.HasPrefix(args[i], "-") || want != "" {
-				fatal("usage: plug update [-p profile] [<tag>|tag|latest]")
+				fatal("usage: plug update [-p profile] [<tag>|tag|latest] [--force]")
 			}
 			want = args[i]
 		}
@@ -75,7 +81,7 @@ func cmdUpdate(args []string) {
 		info("switching this cluster to %s", updateTargetWord(want))
 	}
 	after := before
-	verdict := clientSideUpdate(cfg, before, want)
+	verdict := clientSideUpdate(cfg, before, want, force)
 	if verdict == "" {
 		verdict = askSelfUpdate(cfg, want)
 	}
@@ -122,7 +128,9 @@ func cmdUpdate(args []string) {
 		}
 	}
 
-	updateLauncher(cfg, after)
+	if err := updateLauncher(cfg, after); err != nil {
+		fatal("%v", err)
+	}
 	repairOrphanResolver()
 	reportDatapathLag()
 }
@@ -241,7 +249,7 @@ func updateTarget(profile, host, port string) (config, string) {
 // lookup: an agent from before `info` named its image, a registry only the
 // cluster can reach, a moving tag whose currentness is a digest question only
 // the cluster can answer, or an agent from before `apply` existed.
-func clientSideUpdate(cfg config, before, want string) string {
+func clientSideUpdate(cfg config, before, want string, force bool) string {
 	tr, err := tunnel.Dial(cfg.host, cfg.port, sshUser, cfg.authKeys(), tun.SharedKnownHosts(), nil)
 	if err != nil {
 		fatal("tunnel user: %v — the agent image may be too old; redeploy softwarity/plug", err)
@@ -275,12 +283,21 @@ func clientSideUpdate(cfg config, before, want string) string {
 	case current != "":
 		return "current " + current
 	}
-	verdict, err := tr.Exec("self-update apply " + apply)
+	verb := "self-update apply " + apply
+	if force {
+		verb += " force"
+	}
+	verdict, err := tr.Exec(verb)
 	if err != nil {
 		fatal("asking the agent: %v", err)
 	}
 	if strings.Contains(verdict, "usage: self-update") {
 		return "" // an agent from before `apply` — let it do its own lookup
+	}
+	if strings.Contains(verdict, "rollback is refused") {
+		// The agent's wording names its own verb; say it in this command's.
+		fatal("%s is older than the release this cluster runs. A rollback has to be asked for:\n"+
+			"      plug update %s --force", apply, apply)
 	}
 	return verdict
 }
@@ -338,88 +355,80 @@ func waitNewVersion(cfg config, before string) string {
 // and wanting an earlier version is a legitimate thing to test, not a mistake
 // to be protected from. This is an explicit command: it says which way it went,
 // and running it against a newer cluster is the equally explicit way back.
-func updateLauncher(cfg config, remote string) {
+//
+// It returns rather than exits, and the distinction carries the policy. The
+// agent roll that precedes this call SUCCEEDED, so every refusal below has to
+// choose between two honest outcomes: "the cluster is updated, this binary is
+// not, and here is why" (a nil return after saying so) and "something is wrong
+// with what the agent served" (an error, which cmdUpdate turns into a fatal).
+// Age falls in the first bucket; tampering in the second. Neither ever
+// replaces the binary: that only happens once admitPrivilegedBytes, the same
+// decision ensureVersion makes for the core, has passed the bytes.
+func updateLauncher(cfg config, remote string) error {
 	replace, why := launcherFollow(version, remote)
 	info("%s", why)
 	if !replace {
-		return
+		return nil
 	}
 	self, err := os.Executable()
 	if err != nil {
-		fatal("%v", err)
+		return err
 	}
 	// The VERSION moved; the BINARY may not have. launcherFollow compares numbers,
-	// which is all it can see — but the launcher is a thin thing (pick a version,
+	// which is all it can see, but the launcher is a thin thing (pick a version,
 	// verify a digest, exec the core) and it goes untouched across most releases.
 	// Replacing it anyway costs a 9MB download and, worse, swaps a setuid root
-	// file for an identical one.
+	// file for an identical one. The agent already publishes what each build must
+	// hash to (ensureVersion asks on every launch), so ask and compare.
 	//
-	// The agent already publishes what each build must hash to — ensureVersion
-	// asks on every single launch — so ask the same question and compare with
-	// what is on disk. A digest we cannot get is not a reason to skip the update:
-	// fall through and replace, as before.
+	// A digest the agent cannot give is where the old code went wrong: it took
+	// "unknown" as "go on and replace", skipping the hash and the signature on
+	// the way, and regrantPrivilege then made the result setuid root. There is no
+	// fall-through any more. No digest, no replacement, and the message says so.
 	osArch := runtime.GOOS + "-" + runtime.GOARCH
 	att, derr := fetchDigest(cfg, osArch)
-	want := att.sha256
 	if derr != nil {
-		want = "" // an agent too old to answer; see the check after the download
+		info("the agent is now v%s, but this plug will not replace itself: %v", shortVersion(remote), digestRefusal(derr, "the launcher"))
+		return nil
 	}
-	if want != "" {
-		if got, herr := fileSHA256(self); herr == nil && got == want {
-			info("launcher is already this exact build (same bytes) — nothing to replace")
-			return
-		}
+	if got, herr := fileSHA256(self); herr == nil && got == att.sha256 {
+		info("launcher is already this exact build (same bytes), nothing to replace")
+		return nil
 	}
 	// Retry, because we CAUSED the instability we are about to hit: the agent was
 	// just rolled, it already answers "which version?" from the new pod, and the
 	// very next connection can still land while the endpoint is switching over.
 	// One i/o timeout there failed the whole update at its last step, with the
-	// cluster already migrated — the worst possible place to give up.
+	// cluster already migrated, the worst possible place to give up.
 	data, err := fetchWithRetry(func() ([]byte, error) {
 		return getDownload(cfg, osArch, shortVersion(remote))
 	}, 3, func(attempt int) time.Duration { return time.Duration(attempt) * 2 * time.Second })
 	if err != nil {
-		fatal("downloading %s: %v", shortVersion(remote), err)
+		return fmt.Errorf("downloading %s: %v", shortVersion(remote), err)
 	}
 	if len(data) < 1<<20 || !looksLikeBinary(data) {
-		fatal("downloaded launcher looks invalid (%d bytes)", len(data))
+		return fmt.Errorf("downloaded launcher looks invalid (%d bytes)", len(data))
 	}
-	// The digest was already fetched above, used to decide whether replacing was
-	// even necessary, and then never compared against what arrived. So the file
-	// about to overwrite a setuid root binary was checked for its SIZE and for
-	// looking like an executable, and nothing else. ensureVersion has always done
-	// this for the core; the launcher is the more privileged of the two.
-	//
-	// An agent too old to answer leaves want empty, and that stays a fall-through
-	// rather than a refusal: it is the pre-digest behaviour, and refusing would
-	// strand anyone whose cluster predates the verb.
-	if want != "" {
-		got := fmt.Sprintf("%x", sha256.Sum256(data))
-		if got != want {
-			fatal("the downloaded launcher does not hash to what the agent announced.\n"+
-				"      announced %s\n      received  %s\n"+
-				"      refusing to replace %s with it", want, got, self)
+	// Hash AND signature, because of what happens a few lines below: these bytes
+	// overwrite the plug binary itself, and regrantPrivilege then hands the result
+	// setuid root (macOS) or CAP_SYS_ADMIN (Linux). A digest only says the
+	// download matches what this agent announced, and the agent is whoever the
+	// caller pointed at. This is the difference between updating plug and
+	// installing somebody else's binary as root, permanently.
+	got := fmt.Sprintf("%x", sha256.Sum256(data))
+	if serr := admitPrivilegedBytes(att, nil, osArch, got, "launcher v"+shortVersion(remote)); serr != nil {
+		// Too old to sign is not a reason to die here: the agent roll above
+		// SUCCEEDED, and the only thing left undone is following it locally.
+		// Killing the process would have thrown that away and reported failure
+		// for an update that landed. Say what cannot be done and why, and stop.
+		if errors.Is(serr, errUnsignedCore) {
+			info("the agent is now v%s, but this plug will not replace itself with what that\n"+
+				"      version serves: those binaries are unsigned, and replacing this binary means\n"+
+				"      granting the result setuid root. The cluster is updated; redeploy a signed\n"+
+				"      softwarity/plug image and run plug update again to follow it locally.", shortVersion(remote))
+			return nil
 		}
-		// And the signature, because of what happens twenty lines below: these
-		// bytes overwrite the plug binary itself, and regrantPrivilege then hands
-		// the result setuid root (macOS) or CAP_SYS_ADMIN (Linux). A digest only
-		// says the download matches what this agent announced, and the agent is
-		// whoever the caller pointed at. This is the difference between updating
-		// plug and installing somebody else's binary as root, permanently.
-		if serr := verifyCore(att, osArch, got); serr != nil {
-			// Too old to sign is not a reason to die here: the agent roll above
-			// SUCCEEDED, and the only thing left undone is following it locally.
-			// Killing the process would have thrown that away and reported failure
-			// for an update that landed. Say what cannot be done and why, and stop.
-			if errors.Is(serr, errUnsignedCore) {
-				info("the agent is now v%s, but this plug will not replace itself with what that\n"+
-					"      version serves: those binaries are unsigned, and replacing this binary means\n"+
-					"      granting the result setuid root. The cluster is updated; redeploy a signed\n"+
-					"      softwarity/plug image and run plug update again to follow it locally.", shortVersion(remote))
-				return
-			}
-			fatal("%v", serr)
-		}
+		return serr
 	}
 	if err := replaceBinary(self, data, regrantPrivilege); err != nil {
 		// On Windows the directory holding this binary is deliberately writable by
@@ -427,39 +436,45 @@ func updateLauncher(cfg config, remote string) {
 		// protectServiceBinary). A permission error here is that decision showing
 		// up, not a bug, and saying so beats "access denied" on a path.
 		if runtime.GOOS == "windows" && os.IsPermission(err) {
-			fatal("replacing %s: %v\n"+
+			return fmt.Errorf("replacing %s: %v\n"+
 				"      That directory is writable by administrators only, on purpose: the plug\n"+
 				"      SYSTEM service runs this binary, so a file anyone could rewrite would be\n"+
 				"      a way to become SYSTEM. Re-run `plug update` from an elevated shell.", self, err)
 		}
-		fatal("replacing %s: %v", self, err)
+		return fmt.Errorf("replacing %s: %v", self, err)
 	}
 	if runtime.GOOS == "windows" {
-		// wintun.dll lives beside the exe and comes from the agent too.
-		//
-		// `wintun` is the amd64 driver and stays that way for every launcher
-		// already installed; arm64 asks for the suffixed verb. An agent too old
-		// to know it returns an error, and the existing dll is simply left alone
-		// - which is right: a working driver beside a freshly updated exe beats
-		// no driver at all, and the exe itself was served by the same agent.
-		wintunVerb := "wintun"
-		if runtime.GOARCH == "arm64" {
-			wintunVerb = "wintun-arm64"
-		}
-		if dll, err := getDownload(cfg, wintunVerb, "wintun.dll"); err == nil && len(dll) > 100_000 {
-			_ = os.WriteFile(filepath.Join(filepath.Dir(self), "wintun.dll"), dll, 0o644)
+		// wintun.dll lives beside the exe and comes from the agent too. It is
+		// loaded by the SYSTEM service that runs this exe, so it goes through the
+		// same attestation as the exe did (wintun.go): an agent that cannot vouch
+		// for it leaves the existing driver alone, and the message says so. A
+		// working driver beside a freshly updated exe beats no driver at all, and
+		// unverified bytes beside a SYSTEM binary beat nothing.
+		if err := refreshWintun(cfg, filepath.Dir(self)); err != nil {
+			info("wintun.dll was not refreshed (the one already installed stays): %v", err)
 		}
 	}
 	// Granted inside replaceBinary, on the new file before it is moved into place.
 	// Doing it here, on the target path after the rename, was the window this
 	// closed.
-	if out, err := exec.Command(self, "version").Output(); err == nil {
-		if v := strings.TrimSpace(string(out)); v != remote {
-			info("warning: %s answers v%s, expected v%s", self, v, remote)
-			return
-		}
+	if v := launcherAnswersVersion(self); v != "" && v != remote {
+		info("warning: %s answers v%s, expected v%s", self, v, remote)
+		return nil
 	}
 	info("launcher updated: %s → %s (%s)", shortVersion(version), shortVersion(remote), self)
+	return nil
+}
+
+// launcherAnswersVersion runs the freshly installed binary and reads the
+// version it reports, "" when it cannot be run. A var for one reason: the test
+// of the replacement policy installs nothing real, so it has nothing to run.
+// Never reassigned outside tests.
+var launcherAnswersVersion = func(self string) string {
+	out, err := exec.Command(self, "version").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // launcherFollow is the whole policy, pure so it is testable: does `plug
@@ -490,7 +505,13 @@ func launcherFollow(local, remote string) (replace bool, why string) {
 // their own file there and have sudo hand IT setuid root or CAP_SYS_ADMIN. Doing
 // it first means the inode that arrives at the destination is the one we wrote,
 // already privileged, and there is no in-between to race.
-func replaceBinary(target string, data []byte, grant func(string)) error {
+//
+// replaceBinary is the var the product calls, replaceBinaryFile the body: a
+// seam, so the test of the replacement policy can watch whether the launcher is
+// replaced without an installer running. Never reassigned outside tests.
+var replaceBinary = replaceBinaryFile
+
+func replaceBinaryFile(target string, data []byte, grant func(string)) error {
 	dir := filepath.Dir(target)
 	tmp, err := os.CreateTemp(dir, ".plug-update-*")
 	if err != nil {

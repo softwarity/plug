@@ -322,7 +322,15 @@ func doctorProfile(name string, add func(check)) {
 	add(check{area: name, name: "agent", status: stOK,
 		detail: fmt.Sprintf("v%s at %s:%s", shortVersion(ver), host, port)})
 
-	tr, err := tunnel.Dial(host, port, sshUser, cfg.authKeys(), tun.SharedKnownHosts(), nil)
+	// A key that cannot be offered is a finding, not an exit: the MCP server
+	// runs this for an editor and must answer, not die (see refusal.go).
+	keys, err := cfg.authKeysErr()
+	if err != nil {
+		add(check{area: name, name: "profile key", status: stFail,
+			detail: err.Error(), remedy: "plug keygen -p " + name + ", or remove the key line from the profile"})
+		return
+	}
+	tr, err := tunnel.Dial(host, port, sshUser, keys, tun.SharedKnownHosts(), nil)
 	if err != nil {
 		add(check{area: name, name: "tunnel user", status: stFail,
 			detail: err.Error(), remedy: "the agent image may be too old — redeploy softwarity/plug"})

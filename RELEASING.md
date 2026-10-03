@@ -44,8 +44,9 @@ cache hit as well as on a download, and before `plug update` overwrites plug
 itself.
 
 A build with no key mounted signs nothing and says so: that is the normal case
-for a local `docker build` and for a fork, and the launcher tolerates an unsigned
-core outright. A release build that took that path silently would publish an
+for a local `docker build` and for a fork, and the launcher refuses an unsigned
+core, as it refuses an unsigned launcher or WinTUN DLL on `plug update` (the same
+`plug-sign` step signs the DLLs, served by `digest wintun`). A release build that took that path silently would publish an
 image whose CLI refuses to run, so the message it prints is worth grepping for
 if a release ever looks wrong.
 

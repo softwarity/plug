@@ -84,24 +84,6 @@ func mountedAt(path string) bool {
 	return st.Dev != parent.Dev
 }
 
-func ensureMountpoint(path string) error {
-	if mountedAt(path) {
-		return fmt.Errorf("%s is already a mountpoint (a previous session's? plug doctor --fix)", path)
-	}
-	st, err := os.Stat(path)
-	if err == nil {
-		if !st.IsDir() {
-			return fmt.Errorf("%s exists and is not a directory", path)
-		}
-		return nil
-	}
-	if err := os.MkdirAll(path, 0o755); err != nil {
-		return err
-	}
-	chownToUser(path)
-	return nil
-}
-
 // pinMountName / unpinMountNames: nothing to pin here. The helper's name is
 // dialled by this process through its own forward, never by the kernel
 // through the machine's datapath (see mount_windows.go).

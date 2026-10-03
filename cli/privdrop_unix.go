@@ -149,12 +149,34 @@ func atoiOr(s string, def int) int {
 // Unprivileged (euid == ruid), this is a no-op: the kernel already enforces the
 // user's own rights, and $HOME is theirs to point wherever they like.
 func guardUserPath(path string) {
+	if err := userPathError(path); err != nil {
+		guardFatal("%s", err)
+	}
+}
+
+// userPathError is guardUserPath's decision as a value: the same refusal, for
+// the paths that must not take the process down with them. The shared datapath
+// daemon serves every session of every account on the machine, and the MCP
+// server serves an editor; a key one user mispointed used to exit either, with
+// the resolver left unrestored. nil means the write may proceed.
+func userPathError(path string) error {
 	uid, _, ok := resolveDropTarget(os.Geteuid(), os.Getuid(), os.Getgid(),
 		os.Getenv("SUDO_UID"), os.Getenv("SUDO_GID"))
 	if !ok {
-		return
+		return nil
 	}
-	guardPathOwnedBy(path, uid)
+	return pathOwnedBy(path, uid)
+}
+
+// realUID is the account plug acts for: the invoker behind a setuid or sudo
+// launch, or simply this process's own uid when nothing was dropped (the Linux
+// capabilities path, a genuine root login).
+func realUID() int {
+	if uid, _, ok := resolveDropTarget(os.Geteuid(), os.Getuid(), os.Getgid(),
+		os.Getenv("SUDO_UID"), os.Getenv("SUDO_GID")); ok {
+		return uid
+	}
+	return os.Getuid()
 }
 
 // guardFatal is how the write guards give up. A var, and only so a test can
@@ -174,24 +196,30 @@ var guardFatal = fatal
 // guard refuse their own files, which is the same comparison the setuid
 // launcher makes for real.
 func guardPathOwnedBy(path string, uid int) {
+	if err := pathOwnedBy(path, uid); err != nil {
+		guardFatal("%s", err)
+	}
+}
+
+// pathOwnedBy is the walk itself: nil when the deepest existing component of
+// path is owned by uid (or when nothing of it exists at all), a *foreignPath
+// otherwise.
+func pathOwnedBy(path string, uid int) error {
 	// Walk up to the deepest component that exists: writing creates the rest,
 	// and the ancestor's ownership is what decides whether we may.
 	p := path
 	for {
-		fi, err := os.Stat(p) // follows the chain on purpose — see above
+		fi, err := os.Stat(p) // follows the chain on purpose, see guardUserPath
 		if err == nil {
 			st, okStat := fi.Sys().(*syscall.Stat_t)
 			if okStat && int(st.Uid) != uid {
-				guardFatal("refusing to write %s as root: it resolves to %s, owned by uid %d, not by you (uid %d).\n"+
-					"      plug runs setuid so it never has to ask for a password again — it will not use that\n"+
-					"      privilege to touch a file outside your own tree. Check $HOME and any symlink under it.",
-					path, p, st.Uid, uid)
+				return &foreignPath{path: path, landed: p, owner: int(st.Uid), uid: uid}
 			}
-			return
+			return nil
 		}
 		parent := filepath.Dir(p)
 		if parent == p {
-			return // reached the root without finding anything: nothing to judge
+			return nil // reached the root without finding anything: nothing to judge
 		}
 		p = parent
 	}

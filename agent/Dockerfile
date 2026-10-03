@@ -38,36 +38,6 @@ RUN mkdir -p /out/bin && \
     done && \
     printf '%s' "$V" > /out/VERSION
 
-# Sign what this image will serve. The launcher runs the core with the privilege
-# it holds (root on macOS, CAP_SYS_ADMIN on Linux) and the agent it fetches from
-# is chosen by whoever runs plug, so a digest announced by that same agent proves
-# nothing. Only a signature made with a key the caller cannot reach does, and
-# that key lives here for the length of this one RUN: a BuildKit secret mount is
-# a tmpfs, it lands in no layer and no image history.
-#
-# No key mounted is the normal case for a local `docker build` or a fork, and it
-# must not fail the build: the image simply serves no sig=, and a launcher
-# tolerates that until the cutover date compiled into it. What the release
-# pipeline must never do is silently take that path, so the message says which
-# one was taken and CI greps for it.
-RUN --mount=type=secret,id=release_key \
-    if [ -s /run/secrets/release_key ]; then \
-      go run ./cmd/plug-sign /run/secrets/release_key /out/bin "$(cat /out/VERSION)"; \
-    else \
-      echo "plug-sign: NO RELEASE KEY MOUNTED, this image serves UNSIGNED binaries"; \
-    fi
-
-# The agent: its SSH server, the -s provisioning verbs, the signpost relay and
-# the boot gc. Copied file by file rather than as a directory, because the Go
-# sources now sit beside the image files (Dockerfile, install.sh, serve-binary)
-# so that the module path is github.com/softwarity/plug/agent - what Meerkat
-# imports when it links the agent into its own binary.
-COPY agent/*.go agent/go.mod agent/go.sum /src/agent/
-COPY agent/cmd/ /src/agent/cmd/
-# ./cmd/plug-agent, not "." - the package is importable now (Meerkat links it
-# into its own binary), so the main lives in a cmd of its own.
-RUN CGO_ENABLED=0 go build -C /src/agent -trimpath -ldflags "-s -w" -o /out/plug-agent ./cmd/plug-agent
-
 # WinTUN driver DLL, fetched once at build so the agent serves it to the Windows
 # installer (the installer pulls it from us — no run-time dependency on wintun.net,
 # and no more intermittent fetch).
@@ -96,6 +66,48 @@ RUN for i in 1 2 3; do apk add --no-cache curl unzip && break; \
     mv /out/wintun.dll /out/wintun-amd64.dll && \
     unzip -j /tmp/wintun.zip 'wintun/bin/arm64/wintun.dll' -d /out && \
     mv /out/wintun.dll /out/wintun-arm64.dll
+
+# Sign what this image will serve. The launcher runs the core with the privilege
+# it holds (root on macOS, CAP_SYS_ADMIN on Linux) and the agent it fetches from
+# is chosen by whoever runs plug, so a digest announced by that same agent proves
+# nothing. Only a signature made with a key the caller cannot reach does, and
+# that key lives here for the length of this one RUN: a BuildKit secret mount is
+# a tmpfs, it lands in no layer and no image history.
+#
+# No key mounted is the normal case for a local `docker build` or a fork, and it
+# must not fail the build: the image simply serves no sig=, and a launcher
+# refuses to install anything from it. What the release
+# pipeline must never do is silently take that path, so the message says which
+# one was taken and CI greps for it.
+#
+# The WinTUN DLLs are signed in the same run (fetched above for that reason):
+# they are loaded by the SYSTEM service on Windows, and the launcher now admits
+# them through the same attestation as the binaries. They are then staged under
+# the names the agent serves them by, each .sig beside its file, so the final
+# stage copies them in one glob whether or not a key was mounted.
+RUN --mount=type=secret,id=release_key \
+    if [ -s /run/secrets/release_key ]; then \
+      go run ./cmd/plug-sign /run/secrets/release_key /out/bin "$(cat /out/VERSION)" \
+        /out/wintun-amd64.dll /out/wintun-arm64.dll; \
+    else \
+      echo "plug-sign: NO RELEASE KEY MOUNTED, this image serves UNSIGNED binaries"; \
+    fi && \
+    mkdir -p /out/wintun && \
+    cp /out/wintun-amd64.dll /out/wintun/wintun.dll && \
+    cp /out/wintun-arm64.dll /out/wintun/wintun-arm64.dll && \
+    { [ ! -f /out/wintun-amd64.dll.sig ] || cp /out/wintun-amd64.dll.sig /out/wintun/wintun.dll.sig; } && \
+    { [ ! -f /out/wintun-arm64.dll.sig ] || cp /out/wintun-arm64.dll.sig /out/wintun/wintun-arm64.dll.sig; }
+
+# The agent: its SSH server, the -s provisioning verbs, the signpost relay and
+# the boot gc. Copied file by file rather than as a directory, because the Go
+# sources now sit beside the image files (Dockerfile, install.sh, serve-binary)
+# so that the module path is github.com/softwarity/plug/agent - what Meerkat
+# imports when it links the agent into its own binary.
+COPY agent/*.go agent/go.mod agent/go.sum /src/agent/
+COPY agent/cmd/ /src/agent/cmd/
+# ./cmd/plug-agent, not "." - the package is importable now (Meerkat links it
+# into its own binary), so the main lives in a cmd of its own.
+RUN CGO_ENABLED=0 go build -C /src/agent -trimpath -ldflags "-s -w" -o /out/plug-agent ./cmd/plug-agent
 
 FROM alpine:3.24
 
@@ -179,8 +191,11 @@ COPY --from=build --chmod=755 /out/plug-agent /usr/local/bin/plug-agent
 # Windows launcher already installed asks for it by that name. It must keep
 # getting an amd64 DLL after this image ships, or an update would hand an arm64
 # driver to an amd64 machine and break a datapath that was working.
-COPY --from=build /out/wintun-amd64.dll /opt/plug/wintun.dll
-COPY --from=build /out/wintun-arm64.dll /opt/plug/wintun-arm64.dll
+# One glob per driver: wintun.dll always matches, wintun.dll.sig only when the
+# build signed it, and a COPY with a source that matches nothing fails the
+# build. Files into an existing directory, never the directory itself.
+COPY --from=build /out/wintun/wintun.dll* /opt/plug/
+COPY --from=build /out/wintun/wintun-arm64.dll* /opt/plug/
 COPY --chmod=644 agent/install.sh /opt/plug/install.sh
 
 EXPOSE 22

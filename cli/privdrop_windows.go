@@ -28,8 +28,16 @@ func chownToUser(string) {}
 // %ProgramData%\plug, which plug writes on purpose.
 func guardUserPath(string) {}
 
+// userPathError is guardUserPath as a value, and empty for the same reason.
+func userPathError(string) error { return nil }
+
 // readUserOwnedFile is a plain read here. The ownership question on Windows is
 // answered by guardKeyOwner, which asks who registered the client rather than
 // who owns the file being read, because the account the daemon acts for is not
 // the account it runs as.
 func readUserOwnedFile(path string) ([]byte, error) { return os.ReadFile(path) }
+
+// realUID has no meaning on Windows: identity is a SID, not a number, and the
+// launcher never runs elevated. Negative means "no account" to every caller
+// that takes one (SetKnownHostsOwner falls back to its default).
+func realUID() int { return -1 }

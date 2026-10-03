@@ -48,10 +48,24 @@ func dialTunnel(cfg config) (*tunnel.Transport, error) {
 	knownHosts := knownHostsFor(cfg.host)
 	// The pin file is written by the tunnel package, possibly with euid 0 — same
 	// rule as every other write under the user's home (see guardUserPath).
+	// As values, not as fatals: this dial is made on somebody's behalf by the
+	// shared daemon, the SYSTEM service and the MCP server, and every caller
+	// already handles the error it returns (see refusal.go).
 	if knownHosts != "" {
-		guardUserPath(knownHosts)
+		if err := userPathError(knownHosts); err != nil {
+			return nil, err
+		}
 	}
-	tr, err := tunnel.Dial(cfg.host, cfg.port, sshUser, cfg.authKeys(), knownHosts, info)
+	// The guard above runs once; the tunnel package re-pins on every
+	// reconnect, hours later, still as euid 0. It checks the file's owner
+	// itself each time, and this is the account it must see: the person's,
+	// which under sudo is SUDO_UID and not the real uid of 0.
+	tunnel.SetKnownHostsOwner(realUID())
+	keys, err := cfg.authKeysErr()
+	if err != nil {
+		return nil, err
+	}
+	tr, err := tunnel.Dial(cfg.host, cfg.port, sshUser, keys, knownHosts, info)
 	// The host key is pinned into knownHosts on first connect. Off localhost the
 	// dialer may be the setuid daemon (euid 0), which would leave the pin file
 	// root-owned under the user's ~/.plug — and the "key changed, remove the line"

@@ -359,7 +359,7 @@ func TestAKeyedProfileNeverRunsACoreThatWouldDropItsKey(t *testing.T) {
 // authenticated channel. Whatever the policy is, both channels must share it:
 // one agent, recorded once, and a change noticed wherever it shows up first.
 func TestTheDownloadChannelPinsLikeTheTunnel(t *testing.T) {
-	b, err := os.ReadFile("main.go")
+	b, err := os.ReadFile("coredl.go")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,7 +410,7 @@ func TestBothChannelsGuardAndHandBackThePinFile(t *testing.T) {
 	// with an index out of range instead of saying the thing it exists to say.
 	// Its two siblings guard their extraction; this one relied on that panic.
 	for _, want := range []struct{ file, fn string }{
-		{"main.go", "dialGetUser"},
+		{"coredl.go", "dialGetUser"},
 		{"socks_run.go", "dialTunnel"},
 	} {
 		bodies := funcBodies(t, want.file)
@@ -420,11 +420,18 @@ func TestBothChannelsGuardAndHandBackThePinFile(t *testing.T) {
 				"that whoever creates the pin file guards the path before and hands the file back after, "+
 				"and that has to be checked wherever the creating happens", want.file, want.fn)
 		}
-		for _, call := range []string{"guardUserPath", "chownToUser"} {
-			if !strings.Contains(body, call) {
+		// The guard has two faces (refusal.go): the fatal one for an entry point
+		// and the value for a dial made on somebody's behalf. Either counts, as
+		// long as the question is asked.
+		for _, call := range [][]string{{"guardUserPath", "userPathError"}, {"chownToUser"}} {
+			asked := false
+			for _, face := range call {
+				asked = asked || strings.Contains(body, face)
+			}
+			if !asked {
 				t.Errorf("%s writes the pin file without calling %s: on macOS it runs first, as root, "+
 					"and creates ~/.plug/known_hosts owned by root, which the tunnel's own guard then "+
-					"refuses as a file outside your own tree", want.fn, call)
+					"refuses as a file outside your own tree", want.fn, strings.Join(call, " or "))
 			}
 		}
 	}

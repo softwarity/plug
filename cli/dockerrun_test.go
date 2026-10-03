@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -201,17 +202,25 @@ func TestExitCodeMirrorsTheContainer(t *testing.T) {
 	}
 }
 
-// The projection into the user's container: the workload's env as -e (sorted,
-// so the line is stable), each mounted file as a -v of its local copy onto the
-// EXACT cluster path. dockerRunCmd then places them before the user's args, so
-// a -e the user repeats wins by docker's last-flag rule.
+// The projection into the user's container: the workload's env through an
+// --env-file (sorted, 0600, in the session directory), each mounted file as a
+// -v of its local copy onto the EXACT cluster path. dockerRunCmd then places
+// them before the user's args.
+//
+// Through a file and not -e, because the workload's variables are its secrets
+// and the argv of `docker run` is readable by every process on the machine for
+// as long as the container runs. The assertion that matters is the negative
+// one: no value appears on the command line.
 func TestDockerProjectionFlagsAndPlacement(t *testing.T) {
 	set := map[string]string{"PGPASSWORD": "s3cret", "APP_DB_HOST": "odb"}
 	dir := filepath.Join(string(filepath.Separator)+"tmp", "plug-files-x")
-	flags := dockerProjectionFlags(set, dir, []string{"/certificates"})
+	envFile := filepath.Join(t.TempDir(), "env")
+	flags, env, err := dockerProjectionFlags(set, dir, []string{"/certificates"}, envFile)
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := []string{
-		"-e", "APP_DB_HOST=odb",
-		"-e", "PGPASSWORD=s3cret",
+		"--env-file", envFile,
 		// the host side of the -v is an OS-native path (backslashes on Windows);
 		// the container side stays the POSIX cluster path.
 		"-v", filepath.Join(dir, "/certificates") + ":/certificates:ro",
@@ -219,17 +228,75 @@ func TestDockerProjectionFlagsAndPlacement(t *testing.T) {
 	if !reflect.DeepEqual(flags, want) {
 		t.Fatalf("flags = %v\nwant %v", flags, want)
 	}
+	if len(env) != 0 {
+		t.Fatalf("single-line values need nothing in the docker CLI's environment, got %v", env)
+	}
+	body, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "APP_DB_HOST=odb\nPGPASSWORD=s3cret\n" {
+		t.Fatalf("env file = %q", body)
+	}
+	if runtime.GOOS != "windows" {
+		if fi, _ := os.Stat(envFile); fi.Mode().Perm() != 0o600 {
+			t.Errorf("the env file is %v, want 0600: it holds the workload's secrets", fi.Mode().Perm())
+		}
+	}
 	full, err := dockerRunCmd([]string{"docker", "run", "-e", "PGPASSWORD=mine", "img"}, "side", "/r", flags)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Ours are spliced right after `run` and before the user's args: docker takes
-	// the LAST -e, so the user's PGPASSWORD=mine wins.
 	joined := strings.Join(full, " ")
-	if !strings.Contains(joined, "-e PGPASSWORD=s3cret") || !strings.Contains(joined, "-e PGPASSWORD=mine") {
-		t.Fatalf("both PGPASSWORD flags must be present: %s", joined)
+	if strings.Contains(joined, "s3cret") {
+		t.Fatalf("the workload's secret is on docker's command line: %s", joined)
 	}
-	if strings.Index(joined, "PGPASSWORD=s3cret") > strings.Index(joined, "PGPASSWORD=mine") {
-		t.Fatalf("ours must come before the user's so the user wins: %s", joined)
+	// Ours are spliced right after `run` and before the user's args. docker
+	// reads every --env-file first and the -e flags after them, last one wins,
+	// so the user's PGPASSWORD=mine takes precedence wherever it sits; keeping
+	// ours first is what makes that also true of a reader's intuition.
+	if !strings.Contains(joined, "--env-file "+envFile) || !strings.Contains(joined, "-e PGPASSWORD=mine") {
+		t.Fatalf("both the env file and the user's -e must be present: %s", joined)
+	}
+	if strings.Index(joined, "--env-file") > strings.Index(joined, "PGPASSWORD=mine") {
+		t.Fatalf("ours must come before the user's: %s", joined)
+	}
+	// Written once: a second write at the same path is refused rather than made
+	// through whatever is there now.
+	if _, _, err := dockerProjectionFlags(set, dir, nil, envFile); err == nil {
+		t.Error("the env file was overwritten in place; it must be created exclusively")
+	}
+}
+
+// docker's env-file holds one variable per line and takes the value verbatim,
+// so a value with a newline in it cannot be a line. Those travel the one other
+// way docker offers that keeps them off the argv: a bare KEY line, which makes
+// the docker CLI read the variable from its own environment, and that
+// environment is the second return value.
+func TestDockerProjectionCarriesMultiLineValuesThroughTheCLIEnvironment(t *testing.T) {
+	pem := "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+	set := map[string]string{"TLS_CERT": pem, "PLAIN": "x"}
+	envFile := filepath.Join(t.TempDir(), "env")
+	flags, env, err := dockerProjectionFlags(set, "", nil, envFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(flags, []string{"--env-file", envFile}) {
+		t.Fatalf("flags = %v", flags)
+	}
+	body, _ := os.ReadFile(envFile)
+	if string(body) != "PLAIN=x\nTLS_CERT\n" {
+		t.Fatalf("env file = %q: the multi-line value must be a bare key, the rest unchanged", body)
+	}
+	if !reflect.DeepEqual(env, []string{"TLS_CERT=" + pem}) {
+		t.Fatalf("docker CLI environment = %q, want the multi-line value and nothing else", env)
+	}
+	// And nothing at all when there is nothing to project: no empty file, no flag.
+	none := filepath.Join(t.TempDir(), "env")
+	if flags, env, err := dockerProjectionFlags(nil, "", nil, none); err != nil || len(flags) != 0 || len(env) != 0 {
+		t.Fatalf("an empty projection produced %v %v %v", flags, env, err)
+	}
+	if _, err := os.Stat(none); err == nil {
+		t.Error("an empty projection still wrote an env file")
 	}
 }

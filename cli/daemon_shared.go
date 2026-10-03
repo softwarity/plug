@@ -41,7 +41,11 @@ const authRetryAfter = 60 * time.Second
 // so every map it touches has a single owner.
 func applyDial(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transport, r dialOutcome) {
 	if r.err != nil {
-		if tunnel.IsAuthFailure(r.err) {
+		// A refusal from this machine's own guards (a key that is absent, not
+		// the client's, or outside its profile) will not change until a file
+		// does, exactly like an agent's refusal of the key: back off the same
+		// way, or it becomes three log lines a second for the rest of the day.
+		if tunnel.IsAuthFailure(r.err) || isLocalRefusal(r.err) {
 			authRefused[r.key] = time.Now()
 		}
 		info("daemon: connect %s: %v", r.key, r.err)
@@ -177,7 +181,15 @@ func reconcile(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transport, 
 		// write; the marker beside it carries an owner the system recorded. On
 		// Windows that is the difference between reading a user's own key and
 		// reading whatever file they named, as the machine account.
-		guardKeyOwner(keyFile, marker)
+		//
+		// A refusal is this cluster's failure to dial, recorded like one: the
+		// waiting launcher reads the reason, the other clusters keep their
+		// tunnels. It used to be fatal, which ended the daemon for everyone over
+		// one user's key.
+		if err := keyOwnerError(keyFile, marker); err != nil {
+			applyDial(ct, tunnels, dialOutcome{key: key, err: err})
+			continue
+		}
 		cfg := config{host: host, port: port, key: keyFile}
 		if wait {
 			tr, err := dialTunnel(cfg)

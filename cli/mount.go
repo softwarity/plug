@@ -590,7 +590,7 @@ func startMounts(cfg config) (func(), error) {
 		}
 		m.spec.path = at
 		m.mounted = true
-		m.unmark = markMounted(m.spec, t.local)
+		m.unmark = markMounted(m.spec, t.local, net.JoinHostPort(cfg.host, cfg.port))
 		if spec.auto {
 			a := autoMounts[spec.name]
 			a.mounts = append(a.mounts, volumeMount{cluster: spec.volume, local: at})
@@ -700,23 +700,30 @@ func mountsDir() string { return filepath.Join(plugDir(), "mounts") }
 // mountRecord is what a session leaves about a mount, so the next run and
 // doctor can tell a live mount from a dead one and unmount the latter.
 type mountRecord struct {
-	pid   int
-	path  string
-	spec  string
-	local string // the forward's address the OS client was pointed at
-	file  string
+	pid     int
+	path    string
+	spec    string
+	local   string // the forward's address the OS client was pointed at
+	cluster string // host:port of the agent the volume comes from
+	auto    bool   // placed by plug (a takeover's data volumes), not asked for
+	file    string
 }
 
 // markMounted records this process as holding path mounted, and returns the
 // cleanup that forgets it. The file is named by the path, folded (a path is
 // not a file name): one record per mountpoint.
-func markMounted(spec mountSpec, local string) func() {
+func markMounted(spec mountSpec, local, cluster string) func() {
 	file := filepath.Join(mountsDir(), recordName(spec.path))
 	guardUserPath(file)
 	if os.MkdirAll(mountsDir(), 0o700) != nil {
 		return func() {}
 	}
-	body := fmt.Sprintf("pid = %d\npath = %s\nspec = %s\nlocal = %s\n", os.Getpid(), spec.path, spec, local)
+	auto := "no"
+	if spec.auto {
+		auto = "yes"
+	}
+	body := fmt.Sprintf("pid = %d\npath = %s\nspec = %s\nlocal = %s\ncluster = %s\nauto = %s\n",
+		os.Getpid(), spec.path, spec, local, cluster, auto)
 	if os.WriteFile(file, []byte(body), 0o600) != nil {
 		return func() {}
 	}
@@ -764,6 +771,10 @@ func mountRecords() []mountRecord {
 				r.spec = v
 			case "local":
 				r.local = v
+			case "cluster":
+				r.cluster = v
+			case "auto":
+				r.auto = v == "yes"
 			}
 		}
 		if r.path != "" {

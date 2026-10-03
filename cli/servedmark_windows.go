@@ -20,3 +20,12 @@ func processAlive(pid int) bool {
 	_ = p.Release()
 	return true
 }
+
+// holderIsMine has nothing to check here, and that is a statement about the
+// process model rather than an omission: the launcher is never elevated on
+// Windows (the SYSTEM service holds the datapath, the launcher runs as the
+// person), so the signal stopHolder sends carries the person's own rights and
+// the kernel refuses another account's process by itself. The account check
+// by SID that would make this symmetrical with unix belongs with the per-flow
+// account work in the registry, not here.
+func holderIsMine(int) error { return nil }

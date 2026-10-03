@@ -160,7 +160,7 @@ func TestMountRecordsAndOrphans(t *testing.T) {
 	t.Setenv("HOME", dir)
 	t.Setenv("USERPROFILE", dir)
 	spec := mountSpec{name: "web", volume: "/data", path: filepath.Join(dir, "mnt", "data")}
-	unmark := markMounted(spec, "127.0.0.1:51234")
+	unmark := markMounted(spec, "127.0.0.1:51234", "agent:2222")
 	recs := mountRecords()
 	if len(recs) != 1 || recs[0].pid != os.Getpid() || recs[0].path != spec.path || recs[0].spec != spec.String() || recs[0].local != "127.0.0.1:51234" {
 		t.Fatalf("records = %+v", recs)
@@ -176,8 +176,8 @@ func TestMountRecordsAndOrphans(t *testing.T) {
 		t.Fatalf("after the cleanup: %+v", recs)
 	}
 	// Two mounts, two records, distinct files.
-	u1 := markMounted(mountSpec{name: "a", volume: "x", path: "/one"}, "l")
-	u2 := markMounted(mountSpec{name: "a", volume: "y", path: "/two"}, "l")
+	u1 := markMounted(mountSpec{name: "a", volume: "x", path: "/one"}, "l", "c")
+	u2 := markMounted(mountSpec{name: "a", volume: "y", path: "/two"}, "l", "c")
 	if len(mountRecords()) != 2 {
 		t.Fatal("one record per mountpoint")
 	}

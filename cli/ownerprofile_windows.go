@@ -53,22 +53,32 @@ func profileOfFileOwner(path string) string {
 // owning marker. Unknown owner, unknown profile, or an empty path: nothing is
 // refused, exactly as before this check existed.
 func guardKeyOwner(keyPath, marker string) {
+	if err := keyOwnerError(keyPath, marker); err != nil {
+		fatal("%v", err)
+	}
+}
+
+// keyOwnerError is guardKeyOwner as a value. It is what the SYSTEM service
+// calls from reconcile: that service holds every account's tunnels, and one
+// account's mispointed key used to take all of them down (see refusal.go).
+func keyOwnerError(keyPath, marker string) error {
 	if keyPath == "" || marker == "" {
-		return
+		return nil
 	}
 	profile := profileOfFileOwner(marker)
 	if profile == "" {
-		return // could not tell whose it is; unknown is not a refusal
+		return nil // could not tell whose it is; unknown is not a refusal
 	}
 	abs, err := filepath.Abs(keyPath)
 	if err != nil {
-		return
+		return nil
 	}
 	if keyOutsideOwnersProfile(abs, profile) {
-		fatal("plug: refusing to read %s as a key.\n"+
+		return refuse("plug: refusing to read %s as a key.\n"+
 			"      The client that asked for it was registered by an account whose profile is %s,\n"+
 			"      and that key is outside it. plug runs as a machine-wide service here, so reading\n"+
 			"      a file from another account's profile would be doing for one user something they\n"+
 			"      cannot do themselves.", abs, profile)
 	}
+	return nil
 }

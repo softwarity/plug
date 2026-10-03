@@ -102,26 +102,6 @@ func mountedAt(path string) bool {
 	return st.Dev != parent.Dev
 }
 
-// ensureMountpoint creates the directory as the user and refuses a path that
-// is already something else (a file, a busy mount).
-func ensureMountpoint(path string) error {
-	if mountedAt(path) {
-		return fmt.Errorf("%s is already a mountpoint (a previous session's? plug doctor --fix)", path)
-	}
-	st, err := os.Stat(path)
-	if err == nil {
-		if !st.IsDir() {
-			return fmt.Errorf("%s exists and is not a directory", path)
-		}
-		return nil
-	}
-	if err := os.MkdirAll(path, 0o755); err != nil {
-		return err
-	}
-	chownToUser(path)
-	return nil
-}
-
 // nsmbSection is what plug adds to the user's nsmb.conf, once, scoped to the
 // loopback server every plug mount goes through. SMB multichannel is the one
 // setting that has to be off there: after a reconnect (a tunnel blip, an

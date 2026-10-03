@@ -23,7 +23,7 @@ func TestEveryExampleInTheHelpIsAValidInvocation(t *testing.T) {
 	// never reach serveRequired, which is why they are excluded by name rather
 	// than by shape.
 	subcommands := map[string]bool{
-		"ls": true, "test": true, "doctor": true, "update": true, "rn": true,
+		"ls": true, "test": true, "doctor": true, "mounts": true, "update": true, "rn": true,
 		"rm": true, "version": true, "versions": true, "prune": true,
 		"uninstall": true, "about": true, "init": true, "down": true,
 		"install-service": true, "remove-service": true, "selftest": true, "mcp": true,

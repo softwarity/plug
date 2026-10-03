@@ -135,7 +135,7 @@ func TestTheRefusalNamesTheReasonAndNotTheMechanism(t *testing.T) {
 // guard in one place leaves the other running the verb this build should not
 // carry.
 func TestBothSpellingsOfASubcommandAreGuarded(t *testing.T) {
-	b, err := os.ReadFile("main.go")
+	b, err := os.ReadFile("launcher.go")
 	if err != nil {
 		t.Fatal(err)
 	}

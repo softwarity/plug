@@ -46,6 +46,11 @@ import (
 // mode ("conflicting options: dns and the network mode").
 const dockerRunResolvName = "resolv.conf"
 
+// dockerRunEnvName is the workload's environment for the user's container, as
+// an --env-file in the same session directory: 0600, unlike the resolver, and
+// gone with the directory.
+const dockerRunEnvName = "env"
+
 // dockerSidecarImage is where the Linux plug binary comes from. The published
 // image carries one per architecture, already signed. Overridable because a
 // build from source is stamped with a version that was never pushed anywhere,
@@ -93,73 +98,119 @@ func dockerRunCmd(cmdArgs []string, sidecar, resolv string, projected []string) 
 }
 
 // dockerProjectionFlags turns a workload's projected environment and mounted
-// files into `docker run` flags. Env becomes -e (keys sorted, so the argv is
-// stable and testable); each mounted file path becomes a -v of the local copy
-// onto its EXACT cluster path - a --dockerrun container is Linux and expects
-// /certificates where the pod had it, so nothing is repointed here, unlike the
-// local-process case that cannot write the host's real paths.
-func dockerProjectionFlags(set map[string]string, filesDir string, paths []string) []string {
+// files into `docker run` flags. The environment goes through a FILE and
+// --env-file, never through -e: the workload's variables are its secrets, and
+// an argv is public for the life of the container (ps, /proc, the process
+// table of every account on the machine). The file is 0600 in the session's
+// temp directory, written once, removed with it. Each mounted file path becomes
+// a -v of the local copy onto its EXACT cluster path: a --dockerrun container
+// is Linux and expects /certificates where the pod had it, so nothing is
+// repointed here, unlike the local-process case that cannot write the host's
+// real paths.
+//
+// The env-file format is docker's: one KEY=VALUE per line, the value taken
+// verbatim (quotes included, no escapes), so a value holding a newline cannot
+// be written as a line. Those go the one other way docker offers: a bare KEY
+// line makes the docker CLI read the variable from ITS OWN environment, and
+// the second return value is what to put there. Still no argv involved.
+//
+// Keys are sorted so the file and the flags are stable and testable.
+func dockerProjectionFlags(set map[string]string, filesDir string, paths []string, envFile string) (flags, env []string, err error) {
 	keys := make([]string, 0, len(set))
 	for k := range set {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	var out []string
-	for _, k := range keys {
-		out = append(out, "-e", k+"="+set[k])
+	if len(keys) > 0 {
+		var body strings.Builder
+		for _, k := range keys {
+			v := set[k]
+			if strings.ContainsAny(v, "\n\r") {
+				body.WriteString(k + "\n")
+				env = append(env, k+"="+v)
+				continue
+			}
+			body.WriteString(k + "=" + v + "\n")
+		}
+		// O_EXCL, so a file somebody else planted at that name is a failure and
+		// not a write through it; 0600 from the first byte, and the file handed
+		// to the user where plug holds euid 0.
+		f, err := os.OpenFile(envFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err != nil {
+			return nil, nil, fmt.Errorf("writing the container's environment file: %w", err)
+		}
+		if _, err := f.WriteString(body.String()); err != nil {
+			f.Close()
+			return nil, nil, fmt.Errorf("writing the container's environment file: %w", err)
+		}
+		if err := f.Close(); err != nil {
+			return nil, nil, err
+		}
+		chownToUser(envFile)
+		flags = append(flags, "--env-file", envFile)
 	}
 	for _, p := range paths {
-		out = append(out, "-v", filepath.Join(filesDir, p)+":"+p+":ro")
+		flags = append(flags, "-v", filepath.Join(filesDir, p)+":"+p+":ro")
 	}
-	return out
+	return flags, env, nil
 }
 
 // dockerProjection fetches the workload's environment and mounted files from the
-// agent and turns them into `docker run` flags for the user's container, plus a
-// cleanup for the files temp (called once the container has exited). The source
-// is --env-of when given, else the single -s name; nothing when projection is
-// off, or when there is no one name to read from.
-func dockerProjection(cfg config, exposes []string) ([]string, func()) {
+// agent and turns them into `docker run` flags for the user's container, the
+// variables the docker CLI itself must carry (see dockerProjectionFlags), and a
+// cleanup for the files temp and the env file (called once the container has
+// exited). sessionDir is where the env file goes. The source is --env-of when
+// given, else the single -s name; nothing when projection is off, or when
+// there is no one name to read from.
+func dockerProjection(cfg config, exposes []string, sessionDir string) (flags, env []string, cleanup func()) {
 	noop := func() {}
 	src := dockerEnvSource(cfg, exposes)
 	if src == "" {
-		return nil, noop
+		return nil, nil, noop
 	}
 	tr, err := dialTunnel(cfg)
 	if err != nil {
 		info("could not reach the agent to project %s's environment (%v); the container starts without it", src, err)
-		return nil, noop
+		return nil, nil, noop
 	}
 	defer tr.Close()
 	reply, err := readWorkloadEnv(tr, src)
 	if err != nil {
 		info("%s: could not read the workload's environment (%v); the container starts without it", src, err)
-		return nil, noop
+		return nil, nil, noop
 	}
 	if reply.agentErr != "" {
 		info("%s: the agent did not hand over the environment: %s", src, reply.agentErr)
-		return nil, noop
+		return nil, nil, noop
 	}
 	for _, n := range reply.notes {
 		info("%s: %s", src, n)
 	}
 	// No caller env to merge against - a container inherits none of this host's
-	// shell - so only the policy's drops apply; a -e the user writes wins by
-	// docker's last-flag rule (dockerRunCmd puts ours first).
+	// shell - so only the policy's drops apply; a -e the user writes wins
+	// because docker reads the env files first and the -e flags after them.
 	set, _, _ := mergeWorkloadEnvWithEmpty(reply.vars, nil, cfg.envPolicy)
 	dir, paths, ferr := fetchWorkloadFiles(tr, src)
 	if ferr != nil {
 		info("%s: could not read the workload's mounted files (%v); the container starts without them", src, ferr)
 	}
-	cleanup := noop
-	if dir != "" {
-		cleanup = func() { os.RemoveAll(dir) }
+	envFile := filepath.Join(sessionDir, dockerRunEnvName)
+	cleanup = func() {
+		_ = os.Remove(envFile)
+		if dir != "" {
+			os.RemoveAll(dir)
+		}
 	}
-	flags := dockerProjectionFlags(set, dir, paths)
+	flags, env, err = dockerProjectionFlags(set, dir, paths, envFile)
+	if err != nil {
+		info("%s: %v; the container starts without the workload's environment", src, err)
+		cleanup()
+		return nil, nil, noop
+	}
 	if len(flags) > 0 {
 		info("%s: projected %d variable(s) and %d mounted path(s) into the container", src, len(set), len(paths))
 	}
-	return flags, cleanup
+	return flags, env, cleanup
 }
 
 // dockerEnvSource is the workload whose environment --dockerrun projects: the
@@ -355,10 +406,11 @@ func runDockerRun(cfg config, cmdArgs []string, exposes []string, client bool) i
 	defer stop()
 
 	// The workload's environment and mounted files, projected into the user's
-	// container as -e and -v. Built on THIS host: the sidecar holds only the
-	// datapath, so its own env never reaches the container. The files temp lives
-	// until the container exits, which is when this function returns.
-	projected, cleanup := dockerProjection(cfg, exposes)
+	// container as --env-file and -v. Built on THIS host: the sidecar holds only
+	// the datapath, so its own env never reaches the container. The files temp
+	// and the env file live until the container exits, which is when this
+	// function returns.
+	projected, cliEnv, cleanup := dockerProjection(cfg, exposes, dir)
 	defer cleanup()
 	// Its volumes too, mounted on THIS host as for a process (startMounts)
 	// and handed to the container at their exact cluster path with -v: the
@@ -380,6 +432,11 @@ func runDockerRun(cfg config, cmdArgs []string, exposes []string, client bool) i
 	}
 	cmd := exec.Command(full[0], full[1:]...)
 	cmd.Stdin, cmd.Stdout = os.Stdin, os.Stdout
+	// The multi-line values, carried by the docker CLI's own environment and
+	// named in the env file by a bare KEY line (dockerProjectionFlags).
+	if len(cliEnv) > 0 {
+		cmd.Env = append(os.Environ(), cliEnv...)
+	}
 	var errBuf strings.Builder
 	cmd.Stderr = &teeWriter{to: os.Stderr, into: &errBuf}
 	err = cmd.Run()

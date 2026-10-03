@@ -63,7 +63,10 @@ func markServed(name, agentPort string, cmdArgs []string) func() {
 // record is worse than silence — PIDs get reused, and what we do with this is
 // offer to kill it.
 func servedHolder(name string) *servedRecord {
-	data, err := os.ReadFile(filepath.Join(servedDir(), name))
+	// Read as the user's, on the descriptor: what this record leads to is a
+	// SIGTERM sent with the launcher's privilege, so a file somebody else put
+	// here (or a symlink to one) must not get to name the PID.
+	data, err := readUserOwnedFile(filepath.Join(servedDir(), name))
 	if err != nil {
 		return nil
 	}
@@ -232,6 +235,13 @@ const askToStopDeadline = 2 * time.Minute
 // — which is what releases the name AND restores whatever the session parked. A
 // killed session would leave both behind.
 func stopHolder(r *servedRecord) error {
+	// The record named a PID and the person said yes to it. Neither proves the
+	// process is theirs: PIDs are recycled, and on macOS this signal is sent
+	// with euid 0, which reaches any process on the machine. Ask the kernel who
+	// owns it before asking it to stop (holderIsMine, per OS).
+	if err := holderIsMine(r.pid); err != nil {
+		return err
+	}
 	p, err := os.FindProcess(r.pid)
 	if err != nil {
 		return err
