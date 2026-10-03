@@ -455,8 +455,9 @@ jobs:
     with:
       immutable_only: true
     # The two _docker.yml declares, not the vault. `inherit` handed this build
-    # every secret the repo has, PAT_TOKEN and its contents:write on main
-    # included, to run a job whose only credentialed act is a Docker Hub login.
+    # every secret the repo had, a contents:write token on main included, to
+    # run a job whose only credentialed act is a Docker Hub login. (The write
+    # credential has since moved to the `release` environment, see below.)
     secrets:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_RW: ${{ secrets.DOCKERHUB_RW }}
@@ -592,6 +593,268 @@ jobs:
           echo "promoting $HSRC → $htags"
           docker buildx imagetools create $htags "$HSRC"
           docker buildx imagetools inspect "$IMAGE:$branch-hosted" | head -5
+
+
+  # THE RELEASE IS AN APPROVAL. Every green run on main ends on this job, which
+  # waits on the `release` environment (a reviewer is required there) and does
+  # nothing until somebody approves it. Approving releases THIS build: the
+  # commit this run tested, with the bump written in the approval's comment
+  # (empty is a patch, `minor` or `major` say so). Not approving costs nothing:
+  # the next push to main cancels the waiting run (the concurrency above), so
+  # only the latest green build is ever on offer. Before this job existed a
+  # release was a workflow_dispatch that pushed a tag and had the WHOLE pipeline
+  # run again on a commit differing by one Markdown file: 40 minutes, and one
+  # flake away from a cancelled release (2.20.2 cost exactly that).
+  #
+  # REBUILT, NOT RE-TAGGED, and the reason is where plug keeps its version. It
+  # is compiled into every binary (-X main.version): the launcher compares it
+  # with the agent's, names its cache by it, and the release signature covers
+  # the bytes that carry it. A layer stamped on top of the tested digest, which
+  # is how a service with a runtime version does this, would ship binaries that
+  # call themselves dev+<sha> under a tag that says 2.21.0. So the two images
+  # are built again here, from the same commit, with the same toolchain and the
+  # same Dockerfile; the version string is the one thing that differs from the
+  # build the legs ran. The old release path rebuilt too, in a second pipeline.
+  #
+  # THE PUSH IS THE LAST THING THIS JOB DOES, and it says [skip ci]. The
+  # version commit changes RELEASE_NOTES.md and nothing else; a pipeline on it
+  # would rebuild and publish the same tags a second time, and its arrival
+  # would cancel this very job while it ran its final steps. release-flow is
+  # asked not to push; the commit message is amended, the tag moved onto the
+  # amended commit, both pushed, and the GitHub Release created from the notes
+  # release-flow extracted. The tag lands on the notes commit, one past the
+  # tested one; the image's revision label names the tested commit.
+  #
+  # Two things can stand between a green run and its release, and both stop
+  # the job before it touches anything: main moved by more than release notes
+  # since this commit (a code push without a pipeline, or one that was
+  # cancelled); or nobody approved, which means the environment is not
+  # protected (GitHub creates an environment the moment a job names it) and a
+  # release job would otherwise release every push.
+  release:
+    name: Release (approve to publish)
+    needs: [image]
+    if: >-
+      !cancelled() && needs.image.result == 'success'
+      && github.ref == 'refs/heads/main'
+      && (github.event_name == 'workflow_dispatch'
+          || (github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip release]')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: release
+    permissions:
+      contents: read
+      # The approvals of this very run, where the bump is written.
+      actions: read
+    env:
+      IMAGE: docker.io/softwarity/plug
+    steps:
+      - name: Read the approval
+        id: bump
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          approval=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/approvals" \
+            --jq '[.[] | select(.state == "approved") | select(any(.environments[]; .name == "release"))] | last')
+          if [ -z "$approval" ] || [ "$approval" = "null" ]; then
+            echo "::error::nobody approved this release: the 'release' environment must require a reviewer (Settings > Environments > release)"
+            exit 1
+          fi
+          comment=$(jq -r '.comment // ""' <<<"$approval")
+          bump=$(printf '%s' "$comment" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+          case "$bump" in
+            "") bump="patch" ;;
+            patch|minor|major) ;;
+            *) echo "::error::the approval comment must be empty (patch), minor or major, not '$comment'"; exit 1 ;;
+          esac
+          echo "bump=$bump" >> "$GITHUB_OUTPUT"
+          echo "approved as a $bump release"
+      # The App that WRITES this repository: a token minted for this run, good
+      # for an hour, from a private key that is a secret of the `release`
+      # environment, so it reaches this job once approved and no other job of
+      # the repository. An App rather than a personal token: nothing to renew,
+      # nobody's account behind the version commits.
+      - id: token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: softwarity
+          repositories: plug
+      # main, with its tags and its history, WITH the credential kept: the
+      # version commit and the tag are pushed through this checkout's origin.
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ steps.token.outputs.token }}
+      # main must still be the commit this run tested, give or take release
+      # notes: a [skip ci] push of notes alone is how notes are written here,
+      # and notes are not compiled into anything (.dockerignore excludes *.md).
+      # Anything else moved main without a pipeline, and this build does not
+      # vouch for it.
+      - name: main is still the tested commit
+        id: main
+        env:
+          TESTED: ${{ github.sha }}
+        run: |
+          set -e
+          head=$(git rev-parse HEAD)
+          if [ "$head" != "$TESTED" ]; then
+            moved=$(git diff --name-only "$TESTED" "$head")
+            if [ -z "$moved" ] || [ "$moved" != "RELEASE_NOTES.md" ]; then
+              echo "::error::main is at ${head::7} but this build tested ${TESTED::7}, and the difference is not release notes alone:"
+              echo "$moved" | sed 's/^/         /'
+              echo "         Run the pipeline on main again, then approve that one."
+              exit 1
+            fi
+            echo "main moved from ${TESTED::7} to ${head::7} by release notes only; releasing ${head::7} with this build's green"
+          fi
+          echo "sha=$head" >> "$GITHUB_OUTPUT"
+      # The same arithmetic release-flow does, from the same tags, computed
+      # here first because the images need the version before the notes do.
+      # release-flow is then TOLD this version, so the two cannot disagree.
+      - name: Next version
+        id: next
+        env:
+          BUMP: ${{ steps.bump.outputs.bump }}
+        run: |
+          set -e
+          last=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' | sed 's/^v//' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
+          last=${last:-0.0.0}
+          maj=${last%%.*}; rest=${last#*.}; min=${rest%%.*}; pat=${rest#*.}
+          case "$BUMP" in
+            major) maj=$((maj + 1)); min=0; pat=0 ;;
+            minor) min=$((min + 1)); pat=0 ;;
+            patch) pat=$((pat + 1)) ;;
+          esac
+          {
+            echo "version=$maj.$min.$pat"
+            echo "minor=$maj.$min"
+            echo "major=$maj"
+            echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
+          echo "$last -> $maj.$min.$pat ($BUMP)"
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      - name: Log in to Docker Hub
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_RW }}
+      # The App's own identity on the version commit, as GitHub shows it. The
+      # repository is public, so the bot user's id is readable with no token.
+      - name: Commit as the App
+        env:
+          SLUG: ${{ steps.token.outputs.app-slug }}
+        run: |
+          id=$(gh api "users/${SLUG}[bot]" --jq .id)
+          git config user.name "${SLUG}[bot]"
+          git config user.email "${id}+${SLUG}[bot]@users.noreply.github.com"
+      # Both architectures in one build: the Dockerfile's build stage runs on
+      # the build platform (a Go cross-compile), so only the final stage's apk
+      # runs under QEMU. Same build-args as _docker.yml's "Resolve version"
+      # would pass for a tagged commit: the version, no GIT_REV.
+      - name: Build and publish the standalone image as ${{ steps.next.outputs.version }}
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: agent/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            VERSION=${{ steps.next.outputs.version }}
+            GIT_REV=
+            FLAVOUR=
+          secrets: |
+            release_key=${{ secrets.PLUG_RELEASE_KEY }}
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.next.outputs.version }}
+            ${{ env.IMAGE }}:${{ steps.next.outputs.minor }}
+            ${{ env.IMAGE }}:${{ steps.next.outputs.major }}
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:main
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.main.outputs.sha }}
+            org.opencontainers.image.version=${{ steps.next.outputs.version }}
+            org.opencontainers.image.created=${{ steps.next.outputs.date }}
+          cache-from: type=gha,scope=release-std
+          cache-to: type=gha,scope=release-std,mode=min
+      - name: Build and publish the hosted image as ${{ steps.next.outputs.version }}-hosted
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: agent/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            VERSION=${{ steps.next.outputs.version }}
+            GIT_REV=
+            FLAVOUR=hosted
+          secrets: |
+            release_key=${{ secrets.PLUG_RELEASE_KEY }}
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.next.outputs.version }}-hosted
+            ${{ env.IMAGE }}:${{ steps.next.outputs.minor }}-hosted
+            ${{ env.IMAGE }}:${{ steps.next.outputs.major }}-hosted
+            ${{ env.IMAGE }}:hosted
+            ${{ env.IMAGE }}:main-hosted
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.main.outputs.sha }}
+            org.opencontainers.image.version=${{ steps.next.outputs.version }}-hosted
+            org.opencontainers.image.created=${{ steps.next.outputs.date }}
+          cache-from: type=gha,scope=release-hosted
+          cache-to: type=gha,scope=release-hosted,mode=min
+      # Asserted, not assumed, as the image job does: the binaries inside must
+      # say the version the tag says, and the signatures must be there (an
+      # image built without the key would serve binaries no launcher runs).
+      - name: The published images are stamped and signed
+        env:
+          VERSION: ${{ steps.next.outputs.version }}
+        run: |
+          set -e
+          for suffix in "" "-hosted"; do
+            ref="$IMAGE:$VERSION$suffix"
+            got=$(docker run --rm --platform linux/amd64 --entrypoint cat "$ref" /opt/plug/VERSION)
+            [ "$got" = "$VERSION$suffix" ] || { echo "::error::$ref is stamped '$got'"; exit 1; }
+            docker run --rm --platform linux/amd64 --entrypoint sh "$ref" -c 'test -s /opt/plug/bin/plug-linux-amd64.sig' \
+              || { echo "::error::$ref carries no release signature: was PLUG_RELEASE_KEY set?"; exit 1; }
+            echo "$ref: stamped $got, signed"
+          done
+      # Notes, version commit, tag: computed and written, pushed below by hand
+      # so the commit can say [skip ci] (see the job comment). Told the version
+      # the images were given, so it cannot arrive at another one.
+      - name: Release notes, version commit and tag
+        id: flow
+        uses: softwarity/release-flow@58d6aa0216d97976a623edca2fe484eababf5b57
+        with:
+          version: ${{ steps.next.outputs.version }}
+          push: "false"
+          create-release: "false"
+      - name: Push the version commit and the tag, create the GitHub Release
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          VERSION: ${{ steps.next.outputs.version }}
+          TAG: ${{ steps.flow.outputs.tag }}
+          NOTES: ${{ steps.flow.outputs.notes }}
+          TESTED: ${{ steps.main.outputs.sha }}
+        run: |
+          set -e
+          [ "$TAG" = "v$VERSION" ] || { echo "::error::release-flow tagged $TAG, the images say $VERSION"; exit 1; }
+          git commit --amend --reset-author -m "$VERSION [skip ci]"
+          git tag -f "$TAG"
+          git push origin HEAD:main "refs/tags/$TAG"
+          printf '%s\n' "$NOTES" > "$RUNNER_TEMP/notes.md"
+          gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
+          {
+            echo "## Released $VERSION"
+            echo
+            echo "- images: \`$IMAGE:$VERSION\`, \`$IMAGE:$VERSION-hosted\` (also latest, hosted, and the x.y / x tags)"
+            echo "- built from ${TESTED::7}, tagged $TAG on the notes commit $(git rev-parse --short HEAD)"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # The e2e that native-Linux Docker can't give us: run plug NATIVELY on each OS
   # against a REAL cluster, reaching services BY NAME over a Tailscale mesh (the

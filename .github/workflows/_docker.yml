@@ -52,7 +52,8 @@ on:
           CLI binaries baked into the image so a launcher can refuse to execute,
           with root privilege, anything that did not come from this workflow.
           Not required: without it the image builds and serves unsigned binaries,
-          which a launcher tolerates only until its compiled-in cutover date.
+          which a launcher refuses to execute, to install, or to replace itself
+          with (there is no grace period; see RELEASING.md).
         required: false
 
 # Declared rather than inherited. A reusable workflow takes its caller's scopes,

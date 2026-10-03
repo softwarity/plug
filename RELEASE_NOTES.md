@@ -129,6 +129,17 @@ like the others; a cluster workflow's image input is validated instead of
 interpolated into a shell; and the cell watchdog counts from the job's real
 start, not from the end of its setup.
 
+### A release is an approval
+
+Developer-facing. Every green run on `main` now ends on a job that waits for
+a reviewer; approving it releases that very build (the bump in the approval's
+comment), rebuilding the two images from the tested commit with the version
+compiled in, then writing the notes, the tag and the GitHub Release. The
+separate release workflow, which pushed a tag and had the whole pipeline run
+again on a one-file commit, is gone with it: a release is ten minutes on a
+build that just went green instead of forty on a rerun that could still trip.
+See RELEASING.md for the one-time environment setup.
+
 ---
 
 ## 2.20.2

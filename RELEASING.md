@@ -4,6 +4,52 @@ Notes for whoever cuts a release. The user-facing documentation is the
 [site](https://softwarity.github.io/plug/); this file is the part that only a
 maintainer needs, and that would otherwise live in somebody's memory.
 
+## Cutting a release: approve the green run
+
+Every CI run on `main` ends on a job named "Release (approve to publish)",
+waiting on the `release` environment. Nothing is released until somebody
+approves it, in the run's page (Review deployments) or from a terminal:
+
+```bash
+gh run list -R softwarity/plug --branch main --status waiting
+gh api -X POST repos/softwarity/plug/actions/runs/<run-id>/pending_deployments \
+  -f 'environment_ids[]=<env-id>' -f state=approved -f comment=minor
+```
+
+The bump rides in the approval's comment: empty is a patch, `minor` or `major`
+say so. Approving releases the build that run tested: the two images are
+rebuilt from that commit with the version compiled in, published under
+`x.y.z`, `x.y`, `x`, `latest` (and the `-hosted` names), checked for the stamp
+and the signature, then release-flow writes the notes under their version,
+commits, tags, and the GitHub Release is created. The version commit is pushed
+with `[skip ci]`: it changes one Markdown file and would otherwise start a
+pipeline that republishes the same tags and cancels the release job mid-way.
+
+Not approving costs nothing: the next push to `main` cancels the waiting run.
+A run whose commit says `[skip release]` offers no release. Release notes
+pushed with `[skip ci]` after the run do not block it: the job accepts a
+`main` that moved by `RELEASE_NOTES.md` alone and takes the notes from there.
+
+### What the environment needs (once, in the repository settings)
+
+Settings > Environments > New environment, named exactly `release`:
+
+- Deployment protection rules: **Required reviewers**, the maintainer(s) who
+  may release. Without a reviewer the job's first step stops with "nobody
+  approved this release": GitHub creates an unprotected environment the first
+  time a job names one, and an unprotected one would release every push.
+- Deployment branches: `main` only.
+- Environment variable `RELEASE_APP_ID` and environment secret
+  `RELEASE_APP_PRIVATE_KEY`: a GitHub App installed on this repository with
+  Contents read and write, the same App the other Softwarity repositories
+  release with. The job mints a one-hour token from it to push the version
+  commit and the tag and to create the Release. Keeping the key on the
+  environment is the point: it reaches the approved job and no other.
+
+`DOCKERHUB_USERNAME`, `DOCKERHUB_RW` and `PLUG_RELEASE_KEY` stay repository
+secrets; the CI builds need them before any approval. Nothing is published to
+GitHub Packages, so no packages permission is involved.
+
 ## The release signing key
 
 plug runs the core with the privilege it holds: root on macOS, `CAP_SYS_ADMIN`
@@ -110,5 +156,7 @@ once; the same words are in ci.yml beside the line that builds the name.
 
 - `DOCKERHUB_USERNAME` / `DOCKERHUB_RW`: the account images are pushed as.
   Declared explicitly by `_docker.yml` and passed by name, never inherited.
-- `PAT_TOKEN`: `contents: write` on main, used by the release flow to push the
-  version commit and tag. Deliberately out of reach of the image jobs.
+- `RELEASE_APP_PRIVATE_KEY` (secret) and `RELEASE_APP_ID` (variable), both on
+  the `release` environment: the GitHub App the release job writes the
+  repository with (version commit, tag, GitHub Release). They exist only for
+  the approved job.

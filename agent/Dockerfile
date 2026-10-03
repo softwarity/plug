@@ -17,10 +17,16 @@ ARG GIT_REV=
 #   docker build --build-arg FLAVOUR=hosted -t softwarity/plug:hosted .
 ARG FLAVOUR=
 
-FROM golang:1.26-alpine AS build
+# On the BUILD platform, whatever the target: this stage is a Go cross-compile
+# (the six CLI binaries already are, and the agent below asks for TARGETARCH),
+# so emulating the target here would only make the compiler run under QEMU.
+# That is what lets one job build both architectures at release time, where
+# only the final stage (an apk add) runs emulated.
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
 ARG VERSION
 ARG GIT_REV
 ARG FLAVOUR
+ARG TARGETARCH
 # plug is a single self-contained Go binary — its data path is the userspace TUN
 # (gVisor netstack + wireguard-go device), no C hook or seccomp supervisor to
 # cross-build anymore.
@@ -107,7 +113,7 @@ COPY agent/*.go agent/go.mod agent/go.sum /src/agent/
 COPY agent/cmd/ /src/agent/cmd/
 # ./cmd/plug-agent, not "." - the package is importable now (Meerkat links it
 # into its own binary), so the main lives in a cmd of its own.
-RUN CGO_ENABLED=0 go build -C /src/agent -trimpath -ldflags "-s -w" -o /out/plug-agent ./cmd/plug-agent
+RUN CGO_ENABLED=0 GOARCH=$TARGETARCH go build -C /src/agent -trimpath -ldflags "-s -w" -o /out/plug-agent ./cmd/plug-agent
 
 FROM alpine:3.24
 
