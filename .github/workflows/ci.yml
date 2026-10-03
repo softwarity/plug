@@ -744,10 +744,12 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_RW }}
       # The App's own identity on the version commit, as GitHub shows it. The
-      # repository is public, so the bot user's id is readable with no token.
+      # bot user's id is public, but `gh` in Actions refuses to run without a
+      # token at all (exit 4), so it gets the run's own read-only one.
       - name: Commit as the App
         env:
           SLUG: ${{ steps.token.outputs.app-slug }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           id=$(gh api "users/${SLUG}[bot]" --jq .id)
           git config user.name "${SLUG}[bot]"
