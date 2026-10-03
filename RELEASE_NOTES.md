@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.21.1
+
 ### Eight small bugs from the audit
 
 - Windows: `plug init`, `plug -p <new> <cmd>` and the profile chooser always
