@@ -22,9 +22,11 @@ on:
 # needs blessing — cancel the older run; its clusters die on their TTL
 # backstop (that is what the backstop is for).
 # Read-only by default. Thirteen jobs inherit this token, on three operating
-# systems, and every checkout persists it in the runner's git config before the
+# systems, and a checkout persists it in the runner's git config before the
 # job goes on to run code pulled from Docker Hub. The jobs that need to write
-# (the image publication) ask for it themselves, where the reason is visible.
+# (the image publication, the cluster dispatch and its cancels) ask for it
+# themselves, where the reason is visible; the e2e legs, which run pip, third
+# party images and a binary installed from the cluster, do not persist it at all.
 permissions:
   contents: read
 
@@ -507,9 +509,9 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-tags: true # a release is recognised by the tag pointing at HEAD
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
       - name: Log in to Docker Hub
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_RW }}
@@ -603,15 +605,12 @@ jobs:
   # heavy and needs the Tailscale/Docker secrets, absent on fork PRs. Needs
   # TAILSCALE_CLIENT_ID/SECRET.
   #
-  # Deliberately NOT behind `needs: test`: this job only DISPATCHES the cluster
-  # workflows, and the e2e legs then wait for those clusters to come up inside
-  # their own setup step. Gating it on the unit tests put a full minute of pure
-  # sequence in front of every run (the Windows leg is the long pole) AND held
-  # the clusters' own build back by as much again. The gate that matters is kept
-  # where it belongs: the e2e jobs below need `test`, so nothing is ever
-  # exercised against code whose unit tests are red. The cost is that a red push
-  # dispatches clusters for nothing — the kill jobs still reap them (they run on
-  # always() as long as this job succeeded, e2e skipped or not).
+  # This job only DISPATCHES the cluster workflows; the e2e legs then wait for
+  # those clusters to come up inside their own setup step. It is gated on the
+  # selftest (see `needs` below for why) and on nothing else: the e2e jobs
+  # carry their own `needs: test`, so nothing is ever exercised against code
+  # whose unit tests are red, and the kill jobs reap whatever was dispatched
+  # (they run on always() as long as this job succeeded, e2e skipped or not).
   start-cluster:
     name: start clusters
     # NOT waiting for image-build. This job only DISPATCHES; what needs the image
@@ -772,9 +771,12 @@ jobs:
     name: e2e-compose (${{ matrix.os }}, by name over the mesh)
     needs: [test, start-cluster, build-clients]
     runs-on: ${{ matrix.os }}
+    # Read-only, and the checkout does not keep the token either (see the first
+    # steps). A leg runs pip, third-party images and a plug binary installed
+    # from the cluster, with nothing to write back: it is abort-on-fail that
+    # cancels the run when a leg fails, and no `gh` runs on a leg.
     permissions:
       contents: read
-      actions: write # abort the run when this leg fails
     timeout-minutes: 25 # a hung cell must not run the job (and the cluster) for hours
     env:
       # What CELL_MAX may spend: kept in step with timeout-minutes below by
@@ -808,9 +810,16 @@ jobs:
           - os: windows-latest
             alias: windows
     steps:
+      # FIRST, before the checkout: the cell watchdog in e2e-matrix.sh budgets
+      # a late cell from what is left of the job, and "the job" starts here,
+      # not at the end of a setup that waits up to ten minutes for a cluster.
+      - name: Start the job clock (the cell watchdog budgets from it)
+        shell: bash
+        run: echo "PLUG_JOB_T0=$(date +%s)" >> "$GITHUB_ENV"
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0 # the compat cell decides by ANCESTRY (launcher rev vs fix commit)
+          persist-credentials: false # nothing after this step talks to git; see `permissions`
       # Retried once: see the note on the same action in build-clients. Adoptium's
       # signature verification failed there and cost a whole leg.
       - uses: actions/setup-java@v6 # pin the JRE — the runners' ambient Java differs by OS; no maven cache, nothing builds here
@@ -894,14 +903,15 @@ jobs:
       # setup step installs plug FROM the cluster + builds the clients and records
       # the shared state ($RUNNER_TEMP) the family steps read back. A failing
       # cell STOPS its leg: the cells after it are skipped (grey, not green),
-      # the leg concludes red within seconds and abort-on-fail cuts the run -
-      # where `if: always()` used to carry a leg red at minute 5 through twenty
-      # more minutes of cells before anyone could act on it. The eight other
-      # legs still show every cell. The cells most likely to trip on a timing
-      # (takeover, orphan, resilience) come right after env, before the 8-minute
-      # protocol matrix, for the same reason: a flake should cost minutes, not a
-      # run. The compat step closes the set: the last published launcher must
-      # still drive THIS branch's core (the inter-version channel).
+      # the leg concludes red within seconds and abort-on-fail cancels the whole
+      # run, the nine other legs included - where `if: always()` used to carry a
+      # leg red at minute 5 through twenty more minutes of cells before anyone
+      # could act on it. What a red run shows is the failing leg's red cell and
+      # whatever the others had reached by then. The cells most likely to trip on
+      # a timing (takeover, orphan, resilience) come right after env, before the
+      # 8-minute protocol matrix, for the same reason: a flake should cost
+      # minutes, not a run. The compat step closes the set: the last published
+      # launcher must still drive THIS branch's core (the inter-version channel).
       # ── THE COMMON BLOCK ─────────────────────────────────────────────────
       # Identical, to the character, in e2e-compose, e2e-swarm and e2e-k8s: the
       # same cells, in the same order, under the same names. That is the point.
@@ -1010,8 +1020,7 @@ jobs:
     needs: [test, start-cluster, build-clients]
     runs-on: ubuntu-24.04-arm
     permissions:
-      contents: read
-      actions: write # abort the run when this leg fails
+      contents: read # read-only and no persisted token, as on every leg (see e2e-compose)
     timeout-minutes: 25
     env:
       # What CELL_MAX may spend: kept in step with timeout-minutes below by
@@ -1024,7 +1033,12 @@ jobs:
       AGENT_IMAGE: docker.io/softwarity/plug:sha-${{ needs.start-cluster.outputs.short_sha }}-amd64
       PREBUILT_CLIENTS: e2e-clients
     steps:
+      - name: Start the job clock (the cell watchdog budgets from it)
+        shell: bash
+        run: echo "PLUG_JOB_T0=$(date +%s)" >> "$GITHUB_ENV"
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       # Retried once: see the note on the same action in build-clients.
       - uses: actions/setup-java@v6
         id: java
@@ -1099,8 +1113,7 @@ jobs:
     needs: [test, start-cluster, build-clients]
     runs-on: ${{ matrix.os }}
     permissions:
-      contents: read
-      actions: write # abort the run when this leg fails
+      contents: read # read-only and no persisted token, as on every leg (see e2e-compose)
     timeout-minutes: 30 # compose's 25 + the extra wait for the kind rollout — a hung cell must still not run the cluster for hours
     env:
       # What CELL_MAX may spend: kept in step with timeout-minutes below by
@@ -1119,7 +1132,12 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
+      - name: Start the job clock (the cell watchdog budgets from it)
+        shell: bash
+        run: echo "PLUG_JOB_T0=$(date +%s)" >> "$GITHUB_ENV"
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       # Retried once: see the note on the same action in build-clients. Adoptium's
       # signature verification failed there and cost a whole leg.
       - uses: actions/setup-java@v6 # pin the JRE — the runners' ambient Java differs by OS; no maven cache, nothing builds here
@@ -1288,8 +1306,7 @@ jobs:
     needs: [test, start-cluster, build-clients]
     runs-on: ${{ matrix.os }}
     permissions:
-      contents: read
-      actions: write # abort the run when this leg fails
+      contents: read # read-only and no persisted token, as on every leg (see e2e-compose)
     timeout-minutes: 30
     env:
       # What CELL_MAX may spend: kept in step with timeout-minutes below by
@@ -1308,7 +1325,12 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
+      - name: Start the job clock (the cell watchdog budgets from it)
+        shell: bash
+        run: echo "PLUG_JOB_T0=$(date +%s)" >> "$GITHUB_ENV"
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       # Retried once: see the note on the same action in build-clients. Adoptium's
       # signature verification failed there and cost a whole leg.
       - uses: actions/setup-java@v6 # pin the JRE — the runners' ambient Java differs by OS; no maven cache, nothing builds here

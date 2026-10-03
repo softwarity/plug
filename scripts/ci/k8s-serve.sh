@@ -6,10 +6,14 @@
 # remote runner on the tailnet reaches the agent at <tailnet-ip>:2222 and the
 # gateway at :18090 — the exact contract of the compose cluster.
 #
-# The agent is applied from deploy/plug-k8s.yaml — the PUBLISHED manifest
-# (ServiceAccount, Services-only RBAC, NodePort) with only the image swapped to
-# the branch-built :e2e — so every push blesses the file users deploy. The
-# services come from e2e/k8s.cluster.yaml (same names/ports as compose).
+# The agent is applied from deploy/plug-k8s.yaml, the PUBLISHED manifest
+# (ServiceAccount, the full namespace-scoped RBAC: Services, Endpoints,
+# EndpointSlices, Deployments, pods and pods/exec, PVC reads; NodePort) with
+# only the image swapped to the branch-built :e2e, so every push blesses the
+# file users deploy. The per-leg agents (previous release, crash-test) get that
+# same Role and RoleBinding, extracted from the manifest below, so no copy of
+# it can drift. The services come from e2e/k8s.cluster.yaml (same names/ports
+# as compose).
 #
 # Idles for PLUG_CLUSTER_TTL seconds; the caller cancels the run earlier.
 set -euo pipefail
@@ -91,12 +95,57 @@ fi
 
 printf '%s\n' "$manifest" | kubectl apply -f -
 
+# The per-leg agents (one namespace each, see the fixtures for why) run under
+# the SAME Role and RoleBinding as the published manifest, taken from it here
+# rather than copied into the fixtures: the copies had drifted for eight
+# releases (no endpointslices, no pods/exec, no persistentvolumeclaims), so the
+# crash-test agents could not delete the orphaned EndpointSlice at park, which
+# is the 2.12 to 2.20 bug the resilience cell exists to catch, and nothing
+# noticed because nothing compared the two.
+#
+# yaml_docs_of_kind prints the documents of a multi-document YAML whose `kind:`
+# is one of the alternatives given, separators included. The RBAC documents
+# carry no namespace, exactly like the rest of the manifest, so `kubectl -n`
+# decides where they land, and a RoleBinding subject of kind ServiceAccount
+# with no namespace binds the SA of the binding's own namespace (that is how
+# the manifest works in `default` just above, and in every user's namespace).
+yaml_docs_of_kind() {
+  awk -v want="(^|\n)kind: ($1)\n" '
+    function flush() { if (doc ~ want) printf "---\n%s", doc; doc = "" }
+    /^---[[:space:]]*$/ { flush(); next }
+    { doc = doc $0 "\n" }
+    END { flush() }' "$2"
+}
+leg_namespaces="plug-prev-linux plug-prev-mac plug-prev-win plug-res-linux plug-res-mac plug-res-win"
+
+echo "=== the agent's RBAC, from the published manifest, into every per-leg namespace ==="
+rbac="$(yaml_docs_of_kind 'Role|RoleBinding' "$root/deploy/plug-k8s.yaml")"
+# Asserted, not assumed, like the image rewrite above: an extraction that came
+# back empty or partial would deploy agents with no grant at all, and the cells
+# would fail far from here (or, worse, a renamed rule would quietly bring the
+# drift back). Each rule the copies had lost is required by name.
+rbac_missing=""
+for needle in 'kind: Role' 'kind: RoleBinding' '"services"' '"endpoints"' '"endpointslices"' '"deployments"' '"pods"' '"pods/exec"' '"persistentvolumeclaims"'; do
+  grep -qF -- "$needle" <<<"$rbac" || rbac_missing="$rbac_missing${rbac_missing:+, }$needle"
+done
+if [ -n "$rbac_missing" ]; then
+  echo "::error::the Role/RoleBinding extracted from deploy/plug-k8s.yaml lack: $rbac_missing. Either the manifest's RBAC moved (a ClusterRole, a renamed resource) or the extraction in scripts/ci/k8s-serve.sh no longer matches it; the per-leg agents would run with a grant that is not the published one." >&2
+  exit 1
+fi
+# The namespaces first (they are declared in the fixtures), then the RBAC into
+# each, then the fixtures themselves: the grant is in place before any agent
+# pod boots, so what each one logs about its rights is what a user would see.
+{ yaml_docs_of_kind Namespace "$root/e2e/k8s.prev-agents.yaml"
+  yaml_docs_of_kind Namespace "$root/e2e/k8s.res-agents.yaml"; } | kubectl apply -f -
+for ns in $leg_namespaces; do
+  printf '%s\n' "$rbac" | kubectl -n "$ns" apply -f -
+done
+
 # The update cells start from a PUBLISHED release, so this one is NOT rewritten
-# to the branch image: it is pulled from the registry as 2.4.1, which is the
-# whole point (the oldest agent that can retarget itself). One namespace each —
-# see the manifest for why.
+# to the branch image: it is pulled from the registry as the previous release,
+# which is the whole point (an agent one release behind retargeting itself).
 echo "=== deploy the per-leg previous-release agents (update cells) ==="
-# The image is resolved, not pinned — see scripts/ci/previous-release.sh.
+# The image is resolved, not pinned, see scripts/ci/previous-release.sh.
 PREV_RELEASE="$(bash "$root/scripts/ci/previous-release.sh")" || exit 1
 echo "previous release = $PREV_RELEASE"
 export PREV_RELEASE
@@ -126,8 +175,8 @@ failed=""
 for d in $(kubectl get deploy -o name); do
   kubectl rollout status --timeout=180s "$d" || failed="$failed $d"
 done
-# The previous-release agents live in their own namespaces, which the loop above does not see.
-for ns in plug-prev-linux plug-prev-mac plug-prev-win plug-res-linux plug-res-mac plug-res-win; do
+# The per-leg agents live in their own namespaces, which the loop above does not see.
+for ns in $leg_namespaces; do
   kubectl -n "$ns" rollout status --timeout=180s deploy/plug || failed="$failed $ns/plug"
 done
 kubectl get deploy,svc -o wide

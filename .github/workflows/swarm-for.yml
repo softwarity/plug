@@ -93,24 +93,38 @@ jobs:
       # this runner and checking out happen while it is still being built.
       - name: Pull the tested image
         if: inputs.image != ''
+        # Through `env`, never interpolated into the script: this job holds the
+        # tailnet credentials and the Docker Hub write token, and a dispatch
+        # input written straight into `run:` is a shell injection for whoever
+        # can dispatch. The value is also checked against the one shape ci.yml
+        # ever sends (docker.io/softwarity/plug:<tag>) before it reaches docker.
+        env:
+          IMAGE: ${{ inputs.image }}
         run: |
-          echo "waiting for ${{ inputs.image }} (built in parallel by the caller)"
+          case "$IMAGE" in
+            docker.io/softwarity/plug:[A-Za-z0-9]*) ;;
+            *) echo "::error::refusing image '$IMAGE': not a docker.io/softwarity/plug:<tag> reference"; exit 1 ;;
+          esac
+          if ! printf '%s' "${IMAGE#docker.io/softwarity/plug:}" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'; then
+            echo "::error::refusing image '$IMAGE': the tag is not a docker tag"; exit 1
+          fi
+          echo "waiting for $IMAGE (built in parallel by the caller)"
           # Bounded by the CLOCK, not by a number of attempts. The loop used to
-          # count tries — which silently assumes `docker pull` always returns.
+          # count tries, which silently assumes `docker pull` always returns.
           # It does not: one runner's pull hung past forty minutes while its
           # twin, on another runner, pulled the same digest in seconds. No retry
           # ever fired, no error was ever printed, the cluster never came up,
-          # and the legs blamed "cluster never became reachable" — pointing at
+          # and the legs blamed "cluster never became reachable", pointing at
           # the wrong thing entirely. So: a timeout per attempt, and a deadline
           # on the whole wait.
           ok=""
           deadline=$(( SECONDS + 900 ))
           while [ "$SECONDS" -lt "$deadline" ]; do
-            if timeout 120 docker pull -q "${{ inputs.image }}"; then ok=1; break; fi
+            if timeout 120 docker pull -q "$IMAGE"; then ok=1; break; fi
             sleep 10
           done
-          [ -n "$ok" ] || { echo "::error::${{ inputs.image }} never pulled inside 15 minutes — did the image build fail, or is the registry throttling?"; exit 1; }
-          docker tag "${{ inputs.image }}" softwarity/plug:e2e
+          [ -n "$ok" ] || { echo "::error::$IMAGE never pulled inside 15 minutes: did the image build fail, or is the registry throttling?"; exit 1; }
+          docker tag "$IMAGE" softwarity/plug:e2e
       - uses: actions/download-artifact@v7
         if: inputs.image == ''
         with:

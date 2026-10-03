@@ -1,15 +1,27 @@
 # Per-leg CRASH-TEST agents and the deployed services they take over, for the
-# resilience and lease cells on the Kubernetes family.
+# resilience and update cells on the Kubernetes family, plus the ONE chaos
+# service (in `default`) that the lease and resilience cells drive.
 #
 # One NAMESPACE per leg, like the previous-release agents: the three OS legs run
 # CONCURRENTLY and the resilience cell crashes an agent mid-session, so a shared
-# one would have the legs tearing down each other's sessions. A namespace also
-# scopes chaos: it deletes pods and Services where IT is deployed, and it is
-# deployed once per leg.
+# one would have the legs tearing down each other's sessions.
 #
-# chaos here is the same image as the other families — it detects Kubernetes by
-# the env the kubelet sets, deletes the agent POD (the Deployment recreates it,
+# NO Role or RoleBinding for the agents here, on purpose. scripts/ci/k8s-serve.sh
+# extracts the agent's RBAC from deploy/plug-k8s.yaml, the PUBLISHED manifest,
+# and applies it into each namespace below before this file. A copy kept here
+# drifted from the manifest for eight releases (no endpointslices, no pods/exec,
+# no persistentvolumeclaims): these agents could not delete the orphaned
+# EndpointSlice at park, which is the exact 2.12 to 2.20 bug the resilience cell
+# then could not see, and nothing compared the two files.
+#
+# chaos is the same image as the other families: it detects Kubernetes by the
+# env the kubelet sets, deletes the agent POD (the Deployment recreates it,
 # which is what a crash looks like) and deletes the Service a session serves.
+# It is deployed ONCE, in `default`, where a session reaches it by name; the
+# chaos-crash Roles at the end of this file let it delete pods in the per-leg
+# namespaces, and nothing else there. There used to be a chaos per leg as well,
+# which nothing ever called: every /restart-agent and /rm-signpost goes through
+# the main agent to the one in `default`.
 ---
 apiVersion: v1
 kind: Namespace
@@ -76,40 +88,6 @@ spec:
       targetPort: 22
       nodePort: 32223
 ---
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: plug-serve-names
-  namespace: plug-res-linux
-  labels: { app: plug }
-rules:
-  - apiGroups: [""]
-    resources: ["services"]
-    verbs: ["get", "list", "create", "delete", "update", "patch"]
-  # Same grant as deploy/plug-k8s.yaml: a served name points at ONE pod through
-  # Endpoints the agent writes, so the crash cells exercise the shape users get.
-  - apiGroups: [""]
-    resources: ["endpoints"]
-    verbs: ["get", "create", "update", "delete"]
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["get", "list", "patch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: plug-serve-names
-  namespace: plug-res-linux
-  labels: { app: plug }
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: plug-serve-names
-subjects:
-  - kind: ServiceAccount
-    name: plug
-    namespace: plug-res-linux
----
 # The deployed service the resilience cell parks, then must see restored.
 apiVersion: apps/v1
 kind: Deployment
@@ -143,81 +121,6 @@ spec:
   ports:
     - port: 8115
       targetPort: 8115
----
-# chaos, once per leg: it acts in ITS OWN namespace, so each leg can only ever
-# crash its own agent.
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: chaos
-  namespace: plug-res-linux
-  labels: { app: chaos }
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: chaos
-  namespace: plug-res-linux
-  labels: { app: chaos }
-rules:
-  # restart-agent lists then deletes the agent pod; rm-signpost deletes the
-  # Service a live session serves. Nothing else, and nothing outside here.
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["list", "delete"]
-  - apiGroups: [""]
-    resources: ["services"]
-    verbs: ["delete"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: chaos
-  namespace: plug-res-linux
-  labels: { app: chaos }
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: chaos
-subjects:
-  - kind: ServiceAccount
-    name: chaos
-    namespace: plug-res-linux
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: chaos
-  namespace: plug-res-linux
-  labels: { app: chaos }
-spec:
-  replicas: 1
-  selector:
-    matchLabels: { app: chaos }
-  template:
-    metadata:
-      labels: { app: chaos }
-    spec:
-      serviceAccountName: chaos
-      containers:
-        - name: chaos
-          image: docker.io/plug-e2e/chaos:e2e
-          imagePullPolicy: Never
-          ports:
-            - containerPort: 8095
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: chaos
-  namespace: plug-res-linux
-  labels: { app: chaos }
-spec:
-  selector: { app: chaos }
-  ports:
-    - port: 8095
-      targetPort: 8095
-
 ---
 apiVersion: v1
 kind: Namespace
@@ -284,40 +187,6 @@ spec:
       targetPort: 22
       nodePort: 32224
 ---
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: plug-serve-names
-  namespace: plug-res-mac
-  labels: { app: plug }
-rules:
-  - apiGroups: [""]
-    resources: ["services"]
-    verbs: ["get", "list", "create", "delete", "update", "patch"]
-  # Same grant as deploy/plug-k8s.yaml: a served name points at ONE pod through
-  # Endpoints the agent writes, so the crash cells exercise the shape users get.
-  - apiGroups: [""]
-    resources: ["endpoints"]
-    verbs: ["get", "create", "update", "delete"]
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["get", "list", "patch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: plug-serve-names
-  namespace: plug-res-mac
-  labels: { app: plug }
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: plug-serve-names
-subjects:
-  - kind: ServiceAccount
-    name: plug
-    namespace: plug-res-mac
----
 # The deployed service the resilience cell parks, then must see restored.
 apiVersion: apps/v1
 kind: Deployment
@@ -351,81 +220,6 @@ spec:
   ports:
     - port: 8116
       targetPort: 8116
----
-# chaos, once per leg: it acts in ITS OWN namespace, so each leg can only ever
-# crash its own agent.
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: chaos
-  namespace: plug-res-mac
-  labels: { app: chaos }
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: chaos
-  namespace: plug-res-mac
-  labels: { app: chaos }
-rules:
-  # restart-agent lists then deletes the agent pod; rm-signpost deletes the
-  # Service a live session serves. Nothing else, and nothing outside here.
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["list", "delete"]
-  - apiGroups: [""]
-    resources: ["services"]
-    verbs: ["delete"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: chaos
-  namespace: plug-res-mac
-  labels: { app: chaos }
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: chaos
-subjects:
-  - kind: ServiceAccount
-    name: chaos
-    namespace: plug-res-mac
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: chaos
-  namespace: plug-res-mac
-  labels: { app: chaos }
-spec:
-  replicas: 1
-  selector:
-    matchLabels: { app: chaos }
-  template:
-    metadata:
-      labels: { app: chaos }
-    spec:
-      serviceAccountName: chaos
-      containers:
-        - name: chaos
-          image: docker.io/plug-e2e/chaos:e2e
-          imagePullPolicy: Never
-          ports:
-            - containerPort: 8095
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: chaos
-  namespace: plug-res-mac
-  labels: { app: chaos }
-spec:
-  selector: { app: chaos }
-  ports:
-    - port: 8095
-      targetPort: 8095
-
 ---
 apiVersion: v1
 kind: Namespace
@@ -492,40 +286,6 @@ spec:
       targetPort: 22
       nodePort: 32225
 ---
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: plug-serve-names
-  namespace: plug-res-win
-  labels: { app: plug }
-rules:
-  - apiGroups: [""]
-    resources: ["services"]
-    verbs: ["get", "list", "create", "delete", "update", "patch"]
-  # Same grant as deploy/plug-k8s.yaml: a served name points at ONE pod through
-  # Endpoints the agent writes, so the crash cells exercise the shape users get.
-  - apiGroups: [""]
-    resources: ["endpoints"]
-    verbs: ["get", "create", "update", "delete"]
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["get", "list", "patch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: plug-serve-names
-  namespace: plug-res-win
-  labels: { app: plug }
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: plug-serve-names
-subjects:
-  - kind: ServiceAccount
-    name: plug
-    namespace: plug-res-win
----
 # The deployed service the resilience cell parks, then must see restored.
 apiVersion: apps/v1
 kind: Deployment
@@ -559,80 +319,6 @@ spec:
   ports:
     - port: 8117
       targetPort: 8117
----
-# chaos, once per leg: it acts in ITS OWN namespace, so each leg can only ever
-# crash its own agent.
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: chaos
-  namespace: plug-res-win
-  labels: { app: chaos }
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: chaos
-  namespace: plug-res-win
-  labels: { app: chaos }
-rules:
-  # restart-agent lists then deletes the agent pod; rm-signpost deletes the
-  # Service a live session serves. Nothing else, and nothing outside here.
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["list", "delete"]
-  - apiGroups: [""]
-    resources: ["services"]
-    verbs: ["delete"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: chaos
-  namespace: plug-res-win
-  labels: { app: chaos }
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: chaos
-subjects:
-  - kind: ServiceAccount
-    name: chaos
-    namespace: plug-res-win
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: chaos
-  namespace: plug-res-win
-  labels: { app: chaos }
-spec:
-  replicas: 1
-  selector:
-    matchLabels: { app: chaos }
-  template:
-    metadata:
-      labels: { app: chaos }
-    spec:
-      serviceAccountName: chaos
-      containers:
-        - name: chaos
-          image: docker.io/plug-e2e/chaos:e2e
-          imagePullPolicy: Never
-          ports:
-            - containerPort: 8095
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: chaos
-  namespace: plug-res-win
-  labels: { app: chaos }
-spec:
-  selector: { app: chaos }
-  ports:
-    - port: 8095
-      targetPort: 8095
 ---
 # chaos in the DEFAULT namespace, for the lease cell: that one runs against the
 # MAIN agent (cluster A) and reaches chaos by name, so it has to live where the

@@ -57,7 +57,10 @@ esac
 # --- OS specifics ---
 ext=""; py="python3"
 case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) ext=".exe"; py="python" ;; esac
-SSH_OPTS="-p $port -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o BatchMode=yes"
+# ConnectTimeout, or wait_cluster's "200 x 3s" is not ten minutes: a tailnet
+# peer that is known but not answering lets the TCP connect sit in SYN for the
+# OS's own timeout (over a minute on Windows), one attempt at a time.
+SSH_OPTS="-p $port -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o BatchMode=yes -o ConnectTimeout=5"
 
 # --- prebuilt clients (see scripts/ci/build-clients.sh) -----------------------
 # PREBUILT_CLIENTS points at what one Linux runner produced for every leg: the
@@ -205,6 +208,78 @@ is_addr() {
 }
 glyph() { case "$1" in PASS) printf "✅" ;; FAIL) printf "❌" ;; SKIP) printf "·" ;; *) printf "?" ;; esac; }
 sum()   { echo "$*" >> "${GITHUB_STEP_SUMMARY:-/dev/stderr}"; }
+
+# skip_cell <label> <reason>: a cell that could not measure what it is named
+# for, for a reason that belongs to the RUNNER and not to plug (a registry this
+# machine cannot reach). It exits 0, because a red for the runner's network
+# would be a lie in the other direction, but it must never READ as a pass:
+# update-notify returned 0 on "registry unreachable", which is the usual case
+# on the macOS runners, and the summary showed nothing that told the two apart.
+# So every skip is counted, annotated on the job (a ::warning:: survives the
+# step going green) and written to the summary as a SKIP with its number;
+# leg_tally closes the leg with the total.
+skip_file="${RUNNER_TEMP:-/tmp}/plug-e2e-skips"
+skip_cell() {
+  printf '%s: %s\n' "$1" "$2" >> "$skip_file"
+  sk_n="$(wc -l < "$skip_file" | tr -d ' ')"
+  echo "--- $1 SKIP (#$sk_n on this leg, not a pass) - $2"
+  echo "::warning::$phase: '$1' was SKIPPED, not passed: $2"
+  sum "**$1** $(glyph SKIP) SKIP #$sk_n - $2"
+}
+leg_tally() {
+  [ -s "$skip_file" ] || return 0
+  sum "**skipped on this leg: $(wc -l < "$skip_file" | tr -d ' ')** (counted, not passed)"
+  sed 's/^/- /' "$skip_file" >> "${GITHUB_STEP_SUMMARY:-/dev/stderr}"
+}
+
+# assert_all <probe-fn> <want> <n> <answers> [deadline-epoch] [min]
+#
+# EVERY answer, not the first one that fits. Up to <n> reads of <probe-fn>,
+# each of which must be <want>. The loop it replaces stopped at the first
+# matching answer, and a takeover that handed HALF the requests to the deployed
+# pod (a Kubernetes Service whose old EndpointSlice survived the park, from
+# 2.12.0 to 2.20.0) passed it every time for four weeks. The same shape is the
+# orphan cell's whole subject (a restore that left the dead session's route in)
+# and what sameport and multiport exist to refuse (a port answering the wrong
+# backend). One probe, one rule, so a cell cannot quietly keep the weak form.
+#
+# <answers> lists the PREFIXES a real answer starts with ("deployed- local-").
+# A read matching none of them is not a verdict but a blink: an empty body, or
+# the connection error the prober relays while the controllers are still
+# swapping endpoints after a restore, when for some hundreds of ms the Service
+# has no endpoint at all. That read is taken again once, a second later. What
+# fails is a REAL answer that is not <want>, or a blink that stays.
+#
+# <deadline-epoch> stops the reads while the session under test is certainly
+# alive: a read costs up to 8s on a Windows runner, and one taken after the
+# session's own -ttl says "deployed", which looks exactly like a split route
+# and is not one. <min> (default <n>) is how many reads must have fitted.
+#
+# Results, for the caller's message: aa_seq stamps every answer with its second
+# (from $aa_clock when the caller set one, else from the first read), aa_why
+# says in one line what went wrong or is empty, aa_reads/aa_ok/aa_bad count.
+assert_all() {
+  local aa_probe="$1" aa_want="$2" aa_n="$3" aa_answers="$4" aa_deadline="${5:-}" aa_min="${6:-$3}"
+  local aa_r aa_p aa_real aa_t0 aa_stray=""
+  aa_t0="${aa_clock:-$(date +%s)}"
+  aa_seq=""; aa_ok=0; aa_bad=0; aa_reads=0; aa_why=""
+  while [ "$aa_reads" -lt "$aa_n" ]; do
+    if [ -n "$aa_deadline" ] && [ "$(date +%s)" -ge "$aa_deadline" ]; then break; fi
+    aa_r="$("$aa_probe")"
+    aa_real=""
+    for aa_p in $aa_answers; do case "$aa_r" in "$aa_p"*) aa_real=1 ;; esac; done
+    if [ -z "$aa_real" ]; then sleep 1; aa_r="$("$aa_probe")"; fi
+    aa_reads=$((aa_reads + 1))
+    aa_seq="$aa_seq $(( $(date +%s) - aa_t0 ))s:${aa_r:-nothing}"
+    if [ "$aa_r" = "$aa_want" ]; then aa_ok=$((aa_ok + 1)); else aa_bad=$((aa_bad + 1)); aa_stray="$aa_r"; fi
+  done
+  if [ "$aa_bad" -gt 0 ]; then
+    aa_why="$aa_ok/$aa_reads $aa_want, $aa_bad '${aa_stray:-nothing}' (by second:$aa_seq)"
+  elif [ "$aa_reads" -lt "$aa_min" ]; then
+    aa_why="only $aa_reads read(s) fitted before the deadline (by second:$aa_seq)"
+  fi
+  [ -z "$aa_why" ]
+}
 
 # How this phase left, printed whatever happens. A cell that prints its OK and
 # then dies takes its cause with it: `exposevar` did exactly that, twice, ending
@@ -387,8 +462,16 @@ do_setup() {
   # The job's own clock, so a LATE cell can work out how long it may safely hang.
   # See CELL_MAX below: a fixed budget protects the cells at the start of a leg
   # and cannot protect the ones at the end, which are the ones that hang.
+  #
+  # PLUG_JOB_T0 is the job's FIRST step writing `date +%s` into GITHUB_ENV, and
+  # it is what counts. The clock used to start HERE, at the end of setup, which
+  # is after wait_cluster (up to ten minutes), the install and the wait for the
+  # services: the watchdog then believed a late cell had that much more room
+  # than the job did, and its alarm rang after GitHub had killed the job, which
+  # is the exact bug it exists to fix. The fallback is for a run outside CI.
   { echo "PLUG='$PLUG'"; echo "ip='$ip'"; echo "built='$built'"
-    echo "job_started='$(date +%s)'"; } > "$envfile"
+    echo "job_started='${PLUG_JOB_T0:-$(date +%s)}'"; } > "$envfile"
+  rm -f "$skip_file"
   echo "state → $envfile"
   sum "### plug mesh e2e — $(uname -s)"
   sum "**install** ✅ · clients built:${built:- none}"
@@ -1231,10 +1314,10 @@ do_expose() {
       # when it resolved the name. NXDOMAIN from inside means it minted an
       # address for something gone, which is the bug this cell exists to catch.
       #
-      # Asked through chaos's own resolver, with the FQDN: chaos runs in its
-      # per-leg namespace (k8s.res-agents.yaml) while these names are created by
-      # the main agent in `default`, and a BARE name does not cross namespaces -
-      # the same trick the resilience cell already uses for its VIP. A Service
+      # Asked through chaos's own resolver, with the FQDN, which is the form
+      # that is right whatever namespace chaos answers from (it lives in
+      # `default`, k8s.res-agents.yaml, beside these names; the resilience cell
+      # needs the FQDN for real, its VIP being in plug-res-<leg>). A Service
       # keeps its ClusterIP whether or not it has endpoints, so resolving is
       # exactly the "does it still exist" question and nothing more.
       #
@@ -1273,9 +1356,21 @@ do_expose() {
   paddr_after="$(presolve)"
   wait_bg "$poison2_pid" "the relaunched poison session" 90
   if ! is_addr "${paddr_before:-}" || ! is_addr "${paddr_after:-}"; then
-    echo "address across the relaunch: NOT MEASURABLE — '${paddr_before:-nothing}' → '${paddr_after:-nothing}'"
-    sum "**name keeps its address across a relaunch** · not measurable on this family"
-    return 0
+    # Not an address on either side. On compose that is a reading that cannot
+    # be compared and is reported as such; on Swarm and k8s the assertion IS
+    # measurable (a VIP, a ClusterIP), so a probe that could not read one is
+    # the cell failing to measure what it is named for, and it says so in red
+    # rather than in a grey line that sits next to the green ones.
+    case "$family" in
+      swarm|k8s)
+        echo "--- linger FAIL - the address across the relaunch could not be read: '${paddr_before:-nothing}' -> '${paddr_after:-nothing}'"
+        sum "**name keeps its address across a relaunch** ❌ - not measured: \`${paddr_before:-nothing}\` -> \`${paddr_after:-nothing}\`"
+        return 1 ;;
+      *)
+        echo "address across the relaunch: NOT MEASURABLE on compose - '${paddr_before:-nothing}' -> '${paddr_after:-nothing}'"
+        sum "**name keeps its address across a relaunch** · not measurable on this family"
+        return 0 ;;
+    esac
   fi
   case "$family" in
     swarm|k8s)
@@ -1447,27 +1542,16 @@ do_takeover() {
   # tail of the ten read "deployed" - which looks exactly like a split route
   # and is not one. Every answer is stamped with its second for that reason.
   sleep 8 # arm + park + end-to-end verify
-  # EVERY answer, not the first one that fits. This loop used to stop at the
-  # first local answer, and a takeover that handed HALF the requests to the
-  # deployed pod - a Kubernetes Service whose old EndpointSlice survived the
-  # park, from 2.12.0 to 2.20.0 - passed it every time for four weeks. Once
-  # the name answers at all, ten reads in a row must all be ours; one that is
-  # not is the deployed workload still in the path, and the cell says which.
   for _ in 1 2 3; do during="$(probe)"; [ "$during" = "local-$tname" ] && break; sleep 3; done
-  # Up to ten reads, but only while the session is certainly alive: a read
-  # costs 8s on a Windows runner, so ten of them outlive the 75s echo, and a
-  # read made after the restore says "deployed" and proves nothing. Reads stop
-  # at 60s; every one taken must be ours, and there must be at least five.
-  local n_local=0 n_other=0 stray="" seq=""
+  # Once the name answers at all, every read must be ours (see assert_all for
+  # the split route this caught). Up to ten, but only while the session is
+  # certainly alive: a read costs 8s on a Windows runner, so ten of them
+  # outlive the 75s echo. Reads stop at 60s, and at least five must have fitted.
+  local seq_during=""
   if [ "$during" = "local-$tname" ]; then
-    for _ in 1 2 3 4 5 6 7 8 9 10; do
-      [ $(( $(date +%s) - t0 )) -gt 60 ] && break
-      r="$(probe)"; seq="$seq $(( $(date +%s) - t0 ))s:${r:-nothing}"
-      if [ "$r" = "local-$tname" ]; then n_local=$((n_local+1)); else n_other=$((n_other+1)); stray="$r"; fi
-    done
-    if [ "$n_other" -gt 0 ]; then during="$n_local local, $n_other '${stray:-nothing}' (by second:$seq)"
-    elif [ "$n_local" -lt 5 ]; then during="only $n_local read(s) fitted in the session (by second:$seq)"
-    fi
+    aa_clock=$t0
+    assert_all probe "local-$tname" 10 "deployed- local-" $((t0 + 60)) 5 || during="$aa_why"
+    seq_during="$aa_seq"
   fi
   wait_bg "$tko_pid" "the takeover session (ends on its own -ttl)" 120
 
@@ -1476,25 +1560,16 @@ do_takeover() {
   local after=""
   for _ in 1 2 3 4 5; do after="$(probe)"; [ "$after" = "deployed-$tname" ] && break; sleep 3; done
   # After the first deployed answer the controllers are still swapping slices
-  # (the selector's own slice built, plug's mirrored one withdrawn), and for
-  # some hundreds of ms the Service has no endpoint at all: a read then gets a
-  # connection error, which is the restore's blink, not our process answering.
-  # Let it settle, and retry a read that got no answer once; what fails this
-  # assertion is a "local-" answer (our route left in) or an error that stays.
+  # (the selector's own slice built, plug's mirrored one withdrawn): let it
+  # settle, then ten reads. assert_all retries a blink once; what fails is a
+  # "local-" answer (our route left in) or an error that stays.
   if [ "$after" = "deployed-$tname" ]; then
     sleep 3
-    n_local=0; n_other=0; stray=""; seq=""
-    for _ in 1 2 3 4 5 6 7 8 9 10; do
-      r="$(probe)"
-      case "$r" in deployed-*|local-*) ;; *) sleep 1; r="$(probe)" ;; esac
-      seq="$seq $(( $(date +%s) - t0 ))s:${r:-nothing}"
-      if [ "$r" = "deployed-$tname" ]; then n_local=$((n_local+1)); else n_other=$((n_other+1)); stray="$r"; fi
-    done
-    [ "$n_other" -gt 0 ] && after="$n_local/10 deployed, $n_other/10 '${stray:-nothing}' (by second:$seq)"
+    assert_all probe "deployed-$tname" 10 "deployed- local-" || after="$aa_why"
   fi
 
   if [ "$during" = "local-$tname" ] && [ "$after" = "deployed-$tname" ]; then
-    echo "takeover OK — parked (every read while it lived came to us:$seq), then restored (10/10 deployed answers again)"
+    echo "takeover OK - parked (every read while it lived came to us:$seq_during), then restored (10/10 deployed answers again)"
     sum "**takeover (park+restore)** ✅"; return 0
   fi
   echo "--- takeover FAIL — during='$during' (want local-$tname, every time) after='$after' (want deployed-$tname, every time)"
@@ -1569,11 +1644,23 @@ do_orphan() {
   done
   waited=$(( $(date +%s) - killed_at ))
 
+  # The first deployed answer is not the restore, it is the start of it. The
+  # incident this cell covers is precisely a restore that is PARTIAL: an
+  # EndpointSlice still pointing at the dead session, half the requests lost,
+  # and a single read that happened to land on the right half said "deployed".
+  # So: ten reads after the first, all deployed, or the dead session's route
+  # is still in (the same rule as takeover's restore, through assert_all).
   if [ "$after" = "deployed-$tname" ]; then
-    echo "orphan OK - session killed with no unserve, deployed $tname answering again after ${waited}s, agent never restarted"
+    sleep 3
+    aa_clock=$killed_at
+    assert_all probe "deployed-$tname" 10 "deployed- orphan-" || after="$aa_why"
+  fi
+
+  if [ "$after" = "deployed-$tname" ]; then
+    echo "orphan OK - session killed with no unserve, deployed $tname answering again after ${waited}s (10/10 reads), agent never restarted"
     sum "**orphaned takeover (periodic sweep)** ✅ (${waited}s)"; return 0
   fi
-  echo "--- orphan FAIL - ${waited}s after the kill the prober still says '${after:-nothing}' (want deployed-$tname): the workload is still parked and only an agent restart would bring it back"
+  echo "--- orphan FAIL - ${waited}s after the kill the prober says '${after:-nothing}' (want deployed-$tname, every time): either the workload is still parked (only an agent restart would bring it back), or the restore left the dead session's route in (a split read above)"
   echo "    --- session output ---"; tail -12 /tmp/orphan.out 2>/dev/null | sed 's/^/    /'
   sum "**orphaned takeover (periodic sweep)** ❌ - still parked after ${waited}s"; return 1
 }
@@ -1608,14 +1695,24 @@ do_multiport() {
     -text "mp-a-$name,mp-b-$name,mp-c-$name" >/tmp/multiport.out 2>&1 &
   local mp_pid=$!
   sleep 8 # arm + verify
+  mp_a() { plug curl -s --max-time 10 "http://prober:8097/fetch?url=http://$name:18131/" 2>/dev/null | tr -d '\r' | tail -1; }
+  mp_b() { plug curl -s --max-time 10 "http://prober:8097/fetch?url=http://$name:18132/" 2>/dev/null | tr -d '\r' | tail -1; }
+  mp_c() { plug curl -s --max-time 10 "http://prober:8097/fetch?url=http://$name:18133/" 2>/dev/null | tr -d '\r' | tail -1; }
   local ra="" rb="" rc=""
   for _ in 1 2 3; do
-    ra="$(plug curl -s --max-time 10 "http://prober:8097/fetch?url=http://$name:18131/" 2>/dev/null | tr -d '\r' | tail -1)"
-    rb="$(plug curl -s --max-time 10 "http://prober:8097/fetch?url=http://$name:18132/" 2>/dev/null | tr -d '\r' | tail -1)"
-    rc="$(plug curl -s --max-time 10 "http://prober:8097/fetch?url=http://$name:18133/" 2>/dev/null | tr -d '\r' | tail -1)"
+    ra="$(mp_a)"; rb="$(mp_b)"; rc="$(mp_c)"
     [ "$ra" = "mp-a-$name" ] && [ "$rb" = "mp-b-$name" ] && [ "$rc" = "mp-c-$name" ] && break
     sleep 3
   done
+  # One right answer per port is not "each port its own backend": a relay that
+  # picked a backend at random would pass one try in eight, and three tries
+  # made that better than even. Once all three answer, three more reads each,
+  # every one its own (assert_all keeps the sequence for the failure line).
+  if [ "$ra" = "mp-a-$name" ] && [ "$rb" = "mp-b-$name" ] && [ "$rc" = "mp-c-$name" ]; then
+    assert_all mp_a "mp-a-$name" 3 "mp-" || ra="$aa_why"
+    assert_all mp_b "mp-b-$name" 3 "mp-" || rb="$aa_why"
+    assert_all mp_c "mp-c-$name" 3 "mp-" || rc="$aa_why"
+  fi
   stop_bg "$mp_pid" "the multi-port -s session"
   if [ "$ra" = "mp-a-$name" ] && [ "$rb" = "mp-b-$name" ] && [ "$rc" = "mp-c-$name" ]; then
     echo "multi-port OK — $name answers on 18131/18132/18133, each port its own backend"
@@ -1652,13 +1749,23 @@ do_sameport() {
   "$PLUG" --host "$ip" --port "$port" -s "$nb:18120:$pb"     "$root/echo-local$ext" -addr 127.0.0.1:$pb -text "same-$nb" >/tmp/samep-b.out 2>&1 &
   local b_pid=$!
   sleep 8 # arm + verify, both
+  sp_a() { plug curl -s --max-time 10 "http://prober:8097/fetch?url=http://$na:18120/" 2>/dev/null | tr -d '\r' | tail -1; }
+  sp_b() { plug curl -s --max-time 10 "http://prober:8097/fetch?url=http://$nb:18120/" 2>/dev/null | tr -d '\r' | tail -1; }
   local ra="" rb=""
   for _ in 1 2 3; do
-    ra="$(plug curl -s --max-time 10 "http://prober:8097/fetch?url=http://$na:18120/" 2>/dev/null | tr -d '\r' | tail -1)"
-    rb="$(plug curl -s --max-time 10 "http://prober:8097/fetch?url=http://$nb:18120/" 2>/dev/null | tr -d '\r' | tail -1)"
+    ra="$(sp_a)"; rb="$(sp_b)"
     [ "$ra" = "same-$na" ] && [ "$rb" = "same-$nb" ] && break
     sleep 3
   done
+  # The cross-talk this cell exists to refuse is two names on one port whose
+  # relays answer each other's backend SOME of the time, and one matching read
+  # per name lets that through one try in four. Once both answer, three more
+  # reads each, every one its own (assert_all keeps the sequence for the
+  # failure line).
+  if [ "$ra" = "same-$na" ] && [ "$rb" = "same-$nb" ]; then
+    assert_all sp_a "same-$na" 3 "same-" || ra="$aa_why"
+    assert_all sp_b "same-$nb" 3 "same-" || rb="$aa_why"
+  fi
   stop_bg "$a_pid" "the first same-port session"
   stop_bg "$b_pid" "the second same-port session"
   if [ "$ra" = "same-$na" ] && [ "$rb" = "same-$nb" ]; then
@@ -1776,9 +1883,12 @@ do_lease() {
     wait_bg "$a_pid" "the lease session" 70; sum "**name survives a swept signpost** ❌ sweep"; return 1
   fi
 
-  # B, same name, while A is still very much alive: must bounce.
+  # B, same name, while A is still very much alive: must bounce. Bounded like
+  # collision's second session: a refusal that turned into a prompt, or a
+  # session that hung on the held name, used to sit until the cell watchdog.
   local co
-  co="$("$PLUG" --host "$ip" --port "$port" -s "$lname:$lport:9" curl --version 2>&1 || true)"
+  co="$(perl -e 'alarm 60; exec @ARGV or exit 127' \
+        "$PLUG" --host "$ip" --port "$port" -s "$lname:$lport:9" curl --version 2>&1 || true)"
   wait_bg "$a_pid" "the lease session" 70
   if printf '%s' "$co" | grep -qiE "another live session|another session|already"; then
     echo "lease OK — $lname stayed its session's with no signpost to prove it"
@@ -1831,11 +1941,24 @@ do_resilience() {
   # since taking it over is exactly the case that must still replace it (the
   # receipt is what scales the parked workload back up).
   local vipname="vip-$leg"
+  # 180s of life, not 150: the reads below are plug sessions of up to 8s each
+  # on a Windows runner, and five of them follow the kill-sessions blip (20s)
+  # and the keepalive's own detection of the crash (10-15s). At 150s the last
+  # of them landed after the restore and read "deployed", which looks exactly
+  # like a failed re-park and is not one. Every read is bounded by the
+  # session's own clock (res_deadline) for the same reason.
   PLUG_KEEPALIVE_SECS=5 "$PLUG" --host "$ip_b" --port "$rsshport" -s "$rname:$rport:18123" -s "$vipname:9099:18123" \
-    "$root/echo-local$ext" -addr 127.0.0.1:18123 -text "local-res-$leg" -ttl 150s >/tmp/resilience.out 2>&1 &
-  local res_pid=$! during="" after_crash="" after=""
+    "$root/echo-local$ext" -addr 127.0.0.1:18123 -text "local-res-$leg" -ttl 180s >/tmp/resilience.out 2>&1 &
+  local res_pid=$! during="" after_crash="" after="" t0 res_deadline
+  t0=$(date +%s); res_deadline=$((t0 + 160)); aa_clock=$t0
   sleep 8
   for _ in 1 2 3; do during="$(bprobe)"; [ "$during" = "local-res-$leg" ] && break; sleep 3; done
+  # Five reads, all ours, while the session lives (see assert_all): one
+  # matching answer said nothing about the half of the requests that could
+  # still be reaching the deployed pod.
+  if [ "$during" = "local-res-$leg" ]; then
+    assert_all bprobe "local-res-$leg" 5 "deployed- local-" "$res_deadline" || during="$aa_why"
+  fi
 
   # The address a workload in the cluster resolves the name to, RIGHT NOW —
   # asked from inside, because that is the address callers cache and keep using.
@@ -1877,8 +2000,17 @@ do_resilience() {
   sleep 20 # keepalive (5s cadence here) notices, reconnect re-arms and re-provisions
   raddr_after="$(cresolve)"
   if ! is_addr "${raddr_before:-}" || ! is_addr "${raddr_after:-}"; then
-    echo "live-reconnect address: NOT MEASURABLE — '${raddr_before:-nothing}' → '${raddr_after:-nothing}'"
-    sum "**name keeps its address across a live reconnect** · not measurable on this family"
+    # Swarm is where this is asserted (a service VIP), so a reading that is
+    # not an address there is the cell failing to measure, in red. Compose
+    # only reports the pair, so it only reports that it could not.
+    if [ "$family" = swarm ]; then
+      echo "--- live-reconnect FAIL - the address could not be read: '${raddr_before:-nothing}' -> '${raddr_after:-nothing}'"
+      sum "**name keeps its address across a live reconnect** ❌ - not measured: \`${raddr_before:-nothing}\` -> \`${raddr_after:-nothing}\`"
+      addr_bad=1
+    else
+      echo "live-reconnect address: NOT MEASURABLE on $family - '${raddr_before:-nothing}' -> '${raddr_after:-nothing}'"
+      sum "**name keeps its address across a live reconnect** · not measurable on this family"
+    fi
   else
     case "$family" in
       swarm)
@@ -1898,7 +2030,22 @@ do_resilience() {
   fi
 
   # Crash THIS LEG'S agent mid-session (the chaos service answers, then fires).
-  plug_to "$ip_b" curl -s --max-time 10 "http://chaos:8095/restart-agent?svc=$ragent" >/dev/null 2>&1 || true
+  #
+  # The answer is REQUIRED. chaos says "restarting" before it fires, and
+  # anything else (a 500, a 501, an empty body from a session that could not
+  # reach it) is a restart that did not happen, after which everything below
+  # would be asserting a recovery from nothing. That is what the k8s legs did
+  # for as long as this cell existed: chaos looked for a pod label no agent
+  # carries, answered 500 "no pod labelled", the reply went to /dev/null, and
+  # two green ticks were awarded per leg for a session that was never cut.
+  local n_reconnect_before n_reconnect_after cut_proven=0
+  n_reconnect_before="$(grep -c "after reconnect" /tmp/resilience.out 2>/dev/null || true)"
+  plug_to "$ip_b" curl -s --max-time 10 "http://chaos:8095/restart-agent?svc=$ragent" >/tmp/restart.out 2>&1 || true
+  if ! grep -q restarting /tmp/restart.out 2>/dev/null; then
+    echo "--- resilience FAIL - chaos did not restart $ragent; it said: '$(head -c 200 /tmp/restart.out 2>/dev/null | tr -d '\r\n')'"
+    wait_bg "$res_pid" "the resilience session" 220
+    sum "**resilience (agent crash mid-session)** ❌ - the agent was never restarted (chaos said \`$(head -c 80 /tmp/restart.out 2>/dev/null | tr -d '\r\n')\`)"; return 1
+  fi
   # keepalive detects (~10-15s at 5s cadence), reconnect re-arms and re-parks;
   # the rebooted agent's boot-gc restored the parked service in between.
   for _ in 1 2 3 4 5 6 7 8 9 10; do
@@ -1906,6 +2053,22 @@ do_resilience() {
     [ "$after_crash" = "local-res-$leg" ] && break
     sleep 5
   done
+  # Proof that the transport actually died: the session says so itself when it
+  # comes back ("re-provisioned and verified after reconnect", or one of the
+  # WARNING forms, every one of which carries "after reconnect"). Counted
+  # against what kill-sessions above already wrote, on the families where it
+  # ran. A local answer with no new reconnect line is a session that was never
+  # cut, whatever chaos answered, and this cell is about the cut.
+  for _ in 1 2 3 4 5 6; do
+    n_reconnect_after="$(grep -c "after reconnect" /tmp/resilience.out 2>/dev/null || true)"
+    [ "${n_reconnect_after:-0}" -gt "${n_reconnect_before:-0}" ] && { cut_proven=1; break; }
+    sleep 5
+  done
+  # Five reads, all ours again: the re-park is a takeover like any other and
+  # a single matching read proves no more here than it did above.
+  if [ "$after_crash" = "local-res-$leg" ]; then
+    assert_all bprobe "local-res-$leg" 5 "deployed- local-" "$res_deadline" || after_crash="$aa_why"
+  fi
   addr_after="$(cresolve)"
   # Whether the name KEEPS its address across this depends on what the backend
   # does at agent boot. This cell RESTARTS the agent, and the boot gc sweeps that
@@ -1924,8 +2087,17 @@ do_resilience() {
   # asked by FQDN. Any reading that is still not an address yields no verdict,
   # said out loud.
   if ! is_addr "$addr_before" || ! is_addr "$addr_after"; then
-    echo "address across the agent restart: NOT MEASURABLE — '${addr_before:-nothing}' → '${addr_after:-nothing}'"
-    sum "**name address across an agent restart** · not measurable on this family"
+    # k8s is where this is asserted (a ClusterIP that must survive), so a
+    # reading that is not an address there fails the cell in red rather than
+    # sitting in a grey line beside the green ones.
+    if [ "$family" = k8s ]; then
+      echo "--- address across the agent restart could not be read: '${addr_before:-nothing}' -> '${addr_after:-nothing}'"
+      sum "**name keeps its address across an agent restart** ❌ - not measured: \`${addr_before:-nothing}\` -> \`${addr_after:-nothing}\`"
+      addr_bad=1
+    else
+      echo "address across the agent restart: NOT MEASURABLE on $family - '${addr_before:-nothing}' -> '${addr_after:-nothing}'"
+      sum "**name address across an agent restart** · not measurable on this family"
+    fi
   else
     case "$family" in
       k8s)
@@ -1943,11 +2115,11 @@ do_resilience() {
     esac
   fi
 
-  # Bounded like the others: the -ttl is 150s, so 190 leaves room for a slow
+  # Bounded like the others: the -ttl is 180s, so 220 leaves room for a slow
   # teardown without ever becoming an unbounded wait. A session that ignores
   # its own ttl used to hold the leg until the job timeout, twenty-five
   # minutes later, with nothing in the log naming what it waited for.
-  wait_bg "$res_pid" "the resilience session" 190
+  wait_bg "$res_pid" "the resilience session" 220
 
   # The deployed workload is coming back from a stop, on a runner that has just
   # restarted an agent under it — a "connection reset by peer" here is that
@@ -1955,12 +2127,19 @@ do_resilience() {
   # until it wasn't (macOS, while ubuntu passed the same cell in that run). Same
   # assertion, room to land.
   for _ in $(seq 1 15); do after="$(bprobe)"; [ "$after" = "deployed-res-$leg" ] && break; sleep 3; done
+  # Then ten reads, all deployed: a restore that left our route in is the
+  # orphan cell's incident, and this restore follows an agent reboot.
+  if [ "$after" = "deployed-res-$leg" ]; then
+    sleep 3
+    assert_all bprobe "deployed-res-$leg" 10 "deployed- local-" || after="$aa_why"
+  fi
 
-  if [ "$during" = "local-res-$leg" ] && [ "$after_crash" = "local-res-$leg" ] && [ "$after" = "deployed-res-$leg" ] && [ "$addr_bad" = 0 ]; then
-    echo "resilience OK — parked, agent restarted, RE-parked (self-heal + boot-gc + re-arm), restored"
+  if [ "$during" = "local-res-$leg" ] && [ "$after_crash" = "local-res-$leg" ] && [ "$after" = "deployed-res-$leg" ] && [ "$addr_bad" = 0 ] && [ "$cut_proven" = 1 ]; then
+    echo "resilience OK - parked, agent restarted (the session logged its reconnect), RE-parked (self-heal + boot-gc + re-arm), restored"
     sum "**resilience (agent crash mid-session)** ✅"; return 0
   fi
-  echo "--- resilience FAIL — during='$during' after_crash='$after_crash' (want local-res-$leg) after='$after' (want deployed-res-$leg)"
+  echo "--- resilience FAIL - during='$during' after_crash='$after_crash' (want local-res-$leg, every read) after='$after' (want deployed-res-$leg, every read) reconnect-logged=$cut_proven (want 1)"
+  [ "$cut_proven" = 1 ] || echo "    the session never logged a reconnect after chaos said 'restarting': the agent was not cut under it, so nothing above tested a recovery"
   echo "    --- session output ---"; tail -15 /tmp/resilience.out 2>/dev/null | sed 's/^/    /'
   # The agent it restarted is what restores the parked service through its boot
   # gc, so when the service does not come back the agent is the first suspect —
@@ -1975,7 +2154,8 @@ do_resilience() {
 # verdict is `current … could not pull` — proving the verb answers and nothing
 # is disturbed. The launcher side is a dev build facing a dev agent, so the
 # self-replace path reports and skips (the rolling paths are bench-proven on
-# kind/swarm). Runs LAST among the compose cells on purpose.
+# kind/swarm). It runs after resilience, which crashes this same agent, hence
+# the wait_agent below; the three update cells after it share that agent.
 do_update() {
   local ragent rsshport
   case "$(uname -s)" in
@@ -1992,8 +2172,11 @@ do_update() {
     sum "**plug update** ❌ — per-leg agent never came back"; return 1
   }
 
+  # Bounded, like every other plug call here: the cell watchdog is the last
+  # resort, not the budget. 180s rather than the usual 60, because on compose
+  # the agent PULLS the image before it answers.
   local out rc=0
-  out="$("$PLUG" --host "$ip_b" --port "$rsshport" update </dev/null 2>&1)" || rc=$?
+  out="$(perl -e 'alarm 180; exec @ARGV or exit 127' "$PLUG" --host "$ip_b" --port "$rsshport" update </dev/null 2>&1)" || rc=$?
   printf '%s\n' "$out" | sed 's/^/    /'
   if [ "$rc" != 0 ]; then
     echo "--- update FAIL — exit $rc"; sum "**plug update** ❌ — exit $rc"; return 1
@@ -2085,9 +2268,13 @@ do_update_notify() {
   local prev
   prev="$(ssh -n -p "$oldport" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
           -o LogLevel=ERROR "get@$ip_b" version 2>/dev/null | tr -d '\r')"
+  # A FAIL, as in update-jump: the previous-release agent is a fixture this
+  # cluster deploys on purpose, and a fixture that does not answer is the
+  # cluster being wrong, not a reason to skip. The two cells used to disagree
+  # on this (SKIP here, FAIL there) for the same agent on the same port.
   if ! printf '%s' "$prev" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-    echo "--- update-notify SKIP — the previous-release agent answered '${prev:-nothing}', not an x.y.z release"
-    sum "**update notify** – (no usable N-1)"; return 0
+    echo "--- update-notify FAIL - the previous-release agent answered '${prev:-nothing}', not an x.y.z release"
+    sum "**update notify** ❌ - no usable N-1 (answered \`${prev:-nothing}\`)"; return 1
   fi
   # The precondition that sank this cell twice, now verified instead of hoped:
   # the check itself must exist AND work in the core this agent serves.
@@ -2162,8 +2349,10 @@ do_update_notify() {
     [ -n "$tok" ] && tags="$(curl -s --max-time 20 -H "Authorization: Bearer $tok" \
                               "https://registry-1.docker.io/v2/softwarity/plug/tags/list?n=1" 2>/dev/null)"
     if ! printf '%s' "$tags" | grep -q '"tags"'; then
-      echo "--- update-notify SKIP — this machine cannot list the repository's tags (the same request the check makes, and it has no fallback)"
-      sum "**update notify** – (registry unreachable from this runner)"; return 0
+      # The runner's network, not plug: counted and annotated as a SKIP, so it
+      # cannot be read as a pass (it was, for every macOS leg, for months).
+      skip_cell "update notify" "this runner cannot list the repository's tags (the same request the check makes, and it has no fallback)"
+      return 0
     fi
     echo "--- update-notify FAIL — the second launch said nothing about an update, while the agent runs $prev, a newer release is published, AND this machine can reach the registry"
     echo "    (session 1 output follows)"; sed 's/^/    /' /tmp/notify1.out 2>/dev/null | tail -20
@@ -2203,8 +2392,9 @@ do_update_jump() {
   fi
   echo "    starting from the published $prev"
 
+  # Bounded (180s: on compose the agent pulls the release before answering).
   local out rc=0
-  out="$("$PLUG" --host "$ip_b" --port "$oldport" update </dev/null 2>&1)" || rc=$?
+  out="$(perl -e 'alarm 180; exec @ARGV or exit 127' "$PLUG" --host "$ip_b" --port "$oldport" update </dev/null 2>&1)" || rc=$?
   printf '%s\n' "$out" | sed 's/^/    /'
   if [ "$rc" != 0 ]; then
     echo "--- update-jump FAIL — exit $rc"; sum "**update jump** ❌ — exit $rc"; return 1
@@ -2291,8 +2481,10 @@ do_update_tag() {
   }
 
   # 1) A tag the registry does not have: refused, and the agent left standing.
+  # Bounded: a refusal must come back in seconds, and a verb that hangs on the
+  # registry is a failure with a name rather than a watchdog kill.
   local out rc=0
-  out="$("$PLUG" --host "$ip_b" --port "$rsshport" update definitely-not-a-published-tag </dev/null 2>&1)" || rc=$?
+  out="$(perl -e 'alarm 60; exec @ARGV or exit 127' "$PLUG" --host "$ip_b" --port "$rsshport" update definitely-not-a-published-tag </dev/null 2>&1)" || rc=$?
   printf '%s\n' "$out" | sed 's/^/    /'
   if [ "$rc" = 0 ]; then
     echo "--- update-tag FAIL — an unpublished tag was ACCEPTED"; sum "**update tag** ❌ — unpublished tag accepted"; return 1
@@ -2335,9 +2527,9 @@ do_update_tag() {
 #
 # AND IT IS CAPPED BY WHAT IS LEFT OF THE JOB, which the fixed budget was not -
 # a calibration error that made this whole guard useless exactly where it was
-# needed. A leg gets 25 or 30 minutes; `resilience` is the fifteenth cell of
-# twenty-two and starts around minute twenty, so a twelve-minute alarm would ring
-# at minute thirty-two, after GitHub has killed the job. A killed job takes its
+# needed. A leg gets 25 or 30 minutes; the update cells close the block and
+# start around minute twenty, so a twelve-minute alarm there would ring at
+# minute thirty-two, after GitHub has killed the job. A killed job takes its
 # log with it, so the diagnosis this watchdog had just printed died with it: the
 # flake has now cost three runs and left `log not found` every time.
 #
@@ -2345,9 +2537,17 @@ do_update_tag() {
 # job's own timeout, less a minute for the kill and the summary to be written
 # while the runner is still alive. A cell with no room left keeps a floor of 60s,
 # because a watchdog that fires immediately would fail healthy cells.
+#
+# "What is left" is counted from PLUG_JOB_T0, the job's FIRST step (ci.yml
+# writes it into GITHUB_ENV before the checkout), and not from the end of
+# setup: setup itself holds wait_cluster (up to ten minutes), the install and
+# the wait for the services, and a clock started after them overstated the room
+# a late cell had by exactly that much. The env file's job_started is the same
+# value when setup ran under CI, and the setup-time fallback otherwise.
 CELL_MAX="${PLUG_CELL_MAX:-720}"
-if [ -n "${job_started:-}" ] && [ -n "${PLUG_JOB_MINUTES:-}" ]; then
-  cell_left=$(( job_started + PLUG_JOB_MINUTES * 60 - $(date +%s) - 60 ))
+job_t0="${PLUG_JOB_T0:-${job_started:-}}"
+if [ -n "$job_t0" ] && [ -n "${PLUG_JOB_MINUTES:-}" ]; then
+  cell_left=$(( job_t0 + PLUG_JOB_MINUTES * 60 - $(date +%s) - 60 ))
   [ "$cell_left" -lt 60 ] && cell_left=60
   [ "$cell_left" -lt "$CELL_MAX" ] && CELL_MAX="$cell_left"
 fi
@@ -2433,7 +2633,9 @@ case "$phase" in
   resilience)   do_resilience ;;
   update)       do_update ;;
   updatenotify) do_update_notify ;;
-  updatejump)   do_update_jump ;;
+  # The last cell of the common block closes the leg's summary with the count
+  # of what was skipped (see skip_cell), whatever its own verdict.
+  updatejump)   do_update_jump; rc=$?; leg_tally; exit "$rc" ;;
   updatetag)    do_update_tag ;;
   *) echo "unknown phase: $phase (want setup|env|matrix|multicluster|dockerrun|keymount|outage|expose|exposevar|gateway|takeover|collision|lease|resilience|update)" >&2; exit 2 ;;
 esac

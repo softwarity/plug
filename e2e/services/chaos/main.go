@@ -89,17 +89,25 @@ func agentNamespace(svc string) string {
 }
 
 // k8sRestartAgent deletes the agent's pod. The Deployment recreates it, which
-// is what "the agent died mid-session" looks like on Kubernetes — and unlike a
+// is what "the agent died mid-session" looks like on Kubernetes, and unlike a
 // container restart it also exercises a genuinely new pod, so the boot-gc runs
 // exactly as it would after a node event.
+//
+// The pod is found by NAMESPACE, not by label: every plug agent is labelled
+// `app: plug` (the published manifest, and the per-leg fixtures copied from
+// it), so the label says nothing about WHICH agent. This used to ask for
+// `app=<svc>`, which no pod carries: the list came back empty, the handler
+// answered 500 "no pod labelled", and the resilience cell, which discarded
+// the reply, went on to assert a recovery from a restart that never happened.
+// Three k8s legs were green on it from the day the cell was written.
 func k8sRestartAgent(svc string) error {
 	ns := agentNamespace(svc)
-	code, body, err := k8sDo("GET", "/api/v1/namespaces/"+ns+"/pods?labelSelector=app%3D"+url.QueryEscape(svc))
+	code, body, err := k8sDo("GET", "/api/v1/namespaces/"+ns+"/pods?labelSelector="+url.QueryEscape("app=plug"))
 	if err != nil {
 		return err
 	}
 	if code != 200 {
-		return fmt.Errorf("listing pods app=%s in %s: HTTP %d", svc, ns, code)
+		return fmt.Errorf("listing pods app=plug in %s (for %s): HTTP %d", ns, svc, code)
 	}
 	var list struct {
 		Items []struct {
@@ -112,11 +120,22 @@ func k8sRestartAgent(svc string) error {
 		return err
 	}
 	if len(list.Items) == 0 {
-		return fmt.Errorf("no pod labelled app=%s in namespace %s", svc, ns)
+		return fmt.Errorf("no pod labelled app=plug in namespace %s (agent %s)", ns, svc)
 	}
 	go func(name string) {
 		time.Sleep(500 * time.Millisecond) // let the reply drain through the tunnel
-		_, _, _ = k8sDo("DELETE", "/api/v1/namespaces/"+ns+"/pods/"+name)
+		// Said out loud, as the docker path does: the caller was answered
+		// before this fired, so a refused delete here would otherwise be a
+		// cell failing minutes later with nothing naming the restart that
+		// never happened.
+		code, body, err := k8sDo("DELETE", "/api/v1/namespaces/"+ns+"/pods/"+name)
+		if err != nil {
+			log.Printf("restart-agent %s: deleting pod %s/%s: %v", svc, ns, name, err)
+			return
+		}
+		if code >= 300 {
+			log.Printf("restart-agent %s: deleting pod %s/%s: HTTP %d: %s", svc, ns, name, code, bytes.TrimSpace(body))
+		}
 	}(list.Items[0].Metadata.Name)
 	return nil
 }

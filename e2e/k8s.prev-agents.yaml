@@ -11,8 +11,15 @@
 # each keeps every agent pointed at itself — and the agent reads its own
 # namespace from its service-account token, so nothing has to be told.
 #
-# The image is pinned deliberately: 2.4.1 is a historical fact (the release that
-# taught the agent to retarget), not a version to keep current.
+# The image is the PREVIOUS published release, resolved when the cluster is
+# built (scripts/ci/previous-release.sh substitutes $PREV_RELEASE) rather than
+# pinned: a pinned tag re-tests bugs fixed releases ago.
+#
+# NO Role or RoleBinding here, on purpose: scripts/ci/k8s-serve.sh applies the
+# agent's RBAC from deploy/plug-k8s.yaml, the PUBLISHED manifest, into each of
+# these namespaces before this file (see e2e/k8s.res-agents.yaml for the drift
+# a hand copy allowed). A release agent runs under the current manifest's grant,
+# which is what someone one release behind gets after re-applying the file.
 ---
 apiVersion: v1
 kind: Namespace
@@ -77,35 +84,6 @@ spec:
       targetPort: 22
       nodePort: 32226
 ---
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: plug-serve-names
-  namespace: plug-prev-linux
-  labels: { app: plug }
-rules:
-  - apiGroups: [""]
-    resources: ["services"]
-    verbs: ["get", "list", "create", "delete", "update", "patch"]
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["get", "list", "patch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: plug-serve-names
-  namespace: plug-prev-linux
-  labels: { app: plug }
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: plug-serve-names
-subjects:
-  - kind: ServiceAccount
-    name: plug
-    namespace: plug-prev-linux
----
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -169,35 +147,6 @@ spec:
       targetPort: 22
       nodePort: 32227
 ---
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: plug-serve-names
-  namespace: plug-prev-mac
-  labels: { app: plug }
-rules:
-  - apiGroups: [""]
-    resources: ["services"]
-    verbs: ["get", "list", "create", "delete", "update", "patch"]
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["get", "list", "patch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: plug-serve-names
-  namespace: plug-prev-mac
-  labels: { app: plug }
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: plug-serve-names
-subjects:
-  - kind: ServiceAccount
-    name: plug
-    namespace: plug-prev-mac
----
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -260,32 +209,3 @@ spec:
       port: 2222
       targetPort: 22
       nodePort: 32228
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: plug-serve-names
-  namespace: plug-prev-win
-  labels: { app: plug }
-rules:
-  - apiGroups: [""]
-    resources: ["services"]
-    verbs: ["get", "list", "create", "delete", "update", "patch"]
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["get", "list", "patch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: plug-serve-names
-  namespace: plug-prev-win
-  labels: { app: plug }
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: plug-serve-names
-subjects:
-  - kind: ServiceAccount
-    name: plug
-    namespace: plug-prev-win
