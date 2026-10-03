@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.21.2
+
 ### The mount helper answers the agent alone, and other hardening from the audit
 
 Nothing a working mount or session notices; what changes is what a stranger
