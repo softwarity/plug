@@ -7,7 +7,7 @@ module github.com/softwarity/plug/agent
 go 1.26.0
 
 require (
-	github.com/softwarity/smbserver v0.0.0-20261004093705-96d50a9514a0
+	github.com/softwarity/smbserver v0.1.0
 	golang.org/x/crypto v0.57.0
 )
 
