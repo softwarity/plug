@@ -11,13 +11,18 @@ import { RouterLink } from '@angular/router';
         padding: 8px 4px;
         overflow-x: auto;
       }
-      .diagram svg {
+      .diagram svg,
+      .diagram img {
         display: block;
         width: 100%;
         min-width: 620px;
         max-width: 900px;
         height: auto;
         margin: 0 auto;
+      }
+      .diagram + .cap {
+        color: var(--text-secondary);
+        font-size: 0.92rem;
       }
       .diagram text.mono {
         font-family: var(--font-mono);
@@ -224,6 +229,27 @@ import { RouterLink } from '@angular/router';
       nothing stays locked after a session dies.
       See <a routerLink="/swarm">Swarm</a> and
       <a routerLink="/kubernetes">Kubernetes</a>.
+    </p>
+
+    <h3>A workload's volumes, live</h3>
+    <!--
+      An <img>, not an inline SVG: the animation is SMIL, which has no CSS off
+      switch, so <picture> is what honours prefers-reduced-motion, with a still
+      frame of the same diagram (the moment the write lands on the volume).
+      width/height are the SVG's own, so the page does not jump while it loads.
+    -->
+    <div class="diagram">
+      <picture>
+        <source media="(prefers-reduced-motion: reduce)" srcset="assets/mount-diagram-still.png" />
+        <img src="assets/mount-diagram.svg" width="900" height="511" loading="lazy" alt="A workload's volume in two animated rounds: the deployed api mounts its PVC or volume and reads and writes it; then plug parks api, a plug helper mounts the same claim, and your local api writes a file that travels through the SSH tunnel and the agent to the helper, which writes it on the real volume." />
+      </picture>
+    </div>
+    <p class="cap">
+      The claim on the storage, a PVC or a volume, stays where it is. While your session lives,
+      a <strong>plug helper</strong> started by the agent mounts it in place of the parked
+      workload, and what your process reads and writes goes through the tunnel and the agent to
+      that helper: its files are the real volume, <strong>nothing is copied</strong>. The helper
+      is removed when the session ends, and the workload gets its claim back.
     </p>
 
     <h3>For an AI coding agent</h3>
