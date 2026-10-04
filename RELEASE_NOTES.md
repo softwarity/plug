@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.21.6
+
 ### Live mounts: the helper runs as the workload, on every platform
 
 The helper that serves a workload's volume to your machine now runs with the
