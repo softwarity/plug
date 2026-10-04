@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.21.7
+
 ### Live mounts: the SMB server is part of plug
 
 The helper that serves a workload's volume to your machine now carries its own
