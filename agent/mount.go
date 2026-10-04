@@ -69,23 +69,22 @@ import (
 // workload without scaling anything. The helper mounting the PVC is what the
 // workload does; normal, not a defect.
 //
-// On OpenShift and OKD the helper pod takes a second shape (k8sMountPod,
-// unprivileged): the `restricted` SCC gives every pod an arbitrary uid, no
-// capability and no say in its own uid, so the container listens on a high
-// port and the Service maps 445 to it. The client is told 445 either way:
-// mountHelperPort is the ANNOUNCED port, what mountReply carries, and it never
-// changes, because the Windows SMB client wants 445 of a name it resolves.
+// The helper has one shape everywhere: no privilege, the workload's own uid
+// and gid (helperIDs, read on the workload's process), smbd on smbListenPort.
+// The client is told 445 all the same: mountHelperPort is the ANNOUNCED port,
+// what mountReply carries, because the Windows SMB client wants 445 of a name
+// it resolves. On Kubernetes the helper's Service maps one to the other; on
+// Docker and Swarm, where nothing stands in front, the agent does as it dials
+// (mountDialPort).
 const (
 	mountLabel       = "plug.mount"        // this container/service/pod IS a live-mount helper
 	mountOfLabel     = "plug.mount.of"     // …for this workload name
 	mountVolumeLabel = "plug.mount.volume" // …serving this volume
 	mountOwnerLabel  = "plug.mount.owner"  // …created by this agent (role, as signpostOwnerLabel)
 	mountImageEnv    = "PLUG_MOUNT_IMAGE"  // an embedder's override, as signpostImageEnv
-	mountHelperPort  = "445"               // the port the client is told, whatever the helper binds
+	mountHelperPort  = "445"               // the port the client is told; the helper binds smbListenPort
 	mountShare       = "vol"
-	// mountListenUnprivileged is the port the helper binds when it cannot bind
-	// 445 (no NET_BIND_SERVICE): above 1024, and 445 of the Service in front.
-	mountListenUnprivileged = 1445
+	mountHelperPfx   = "plug-mnt-" // what every helper's name starts with
 )
 
 // mountHelperName is the helper's cluster name: one per (workload, volume,
@@ -99,7 +98,114 @@ const (
 // cuts the whole and signs it, and mountOfLabel keeps the name whole.
 func mountHelperName(name, volume, agentPort string) string {
 	sum := sha256.Sum256([]byte(volume + ":" + agentPort))
-	return fitClusterName("plug-mnt-" + name + "-" + hex.EncodeToString(sum[:])[:8])
+	return fitClusterName(mountHelperPfx + name + "-" + hex.EncodeToString(sum[:])[:8])
+}
+
+// mountDialPort is the port the agent dials for a destination a client asked
+// for: a mount helper's announced port becomes the one it listens on, anything
+// else is left alone. For the backends with no Service in front of the helper
+// (Docker, Swarm); a helper is known by its name, the prefix every one of
+// them carries.
+func mountDialPort(host, port string) string {
+	if port == mountHelperPort && strings.HasPrefix(host, mountHelperPfx) {
+		return strconv.Itoa(smbListenPort)
+	}
+	return port
+}
+
+// helperIDs is who the helper runs as: the workload's uid and gid, so that
+// what the developer writes is the workload's to read back, and so that the
+// helper is a pod a restricted admission lets in (on OpenShift the workload's
+// uid is in the namespace's range, which is all the SCC asks). Either may be
+// unknown; with no uid the helper starts as its image's user and mount-serve
+// works the identity out itself (mountserve.go, smbdIdentity).
+type helperIDs struct {
+	uid, gid       int
+	hasUID, hasGID bool
+}
+
+// user is the ids in the form Docker's User takes: "uid:gid", "uid", or ""
+// for the image's own.
+func (i helperIDs) user() string {
+	switch {
+	case !i.hasUID:
+		return ""
+	case !i.hasGID:
+		return strconv.Itoa(i.uid)
+	}
+	return strconv.Itoa(i.uid) + ":" + strconv.Itoa(i.gid)
+}
+
+// note is the line the helper's log gets when the uid is not the one read on
+// the workload's process, "" when it is.
+func (i helperIDs) note(read bool) string {
+	switch {
+	case read:
+		return ""
+	case i.hasUID:
+		return "the workload's process could not be read, so the helper runs as the user its spec declares"
+	}
+	return "the workload's uid could not be read and its spec declares none, so the helper runs as the image's user"
+}
+
+// parseProcStatusIDs reads the real uid and gid out of /proc/<pid>/status: the
+// first value of the "Uid:" and "Gid:" lines (real, effective, saved, fs).
+// Both or nothing.
+func parseProcStatusIDs(status string) (uid, gid int, ok bool) {
+	var haveUID, haveGID bool
+	for _, line := range strings.Split(status, "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			continue
+		}
+		n, err := strconv.Atoi(f[1])
+		if err != nil || n < 0 {
+			continue
+		}
+		switch f[0] {
+		case "Uid:":
+			uid, haveUID = n, true
+		case "Gid:":
+			gid, haveGID = n, true
+		}
+	}
+	if !haveUID || !haveGID {
+		return 0, 0, false
+	}
+	return uid, gid, true
+}
+
+// procStatusCmd is what the agent runs in the workload to learn its ids, the
+// way env-of reads /proc/1/environ.
+var procStatusCmd = []string{"cat", "/proc/1/status"}
+
+// declaredIDs reads a declared user ("1000", "1000:1000") when it is numeric.
+// A name ("postgres") is only resolvable in the workload's image, so it says
+// nothing here; a numeric uid beside a named group keeps the uid.
+func declaredIDs(user string) helperIDs {
+	u, g, hasGroup := strings.Cut(strings.TrimSpace(user), ":")
+	var ids helperIDs
+	uid, err := strconv.Atoi(u)
+	if err != nil || uid < 0 {
+		return ids
+	}
+	ids.uid, ids.hasUID = uid, true
+	if gid, err := strconv.Atoi(g); hasGroup && err == nil && gid >= 0 {
+		ids.gid, ids.hasGID = gid, true
+	}
+	return ids
+}
+
+// workloadIDs settles the helper's ids from what could be learnt, best first:
+// the workload's own process (status is its /proc/1/status, "" when the exec
+// failed: an image without cat, a parked container, a Swarm task on a node the
+// manager's socket does not reach), then the user its spec declares. read says
+// the first one answered.
+func workloadIDs(status string, declared helperIDs) (ids helperIDs, read bool) {
+	if uid, gid, ok := parseProcStatusIDs(status); ok {
+		return helperIDs{uid: uid, gid: gid, hasUID: true, hasGID: true}, true
+	}
+	return declared, false
 }
 
 // mountImage is the image the helper runs: the agent's own, which carries
@@ -316,13 +422,12 @@ func volumesOf(name string) []string {
 		if err != nil {
 			return nil
 		}
-		var mounts []dockerMount
 		if self.service != "" && swarmManager() {
-			mounts, _, _ = swarmWorkloadMounts(name, self)
-		} else {
-			mounts, _ = dockerWorkloadMounts(name, self)
+			w, _ := swarmWorkloadMounts(name, self)
+			return dataVolumePaths(w.mounts)
 		}
-		return dataVolumePaths(mounts)
+		w, _ := dockerWorkloadMounts(name, self)
+		return dataVolumePaths(w.mounts)
 	}
 	return nil
 }
@@ -429,24 +534,46 @@ func pickDockerMount(want string, mounts []dockerMount) (*dockerMount, string) {
 	return nil, "it mounts: " + strings.Join(have, ", ")
 }
 
-// dockerWorkloadMounts finds the workload's mounts through the same candidates
-// env-of uses: the parking receipt (a parked, stopped container still reports
-// its mounts) or a running owner on a network the agent shares.
-func dockerWorkloadMounts(name string, self selfInfo) ([]dockerMount, bool) {
+// dockerWorkload is what the mount reads of a container: what it mounts, and
+// the id and declared user the helper's ids are worked out from.
+type dockerWorkload struct {
+	id, user string
+	mounts   []dockerMount
+}
+
+// dockerWorkloadMounts finds the workload through the same candidates env-of
+// uses: the parking receipt (a parked, stopped container still reports its
+// mounts) or a running owner on a network the agent shares.
+func dockerWorkloadMounts(name string, self selfInfo) (dockerWorkload, bool) {
 	for _, id := range dockerNameCandidates(name, self) {
 		var insp struct {
+			ID     string `json:"Id"`
+			Config struct {
+				User string `json:"User"`
+			} `json:"Config"`
 			Mounts []dockerMount `json:"Mounts"`
 		}
 		if code, err := dockerAPI("GET", "/containers/"+id+"/json", nil, &insp); err == nil && code == 200 {
-			return insp.Mounts, true
+			return dockerWorkload{id: id, user: insp.Config.User, mounts: insp.Mounts}, true
 		}
 	}
-	return nil, false
+	return dockerWorkload{}, false
+}
+
+// dockerProcStatus is /proc/1/status of the first of these containers that
+// answers an exec, "" when none does.
+func dockerProcStatus(containers ...string) string {
+	for _, id := range containers {
+		if out, err := dockerExec(id, procStatusCmd); err == nil && len(out) > 0 {
+			return string(out)
+		}
+	}
+	return ""
 }
 
 // hostSystemDirs are the parts of the HOST a bind mount must not hand out.
-// The helper serves what it is given read-write, as root when the directory
-// is root's (mountserve.go), so a bind of /etc or / would be the host's
+// The helper serves what it is given read-write, as whoever the workload runs
+// as, root included (mountserve.go), so a bind of /etc or / would be the host's
 // configuration, its device nodes or the daemon's own storage, writable by
 // whoever reaches the agent. A project directory bind-mounted under Compose
 // (a developer's code, a data directory under /srv or /home) is the legitimate
@@ -519,11 +646,11 @@ func dockerMountVolume(name, volume, agentPort, pass string, self selfInfo) {
 			"application network (an attachable overlay, or the Compose network your services share)")
 	}
 	network := mountNetwork(nets)
-	mounts, found := dockerWorkloadMounts(name, self)
+	w, found := dockerWorkloadMounts(name, self)
 	if !found {
 		answer("error: no container answers to %q here, so there is no volume to mount", name)
 	}
-	m, why := pickDockerMount(volume, mounts)
+	m, why := pickDockerMount(volume, w.mounts)
 	if m == nil {
 		answer("error: %q has no volume %q — %s", name, volume, why)
 	}
@@ -536,16 +663,13 @@ func dockerMountVolume(name, volume, agentPort, pass string, self selfInfo) {
 	if code, err := dockerAPI("GET", "/containers/"+helper+"/json", nil, nil); err == nil && code == 200 {
 		_, _ = dockerAPI("DELETE", "/containers/"+helper+"?force=1", nil, nil)
 	}
+	ids, read := workloadIDs(dockerProcStatus(w.id), declaredIDs(w.user))
 	body := map[string]any{
 		"Image":      mountImage(self.image),
 		"Entrypoint": []string{"/usr/local/bin/plug-agent", "mount-serve"},
-		// Root, said rather than assumed: this shape binds 445 and writes files
-		// as the volume's owner (force user), both of which need it, and the
-		// image serving as helper is not always plug's own. A gateway that
-		// embeds the agent ships USER 65532 for Pod Security, and the helper it
-		// started from that image ran unprivileged by accident, losing both.
-		"User": "0",
-		"Env":  mountEnv(pass, "", mountAllow(self.addrs()...), ""),
+		// The workload's uid and gid; "" leaves the image's user in place.
+		"User": ids.user(),
+		"Env":  mountEnv(pass, "", mountAllow(self.addrs()...), ids.note(read)),
 		"Labels": map[string]string{
 			mountLabel:        "1",
 			mountOfLabel:      name,
@@ -669,19 +793,29 @@ func dockerUnmountVolume(helper string) error {
 
 // ── Swarm ────────────────────────────────────────────────────────────────────
 
+// swarmWorkload is what the mount reads of a service: its declared mounts and
+// user, the node its task last ran on, and the containers of its running
+// tasks, where the workload's ids can be read.
+type swarmWorkload struct {
+	mounts     []dockerMount
+	node, user string
+	containers []string
+}
+
 // swarmWorkloadMounts reads the service's declared mounts, and the node its
 // task last ran on - a local volume lives on ONE node, so the helper must be
 // placed there to see it. The node is best-effort: a service scaled to 0 (a
 // parked one) keeps its shut-down tasks listed for a while, with their NodeID.
-func swarmWorkloadMounts(name string, self selfInfo) (mounts []dockerMount, node string, found bool) {
+func swarmWorkloadMounts(name string, self selfInfo) (w swarmWorkload, found bool) {
 	own := swarmWorkloadOwner(name, self)
 	if own == nil {
-		return nil, "", false
+		return w, false
 	}
 	var svc struct {
 		Spec struct {
 			TaskTemplate struct {
 				ContainerSpec struct {
+					User   string `json:"User"`
 					Mounts []struct {
 						Type   string `json:"Type"`
 						Source string `json:"Source"`
@@ -692,28 +826,38 @@ func swarmWorkloadMounts(name string, self selfInfo) (mounts []dockerMount, node
 		} `json:"Spec"`
 	}
 	if code, err := dockerAPI("GET", "/services/"+own.id, nil, &svc); err != nil || code != 200 {
-		return nil, "", false
+		return w, false
 	}
+	w.user = svc.Spec.TaskTemplate.ContainerSpec.User
 	for _, m := range svc.Spec.TaskTemplate.ContainerSpec.Mounts {
 		dm := dockerMount{Type: m.Type, Source: m.Source, Destination: m.Target}
 		if m.Type == "volume" {
 			dm.Name = m.Source
 		}
-		mounts = append(mounts, dm)
+		w.mounts = append(w.mounts, dm)
 	}
 	var tasks []struct {
 		NodeID    string `json:"NodeID"`
 		CreatedAt string `json:"CreatedAt"`
+		Status    struct {
+			State           string `json:"State"`
+			ContainerStatus struct {
+				ContainerID string `json:"ContainerID"`
+			} `json:"ContainerStatus"`
+		} `json:"Status"`
 	}
 	if _, err := dockerAPI("GET", "/tasks?filters="+dockerFilters(map[string][]string{"service": {own.id}}), nil, &tasks); err == nil {
 		latest := ""
 		for _, t := range tasks {
 			if t.NodeID != "" && t.CreatedAt > latest {
-				latest, node = t.CreatedAt, t.NodeID
+				latest, w.node = t.CreatedAt, t.NodeID
+			}
+			if id := t.Status.ContainerStatus.ContainerID; id != "" && t.Status.State == "running" {
+				w.containers = append(w.containers, id)
 			}
 		}
 	}
-	return mounts, node, true
+	return w, true
 }
 
 func swarmMountVolume(name, volume, agentPort, pass string, self selfInfo) {
@@ -721,11 +865,12 @@ func swarmMountVolume(name, volume, agentPort, pass string, self selfInfo) {
 	if len(nets) == 0 {
 		answer("error: the agent is on no overlay network — attach it to the overlay your services use")
 	}
-	mounts, node, found := swarmWorkloadMounts(name, self)
+	w, found := swarmWorkloadMounts(name, self)
 	if !found {
 		answer("error: no service answers to %q here, so there is no volume to mount", name)
 	}
-	m, why := pickDockerMount(volume, mounts)
+	node := w.node
+	m, why := pickDockerMount(volume, w.mounts)
 	if m == nil {
 		answer("error: %q has no volume %q — %s", name, volume, why)
 	}
@@ -758,19 +903,39 @@ func swarmMountVolume(name, volume, agentPort, pass string, self selfInfo) {
 	container := map[string]any{
 		"Image":   pinnedImage(mountImage(self.image)),
 		"Command": []string{"/usr/local/bin/plug-agent", "mount-serve"},
-		"User":    "0", // same reason as the Docker shape: 445 and force user need root
 		"Mounts":  []map[string]any{mountSpec(m)},
+	}
+	// The workload's ids, read in a task of it: only one on a node this
+	// manager's socket reaches answers, and the declared user stands in for
+	// the others.
+	ids, read := workloadIDs(dockerProcStatus(w.containers...), declaredIDs(w.user))
+	if u := ids.user(); u != "" {
+		container["User"] = u
+	}
+	// The secret's file belongs to whoever the helper runs as, who is the only
+	// one to read it: root when the uid is unknown, since mount-serve reads
+	// the password before smbd takes another identity.
+	fileUID, fileGID := "0", "0"
+	if ids.hasUID {
+		fileUID = strconv.Itoa(ids.uid)
+	}
+	if ids.hasGID {
+		fileGID = strconv.Itoa(ids.gid)
 	}
 	allow := mountAllow(self.addrs()...)
 	if secretID, err := swarmMountSecret(helper, pass, labels); err == nil {
-		container["Env"] = mountEnv("", secretsMount+"/"+helper, allow, "")
+		container["Env"] = mountEnv("", secretsMount+"/"+helper, allow, ids.note(read))
 		container["Secrets"] = []map[string]any{{
-			"File":       map[string]any{"Name": helper, "UID": "0", "GID": "0", "Mode": 0o400},
+			"File":       map[string]any{"Name": helper, "UID": fileUID, "GID": fileGID, "Mode": 0o400},
 			"SecretID":   secretID,
 			"SecretName": helper,
 		}}
 	} else {
-		container["Env"] = mountEnv(pass, "", allow, "the Swarm secret could not be created ("+err.Error()+"), so the password came through the environment")
+		note := "the Swarm secret could not be created (" + err.Error() + "), so the password came through the environment"
+		if n := ids.note(read); n != "" {
+			note += "; " + n
+		}
+		container["Env"] = mountEnv(pass, "", allow, note)
 	}
 	task := map[string]any{
 		"ContainerSpec": container,
@@ -917,24 +1082,65 @@ func k8sWorkloadPods(ns, name string) ([]k8sWorkloadPod, string) {
 }
 
 // k8sWorkloadClaim resolves <volume> against the pods behind <name>: the
-// claim to mount, and the node the pod runs on.
-func k8sWorkloadClaim(ns, name, volume string) (claim, node, why string) {
+// claim to mount, the pod that mounts it (its node is where the helper goes)
+// and the container of that pod the volume is mounted in.
+func k8sWorkloadClaim(ns, name, volume string) (claim string, pod *k8sWorkloadPod, container int, why string) {
 	pods, why := k8sWorkloadPods(ns, name)
 	if why != "" {
-		return "", "", why
+		return "", nil, 0, why
 	}
-	for _, p := range pods {
+	for i := range pods {
+		p := &pods[i]
 		var mounts []k8sMount
 		for _, c := range p.Spec.Containers {
 			mounts = append(mounts, c.VolumeMounts...)
 		}
 		c, w := pickClaim(volume, p.Spec.Volumes, mounts)
-		if c != "" {
-			return c, p.Spec.NodeName, ""
+		if c == "" {
+			why = fmt.Sprintf("%q has no volume %q — %s", name, volume, w)
+			continue
 		}
-		why = fmt.Sprintf("%q has no volume %q — %s", name, volume, w)
+		for ci, ct := range p.Spec.Containers {
+			if got, _ := pickClaim(c, p.Spec.Volumes, ct.VolumeMounts); got == c {
+				return c, p, ci, ""
+			}
+		}
+		return c, p, 0, ""
 	}
-	return "", "", why
+	return "", nil, 0, why
+}
+
+// k8sHelperIDs is who the helper pod runs as: the ids of the process in the
+// workload's container that mounts the volume (pods/exec, as env-of), else
+// what the container's securityContext declares, then the pod's. On OpenShift
+// either is a uid of the namespace's range, the SCC having put it there, which
+// is why the helper may name it. fsGroup is the pod's, to be carried over: the
+// volume was set up for it.
+func k8sHelperIDs(ns string, p *k8sWorkloadPod, container int) (ids helperIDs, read bool, fsGroup *int64) {
+	var declared helperIDs
+	c := p.Spec.Containers[container]
+	for _, sc := range []*k8sSecurityContext{c.SecurityContext, p.Spec.SecurityContext} {
+		if sc == nil {
+			continue
+		}
+		if !declared.hasUID && sc.RunAsUser != nil {
+			declared.uid, declared.hasUID = int(*sc.RunAsUser), true
+		}
+		if !declared.hasGID && sc.RunAsGroup != nil {
+			declared.gid, declared.hasGID = int(*sc.RunAsGroup), true
+		}
+	}
+	if p.Spec.SecurityContext != nil {
+		fsGroup = p.Spec.SecurityContext.FSGroup
+	}
+	status := ""
+	if p.Status.Phase == "Running" {
+		if out, _, err := k8sExec(ns, p.Metadata.Name, c.Name, procStatusCmd...); err == nil {
+			status = string(out)
+		}
+	}
+	ids, read = workloadIDs(status, declared)
+	return ids, read, fsGroup
 }
 
 // k8sClaimModes reads a claim's access modes: ReadWriteOncePod is the one that
@@ -951,25 +1157,6 @@ func k8sClaimModes(ns, claim string) []string {
 	return pvc.Spec.AccessModes
 }
 
-// k8sIsOpenShift says whether this cluster is OpenShift or OKD: the one
-// platform whose default admission (the `restricted` SCC) refuses the root
-// helper. Asked of API discovery, which every ServiceAccount may read
-// (system:discovery is bound to system:authenticated), so no rule is added to
-// the Role: the security.openshift.io group exists there and nowhere else. One
-// answer per process, since a cluster does not change platform under a
-// running agent; a call that could not reach the API is asked again next
-// time, a plain "no" (a 404 on vanilla Kubernetes) is kept. A variable, so the
-// backend tests can stand in for the API.
-var k8sIsOpenShift = memoize(k8sDetectOpenShift)
-
-func k8sDetectOpenShift() (bool, error) {
-	code, err := k8sAPI("GET", "/apis/security.openshift.io", nil, nil)
-	if code == 0 {
-		return false, err
-	}
-	return code == 200, nil
-}
-
 // k8sMountPod is the helper pod. Labels carry what a label value may (the
 // flag, the workload's name, a folded volume); the session owner is host:port,
 // which a label value cannot hold, so it rides an annotation - as the parking
@@ -977,17 +1164,19 @@ func k8sDetectOpenShift() (bool, error) {
 // addresses (mountAllow), what the Service in front of the pod hands smbd as
 // source, kube-proxy preserving the pod's address on ClusterIP traffic.
 //
-// unprivileged is the OpenShift shape (k8sIsOpenShift): the container listens
-// on mountListenUnprivileged, says so through PLUG_SMB_LISTEN, and carries the
-// securityContext the `restricted` SCC admits: non-root, no escalation, every
-// capability dropped, the runtime's seccomp profile. No runAsUser, runAsGroup
-// or fsGroup: OpenShift allocates the uid from the namespace's range and
-// REJECTS a pod that names its own. mount-serve then sees it is not root and
-// takes the unprivileged path on its own (mountserve.go). The root shape is
-// what it always was: 445 in the container, no securityContext.
-func k8sMountPod(ns, helper, name, volume, claim, node, image, owner, pass string, allow []string, unprivileged bool) map[string]any {
+// The pod is one every admission lets in, the `restricted` ones included
+// (OpenShift's SCC, Pod Security): it runs as ids, the workload's, non-root
+// said when that is so, with the workload's fsGroup, no escalation, every
+// capability dropped and the runtime's seccomp profile; smbd listens above
+// 1024. The one exception is a pod that is or may be root: a workload that
+// runs as root, or one whose uid nobody could tell (no uid is named then, and
+// an SCC puts its own). It keeps CHOWN, SETUID and SETGID: a root smbd calls
+// setgroups and dies without the right to, and mount-serve hands smbd to the
+// volume's owner (mountserve.go), which takes all three. An admission that
+// refuses those capabilities refuses that pod, and mount-status says so.
+func k8sMountPod(ns, helper, name, volume, claim, node, image, owner, pass string, allow []string, ids helperIDs, read bool, fsGroup *int64) map[string]any {
 	env := []map[string]string{}
-	for _, kv := range mountEnv(pass, "", allow, "") {
+	for _, kv := range mountEnv(pass, "", allow, ids.note(read)) {
 		k, v, _ := strings.Cut(kv, "=")
 		env = append(env, map[string]string{"name": k, "value": v})
 	}
@@ -996,26 +1185,29 @@ func k8sMountPod(ns, helper, name, volume, claim, node, image, owner, pass strin
 		"image":        image,
 		"command":      []string{"/usr/local/bin/plug-agent", "mount-serve"},
 		"env":          env,
-		"ports":        []map[string]any{{"containerPort": 445}},
+		"ports":        []map[string]any{{"containerPort": smbListenPort}},
 		"volumeMounts": []map[string]any{{"name": "vol", "mountPath": mountVolumePath}},
 	}
-	if unprivileged {
-		container["env"] = append(env, map[string]string{"name": smbListenEnv, "value": strconv.Itoa(mountListenUnprivileged)})
-		container["ports"] = []map[string]any{{"containerPort": mountListenUnprivileged}}
-		container["securityContext"] = map[string]any{
-			"runAsNonRoot":             true,
-			"allowPrivilegeEscalation": false,
-			"capabilities":             map[string]any{"drop": []string{"ALL"}},
-			"seccompProfile":           map[string]any{"type": "RuntimeDefault"},
-		}
+	caps := map[string]any{"drop": []string{"ALL"}}
+	podSC := map[string]any{}
+	if ids.hasUID {
+		podSC["runAsUser"] = ids.uid
+	}
+	if ids.hasUID && ids.uid != 0 {
+		podSC["runAsNonRoot"] = true
 	} else {
-		// Root, said rather than assumed: the image serving as helper is not
-		// always plug's own (a gateway embedding the agent ships USER 65532),
-		// and this shape needs root for 445 and for writing as the volume's
-		// owner. A namespace that forbids root (Pod Security `restricted`
-		// outside OpenShift) takes the unprivileged shape instead, through
-		// PLUG_MOUNT_UNPRIVILEGED on the agent.
-		container["securityContext"] = map[string]any{"runAsUser": 0}
+		caps["add"] = []string{"CHOWN", "SETUID", "SETGID"}
+	}
+	if ids.hasGID {
+		podSC["runAsGroup"] = ids.gid
+	}
+	if fsGroup != nil {
+		podSC["fsGroup"] = *fsGroup
+	}
+	container["securityContext"] = map[string]any{
+		"allowPrivilegeEscalation": false,
+		"capabilities":             caps,
+		"seccompProfile":           map[string]any{"type": "RuntimeDefault"},
 	}
 	spec := map[string]any{
 		"restartPolicy": "Always",
@@ -1024,6 +1216,9 @@ func k8sMountPod(ns, helper, name, volume, claim, node, image, owner, pass strin
 			"persistentVolumeClaim": map[string]any{"claimName": claim},
 		}},
 		"containers": []map[string]any{container},
+	}
+	if len(podSC) > 0 {
+		spec["securityContext"] = podSC
 	}
 	if node != "" {
 		spec["nodeName"] = node
@@ -1054,25 +1249,11 @@ func k8sMountPod(ns, helper, name, volume, claim, node, image, owner, pass strin
 // helper's own name, one pod behind one name.
 const mountHelperLabel = "plug.mount.helper"
 
-// mountForcedUnprivileged reads PLUG_MOUNT_UNPRIVILEGED on the agent: 1 or
-// true asks for the unprivileged helper shape on every Kubernetes cluster, for
-// a namespace under Pod Security `restricted` that is not OpenShift and so is
-// not detected (k8sIsOpenShift). Anything else leaves the platform to decide.
-func mountForcedUnprivileged() bool {
-	v := strings.ToLower(strings.TrimSpace(os.Getenv("PLUG_MOUNT_UNPRIVILEGED")))
-	return v == "1" || v == "true"
-}
-
 // k8sMountService is the Service that gives the helper pod a NAME the cluster
 // resolves: plug's own (k8sManaged, so the Service sweep reaps it with a dead
 // session's names) and a mount's (mountLabel), selecting the one pod. Port
-// 445 always, the one the client is told; the target is the container's
-// port, which the unprivileged shape moves above 1024.
-func k8sMountService(ns, helper, owner string, unprivileged bool) map[string]any {
-	target := 445
-	if unprivileged {
-		target = mountListenUnprivileged
-	}
+// 445, the one the client is told, to the port smbd listens on.
+func k8sMountService(ns, helper, owner string) map[string]any {
 	return map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Service",
@@ -1084,7 +1265,7 @@ func k8sMountService(ns, helper, owner string, unprivileged bool) map[string]any
 		},
 		"spec": map[string]any{
 			"selector": map[string]string{mountHelperLabel: helper},
-			"ports":    []map[string]any{{"name": "smb", "port": 445, "targetPort": target}},
+			"ports":    []map[string]any{{"name": "smb", "port": 445, "targetPort": smbListenPort}},
 		},
 	}
 }
@@ -1099,10 +1280,11 @@ func labelSafe(v string) string {
 }
 
 func k8sMountVolume(ns, name, volume, agentPort, pass string) {
-	claim, node, why := k8sWorkloadClaim(ns, name, volume)
+	claim, wpod, wc, why := k8sWorkloadClaim(ns, name, volume)
 	if claim == "" {
 		answer("error: %s", why)
 	}
+	node := wpod.Spec.NodeName
 	for _, m := range k8sClaimModes(ns, claim) {
 		if m == "ReadWriteOncePod" {
 			answer("error: claim %q is ReadWriteOncePod — one pod at a time, so no helper can mount it beside %q", claim, name)
@@ -1120,15 +1302,8 @@ func k8sMountVolume(ns, name, volume, agentPort, pass string) {
 			answer("error: replacing the previous mount helper: %v", err)
 		}
 	}
-	// The platform decides the pod's shape: OpenShift admits only the
-	// unprivileged one, everything else runs the root one it always did. An
-	// operator whose namespace forbids root without being OpenShift (Pod
-	// Security `restricted`) says so on the agent, PLUG_MOUNT_UNPRIVILEGED=1.
-	unprivileged := mountForcedUnprivileged()
-	if !unprivileged {
-		unprivileged, _ = k8sIsOpenShift()
-	}
-	body := k8sMountPod(ns, helper, name, volume, claim, node, mountImage(image), owner, pass, mountAllow(k8sSelfIP()), unprivileged)
+	ids, read, fsGroup := k8sHelperIDs(ns, wpod, wc)
+	body := k8sMountPod(ns, helper, name, volume, claim, node, mountImage(image), owner, pass, mountAllow(k8sSelfIP()), ids, read, fsGroup)
 	code, err := k8sAPI("POST", "/api/v1/namespaces/"+ns+"/pods", body, nil)
 	if code == 403 {
 		answer("error: this agent's RBAC cannot create pods, which a mount helper is — re-apply deploy/plug-k8s.yaml (pods: create, delete)")
@@ -1139,7 +1314,7 @@ func k8sMountVolume(ns, name, volume, agentPort, pass string) {
 	// The name in front of it. A leftover Service of this name is this
 	// session's earlier try: replaced.
 	_, _ = k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/services/"+helper, nil, nil)
-	if _, err := k8sAPI("POST", "/api/v1/namespaces/"+ns+"/services", k8sMountService(ns, helper, owner, unprivileged), nil); err != nil {
+	if _, err := k8sAPI("POST", "/api/v1/namespaces/"+ns+"/services", k8sMountService(ns, helper, owner), nil); err != nil {
 		_, _ = k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/pods/"+helper, nil, nil)
 		answer("error: creating the mount helper's Service: %v", err)
 	}

@@ -28,7 +28,7 @@ import (
 // keeps a journal of every request, so a test can assert ORDER (the signpost
 // is started before the workload is stopped) and not only the final state. It
 // stores no more than the agent reads back: no pulls, no logs, no addresses
-// unless seeded, an exec that carries nothing.
+// unless seeded, an exec that carries nothing unless scripted (execAnswers).
 //
 // Why it exists: three bugs in one week lived in these paths (a parking receipt
 // destroyed after a failed restore, a takeover parking the agent itself, a
@@ -38,7 +38,7 @@ import (
 // stand a server in for the daemon; the fake is what stands there.
 //
 // Not covered: image pulls (dockerPull streams), container archives, exec
-// output, the daemon's own validation of a spec. A spec the fake accepts may
+// output beyond a scripted stdout, the daemon's own validation of a spec. A spec the fake accepts may
 // still be one a daemon refuses; the e2e suite keeps that.
 
 type fakeContainer struct {
@@ -95,6 +95,8 @@ type fakeEngine struct {
 	tasks      []map[string]any
 	images     map[string][]string // image name -> RepoDigests
 	log        []string            // "METHOD /path?query", in order
+	execOut    map[string]string   // "cat /proc/1/status" -> the stdout of that exec
+	execs      map[string]string   // exec id -> the command it was created with
 	refuse     func(method, path string) (int, string)
 }
 
@@ -109,6 +111,8 @@ func newFakeEngine(t *testing.T) *fakeEngine {
 		secrets:    map[string]*fakeSecret{},
 		networks:   map[string]*fakeNetwork{},
 		images:     map[string][]string{},
+		execOut:    map[string]string{},
+		execs:      map[string]string{},
 	}
 	fe.srv = httptest.NewServer(fe)
 	addr := fe.srv.Listener.Addr().String()
@@ -167,9 +171,16 @@ func (fe *fakeEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case p == "/containers/create" && r.Method == "POST":
 		fe.createContainer(w, q.Get("name"), body)
 	case strings.HasPrefix(p, "/containers/"):
-		fe.containerOp(w, r.Method, strings.TrimPrefix(p, "/containers/"))
+		fe.containerOp(w, r.Method, strings.TrimPrefix(p, "/containers/"), body)
 	case strings.HasPrefix(p, "/exec/") && r.Method == "POST":
-		w.WriteHeader(200) // an exec whose stream carries nothing
+		// The attach stream: one stdout frame when the command is scripted
+		// (execAnswers), nothing at all otherwise.
+		w.WriteHeader(200)
+		id := strings.TrimSuffix(strings.TrimPrefix(p, "/exec/"), "/start")
+		if out, ok := fe.execOut[fe.execs[id]]; ok {
+			n := len(out)
+			_, _ = w.Write(append([]byte{1, 0, 0, 0, byte(n >> 24), byte(n >> 16), byte(n >> 8), byte(n)}, out...))
+		}
 	case strings.HasPrefix(p, "/networks/"):
 		fe.networkOp(w, r.Method, strings.TrimPrefix(p, "/networks/"), body)
 	case strings.HasPrefix(p, "/images/") && strings.HasSuffix(p, "/json"):
@@ -263,7 +274,7 @@ func (fe *fakeEngine) createContainer(w http.ResponseWriter, name string, body m
 	jsonReply(w, 201, map[string]any{"Id": c.ID, "Warnings": []string{}})
 }
 
-func (fe *fakeEngine) containerOp(w http.ResponseWriter, method, rest string) {
+func (fe *fakeEngine) containerOp(w http.ResponseWriter, method, rest string, body map[string]any) {
 	id, op, _ := strings.Cut(rest, "/")
 	c := fe.findContainer(id)
 	if c == nil {
@@ -282,7 +293,7 @@ func (fe *fakeEngine) containerOp(w http.ResponseWriter, method, rest string) {
 		jsonReply(w, 200, map[string]any{
 			"Id": c.ID, "Name": "/" + c.Name, "Image": "sha256:" + fakeDigest(c.Image),
 			"State":           map[string]any{"Status": c.state(), "Running": c.Running},
-			"Config":          map[string]any{"Image": c.Image, "Labels": c.Labels, "Entrypoint": c.Entrypoint, "Env": c.Env},
+			"Config":          map[string]any{"Image": c.Image, "Labels": c.Labels, "Entrypoint": c.Entrypoint, "Env": c.Env, "User": c.User},
 			"NetworkSettings": map[string]any{"Networks": nets},
 			"Mounts":          c.Mounts,
 		})
@@ -301,7 +312,15 @@ func (fe *fakeEngine) containerOp(w http.ResponseWriter, method, rest string) {
 		c.Running = false
 		w.WriteHeader(204)
 	case method == "POST" && op == "exec":
-		jsonReply(w, 201, map[string]any{"Id": "exec-" + c.ID[:12]})
+		// As the daemon: no exec in a container that is not running.
+		if !c.Running {
+			jsonReply(w, 409, apiMsg("container "+c.ID+" is not running"))
+			return
+		}
+		fe.seq++
+		id := fmt.Sprintf("exec-%d", fe.seq)
+		fe.execs[id] = strings.Join(anyStrings(body["Cmd"]), " ")
+		jsonReply(w, 201, map[string]any{"Id": id})
 	case method == "DELETE" && op == "":
 		delete(fe.containers, c.ID)
 		w.WriteHeader(204)
@@ -596,6 +615,32 @@ func (fe *fakeEngine) addSecret(name string, labels map[string]string) *fakeSecr
 	return s
 }
 
+// execAnswers scripts an exec: a command (argv joined by spaces) and what it
+// writes on stdout, in every running container.
+func (fe *fakeEngine) execAnswers(command, stdout string) {
+	fe.mu.Lock()
+	defer fe.mu.Unlock()
+	fe.execOut[command] = stdout
+}
+
+// setContainerUser gives a seeded container the user its Config declares.
+func (fe *fakeEngine) setContainerUser(id, user string) {
+	fe.mu.Lock()
+	defer fe.mu.Unlock()
+	if c := fe.findContainer(id); c != nil {
+		c.User = user
+	}
+}
+
+// setServiceUser gives a seeded service the user its ContainerSpec declares.
+func (fe *fakeEngine) setServiceUser(id, user string) {
+	fe.mu.Lock()
+	defer fe.mu.Unlock()
+	if s := fe.findService(id); s != nil {
+		anyMap(anyMap(s.Spec["TaskTemplate"])["ContainerSpec"])["User"] = user
+	}
+}
+
 // setContainerMounts gives a seeded container the mounts inspect reports.
 func (fe *fakeEngine) setContainerMounts(id string, mounts ...dockerMount) {
 	fe.mu.Lock()
@@ -692,7 +737,7 @@ type serviceSpec struct {
 			Mounts  []map[string]any
 			Secrets []struct {
 				SecretName string
-				File       struct{ Name string }
+				File       struct{ Name, UID, GID string }
 			}
 		}
 		Networks []struct {

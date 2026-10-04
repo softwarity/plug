@@ -2,6 +2,8 @@ package agent
 
 import (
 	"encoding/base64"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -25,7 +27,8 @@ func envValue(env []string, key string) string {
 // re-provision picks the same), and a `hosts allow` carrying the agent's
 // addresses. Would have caught: a helper joined to every network of the stack
 // (beside every workload), a label set the sweep could not find it by, an
-// allow list without the agent's own address (the mount refused the agent).
+// allow list without the agent's own address (the mount refused the agent), a
+// helper writing as another uid than the workload's.
 func TestDockerMountVolumeCreatesTheHelperOnOneNetworkWithTheAgentAllowed(t *testing.T) {
 	fe := newFakeEngine(t)
 	t.Setenv(mountAllowEnv, "")
@@ -41,6 +44,8 @@ func TestDockerMountVolumeCreatesTheHelperOnOneNetworkWithTheAgentAllowed(t *tes
 	}
 	db := fe.addContainer("shop-db-1", true, nil, map[string][]string{"shop_default": {"db"}})
 	fe.setContainerMounts(db.ID, dockerMount{Type: "volume", Name: "pgdata", Source: "/var/lib/docker/volumes/pgdata/_data", Destination: "/var/lib/postgresql/data"})
+	fe.setContainerUser(db.ID, "70:70")
+	fe.execAnswers("cat /proc/1/status", procStatus(999, 998))
 	liveSessions(t)
 
 	helper := mountHelperName("db", "pgdata", "41020")
@@ -55,8 +60,14 @@ func TestDockerMountVolumeCreatesTheHelperOnOneNetworkWithTheAgentAllowed(t *tes
 	if !c.Running {
 		t.Error("the helper was created but never started")
 	}
-	if c.User != "0" {
-		t.Errorf("the root shape says User 0, the image may ship another: got %q", c.User)
+	if c.User != "999:998" {
+		t.Errorf("the helper runs as the workload's process does (999:998, read by exec), got User %q", c.User)
+	}
+	if note := envValue(c.Env, smbNoteEnv); note != "" {
+		t.Errorf("ids read on the process need no note, got %q", note)
+	}
+	if k8sRequests(fe.requests(), "POST", "/containers/"+db.ID+"/exec") != 1 {
+		t.Errorf("the ids are read in the workload's container, once: %v", fe.requests())
 	}
 	want := map[string]string{
 		mountLabel: "1", mountOfLabel: "db", mountVolumeLabel: "pgdata",
@@ -87,6 +98,55 @@ func TestDockerMountVolumeCreatesTheHelperOnOneNetworkWithTheAgentAllowed(t *tes
 	if envValue(c.Env, smbPassEnv) != hexPass || envValue(c.Env, smbUserEnv) != mountUser || envValue(c.Env, smbShareEnv) != mountShare {
 		t.Errorf("the helper's credential and share must be the session's: %v", c.Env)
 	}
+}
+
+// The fallbacks on Docker, in order: a workload whose process cannot be read
+// (parked, so stopped: no exec) gives the helper its declared user when that
+// is numeric, and nothing when it is a name or absent, the image's own user
+// then standing; the helper's log is told either way. Would have caught: a
+// mount refused because the exec failed, a User "postgres" the helper's image
+// cannot resolve, a User "0" invented.
+func TestDockerMountVolumeFallsBackToTheDeclaredUserThenToNone(t *testing.T) {
+	for _, tc := range []struct{ declared, want, note string }{
+		{"1000:1000", "1000:1000", "declares"},
+		{"1000", "1000", "declares"},
+		{"postgres", "", "image's user"},
+		{"", "", "image's user"},
+	} {
+		fe := newFakeEngine(t)
+		t.Setenv(mountAllowEnv, "")
+		fe.addNetwork("shop_default", "bridge", true)
+		agent := fe.addContainer("shop-plug-1", true, nil, map[string][]string{"shop_default": {"plug"}})
+		self := selfInfo{id: agent.ID, name: "shop-plug-1", image: "example/plug:test",
+			nets: []netRef{{name: "shop_default", attachable: true, addrs: []string{"172.18.0.5"}}}}
+		db := fe.addContainer("shop-db-1", true, nil, map[string][]string{"shop_default": {"db"}})
+		fe.setContainerMounts(db.ID, dockerMount{Type: "volume", Name: "pgdata", Destination: "/var/lib/postgresql/data"})
+		fe.setContainerUser(db.ID, tc.declared)
+		// No exec scripted: the stream carries nothing, as from an image without cat.
+		liveSessions(t)
+
+		helper := mountHelperName("db", "pgdata", "41020")
+		if said := verbReply(t, func() { dockerMountVolume("db", "pgdata", "41020", hexPass, self) }); said != mountReply(helper) {
+			t.Fatalf("declared %q: mount answered %q", tc.declared, said)
+		}
+		c := fe.container(helper)
+		if c == nil {
+			t.Fatalf("declared %q: no helper", tc.declared)
+		}
+		if c.User != tc.want {
+			t.Errorf("declared %q: helper User %q, want %q", tc.declared, c.User, tc.want)
+		}
+		if note := envValue(c.Env, smbNoteEnv); !strings.Contains(note, tc.note) {
+			t.Errorf("declared %q: the helper's log must say where its uid comes from, got %q", tc.declared, note)
+		}
+	}
+}
+
+// procStatus is a /proc/1/status as the kernel writes it, for the two lines
+// the agent reads among the others.
+func procStatus(uid, gid int) string {
+	return fmt.Sprintf("Name:\tpostgres\nUmask:\t0077\nState:\tS (sleeping)\nTgid:\t1\nPid:\t1\nPPid:\t0\n"+
+		"Uid:\t%d\t%d\t%d\t%d\nGid:\t%d\t%d\t%d\t%d\nFDSize:\t64\nGroups:\t%d\nVmPeak:\t  218268 kB\n", uid, uid, uid, uid, gid, gid, gid, gid, gid)
 }
 
 // The sweep: a helper whose session no longer answers goes, one whose session
@@ -140,14 +200,18 @@ func TestDockerSweepMountHelpersRemovesDeadSessionsOnly(t *testing.T) {
 // balancer rewrote the connection's source and the helper's allow list
 // refused the agent itself. Would have caught: a service created with the
 // default VIP endpoint, a password in `docker service inspect`, a helper
-// scheduled where the volume is not.
+// scheduled where the volume is not, a helper writing as another uid than the
+// workload's, a secret file the helper's uid cannot read.
 func TestSwarmMountVolumeCreatesTheSecretAndADNSRRService(t *testing.T) {
 	fe := newFakeEngine(t)
 	t.Setenv(mountAllowEnv, "")
 	self := swarmAgent(t, fe)
 	db := fe.addService("shop_db", nil, 1, map[string][]string{"shop_net": {"db"}})
 	fe.setServiceMounts(db.ID, dockerMount{Type: "volume", Source: "pgdata", Destination: "/var/lib/postgresql/data"})
-	fe.addTask(db.ID, "node-b", "running", "")
+	task := fe.addContainer("shop_db.1.task9", true, nil, nil)
+	fe.addTask(db.ID, "node-b", "running", task.ID)
+	fe.setServiceUser(db.ID, "70:70")
+	fe.execAnswers("cat /proc/1/status", procStatus(999, 998))
 	liveSessions(t)
 
 	helper := mountHelperName("db", "pgdata", "41020")
@@ -173,11 +237,18 @@ func TestSwarmMountVolumeCreatesTheSecretAndADNSRRService(t *testing.T) {
 		t.Errorf("the helper must publish no VIP (dnsrr), got endpoint mode %q", sp.EndpointSpec.Mode)
 	}
 	cs := sp.TaskTemplate.ContainerSpec
-	if cs.User != "0" {
-		t.Errorf("the root shape says User 0 on Swarm too, got %q", cs.User)
+	if cs.User != "999:998" {
+		t.Errorf("the helper runs as the workload's task does (999:998, read by exec), got User %q", cs.User)
 	}
 	if len(cs.Secrets) != 1 || cs.Secrets[0].SecretName != helper || cs.Secrets[0].File.Name != helper {
 		t.Errorf("the service must mount its secret under the helper's name, got %+v", cs.Secrets)
+	}
+	// The secret's file is 0400: it has to belong to the uid that reads it.
+	if cs.Secrets[0].File.UID != "999" || cs.Secrets[0].File.GID != "998" {
+		t.Errorf("the secret's file must belong to the helper's uid, got %+v", cs.Secrets[0].File)
+	}
+	if envValue(cs.Env, smbNoteEnv) != "" {
+		t.Errorf("nothing to note, got %q", envValue(cs.Env, smbNoteEnv))
 	}
 	if envValue(cs.Env, smbPassFileEnv) != secretsMount+"/"+helper || envValue(cs.Env, smbPassEnv) != "" {
 		t.Errorf("the environment names the password's file and never carries the value, got %v", cs.Env)
@@ -202,22 +273,82 @@ func TestSwarmMountVolumeCreatesTheSecretAndADNSRRService(t *testing.T) {
 	}
 }
 
+// The fallbacks on Swarm: a task this manager's socket does not reach (another
+// node: no container of that id here) leaves the service's declared user, and
+// a service that declares none leaves the helper to its image's user, with a
+// secret file that is root's, since mount-serve reads the password before smbd
+// changes identity. Would have caught: a multi-node mount refused for an exec
+// that cannot be, a User "" sent to the daemon.
+func TestSwarmMountVolumeFallsBackToTheDeclaredUserThenToNone(t *testing.T) {
+	for _, tc := range []struct{ declared, want, fileUID, fileGID, note string }{
+		{"1000:1001", "1000:1001", "1000", "1001", "declares"},
+		{"", "", "0", "0", "image's user"},
+	} {
+		fe := newFakeEngine(t)
+		t.Setenv(mountAllowEnv, "")
+		self := swarmAgent(t, fe)
+		db := fe.addService("shop_db", nil, 1, map[string][]string{"shop_net": {"db"}})
+		fe.setServiceMounts(db.ID, dockerMount{Type: "volume", Source: "pgdata", Destination: "/var/lib/postgresql/data"})
+		fe.addTask(db.ID, "node-b", "running", "a-container-on-another-node")
+		if tc.declared != "" {
+			fe.setServiceUser(db.ID, tc.declared)
+		}
+		fe.execAnswers("cat /proc/1/status", procStatus(999, 998)) // would answer, were the task here
+		liveSessions(t)
+
+		helper := mountHelperName("db", "pgdata", "41020")
+		if said := verbReply(t, func() { swarmMountVolume("db", "pgdata", "41020", hexPass, self) }); said != mountReply(helper) {
+			t.Fatalf("declared %q: mount answered %q", tc.declared, said)
+		}
+		sp, ok := fe.spec(helper)
+		if !ok {
+			t.Fatalf("declared %q: no helper service", tc.declared)
+		}
+		cs := sp.TaskTemplate.ContainerSpec
+		if cs.User != tc.want {
+			t.Errorf("declared %q: helper User %q, want %q", tc.declared, cs.User, tc.want)
+		}
+		if _, sent := anyMap(anyMap(fe.service(helper).Spec["TaskTemplate"])["ContainerSpec"])["User"]; sent != (tc.want != "") {
+			t.Errorf("declared %q: User is sent only when there is one", tc.declared)
+		}
+		if len(cs.Secrets) != 1 || cs.Secrets[0].File.UID != tc.fileUID || cs.Secrets[0].File.GID != tc.fileGID {
+			t.Errorf("declared %q: secret file owner %+v, want %s:%s", tc.declared, cs.Secrets, tc.fileUID, tc.fileGID)
+		}
+		if note := envValue(cs.Env, smbNoteEnv); !strings.Contains(note, tc.note) {
+			t.Errorf("declared %q: the helper's log must say where its uid comes from, got %q", tc.declared, note)
+		}
+		if sp.EndpointSpec.Mode != "dnsrr" || strings.Join(sp.TaskTemplate.Placement.Constraints, ",") != "node.id==node-b" {
+			t.Errorf("declared %q: the rest of the service does not depend on the ids: %+v", tc.declared, sp)
+		}
+	}
+}
+
 // seedK8sWorkload puts a workload behind a Service in the fake: the Service's
-// selector, one pod on a node with a claim mounted, the claim itself, and the
-// agent's own Deployment (the image the helper runs is read off it).
-func seedK8sWorkload(fa *fakeAPIServer) {
+// selector, one Running pod on a node with a claim mounted in its SECOND
+// container (the one whose process is read), the claim itself, and the agent's
+// own Deployment (the image the helper runs is read off it). podSC and dbSC are
+// the pod's and that container's securityContext, nil for none.
+func seedK8sWorkload(fa *fakeAPIServer, podSC, dbSC map[string]any) {
 	fa.add("services", k8sObject("Service", "db", nil, nil, map[string]any{
 		"selector": map[string]string{"app": "db"},
 		"ports":    []map[string]any{{"name": "pg", "port": 5432, "targetPort": 5432}},
 	}))
-	fa.add("pods", k8sObject("Pod", "db-0", map[string]string{"app": "db"}, nil, map[string]any{
-		"nodeName": "node-b",
-		"volumes":  []map[string]any{{"name": "data", "persistentVolumeClaim": map[string]any{"claimName": "pgdata"}}},
-		"containers": []map[string]any{{
-			"name":         "db",
-			"volumeMounts": []map[string]any{{"name": "data", "mountPath": "/var/lib/postgresql/data"}},
-		}},
-	}))
+	db := map[string]any{
+		"name":         "db",
+		"volumeMounts": []map[string]any{{"name": "data", "mountPath": "/var/lib/postgresql/data"}},
+	}
+	if dbSC != nil {
+		db["securityContext"] = dbSC
+	}
+	spec := map[string]any{
+		"nodeName":   "node-b",
+		"volumes":    []map[string]any{{"name": "data", "persistentVolumeClaim": map[string]any{"claimName": "pgdata"}}},
+		"containers": []map[string]any{{"name": "proxy"}, db},
+	}
+	if podSC != nil {
+		spec["securityContext"] = podSC
+	}
+	fa.add("pods", k8sObject("Pod", "db-0", map[string]string{"app": "db"}, nil, spec))
 	fa.add("persistentvolumeclaims", k8sObject("PersistentVolumeClaim", "pgdata", nil, nil, map[string]any{"accessModes": []string{"ReadWriteOnce"}}))
 	fa.add("deployments", map[string]any{
 		"apiVersion": "apps/v1", "kind": "Deployment",
@@ -228,66 +359,97 @@ func seedK8sWorkload(fa *fakeAPIServer) {
 	})
 }
 
-// A Kubernetes helper, both shapes, chosen by what the API says the platform
-// is. On OpenShift (the security.openshift.io group answers discovery) the pod
-// is the unprivileged one: a high container port the Service maps 445 to, the
-// listen port in the environment, the securityContext the restricted SCC
-// admits; anywhere else the root one, 445 to 445, as it always was. The
-// client is told 445 in both. Would have caught: a detection that never
-// reached the API (a vanilla answer on OpenShift, the helper crash-looping on
-// bind 445), a Service left targeting 445 while the container moved, a root
-// pod shape changed by the addition.
-func TestK8sMountVolumeTakesTheShapeThePlatformAdmits(t *testing.T) {
+// A Kubernetes helper, through the three ways its ids are settled. The exec
+// answers: the pod runs as the workload's process does, whatever the spec
+// declares, with the workload's fsGroup. The exec is refused (no pods/exec, an
+// image without cat): the container's securityContext, then the pod's. Nothing
+// anywhere: no uid named and the capabilities the helper needs to settle it
+// itself, which a workload that is root keeps too. In every case 1445 in the container, 445 on the Service, 445 told to
+// the client. Would have caught: an exec in the wrong container (the sidecar's
+// uid), a pod the SCC refuses for a uid outside the range, a mount that fails
+// where exec is not granted, a Service targeting a port nothing listens on.
+func TestK8sMountVolumeRunsTheHelperAsTheWorkload(t *testing.T) {
+	type sc = map[string]any
 	for _, tc := range []struct {
-		openshift bool
-		port      float64
-	}{{true, mountListenUnprivileged}, {false, 445}} {
+		name          string
+		exec          string // "" for an exec that is refused
+		podSC, dbSC   sc
+		wantPodSC     sc
+		wantAdd, note bool
+	}{
+		{name: "exec answers", exec: procStatus(1000680000, 0),
+			podSC: sc{"runAsUser": 5, "fsGroup": 1000680000}, dbSC: sc{"runAsUser": 6},
+			wantPodSC: sc{"runAsUser": float64(1000680000), "runAsGroup": float64(0), "runAsNonRoot": true, "fsGroup": float64(1000680000)}},
+		{name: "exec answers root", exec: procStatus(0, 0),
+			wantPodSC: sc{"runAsUser": float64(0), "runAsGroup": float64(0)}, wantAdd: true},
+		{name: "no exec, the container declares", podSC: sc{"runAsUser": 5, "runAsGroup": 7, "fsGroup": 9}, dbSC: sc{"runAsUser": 1001},
+			wantPodSC: sc{"runAsUser": float64(1001), "runAsGroup": float64(7), "runAsNonRoot": true, "fsGroup": float64(9)}, note: true},
+		{name: "no exec, the pod declares", podSC: sc{"runAsUser": 1002},
+			wantPodSC: sc{"runAsUser": float64(1002), "runAsNonRoot": true}, note: true},
+		{name: "no exec, nothing declared", wantAdd: true, note: true},
+	} {
 		fa := newFakeAPIServer(t, testNS, testPodIP)
-		fa.openshift = tc.openshift
 		t.Setenv(mountAllowEnv, "")
-		seedK8sWorkload(fa)
+		seedK8sWorkload(fa, tc.podSC, tc.dbSC)
+		if tc.exec != "" {
+			fa.execAnswers("cat /proc/1/status", tc.exec)
+		}
 
 		helper := mountHelperName("db", "pgdata", "41020")
 		if said := verbReply(t, func() { k8sMountVolume(testNS, "db", "pgdata", "41020", hexPass) }); said != mountReply(helper) {
-			t.Fatalf("openshift=%v: mount answered %q, want %q (445 announced in every shape)", tc.openshift, said, mountReply(helper))
+			t.Fatalf("%s: mount answered %q, want %q", tc.name, said, mountReply(helper))
 		}
-		if k8sRequests(fa.requests(), "GET", "/apis/security.openshift.io") != 1 {
-			t.Errorf("openshift=%v: the platform is asked of API discovery exactly once, got %v", tc.openshift, fa.requests())
+		execs := 0
+		for _, r := range fa.requests() {
+			if strings.HasPrefix(r, "GET /api/v1/namespaces/"+testNS+"/pods/db-0/exec?") {
+				execs++
+				if !strings.Contains(r, "container=db&") && !strings.HasSuffix(r, "container=db") {
+					t.Errorf("%s: the ids are read in the container that mounts the volume, got %s", tc.name, r)
+				}
+			}
+			if strings.Contains(r, "security.openshift.io") {
+				t.Errorf("%s: the platform is not asked what it is: %s", tc.name, r)
+			}
+		}
+		if execs != 1 {
+			t.Errorf("%s: one exec in the workload's pod, got %d in %v", tc.name, execs, fa.requests())
 		}
 		pod := fa.get("pods", helper)
 		if pod == nil {
-			t.Fatalf("openshift=%v: no helper pod", tc.openshift)
+			t.Fatalf("%s: no helper pod", tc.name)
 		}
-		c := anyMap(anyMap(pod["spec"])["containers"].([]any)[0])
-		if port := anyMap(c["ports"].([]any)[0])["containerPort"]; port != tc.port {
-			t.Errorf("openshift=%v: containerPort %v, want %v", tc.openshift, port, tc.port)
+		spec := anyMap(pod["spec"])
+		if got := anyMap(spec["securityContext"]); !reflect.DeepEqual(got, tc.wantPodSC) && (len(got) != 0 || len(tc.wantPodSC) != 0) {
+			t.Errorf("%s: pod securityContext %v, want %v", tc.name, got, tc.wantPodSC)
+		}
+		c := anyMap(spec["containers"].([]any)[0])
+		if port := anyMap(c["ports"].([]any)[0])["containerPort"]; port != float64(1445) {
+			t.Errorf("%s: containerPort %v, want 1445", tc.name, port)
+		}
+		csc := anyMap(c["securityContext"])
+		caps := anyMap(csc["capabilities"])
+		if csc["allowPrivilegeEscalation"] != false || !reflect.DeepEqual(caps["drop"], []any{"ALL"}) || anyMap(csc["seccompProfile"])["type"] != "RuntimeDefault" {
+			t.Errorf("%s: container securityContext %v", tc.name, csc)
+		}
+		if _, added := caps["add"]; added != tc.wantAdd {
+			t.Errorf("%s: capabilities %v, added want %v", tc.name, caps, tc.wantAdd)
 		}
 		env := map[string]string{}
 		for _, e := range c["env"].([]any) {
 			env[anyMap(e)["name"].(string)], _ = anyMap(e)["value"].(string)
 		}
-		_, sc := c["securityContext"]
-		if tc.openshift {
-			if env[smbListenEnv] != "1445" || !sc {
-				t.Errorf("the unprivileged helper is told its port and carries a securityContext, got env %v, securityContext %v", env, sc)
-			}
-			for _, k := range []string{"runAsUser", "runAsGroup"} {
-				if _, named := anyMap(c["securityContext"])[k]; named {
-					t.Errorf("%s would have the pod refused by the SCC", k)
-				}
-			}
-		} else if _, told := env[smbListenEnv]; told || !sc || anyMap(c["securityContext"])["runAsUser"] != float64(0) {
-			t.Errorf("the root helper runs as root, said explicitly, and is told nothing else, got env %v, securityContext %v", env, c["securityContext"])
+		if _, noted := env[smbNoteEnv]; noted != tc.note {
+			t.Errorf("%s: note %q, want one: %v", tc.name, env[smbNoteEnv], tc.note)
 		}
-		if anyMap(pod["spec"])["nodeName"] != "node-b" || env[smbPassEnv] != hexPass {
-			t.Errorf("openshift=%v: pinned to the workload's node with the session's credential, got %v / %v", tc.openshift, anyMap(pod["spec"])["nodeName"], env)
+		if spec["nodeName"] != "node-b" || env[smbPassEnv] != hexPass {
+			t.Errorf("%s: pinned to the workload's node with the session's credential, got %v / %v", tc.name, spec["nodeName"], env)
 		}
 		svc, ok := fa.service(helper)
-		if !ok || len(svc.Spec.Ports) != 1 || svc.Spec.Ports[0].Port != 445 || svc.Spec.Ports[0].TargetPort != tc.port {
-			t.Errorf("openshift=%v: the Service answers 445 and targets the container's port, got %+v", tc.openshift, svc.Spec.Ports)
+		if !ok || len(svc.Spec.Ports) != 1 || svc.Spec.Ports[0].Port != 445 || svc.Spec.Ports[0].TargetPort != float64(1445) {
+			t.Errorf("%s: the Service answers 445 and targets 1445, got %+v", tc.name, svc.Spec.Ports)
 		}
 		if svc.Spec.Selector[mountHelperLabel] != helper {
-			t.Errorf("openshift=%v: the Service selects the helper, got %v", tc.openshift, svc.Spec.Selector)
+			t.Errorf("%s: the Service selects the helper, got %v", tc.name, svc.Spec.Selector)
 		}
 	}
 }

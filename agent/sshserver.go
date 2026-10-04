@@ -503,7 +503,13 @@ func (s *sshServer) directTCPIP(nch ssh.NewChannel) {
 		_ = nch.Reject(ssh.ConnectionFailed, "malformed direct-tcpip request")
 		return
 	}
-	addr := net.JoinHostPort(req.Host, fmt.Sprint(req.Port))
+	port := fmt.Sprint(req.Port)
+	if !k8sAvailable() {
+		// A mount helper is announced on 445 and listens above 1024. On
+		// Kubernetes its Service maps one to the other; here nothing does.
+		port = mountDialPort(req.Host, port)
+	}
+	addr := net.JoinHostPort(req.Host, port)
 
 	// Bounded: an unresolvable name must come back as an error the CLI can
 	// report, not as a channel that hangs until the user gives up. The CLI's own

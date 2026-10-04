@@ -959,11 +959,13 @@ type k8sWorkloadPod struct {
 		Phase string `json:"phase"`
 	} `json:"status"`
 	Spec struct {
-		NodeName   string      `json:"nodeName"`
-		Volumes    []k8sVolume `json:"volumes"`
-		Containers []struct {
-			Name string `json:"name"`
-			Env  []struct {
+		NodeName        string              `json:"nodeName"`
+		Volumes         []k8sVolume         `json:"volumes"`
+		SecurityContext *k8sSecurityContext `json:"securityContext"`
+		Containers      []struct {
+			Name            string              `json:"name"`
+			SecurityContext *k8sSecurityContext `json:"securityContext"`
+			Env             []struct {
 				Name      string          `json:"name"`
 				Value     string          `json:"value"`
 				ValueFrom json.RawMessage `json:"valueFrom"`
@@ -971,6 +973,14 @@ type k8sWorkloadPod struct {
 			VolumeMounts []k8sMount `json:"volumeMounts"`
 		} `json:"containers"`
 	} `json:"spec"`
+}
+
+// k8sSecurityContext is what the mount reads of a securityContext, a pod's or
+// a container's: who the workload runs as (fsGroup is the pod's alone).
+type k8sSecurityContext struct {
+	RunAsUser  *int64 `json:"runAsUser"`
+	RunAsGroup *int64 `json:"runAsGroup"`
+	FSGroup    *int64 `json:"fsGroup"`
 }
 
 // k8sPodsSelected lists the pods a selector matches.

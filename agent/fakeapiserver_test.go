@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // A fake Kubernetes API server, in memory, behind an httptest.Server: the
@@ -27,8 +29,9 @@ import (
 //
 // Not covered: admission (a Service with no ports is accepted here), the
 // endpoints and endpointslice controllers (nothing here writes an object the
-// agent did not), watches, the exec subresource (a 404 for a missing pod, a 400
-// otherwise), and server-side validation of what a merge patch produces.
+// agent did not), watches, the exec subresource beyond a scripted stdout
+// (execAnswers; a 404 for a missing pod, a 400 otherwise), and server-side
+// validation of what a merge patch produces.
 
 const fakeK8sToken = "unit-test-token"
 
@@ -37,12 +40,12 @@ type fakeAPIServer struct {
 	srv *httptest.Server
 	ns  string
 
-	mu        sync.Mutex
-	seq       int
-	objects   map[string]map[string]map[string]any // resource -> name -> object
-	log       []string
-	refuse    func(method, path string) (int, string)
-	openshift bool // answer API discovery the way OpenShift does (the security.openshift.io group exists)
+	mu      sync.Mutex
+	seq     int
+	objects map[string]map[string]map[string]any // resource -> name -> object
+	log     []string
+	refuse  func(method, path string) (int, string)
+	execOut map[string]string // "cat /proc/1/status" -> what the exec subresource writes on stdout
 }
 
 // newFakeAPIServer starts the fake in namespace ns and points every seam the
@@ -58,12 +61,11 @@ func newFakeAPIServer(t *testing.T, ns, podIP string) *fakeAPIServer {
 			t.Fatal(err)
 		}
 	}
-	oldSA, oldBase, oldClient, oldSock, oldOpenShift := k8sSA, k8sAPIBase, k8sClient, dockerSock, k8sIsOpenShift
+	oldSA, oldBase, oldClient, oldSock, oldDial := k8sSA, k8sAPIBase, k8sClient, dockerSock, k8sExecDial
 	k8sSA, k8sAPIBase = sa, fa.srv.URL
 	k8sClient = func() *http.Client { return fa.srv.Client() }
-	// The platform is asked once per process; here once per fake, since each
-	// test decides what its cluster is.
-	k8sIsOpenShift = memoize(k8sDetectOpenShift)
+	// The exec handshake dials for itself, over TLS; the fake speaks plain HTTP.
+	k8sExecDial = func(addr, _ string) (net.Conn, error) { return net.DialTimeout("tcp", addr, 5*time.Second) }
 	// No Docker socket, whatever the host has: the k8s backend must be the one
 	// answering here.
 	dockerSock = filepath.Join(t.TempDir(), "absent.sock")
@@ -71,7 +73,7 @@ func newFakeAPIServer(t *testing.T, ns, podIP string) *fakeAPIServer {
 	t.Cleanup(func() {
 		fa.srv.Client().CloseIdleConnections()
 		fa.srv.Close()
-		k8sSA, k8sAPIBase, k8sClient, dockerSock, k8sIsOpenShift = oldSA, oldBase, oldClient, oldSock, oldOpenShift
+		k8sSA, k8sAPIBase, k8sClient, dockerSock, k8sExecDial = oldSA, oldBase, oldClient, oldSock, oldDial
 	})
 	return fa
 }
@@ -90,16 +92,6 @@ func (fa *fakeAPIServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// API discovery, the one group the agent asks about: present on OpenShift
-	// and OKD, a 404 everywhere else, which is what a real server answers.
-	if r.Method == "GET" && r.URL.Path == "/apis/security.openshift.io" {
-		if fa.openshift {
-			jsonReply(w, 200, map[string]any{"kind": "APIGroup", "apiVersion": "v1", "name": "security.openshift.io"})
-		} else {
-			k8sStatus(w, 404, "the server could not find the requested resource")
-		}
-		return
-	}
 	res, name, sub, ok := fa.route(r.URL.Path)
 	if !ok {
 		k8sStatus(w, 404, "the server could not find the requested resource")
@@ -115,9 +107,13 @@ func (fa *fakeAPIServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case sub != "":
 		// pods/<name>/exec and the like: enough to tell a missing pod from one
 		// that exists, which is all the RBAC probes read.
-		if coll[name] == nil {
+		out, scripted := fa.execOut[strings.Join(q["command"], " ")]
+		switch {
+		case coll[name] == nil:
 			k8sStatus(w, 404, fmt.Sprintf("pods %q not found", name))
-		} else {
+		case sub == "exec" && scripted && r.Header.Get("Upgrade") == "websocket":
+			execReply(w, out)
+		default:
 			k8sStatus(w, 400, "Upgrade request required")
 		}
 	case name == "" && r.Method == "GET":
@@ -346,6 +342,42 @@ func (fa *fakeAPIServer) edit(res, name string, fn func(obj map[string]any)) {
 	if o := fa.collection(res)[name]; o != nil {
 		fn(o)
 	}
+}
+
+// execAnswers scripts the exec subresource: a command (argv joined by spaces)
+// and what it writes on stdout, for every pod. Unscripted, exec stays a 400.
+func (fa *fakeAPIServer) execAnswers(command, stdout string) {
+	fa.mu.Lock()
+	defer fa.mu.Unlock()
+	if fa.execOut == nil {
+		fa.execOut = map[string]string{}
+	}
+	fa.execOut[command] = stdout
+}
+
+// execReply is the exec subresource's session, the smallest one the agent
+// reads (k8sExec): the WebSocket upgrade, stdout on channel 1, the API
+// server's verdict on channel 3, a close frame.
+func execReply(w http.ResponseWriter, stdout string) {
+	conn, buf, err := w.(http.Hijacker).Hijack()
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	frame := func(opcode byte, payload []byte) {
+		buf.WriteByte(0x80 | opcode)
+		if len(payload) < 126 {
+			buf.WriteByte(byte(len(payload)))
+		} else {
+			buf.Write([]byte{126, byte(len(payload) >> 8), byte(len(payload))})
+		}
+		buf.Write(payload)
+	}
+	buf.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
+	frame(0x2, append([]byte{1}, stdout...))
+	frame(0x2, append([]byte{3}, `{"status":"Success"}`...))
+	frame(0x8, nil)
+	_ = buf.Flush()
 }
 
 func (fa *fakeAPIServer) refuseWith(f func(method, path string) (int, string)) {

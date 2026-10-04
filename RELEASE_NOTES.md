@@ -2,17 +2,37 @@
 
 ## NEXT RELEASE
 
-### The mount helper says it runs as root, instead of assuming it
+### The mount helper has one shape: the workload's uid, port 1445
 
-The root shape of the helper (Docker, Swarm, Kubernetes outside OpenShift)
-named no user and relied on the image's default. A gateway that embeds the
-agent and serves as its own helper ships `USER 65532` for Pod Security, so
-the helper it started ran unprivileged by accident: files were written as
-65532 instead of the volume's owner, and binding 445 depended on the runtime.
-The three root shapes now say `User 0` (`runAsUser: 0` on Kubernetes).
-A Kubernetes namespace that forbids root without being OpenShift (Pod
-Security `restricted`) takes the unprivileged shape of 2.21.5 by setting
-`PLUG_MOUNT_UNPRIVILEGED=1` on the agent.
+2.21.5 taught the helper of a live mount to run without privilege on
+OpenShift, and kept the root helper everywhere else: two shapes, two ports, a
+detection and a switch. There is one shape now, the same on Docker, Swarm,
+Kubernetes, OpenShift and OKD.
+
+- The helper runs with the uid and gid of the workload itself. The agent
+  reads them on the workload's first process (`/proc/1/status`, through the
+  exec it already uses for the environment), falls back to the user the
+  workload declares, and names none when it cannot tell. Files written
+  through the mount belong to the workload's user, as they did, without root
+  and without Samba's `force user`. A helper that still starts as root (no
+  uid could be told and the image runs as root) serves as the owner of the
+  volume's root.
+- It listens on 1445, everywhere, which needs no privilege. The client is
+  still told 445, the only port Windows speaks: on Kubernetes the helper's
+  Service maps 445 to 1445, and on Docker and Swarm, where there is no
+  Service, the agent translates a helper's address asked on 445.
+- Gone with the second shape: the detection of OpenShift, the creation of a
+  Unix account in the helper, `PLUG_SMB_LISTEN`. A gateway embedding the
+  agent no longer depends on its image's default user.
+
+On Kubernetes the helper's pod drops every capability when the workload's uid
+is known and not root, which is what the `restricted` profiles of OpenShift
+and Pod Security admit. A root workload gets a helper with the three
+capabilities Samba needs to serve as the volume's owner (CHOWN, SETUID,
+SETGID); such a workload is not admitted under `restricted` to begin with.
+
+An image that serves as helper must carry `nss_wrapper` beside Samba in every
+case now, not only on OpenShift. plug's own images do.
 
 ---
 

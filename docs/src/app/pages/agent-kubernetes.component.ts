@@ -51,17 +51,18 @@ import { FileComponent } from '../file/file.component';
     <h3>OpenShift and OKD</h3>
     <p>
       The same manifest, the same Role, and the mount works under the default <code>restricted</code>
-      SCC. The agent tells the platform apart by API discovery (the <code>security.openshift.io</code>
-      group, readable by every ServiceAccount, so no rule is added) and starts the helper pod in the
-      shape that SCC admits: no root, no capability, no <code>runAsUser</code> (the platform allocates
-      the uid from the namespace's range and refuses a pod that names its own), Samba listening on a
-      high port with the helper's Service mapping 445 to it, so the client is told 445 as everywhere.
-      Files are then written by that uid rather than the volume's owner, which is what OpenShift sets
-      volumes up for (group 0 writable). Everywhere else the helper runs as root, said explicitly in
-      its spec so that it holds even when the image serving as helper ships a user of its own, and
-      writes as the volume's owner, as before. A namespace that forbids root without being OpenShift
-      (Pod Security <code>restricted</code>) gets the same unprivileged shape by setting
-      <code>PLUG_MOUNT_UNPRIVILEGED=1</code> on the agent.
+      SCC, with nothing particular to it: the helper has one shape on every cluster. It runs with
+      the uid and gid of the workload whose volume it serves, which the agent reads on the
+      workload's own process (<code>exec cat /proc/1/status</code>, the <code>pods/exec</code> rule
+      above) or, failing that, in its <code>securityContext</code>; it carries the workload's
+      <code>fsGroup</code>, no capability, no privilege escalation, the runtime's seccomp profile.
+      Samba listens on 1445 and the helper's Service answers on 445, the port the client is told.
+      Files are written under the workload's uid, so what you save is what it reads back. On
+      OpenShift and OKD that uid is one of the namespace's range, which is all the SCC asks of a
+      pod that names its own; the same pod passes Pod Security <code>restricted</code> elsewhere.
+      Two cases keep three capabilities (<code>CHOWN</code>, <code>SETUID</code>,
+      <code>SETGID</code>), which a restricted admission refuses: a workload that runs as root, and
+      one whose uid could be read nowhere; the helper then writes as the owner of the volume's root.
     </p>
 
     <h3>Reaching it</h3>

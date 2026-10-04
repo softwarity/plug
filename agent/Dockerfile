@@ -134,15 +134,13 @@ FROM alpine:3.24
 # is published: the e2e legs pull what this produced, and only a green run is
 # promoted.
 #
-# nss_wrapper rides with it, for the helper that is NOT root: OpenShift and OKD
-# run every pod under an arbitrary uid with no capability (the restricted SCC),
-# and Samba resolves its account through NSS, where that uid is unknown. The
-# helper then preloads this library over passwd/group files it writes itself
-# (mountserve.go, nssWrapperFiles). An image built without it serves the root
-# path as before and refuses the unprivileged one, naming this package. An
-# embedder that builds its own image from this agent (the hosted flavour, a
-# gateway) must add the same package beside samba-server, or its mounts fail on
-# OpenShift with that message.
+# nss_wrapper rides with it: the helper runs without privilege, under the
+# uid of the workload whose volume it serves (an arbitrary one on OpenShift and
+# OKD), and Samba resolves its account through NSS, where that uid is unknown.
+# The helper preloads this library over passwd/group files it writes itself
+# (mountserve.go, nssWrapperFiles). An embedder that builds its own image from
+# this agent (the hosted flavour, a gateway) must add the same package beside
+# samba-server, or its mounts are refused with a message naming it.
 RUN for i in 1 2 3; do apk add --no-cache samba-server nss_wrapper && break; \
       echo "apk failed (attempt $i/3), retrying"; sleep $((i * 5)); \
     done && [ -x /usr/sbin/smbd ] && [ -f /usr/lib/libnss_wrapper.so ]

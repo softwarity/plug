@@ -205,13 +205,14 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
           the agent starts a helper beside the workload (its own image, Samba, the volume mounted)
           and plug mounts it through the tunnel with the SMB client your OS ships with -
           <code>mount_smbfs</code> on macOS as you, the cifs module on Linux through mount(2).
-          Files are written as the volume's owner. A session that dies has its helper reaped by
+          The helper runs without privilege, with the workload's own uid and gid, so files are
+          written as the workload writes them. A session that dies has its helper reaped by
           the agent within the minute and its mount cleaned by the next run or
           <code>plug doctor --fix</code>. Kubernetes: the helper pod is pinned to the workload's
           node (ReadWriteOnce is one node, not one pod); the RBAC needs <code>pods</code>
-          create/delete, re-apply <code>plug-k8s.yaml</code>. OpenShift and OKD: the helper runs
-          without privilege under the <code>restricted</code> SCC (a high port behind its Service,
-          the uid the platform allocates, files written by that uid), nothing to grant. On Windows a mount lands on a drive
+          create/delete, re-apply <code>plug-k8s.yaml</code>. The helper is the same
+          everywhere (it listens on 1445; on Kubernetes its Service answers on 445), which on
+          OpenShift and OKD satisfies the <code>restricted</code> SCC with nothing to grant. On Windows a mount lands on a drive
           letter (an automatic one takes a free letter from Z down; <code>--mount /data:Y:</code>
           names one), the variables repointed at it the same way. With <code>--dockerrun</code>
           the container gets the volume at its exact cluster path.

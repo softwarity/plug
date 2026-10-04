@@ -208,10 +208,11 @@ rules:
   # pod, not only the helpers.
   # `persistentvolumeclaims` get: to refuse a ReadWriteOncePod claim with a
   # reason instead of a helper that stays Pending.
-  # On OpenShift and OKD the helper pod is created in the shape the restricted
-  # SCC admits (no root, no capability, a high port behind its Service); the
-  # agent tells the platform apart by API discovery, which every
-  # ServiceAccount may read, so nothing is granted for it here.
+  # The helper pod has one shape everywhere, which OpenShift's restricted SCC
+  # admits as it is: the workload's own uid and gid, no capability, a port
+  # above 1024 behind its Service. `pods/exec` also serves here: the agent
+  # reads that uid on the workload's process (cat /proc/1/status), and falls
+  # back to the pod's securityContext without it.
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "create", "delete"]
