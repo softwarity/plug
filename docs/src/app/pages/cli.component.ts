@@ -202,7 +202,7 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
           when it does not exist yet, its nearest existing parent) must be yours: plug mounts
           with privilege and only where you could have written unprivileged. Unnamed, it is the
           <code>-s</code> one or the <code>--env-of</code> one. Repeatable. Nothing is installed:
-          the agent starts a helper beside the workload (its own image, Samba, the volume mounted)
+          the agent starts a helper beside the workload (its own image, the volume mounted)
           and plug mounts it through the tunnel with the SMB client your OS ships with -
           <code>mount_smbfs</code> on macOS as you, the cifs module on Linux through mount(2).
           The helper runs without privilege, with the workload's own uid and gid, so files are

@@ -651,7 +651,7 @@ func dockerMountFlags() ([]string, func()) {
 			continue
 		}
 		name := "plug-vol-" + recordName(m.spec.name + ":" + m.spec.volume + ":" + port)[:16]
-		opts := fmt.Sprintf("port=%s,username=%s,password=%s,vers=3.0,uid=0,gid=0,file_mode=0664,dir_mode=0775,noperm,nobrl",
+		opts := fmt.Sprintf("port=%s,username=%s,password=%s,uid=0,gid=0,file_mode=0664,dir_mode=0775,noperm,nobrl",
 			port, m.target.user, m.target.pass)
 		// As the user, like every docker call here: the cifs mount itself is the
 		// daemon's kernel's work, so the volume needs nothing of this process's

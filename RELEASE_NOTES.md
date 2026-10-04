@@ -2,6 +2,26 @@
 
 ## NEXT RELEASE
 
+### Live mounts: the SMB server is part of plug
+
+The helper that serves a workload's volume to your machine now carries its own
+SMB server, compiled into `plug-agent`.
+
+- **A lighter image.** The agent image goes from 215 MB to 131 MB: there is no
+  package left to install in it.
+- **Nothing to add for an embedder.** A gateway that builds its own image from
+  the agent serves live mounts with the binary alone.
+- **Fewer rights.** The helper holds no capability at all, and in the one case
+  where it starts as root (a root workload, or one whose user could not be
+  read) it keeps two instead of three, `SETUID` and `SETGID`.
+- **Nothing on disk.** No configuration, no account file, no state directory:
+  the helper also runs on a read-only root filesystem.
+- **The volume stays clean.** macOS metadata is kept in memory and never
+  written beside your files.
+
+Nothing changes in how you use it: same command, same mount, and a CLI from an
+earlier version keeps mounting against the new helper.
+
 ---
 
 ## 2.21.6

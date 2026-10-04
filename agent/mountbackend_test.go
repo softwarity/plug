@@ -276,7 +276,7 @@ func TestSwarmMountVolumeCreatesTheSecretAndADNSRRService(t *testing.T) {
 // The fallbacks on Swarm: a task this manager's socket does not reach (another
 // node: no container of that id here) leaves the service's declared user, and
 // a service that declares none leaves the helper to its image's user, with a
-// secret file that is root's, since mount-serve reads the password before smbd
+// secret file that is root's, since mount-serve reads the password before it
 // changes identity. Would have caught: a multi-node mount refused for an exec
 // that cannot be, a User "" sent to the daemon.
 func TestSwarmMountVolumeFallsBackToTheDeclaredUserThenToNone(t *testing.T) {

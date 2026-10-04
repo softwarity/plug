@@ -56,12 +56,11 @@ import { FileComponent } from '../file/file.component';
       workload's own process (<code>exec cat /proc/1/status</code>, the <code>pods/exec</code> rule
       above) or, failing that, in its <code>securityContext</code>; it carries the workload's
       <code>fsGroup</code>, no capability, no privilege escalation, the runtime's seccomp profile.
-      Samba listens on 1445 and the helper's Service answers on 445, the port the client is told.
+      The helper listens on 1445 and the helper's Service answers on 445, the port the client is told.
       Files are written under the workload's uid, so what you save is what it reads back. On
       OpenShift and OKD that uid is one of the namespace's range, which is all the SCC asks of a
       pod that names its own; the same pod passes Pod Security <code>restricted</code> elsewhere.
-      Two cases keep three capabilities (<code>CHOWN</code>, <code>SETUID</code>,
-      <code>SETGID</code>), which a restricted admission refuses: a workload that runs as root, and
+      Two cases keep two capabilities (<code>SETUID</code>, <code>SETGID</code>), which a restricted admission refuses: a workload that runs as root, and
       one whose uid could be read nowhere; the helper then writes as the owner of the volume's root.
     </p>
 

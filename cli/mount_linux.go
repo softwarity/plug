@@ -32,7 +32,9 @@ func mountSMBShare(t mountTarget, path string) (string, error) {
 	if u, g, ok := resolveDropTarget(os.Geteuid(), uid, gid, os.Getenv("SUDO_UID"), os.Getenv("SUDO_GID")); ok {
 		uid, gid = u, g
 	}
-	opts := fmt.Sprintf("ip=%s,port=%s,user=%s,pass=%s,vers=3.0,uid=%d,gid=%d,file_mode=0664,dir_mode=0775,noperm,nobrl",
+	// No vers=: the dialect is negotiated, the highest the helper's server
+	// offers.
+	opts := fmt.Sprintf("ip=%s,port=%s,user=%s,pass=%s,uid=%d,gid=%d,file_mode=0664,dir_mode=0775,noperm,nobrl",
 		host, port, user, pass, uid, gid)
 	if err := unix.Mount("//"+host+"/"+share, path, "cifs", 0, opts); err != nil {
 		if errors.Is(err, unix.ENODEV) {

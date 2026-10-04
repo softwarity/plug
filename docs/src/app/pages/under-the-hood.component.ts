@@ -245,6 +245,7 @@ import { RouterLink } from '@angular/router';
       <tbody>
         <tr><td><a href="https://pkg.go.dev/golang.org/x/crypto/ssh" target="_blank" rel="noopener">golang.org/x/crypto/ssh</a></td><td>The transport, on both ends: the CLI's in-process client, and the agent's server doing the <code>direct-tcpip</code> dials and the remote forwards</td><td>BSD</td></tr>
         <tr><td><a href="https://github.com/WireGuard/wireguard-go" target="_blank" rel="noopener">wireguard-go</a> + <a href="https://gvisor.dev/" target="_blank" rel="noopener">gVisor</a></td><td>The userspace TUN device and network stack that answer DNS and terminate flows in-process</td><td>MIT · Apache-2.0</td></tr>
+        <tr><td><a href="https://github.com/softwarity/smbserver" target="_blank" rel="noopener">smbserver</a></td><td>The SMB server of a live mount, compiled into the agent: the helper serves a workload's volume with the binary alone, without privilege</td><td>Apache-2.0</td></tr>
         <tr><td><a href="https://go.dev/" target="_blank" rel="noopener">Go</a></td><td>The CLI - one static binary per platform, no runtime dependencies</td><td>BSD</td></tr>
         <tr><td><a href="https://www.alpinelinux.org/" target="_blank" rel="noopener">Alpine Linux</a></td><td>Base of the agent image - one static Go binary + the binaries it serves</td><td>MIT</td></tr>
       </tbody>

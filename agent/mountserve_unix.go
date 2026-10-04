@@ -5,7 +5,6 @@ package agent
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"syscall"
 )
 
@@ -22,7 +21,14 @@ func ownerIDs(path string) (uid, gid int, err error) {
 	return int(st.Uid), int(st.Gid), nil
 }
 
-// runAs makes cmd start under uid:gid, with that one group and no other.
-func runAs(cmd *exec.Cmd, uid, gid int) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid)}}
+// becomeIDs makes this whole process uid:gid, with that one group and no
+// other, for good. Group first: once the uid is given up, nothing else can be.
+func becomeIDs(uid, gid int) error {
+	if err := syscall.Setgroups([]int{gid}); err != nil {
+		return err
+	}
+	if err := syscall.Setgid(gid); err != nil {
+		return err
+	}
+	return syscall.Setuid(uid)
 }

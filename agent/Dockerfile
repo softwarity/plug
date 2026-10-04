@@ -21,7 +21,7 @@ ARG FLAVOUR=
 # (the six CLI binaries already are, and the agent below asks for TARGETARCH),
 # so emulating the target here would only make the compiler run under QEMU.
 # That is what lets one job build both architectures at release time, where
-# only the final stage (an apk add) runs emulated.
+# the final stage runs nothing that has to be emulated.
 FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
 ARG VERSION
 ARG GIT_REV
@@ -117,33 +117,15 @@ RUN CGO_ENABLED=0 GOARCH=$TARGETARCH go build -C /src/agent -trimpath -ldflags "
 
 FROM alpine:3.24
 
-# Samba, and it is the one package this stage installs. It serves a live mount
-# (--mount): the agent starts a HELPER beside the workload - this very image,
-# running `plug-agent mount-serve` with the workload's volume or PVC mounted -
-# and the developer's process reads and writes the real data at the real path
-# through the SMB client every OS already has (mount_smbfs, the cifs module,
-# the Windows redirector). Nothing to install on the workstation, and no
-# second image to pull or to mirror: the helper is the agent, as the signpost is.
-#
-# The note below says this stage ran no `apk add`, and why: one TLS error on
-# dl-cdn killed 2.7.3. That risk is taken here, deliberately, with the same
-# three-attempt retry the build stage already uses for curl, because the only
-# SMB2 server written in Go is AGPL and has no authentication, and a separate
-# image would have to be pulled on demand and mirrored by every private
-# registry. A failed install fails THIS build, loudly, and never an image that
-# is published: the e2e legs pull what this produced, and only a green run is
-# promoted.
-#
-# nss_wrapper rides with it: the helper runs without privilege, under the
-# uid of the workload whose volume it serves (an arbitrary one on OpenShift and
-# OKD), and Samba resolves its account through NSS, where that uid is unknown.
-# The helper preloads this library over passwd/group files it writes itself
-# (mountserve.go, nssWrapperFiles). An embedder that builds its own image from
-# this agent (the hosted flavour, a gateway) must add the same package beside
-# samba-server, or its mounts are refused with a message naming it.
-RUN for i in 1 2 3; do apk add --no-cache samba-server nss_wrapper && break; \
-      echo "apk failed (attempt $i/3), retrying"; sleep $((i * 5)); \
-    done && [ -x /usr/sbin/smbd ] && [ -f /usr/lib/libnss_wrapper.so ]
+# A live mount (--mount) needs no package here: the agent starts a HELPER
+# beside the workload - this very image, running `plug-agent mount-serve` with
+# the workload's volume or PVC mounted - and the SMB server is compiled into
+# plug-agent (github.com/softwarity/smbserver). The developer's process reads
+# and writes the real data at the real path through the SMB client every OS
+# already has (mount_smbfs, the cifs module, the Windows redirector). Nothing
+# to install on the workstation, no second image to pull or to mirror, and
+# nothing for an embedder to add to its own image: the helper is the agent, as
+# the signpost is.
 
 # No sshd. The SSH server is `plug-agent serve` (agent/sshserver.go),
 # which speaks the same protocol to the same CLI and replaces the whole of what
@@ -154,10 +136,9 @@ RUN for i in 1 2 3; do apk add --no-cache samba-server nss_wrapper && break; \
 #   * plug-agent is no longer setuid root. It was, ONLY because sshd ran it as
 #     the unprivileged `plug` user while it needed the docker socket or the
 #     pod's SA token. The server process holds those directly now.
-#   * one `apk add` in this stage, Samba above, and none for the server itself:
-#     the failure that killed 2.7.3 (one TLS error on dl-cdn, "no such
-#     package", three e2e legs timed out) was an install this stage no longer
-#     needs for sshd. What remains is retried, and fails the build, not a run.
+#   * no `apk add` in this stage: the failure that killed 2.7.3 (one TLS error
+#     on dl-cdn, "no such package", three e2e legs timed out) was an install
+#     this stage no longer needs.
 #   * the host key is kept rather than regenerated. On its own that changes
 #     nothing, since the CLI re-pins whatever answers; it only puts the key
 #     where it will have to be the day identity is actually verified. See

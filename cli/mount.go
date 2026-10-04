@@ -362,7 +362,7 @@ func (f *mountForward) Close() {
 	f.wg.Wait()
 }
 
-// splice copies both ways until either side ends; the SMB client and Samba
+// splice copies both ways until either side ends; the SMB client and the helper
 // both close cleanly, so a half-close is enough to let the other side drain.
 func splice(a, b net.Conn) {
 	done := make(chan struct{}, 2)
@@ -382,7 +382,7 @@ func splice(a, b net.Conn) {
 }
 
 // mountHelperReady waits for the helper to answer on its port: scheduling and
-// smbd's start are seconds, a pod pulling its image can be more. Short dials,
+// the helper's start are seconds, a pod pulling its image can be more. Short dials,
 // retried, as the exposes' verify does. Every few seconds the agent is asked
 // where the helper stands (mount-status) and the progress line says it - a
 // task pending on a constrained node, a pod pulling its image - and when the

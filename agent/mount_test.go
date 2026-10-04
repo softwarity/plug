@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strings"
 	"testing"
-	"time"
 )
 
 // The verb's argument gate: what reaches an orchestrator API, and what does
@@ -294,7 +293,7 @@ func TestK8sMountPodShape(t *testing.T) {
 		t.Fatal("labelSafe")
 	}
 	// The one shape, which a restricted admission lets in (OpenShift's SCC, Pod
-	// Security): smbd's port above 1024, the workload's uid and gid said on the
+	// Security): the server's port above 1024, the workload's uid and gid said on the
 	// pod, non-root said since it is so, the workload's fsGroup carried over,
 	// and on the container no escalation, no capability, the runtime's seccomp
 	// profile. Would have caught: a containerPort the Service does not target,
@@ -325,15 +324,15 @@ func TestK8sMountPodShape(t *testing.T) {
 	}
 	// A workload that runs as root: the helper too, runAsNonRoot is not said
 	// (true would be a pod that never starts), and the capabilities a root
-	// smbd cannot do without are kept (it dies on setgroups otherwise).
+	// a root helper cannot do without are kept (it becomes the volume's owner).
 	root := k8sMountPod("shop", "h", "web", "data", "c", "", "img", "o", "p", nil, ids(0, 0), true, nil)
 	psc = root["spec"].(map[string]any)["securityContext"].(map[string]any)
 	if _, said := psc["runAsNonRoot"]; said || psc["runAsUser"] != 0 || psc["runAsGroup"] != 0 {
 		t.Fatalf("root pod securityContext %v", psc)
 	}
 	rootCaps := root["spec"].(map[string]any)["containers"].([]map[string]any)[0]["securityContext"].(map[string]any)["capabilities"].(map[string]any)
-	if !reflect.DeepEqual(rootCaps["drop"], []string{"ALL"}) || !reflect.DeepEqual(rootCaps["add"], []string{"CHOWN", "SETUID", "SETGID"}) {
-		t.Fatalf("a root helper keeps what a root smbd needs and nothing else: %v", rootCaps)
+	if !reflect.DeepEqual(rootCaps["drop"], []string{"ALL"}) || !reflect.DeepEqual(rootCaps["add"], []string{"SETUID", "SETGID"}) {
+		t.Fatalf("a root helper keeps what it needs to become the owner and nothing else: %v", rootCaps)
 	}
 	// Everything the sweep and the Service rely on is the same whoever it runs as.
 	if !reflect.DeepEqual(pod["metadata"], k8sMountPod("shop", "plug-mnt-web-abcd1234", "web", "/data", "web-data", "node-2",
@@ -344,7 +343,7 @@ func TestK8sMountPodShape(t *testing.T) {
 
 // The pod when nobody could tell the workload's uid (no exec, nothing
 // declared): no uid is named, so the image's user or the platform's stands,
-// and the three capabilities mount-serve needs to hand smbd to the volume's
+// and the two capabilities mount-serve needs to become the volume's
 // owner are kept, in case that user is root (as for a workload known to be). The helper's log is told. A uid
 // declared without a gid names the uid alone. Would have caught: a
 // runAsNonRoot on a pod whose image is root (never starts), a runAsUser 0
@@ -358,7 +357,7 @@ func TestK8sMountPodWithoutAKnownUID(t *testing.T) {
 	c := spec["containers"].([]map[string]any)[0]
 	sc := c["securityContext"].(map[string]any)
 	caps := sc["capabilities"].(map[string]any)
-	if !reflect.DeepEqual(caps["drop"], []string{"ALL"}) || !reflect.DeepEqual(caps["add"], []string{"CHOWN", "SETUID", "SETGID"}) {
+	if !reflect.DeepEqual(caps["drop"], []string{"ALL"}) || !reflect.DeepEqual(caps["add"], []string{"SETUID", "SETGID"}) {
 		t.Fatalf("capabilities %v", caps)
 	}
 	if sc["allowPrivilegeEscalation"] != false || sc["seccompProfile"].(map[string]any)["type"] != "RuntimeDefault" {
@@ -462,82 +461,14 @@ func TestMountDialPort(t *testing.T) {
 	}
 }
 
-// The helper's own side (mountserve.go): the Samba configuration, of which
-// there is one shape. SMB2 and signing, only the agent allowed in, smbd on its
-// port above 1024, every path smbd opens for itself under the one directory it
-// was given with the account file beside them, and NO `force user`: smbd
-// already is whoever the files belong to. Would have caught: a `force user`
-// smbd refuses without root, a lock directory under /var/lib, a smbpasswd
-// written where the conf does not look, a port a non-root process cannot bind.
-func TestSmbConf(t *testing.T) {
-	dir := t.TempDir()
-	o := smbOptions{share: "vol", user: "plug", fruit: true, allow: []string{"10.0.1.5", "fd00::5"}, stateDir: dir}
-	c := smbConf(o)
-	for _, want := range []string{
-		"[global]", "security = user", "passdb backend = smbpasswd", "server min protocol = SMB2_02",
-		"smb ports = 1445\n", "disable netbios = yes", "load printers = no",
-		"vfs objects = fruit streams_xattr",
-		// Only the agent may connect: signing every client does unasked,
-		// encryption when the client has it and never as a condition.
-		"hosts allow = 10.0.1.5 fd00::5\n", "server signing = mandatory", "smb encrypt = desired",
-		"lock directory = " + filepath.Join(dir, "lock") + "\n",
-		"state directory = " + filepath.Join(dir, "state") + "\n",
-		"cache directory = " + filepath.Join(dir, "cache") + "\n",
-		"private dir = " + filepath.Join(dir, "private") + "\n",
-		"pid directory = " + filepath.Join(dir, "pid") + "\n",
-		"ncalrpc dir = " + filepath.Join(dir, "ncalrpc") + "\n",
-		"log file = " + filepath.Join(dir, "log.smbd") + "\n",
-		"smb passwd file = " + filepath.Join(dir, "smbpasswd") + "\n",
-		"[vol]", "path = " + mountVolumePath, "read only = no", "valid users = plug\n",
-	} {
-		if !strings.Contains(c, want) {
-			t.Errorf("missing %q in\n%s", want, c)
-		}
-	}
-	if strings.Contains(c, "smb encrypt = required") || strings.Contains(c, "hosts deny") {
-		t.Error("a client that does not encrypt must still mount; the allow list alone is the filter")
-	}
-	if strings.Contains(c, "force user") {
-		t.Errorf("never a force user:\n%s", c)
-	}
-	if strings.Contains(c, "/etc/samba") || strings.Contains(c, "/var/lib/samba") || strings.Contains(c, "smb ports = 445") {
-		t.Errorf("nothing of a root layout may remain:\n%s", c)
-	}
-	// The filter and the directories live in [global], before the share, so the
-	// filter covers the negotiation itself and not just the tree connect.
-	share := strings.Index(c, "[vol]")
-	if strings.Index(c, "hosts allow") > share || strings.LastIndex(c, "directory = ") > share {
-		t.Error("hosts allow and the directories must be global")
-	}
-	if o.confFile() != filepath.Join(dir, "smb.conf") || o.passwdFile() != filepath.Join(dir, "smbpasswd") {
-		t.Errorf("files at %s and %s", o.confFile(), o.passwdFile())
-	}
-	// Every directory mount-serve creates is one the conf names (smbd makes
-	// some itself and not others).
-	for _, d := range smbStateDirs {
-		if !strings.Contains(c, d[0]+" = "+filepath.Join(dir, d[1])+"\n") {
-			t.Errorf("%s is created but not configured", d[1])
-		}
-	}
-	plain := smbConf(smbOptions{share: "vol", user: "plug", stateDir: dir})
-	if strings.Contains(plain, "fruit") {
-		t.Error("no fruit module, no fruit configuration")
-	}
-	// An agent that could not tell its addresses sets no filter at all: a
-	// refusal would be a mount lost for a guess.
-	if strings.Contains(plain, "hosts allow") {
-		t.Error("an empty allow list must not restrict anything")
-	}
-}
-
-// Who smbd runs as. A process that is not root is what the agent made it, the
+// Who the server runs as. A process that is not root is what the agent made it, the
 // workload's ids, and stays that. A root process is the fallback (the agent
-// could not tell): the owner of the volume's root decides, and smbd changes
+// could not tell): the owner of the volume's root decides, and the process changes
 // identity for it; a root-owned volume, or one that cannot be read, is served
 // as root with nothing to change. Would have caught: a helper started as the
 // workload's uid trying to become the volume's owner, files written as root
 // on a volume that is someone's.
-func TestSmbdIdentity(t *testing.T) {
+func TestServeIdentity(t *testing.T) {
 	owner := func(uid, gid int, err error) func() (int, int, error) {
 		return func() (int, int, error) { return uid, gid, err }
 	}
@@ -545,16 +476,16 @@ func TestSmbdIdentity(t *testing.T) {
 		t.Error("a process that is not root does not ask who owns the volume")
 		return 0, 0, nil
 	}
-	if uid, gid, from, change := smbdIdentity(1000680000, 0, unasked); uid != 1000680000 || gid != 0 || change || !strings.Contains(from, "the workload's, given by the agent") {
+	if uid, gid, from, change := serveIdentity(1000680000, 0, unasked); uid != 1000680000 || gid != 0 || change || !strings.Contains(from, "the workload's, given by the agent") {
 		t.Errorf("not root: %d:%d %q %v", uid, gid, from, change)
 	}
-	if uid, gid, from, change := smbdIdentity(0, 0, owner(1000, 1001, nil)); uid != 1000 || gid != 1001 || !change || !strings.Contains(from, "the volume owner's") {
+	if uid, gid, from, change := serveIdentity(0, 0, owner(1000, 1001, nil)); uid != 1000 || gid != 1001 || !change || !strings.Contains(from, "the volume owner's") {
 		t.Errorf("root, a volume that is someone's: %d:%d %q %v", uid, gid, from, change)
 	}
-	if uid, gid, from, change := smbdIdentity(0, 0, owner(0, 0, nil)); uid != 0 || gid != 0 || change || !strings.Contains(from, "the volume owner's") {
+	if uid, gid, from, change := serveIdentity(0, 0, owner(0, 0, nil)); uid != 0 || gid != 0 || change || !strings.Contains(from, "the volume owner's") {
 		t.Errorf("root, a root-owned volume: %d:%d %q %v", uid, gid, from, change)
 	}
-	if uid, gid, _, change := smbdIdentity(0, 0, owner(0, 0, os.ErrPermission)); uid != 0 || gid != 0 || change {
+	if uid, gid, _, change := serveIdentity(0, 0, owner(0, 0, os.ErrPermission)); uid != 0 || gid != 0 || change {
 		t.Errorf("root, an owner that cannot be read: %d:%d %v", uid, gid, change)
 	}
 }
@@ -571,47 +502,6 @@ func TestOwnerIDs(t *testing.T) {
 	}
 	if _, _, err := ownerIDs(filepath.Join(t.TempDir(), "absent")); err == nil {
 		t.Fatal("a missing path has no owner")
-	}
-}
-
-// What nss_wrapper serves smbd: the SMB account under the ids smbd runs as
-// (so the account Samba resolves is the uid it already is), and `nobody`, the guest account Samba insists on at start even
-// though `map to guest = Never` means nobody ever becomes it; the groups to
-// match. Would have caught: smbd exiting on "guest account nobody is invalid",
-// or on an account that NSS does not know.
-func TestNSSWrapperFiles(t *testing.T) {
-	passwd, group := nssWrapperFiles("plug", 1000680000, 0)
-	if passwd != "plug:x:1000680000:0:plug:/tmp:/sbin/nologin\nnobody:x:65534:65534:nobody:/:/sbin/nologin\n" {
-		t.Errorf("passwd:\n%s", passwd)
-	}
-	if group != "plug:x:0:\nnobody:x:65534:\n" {
-		t.Errorf("group:\n%s", group)
-	}
-	// Written where asked, and smbd told to read them there; the library is
-	// the one thing the image must carry, and a missing one is named with its
-	// package rather than left for smbd to fail on.
-	dir := t.TempDir()
-	old := nssWrapperLib
-	t.Cleanup(func() { nssWrapperLib = old })
-	nssWrapperLib = filepath.Join(dir, "libnss_wrapper.so")
-	if _, err := nssWrapperEnv(dir, "plug", 1000680000, 0); err == nil || !strings.Contains(err.Error(), "nss_wrapper package") {
-		t.Fatalf("a missing library must name the package, got %v", err)
-	}
-	if err := os.WriteFile(nssWrapperLib, nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	env, err := nssWrapperEnv(dir, "plug", 1000680000, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Join(env, " ") != "LD_PRELOAD="+nssWrapperLib+" NSS_WRAPPER_PASSWD="+filepath.Join(dir, "passwd")+" NSS_WRAPPER_GROUP="+filepath.Join(dir, "group") {
-		t.Errorf("env %v", env)
-	}
-	if b, _ := os.ReadFile(filepath.Join(dir, "passwd")); string(b) != passwd {
-		t.Errorf("passwd on disk:\n%s", b)
-	}
-	if b, _ := os.ReadFile(filepath.Join(dir, "group")); string(b) != group {
-		t.Errorf("group on disk:\n%s", b)
 	}
 }
 
@@ -721,19 +611,6 @@ func TestMountNetwork(t *testing.T) {
 	}
 }
 
-// The NT hash is MD4 over UTF-16LE: the known vector for "password", and the
-// smbpasswd(5) line around it.
-func TestNTHashAndSmbPasswdLine(t *testing.T) {
-	if got := ntHash("password"); got != "8846F7EAEE8FB117AD06BDD830B7586C" {
-		t.Fatalf("ntHash(password) = %s", got)
-	}
-	line := smbPasswdLine("plug", 1000, "password", time.Unix(0x5F000000, 0))
-	want := "plug:1000:" + strings.Repeat("X", 32) + ":8846F7EAEE8FB117AD06BDD830B7586C:[U          ]:LCT-5F000000:\n"
-	if line != want {
-		t.Fatalf("line = %q\nwant %q", line, want)
-	}
-}
-
 // The image the helper runs is the agent's own unless an embedder overrides
 // it - the same rule as the signpost.
 func TestMountImage(t *testing.T) {
@@ -773,7 +650,7 @@ func TestDataVolumePathsAndReply(t *testing.T) {
 
 // The Service in front of a Kubernetes helper: plug's own (the Service sweep
 // reaps it with a dead session's names), a mount's, selecting the one pod by
-// the helper label the pod carries; 445 for the client, the port smbd listens
+// the helper label the pod carries; 445 for the client, the port the server listens
 // on behind it.
 func TestK8sMountServiceShape(t *testing.T) {
 	svc := k8sMountService("shop", "plug-mnt-web-abcd1234", "10.1.2.3:40001")
@@ -809,5 +686,30 @@ func TestMountStatusLine(t *testing.T) {
 		if answered := refusalFor(t, c...); !strings.HasPrefix(answered, "error: ") {
 			t.Errorf("%v: expected a refusal, got %q", c, answered)
 		}
+	}
+}
+
+// The built-in server's source filter: an address becomes its own subnet, a
+// subnet is kept, and an entry that does not parse refuses the start instead
+// of shrinking the list towards "anyone".
+func TestAllowPrefixes(t *testing.T) {
+	got, err := allowPrefixes([]string{"10.0.1.5", "10.42.0.0/16", "fd00::7"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"10.0.1.5/32", "10.42.0.0/16", "fd00::7/128"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i, p := range got {
+		if p.String() != want[i] {
+			t.Errorf("entry %d: got %s, want %s", i, p, want[i])
+		}
+	}
+	if _, err := allowPrefixes([]string{"10.0.1.5", "not-an-address"}); err == nil {
+		t.Error("an entry that does not parse must be refused")
+	}
+	if got, err := allowPrefixes(nil); err != nil || len(got) != 0 {
+		t.Errorf("no entry: got %v, %v", got, err)
 	}
 }

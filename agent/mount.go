@@ -70,7 +70,7 @@ import (
 // workload does; normal, not a defect.
 //
 // The helper has one shape everywhere: no privilege, the workload's own uid
-// and gid (helperIDs, read on the workload's process), smbd on smbListenPort.
+// and gid (helperIDs, read on the workload's process), the server on smbListenPort.
 // The client is told 445 all the same: mountHelperPort is the ANNOUNCED port,
 // what mountReply carries, because the Windows SMB client wants 445 of a name
 // it resolves. On Kubernetes the helper's Service maps one to the other; on
@@ -89,8 +89,8 @@ const (
 
 // mountHelperName is the helper's cluster name: one per (workload, volume,
 // SESSION), the session being its liveness port. Per session, not per volume:
-// two developers may mount one volume at once (serving several clients is
-// what Samba is for), and a re-provision after a reconnect - a new port - is
+// two developers may mount one volume at once (a server takes several
+// clients), and a re-provision after a reconnect - a new port - is
 // a new helper beside the old one, which the sweep reaps as the old port no
 // longer answers. Hashed: a volume name can be sixty characters and a bind is
 // a path, neither of which fits a DNS label beside the workload's name. The
@@ -118,7 +118,7 @@ func mountDialPort(host, port string) string {
 // helper is a pod a restricted admission lets in (on OpenShift the workload's
 // uid is in the namespace's range, which is all the SCC asks). Either may be
 // unknown; with no uid the helper starts as its image's user and mount-serve
-// works the identity out itself (mountserve.go, smbdIdentity).
+// works the identity out itself (mountserve.go, serveIdentity).
 type helperIDs struct {
 	uid, gid       int
 	hasUID, hasGID bool
@@ -208,8 +208,8 @@ func workloadIDs(status string, declared helperIDs) (ids helperIDs, read bool) {
 	return declared, false
 }
 
-// mountImage is the image the helper runs: the agent's own, which carries
-// plug-agent AND Samba, unless an embedder says otherwise (the same reasoning
+// mountImage is the image the helper runs: the agent's own, since
+// the server is in plug-agent, unless an embedder says otherwise (the same reasoning
 // as signpostImage, and the same shape).
 func mountImage(self string) string {
 	if img := strings.TrimSpace(os.Getenv(mountImageEnv)); img != "" {
@@ -733,7 +733,7 @@ const mountAllowEnv = "PLUG_MOUNT_ALLOW"
 
 // mountAllow is the list the helper's `hosts allow` is built from: every
 // address this agent can connect FROM, since the helper only ever hears from
-// the agent (see smbConf). The agent's own interfaces are the ground truth: the
+// the agent (see allowPrefixes). The agent's own interfaces are the ground truth: the
 // kernel picks the source of a connection among them, whichever network the
 // helper is reached on. extra is what the orchestrator says on top (the pod
 // address on Kubernetes, the per-network addresses Docker reports), which can
@@ -768,7 +768,7 @@ func mountAllow(extra ...string) []string {
 		}
 		if !seen[e] {
 			seen[e] = true
-			out = append(out, e) // an address or a subnet, as Samba takes it
+			out = append(out, e) // an address or a subnet, as the helper takes it
 		}
 	}
 	sort.Strings(out)
@@ -914,7 +914,7 @@ func swarmMountVolume(name, volume, agentPort, pass string, self selfInfo) {
 	}
 	// The secret's file belongs to whoever the helper runs as, who is the only
 	// one to read it: root when the uid is unknown, since mount-serve reads
-	// the password before smbd takes another identity.
+	// the password before it takes another identity.
 	fileUID, fileGID := "0", "0"
 	if ids.hasUID {
 		fileUID = strconv.Itoa(ids.uid)
@@ -1161,19 +1161,19 @@ func k8sClaimModes(ns, claim string) []string {
 // flag, the workload's name, a folded volume); the session owner is host:port,
 // which a label value cannot hold, so it rides an annotation - as the parking
 // receipt's owner does. allow is who may reach the helper: this agent's pod
-// addresses (mountAllow), what the Service in front of the pod hands smbd as
+// addresses (mountAllow), what the Service in front of the pod hands the server as
 // source, kube-proxy preserving the pod's address on ClusterIP traffic.
 //
 // The pod is one every admission lets in, the `restricted` ones included
 // (OpenShift's SCC, Pod Security): it runs as ids, the workload's, non-root
 // said when that is so, with the workload's fsGroup, no escalation, every
-// capability dropped and the runtime's seccomp profile; smbd listens above
-// 1024. The one exception is a pod that is or may be root: a workload that
-// runs as root, or one whose uid nobody could tell (no uid is named then, and
-// an SCC puts its own). It keeps CHOWN, SETUID and SETGID: a root smbd calls
-// setgroups and dies without the right to, and mount-serve hands smbd to the
-// volume's owner (mountserve.go), which takes all three. An admission that
-// refuses those capabilities refuses that pod, and mount-status says so.
+// capability dropped and the runtime's seccomp profile; the server listens
+// above 1024. The one exception is a pod that is or may be root: a workload
+// that runs as root, or one whose uid nobody could tell (no uid is named then,
+// and an SCC puts its own). It keeps SETUID and SETGID: a root mount-serve
+// becomes the volume's owner before it serves (mountserve.go), which takes
+// both. An admission that refuses those capabilities refuses that pod, and
+// mount-status says so.
 func k8sMountPod(ns, helper, name, volume, claim, node, image, owner, pass string, allow []string, ids helperIDs, read bool, fsGroup *int64) map[string]any {
 	env := []map[string]string{}
 	for _, kv := range mountEnv(pass, "", allow, ids.note(read)) {
@@ -1196,7 +1196,7 @@ func k8sMountPod(ns, helper, name, volume, claim, node, image, owner, pass strin
 	if ids.hasUID && ids.uid != 0 {
 		podSC["runAsNonRoot"] = true
 	} else {
-		caps["add"] = []string{"CHOWN", "SETUID", "SETGID"}
+		caps["add"] = []string{"SETUID", "SETGID"}
 	}
 	if ids.hasGID {
 		podSC["runAsGroup"] = ids.gid
@@ -1252,7 +1252,7 @@ const mountHelperLabel = "plug.mount.helper"
 // k8sMountService is the Service that gives the helper pod a NAME the cluster
 // resolves: plug's own (k8sManaged, so the Service sweep reaps it with a dead
 // session's names) and a mount's (mountLabel), selecting the one pod. Port
-// 445, the one the client is told, to the port smbd listens on.
+// 445, the one the client is told, to the port the server listens on.
 func k8sMountService(ns, helper, owner string) map[string]any {
 	return map[string]any{
 		"apiVersion": "v1",
