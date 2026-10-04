@@ -187,10 +187,10 @@ import { MatIconModule } from '@angular/material/icon';
         <span class="feature-title">Linux · macOS · Windows</span>
         <span class="feature-desc">Native on all three (no WSL2 needed); a multi-arch <code>amd64</code>/<code>arm64</code> agent image.</span>
       </a>
-      <a routerLink="/security" class="card feature-card">
-        <mat-icon class="feature-icon">shield</mat-icon>
-        <span class="feature-title">Honest security model</span>
-        <span class="feature-desc">Deliberately auth-less, for trusted dev clusters - read the model before deploying.</span>
+      <a routerLink="/how-it-works" class="card feature-card">
+        <mat-icon class="feature-icon">inventory_2</mat-icon>
+        <span class="feature-title">The service's configuration and data</span>
+        <span class="feature-desc">Take a deployed service's place and your process starts with its values, its secrets and its config files, and works on its volumes, live.</span>
       </a>
     </section>
 

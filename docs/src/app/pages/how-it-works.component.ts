@@ -74,6 +74,19 @@ import { RouterLink } from '@angular/router';
       for the session: it stops answering, and your process answers instead. When your command ends,
       the service is <strong>restored</strong> as it was. Nobody redeploys anything.
     </p>
+    <!-- Same reason for an <img> and a <picture> as the first diagram above. -->
+    <div class="diagram">
+      <picture>
+        <source media="(prefers-reduced-motion: reduce)" srcset="assets/env-diagram-still.png" />
+        <img src="assets/env-diagram.svg" width="900" height="511" loading="lazy" alt="A service's configuration in two animated rounds: the deployed api runs with the values, secrets and config files the cluster gives it; then plug parks api, the agent reads that configuration and hands it through the SSH tunnel, and your local api starts with the same values, secrets and files." />
+      </picture>
+    </div>
+    <p class="cap">
+      What the cluster gave the service, its values, its secrets, its config files, is read by the
+      agent and handed to your process when it starts. You copy nothing by hand, and your process
+      behaves as the service did.
+    </p>
+
     <p>Standing in for a service means being it, so your process receives what the service had:</p>
     <ul>
       <li>its <strong>environment</strong>, secrets included, with the cluster's values;</li>

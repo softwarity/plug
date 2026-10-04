@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="900" height="511" viewBox="0 0 900 511" xmlns="http://www.w3.org/2000/svg" role="img" font-family="-apple-system, Segoe UI, Roboto, sans-serif">
+  <title>plug: your process runs with the configuration of the service it replaces</title>
+  <desc>Animated walk in two rounds. Round one, the cluster alone: the deployed service api runs with its configuration, values, secrets and config files, which the cluster gives it. Then the plug command lights up on your machine and the session starts: the deployed api is parked, the plug agent reads what api was given and hands it through the SSH tunnel to your machine, and your local api starts with the same values, the same secrets and the same files. The loop ends with the service restored.</desc>
+  <defs>
+    <marker id="ev-g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#3fb950" /></marker>
+    <marker id="ev-p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#a371f7" /></marker>
+  </defs>
+  <rect x="2" y="2" width="896" height="507" rx="16" fill="#0d1117" stroke="#30363d" stroke-width="1.5" />
+
+  <!-- The cluster. -->
+  <rect x="30" y="52" width="520" height="396" rx="12" fill="#0e141b" stroke="#30363d" />
+  <text x="54" y="80" font-size="12" letter-spacing="2" fill="#8b949e" font-weight="700">THE CLUSTER</text>
+
+  <!-- The configuration the cluster holds for api: always there. -->
+  <rect x="62" y="268" width="216" height="148" rx="8" fill="#161b22" stroke="#30363d" />
+  <text x="78" y="290" font-size="10.5" letter-spacing="1.2" fill="#8b949e" font-weight="700">ITS CONFIGURATION</text>
+  <rect x="76" y="302" width="188" height="28" rx="5" fill="#21262d" stroke="#30363d" />
+  <text x="88" y="320" font-family="ui-monospace, Menlo, monospace" font-size="10.5" fill="#e6edf3">DB_HOST=postgres</text>
+  <text x="254" y="320" text-anchor="end" font-size="8.5" fill="#8b949e">value</text>
+  <rect x="76" y="336" width="188" height="28" rx="5" fill="#21262d" stroke="#30363d" />
+  <text x="88" y="354" font-family="ui-monospace, Menlo, monospace" font-size="10.5" fill="#e6edf3">API_KEY=••••••</text>
+  <text x="254" y="354" text-anchor="end" font-size="8.5" fill="#8b949e">secret</text>
+  <rect x="76" y="370" width="188" height="28" rx="5" fill="#21262d" stroke="#30363d" />
+  <text x="88" y="388" font-family="ui-monospace, Menlo, monospace" font-size="10.5" fill="#e6edf3">ca.pem</text>
+  <text x="254" y="388" text-anchor="end" font-size="8.5" fill="#8b949e">config file</text>
+
+  <!-- The agent. -->
+  <rect x="430" y="120" width="90" height="98" rx="8" fill="#161b22" stroke="#a371f7" stroke-width="1.4" />
+  <text x="475" y="156" text-anchor="middle" font-size="12.5" fill="#e6edf3" font-weight="600">plug</text>
+  <text x="475" y="173" text-anchor="middle" font-size="11" fill="#8b949e">agent</text>
+
+  <!-- api as DEPLOYED (live before the session, restored at the end). -->
+  <g opacity="1">
+    <animate attributeName="opacity" values="1;1;0;0;1" keyTimes="0;0.42;0.46;0.96;1" dur="16s" repeatCount="indefinite" />
+    <rect x="96" y="130" width="148" height="54" rx="8" fill="#21262d" stroke="#30363d" />
+    <text x="170" y="153" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#e6edf3" font-weight="600">api</text>
+    <text x="170" y="170" text-anchor="middle" font-size="8.5" fill="#8b949e">deployed in the stack</text>
+    <line x1="170" y1="184" x2="170" y2="268" stroke="#8b949e" stroke-width="1.8" />
+    <text x="160" y="230" text-anchor="end" font-size="8.5" fill="#8b949e">runs with it</text>
+  </g>
+  <!-- api PARKED while the plug session lives. -->
+  <g opacity="0">
+    <animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.42;0.46;0.96;1" dur="16s" repeatCount="indefinite" />
+    <g opacity="0.55">
+      <rect x="96" y="130" width="148" height="54" rx="8" fill="#161b22" stroke="#30363d" stroke-dasharray="4 3" />
+      <text x="170" y="153" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="12.5" fill="#8b949e" font-weight="600">api</text>
+      <text x="170" y="170" text-anchor="middle" font-size="8.5" fill="#6e7681">deployed · restored on exit</text>
+    </g>
+    <rect x="198" y="123" width="42" height="14" rx="7" fill="#0d1117" stroke="#d29922" stroke-width="0.8" />
+    <text x="219" y="133" text-anchor="middle" font-size="8.5" fill="#d29922">parked</text>
+  </g>
+
+  <!-- Round 1: the deployed api starts with its configuration. -->
+  <g opacity="0">
+    <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.05;0.07;0.36;0.40;1" dur="16s" repeatCount="indefinite" />
+    <rect x="96" y="130" width="148" height="54" rx="8" fill="none" stroke="#3fb950" stroke-width="2" />
+    <line x1="170" y1="264" x2="170" y2="188" stroke="#3fb950" stroke-width="2.2" marker-end="url(#ev-g)" />
+    <text x="180" y="230" font-size="9.5" fill="#3fb950" font-weight="600">given by the cluster</text>
+    <rect x="62" y="268" width="216" height="148" rx="8" fill="none" stroke="#3fb950" stroke-width="2" />
+  </g>
+
+  <!-- Your side: dimmed until the plug session starts. -->
+  <g opacity="0.3">
+    <animate attributeName="opacity" values="0.3;0.3;1;1;0.3" keyTimes="0;0.42;0.46;0.96;1" dur="16s" repeatCount="indefinite" />
+    <rect x="550" y="120" width="96" height="98" rx="6" fill="#0d1117" stroke="#21262d" stroke-dasharray="3 3" />
+    <text x="598" y="114" text-anchor="middle" font-size="9" fill="#6e7681">SSH tunnel</text>
+    <rect x="646" y="96" width="232" height="262" rx="12" fill="#161b22" stroke="#30363d" />
+    <text x="662" y="118" font-size="11" letter-spacing="1.5" fill="#8b949e" font-weight="700">YOUR MACHINE</text>
+    <rect x="662" y="128" width="200" height="60" rx="8" fill="#21262d" stroke="#30363d" />
+    <text x="762" y="152" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="14" fill="#e6edf3" font-weight="600">api</text>
+    <text x="762" y="172" text-anchor="middle" font-size="10" fill="#8b949e">npm run start:dev</text>
+    <text x="762" y="344" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="9.5" fill="#6e7681">plug -s api:80:3000</text>
+    <rect x="412" y="96" width="476" height="276" rx="16" fill="none" stroke="#a371f7" stroke-width="1.3" stroke-dasharray="6 4" opacity="0.85" />
+    <rect x="412" y="86" width="48" height="20" rx="5" fill="#0d1117" stroke="#a371f7" />
+    <text x="436" y="100" text-anchor="middle" font-size="11" fill="#a371f7" font-weight="700">plug</text>
+  </g>
+  <!-- The plug command lights up right before the session block does. -->
+  <g opacity="0">
+    <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.405;0.417;0.90;0.94;1" dur="16s" repeatCount="indefinite" />
+    <text x="762" y="344" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="9.5" fill="#3fb950" font-weight="600">plug -s api:80:3000</text>
+  </g>
+
+  <!-- Step 1: the agent reads what api was given. -->
+  <g opacity="0">
+    <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.52;0.532;0.90;0.94;1" dur="16s" repeatCount="indefinite" />
+    <rect x="62" y="268" width="216" height="148" rx="8" fill="none" stroke="#a371f7" stroke-width="2" />
+    <path d="M280 320 H475 V222" fill="none" stroke="#a371f7" stroke-width="2.2" marker-end="url(#ev-p)" />
+    <text x="342" y="312" text-anchor="middle" font-size="9.5" fill="#a371f7">read by the agent</text>
+    <rect x="430" y="120" width="90" height="98" rx="8" fill="none" stroke="#a371f7" stroke-width="2" />
+  </g>
+  <!-- Step 2: handed through the tunnel to your machine. -->
+  <g opacity="0">
+    <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.60;0.612;0.90;0.94;1" dur="16s" repeatCount="indefinite" />
+    <line x1="524" y1="160" x2="658" y2="160" stroke="#a371f7" stroke-width="2.2" marker-end="url(#ev-p)" />
+    <text x="598" y="178" text-anchor="middle" font-size="9.5" fill="#a371f7">handed to your process</text>
+  </g>
+  <!-- Step 3: your process starts with the same configuration, row by row. -->
+  <g opacity="0">
+    <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.68;0.692;0.90;0.94;1" dur="16s" repeatCount="indefinite" />
+    <rect x="662" y="128" width="200" height="60" rx="8" fill="none" stroke="#3fb950" stroke-width="2" />
+    <text x="662" y="210" font-size="9" letter-spacing="1" fill="#3fb950" font-weight="700">STARTS WITH</text>
+    <rect x="662" y="218" width="200" height="28" rx="5" fill="#21262d" stroke="#3fb950" stroke-width="1.2" />
+    <text x="674" y="236" font-family="ui-monospace, Menlo, monospace" font-size="10.5" fill="#e6edf3">DB_HOST=postgres</text>
+    <text x="852" y="236" text-anchor="end" font-size="8.5" fill="#8b949e">value</text>
+  </g>
+  <g opacity="0">
+    <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.73;0.742;0.90;0.94;1" dur="16s" repeatCount="indefinite" />
+    <rect x="662" y="252" width="200" height="28" rx="5" fill="#21262d" stroke="#3fb950" stroke-width="1.2" />
+    <text x="674" y="270" font-family="ui-monospace, Menlo, monospace" font-size="10.5" fill="#e6edf3">API_KEY=••••••</text>
+    <text x="852" y="270" text-anchor="end" font-size="8.5" fill="#8b949e">secret</text>
+  </g>
+  <g opacity="0">
+    <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.78;0.792;0.90;0.94;1" dur="16s" repeatCount="indefinite" />
+    <rect x="662" y="286" width="200" height="28" rx="5" fill="#21262d" stroke="#3fb950" stroke-width="1.2" />
+    <text x="674" y="304" font-family="ui-monospace, Menlo, monospace" font-size="10.5" fill="#e6edf3">ca.pem</text>
+    <text x="852" y="304" text-anchor="end" font-size="8.5" fill="#8b949e">config file</text>
+  </g>
+
+  <line x1="60" y1="481" x2="90" y2="481" stroke="#3fb950" stroke-width="2.6" />
+  <text x="98" y="485" font-size="11.5" fill="#8b949e">the configuration a process starts with</text>
+  <line x1="420" y1="481" x2="450" y2="481" stroke="#a371f7" stroke-width="2.6" />
+  <text x="458" y="485" font-size="11.5" fill="#8b949e">read in the cluster, handed over through plug</text>
+</svg>

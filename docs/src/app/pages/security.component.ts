@@ -75,12 +75,32 @@ ssh -p 2222 get@&lt;host&gt; cat /etc/shadow                  # ForceCommand ign
         scope   =  the networks: list of the stack (Docker, Swarm)
                    the agent's namespace (Kubernetes), nothing more</app-code>
 
-    <h3>If your threat model grows</h3>
+    <h3>For a shared cluster: the hosted version</h3>
     <p>
-      The architecture doesn't change - only the transport hardens: generate a real keypair, bake
-      the public half into your own agent image, distribute the private half to the team. The
-      planned <a routerLink="/roadmap">API-gateway integration</a> goes further: the tunnel endpoint
-      is enabled/disabled dynamically and inherits the gateway's own authentication.
+      Standalone, plug is meant for a <strong>private network</strong>: whoever reaches the agent's
+      port is in. Where a cluster is shared, or that port cannot stay private, the answer is the
+      <strong>hosted</strong> version, the same agent embedded in a gateway that knows who people
+      are. <a routerLink="/meerkat">Meerkat</a> is one.
+    </p>
+    <ul>
+      <li>
+        <strong>Each developer has an identity.</strong> They create a personal key with
+        <code>plug keygen</code> and register its public half in the gateway's own interface, where
+        it is tied to their name.
+      </li>
+      <li>
+        <strong>Only declared identities get in.</strong> A key the gateway has not been given
+        opens nothing. Access is given and withdrawn per person, in the gateway, like any other
+        right it manages.
+      </li>
+      <li>
+        <strong>Every session has a name on it.</strong> Which service is plugged, by whom, since
+        when: the cluster can say it.
+      </li>
+    </ul>
+    <p>
+      The CLI is the same and so is everything it does. What changes is who may use it, and that
+      the gateway, not the network, decides.
     </p>
   `,
 })
