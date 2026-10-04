@@ -539,7 +539,13 @@ func dockerMountVolume(name, volume, agentPort, pass string, self selfInfo) {
 	body := map[string]any{
 		"Image":      mountImage(self.image),
 		"Entrypoint": []string{"/usr/local/bin/plug-agent", "mount-serve"},
-		"Env":        mountEnv(pass, "", mountAllow(self.addrs()...), ""),
+		// Root, said rather than assumed: this shape binds 445 and writes files
+		// as the volume's owner (force user), both of which need it, and the
+		// image serving as helper is not always plug's own. A gateway that
+		// embeds the agent ships USER 65532 for Pod Security, and the helper it
+		// started from that image ran unprivileged by accident, losing both.
+		"User": "0",
+		"Env":  mountEnv(pass, "", mountAllow(self.addrs()...), ""),
 		"Labels": map[string]string{
 			mountLabel:        "1",
 			mountOfLabel:      name,
@@ -752,6 +758,7 @@ func swarmMountVolume(name, volume, agentPort, pass string, self selfInfo) {
 	container := map[string]any{
 		"Image":   pinnedImage(mountImage(self.image)),
 		"Command": []string{"/usr/local/bin/plug-agent", "mount-serve"},
+		"User":    "0", // same reason as the Docker shape: 445 and force user need root
 		"Mounts":  []map[string]any{mountSpec(m)},
 	}
 	allow := mountAllow(self.addrs()...)
@@ -1001,6 +1008,14 @@ func k8sMountPod(ns, helper, name, volume, claim, node, image, owner, pass strin
 			"capabilities":             map[string]any{"drop": []string{"ALL"}},
 			"seccompProfile":           map[string]any{"type": "RuntimeDefault"},
 		}
+	} else {
+		// Root, said rather than assumed: the image serving as helper is not
+		// always plug's own (a gateway embedding the agent ships USER 65532),
+		// and this shape needs root for 445 and for writing as the volume's
+		// owner. A namespace that forbids root (Pod Security `restricted`
+		// outside OpenShift) takes the unprivileged shape instead, through
+		// PLUG_MOUNT_UNPRIVILEGED on the agent.
+		container["securityContext"] = map[string]any{"runAsUser": 0}
 	}
 	spec := map[string]any{
 		"restartPolicy": "Always",
@@ -1038,6 +1053,15 @@ func k8sMountPod(ns, helper, name, volume, claim, node, image, owner, pass strin
 // mountHelperLabel is the pod label the helper's Service selects on: the
 // helper's own name, one pod behind one name.
 const mountHelperLabel = "plug.mount.helper"
+
+// mountForcedUnprivileged reads PLUG_MOUNT_UNPRIVILEGED on the agent: 1 or
+// true asks for the unprivileged helper shape on every Kubernetes cluster, for
+// a namespace under Pod Security `restricted` that is not OpenShift and so is
+// not detected (k8sIsOpenShift). Anything else leaves the platform to decide.
+func mountForcedUnprivileged() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("PLUG_MOUNT_UNPRIVILEGED")))
+	return v == "1" || v == "true"
+}
 
 // k8sMountService is the Service that gives the helper pod a NAME the cluster
 // resolves: plug's own (k8sManaged, so the Service sweep reaps it with a dead
@@ -1097,8 +1121,13 @@ func k8sMountVolume(ns, name, volume, agentPort, pass string) {
 		}
 	}
 	// The platform decides the pod's shape: OpenShift admits only the
-	// unprivileged one, everything else runs the root one it always did.
-	unprivileged, _ := k8sIsOpenShift()
+	// unprivileged one, everything else runs the root one it always did. An
+	// operator whose namespace forbids root without being OpenShift (Pod
+	// Security `restricted`) says so on the agent, PLUG_MOUNT_UNPRIVILEGED=1.
+	unprivileged := mountForcedUnprivileged()
+	if !unprivileged {
+		unprivileged, _ = k8sIsOpenShift()
+	}
 	body := k8sMountPod(ns, helper, name, volume, claim, node, mountImage(image), owner, pass, mountAllow(k8sSelfIP()), unprivileged)
 	code, err := k8sAPI("POST", "/api/v1/namespaces/"+ns+"/pods", body, nil)
 	if code == 403 {

@@ -55,6 +55,9 @@ func TestDockerMountVolumeCreatesTheHelperOnOneNetworkWithTheAgentAllowed(t *tes
 	if !c.Running {
 		t.Error("the helper was created but never started")
 	}
+	if c.User != "0" {
+		t.Errorf("the root shape says User 0, the image may ship another: got %q", c.User)
+	}
 	want := map[string]string{
 		mountLabel: "1", mountOfLabel: "db", mountVolumeLabel: "pgdata",
 		mountOwnerLabel: "shop-plug-1", sessionOwnerLabel: "shop-plug-1:41020",
@@ -170,6 +173,9 @@ func TestSwarmMountVolumeCreatesTheSecretAndADNSRRService(t *testing.T) {
 		t.Errorf("the helper must publish no VIP (dnsrr), got endpoint mode %q", sp.EndpointSpec.Mode)
 	}
 	cs := sp.TaskTemplate.ContainerSpec
+	if cs.User != "0" {
+		t.Errorf("the root shape says User 0 on Swarm too, got %q", cs.User)
+	}
 	if len(cs.Secrets) != 1 || cs.Secrets[0].SecretName != helper || cs.Secrets[0].File.Name != helper {
 		t.Errorf("the service must mount its secret under the helper's name, got %+v", cs.Secrets)
 	}
@@ -270,8 +276,8 @@ func TestK8sMountVolumeTakesTheShapeThePlatformAdmits(t *testing.T) {
 					t.Errorf("%s would have the pod refused by the SCC", k)
 				}
 			}
-		} else if _, told := env[smbListenEnv]; told || sc {
-			t.Errorf("the root helper is what it always was, got env %v, securityContext %v", env, sc)
+		} else if _, told := env[smbListenEnv]; told || !sc || anyMap(c["securityContext"])["runAsUser"] != float64(0) {
+			t.Errorf("the root helper runs as root, said explicitly, and is told nothing else, got env %v, securityContext %v", env, c["securityContext"])
 		}
 		if anyMap(pod["spec"])["nodeName"] != "node-b" || env[smbPassEnv] != hexPass {
 			t.Errorf("openshift=%v: pinned to the workload's node with the session's credential, got %v / %v", tc.openshift, anyMap(pod["spec"])["nodeName"], env)

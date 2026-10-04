@@ -289,13 +289,14 @@ func TestK8sMountPodShape(t *testing.T) {
 		t.Fatal("labelSafe")
 	}
 	// The root shape, which every cluster but OpenShift runs: 445 in the
-	// container, no securityContext, no listen port in the environment. This
-	// is the shape that must not move when the other one is added.
+	// container, root said explicitly (an image serving as helper may ship a
+	// USER of its own), no listen port in the environment. This is the shape
+	// that must not move when the other one is added.
 	if ports := c["ports"].([]map[string]any); len(ports) != 1 || ports[0]["containerPort"] != 445 {
 		t.Fatalf("root shape ports %v", ports)
 	}
-	if _, has := c["securityContext"]; has {
-		t.Fatal("the root shape carries no securityContext")
+	if sc, _ := c["securityContext"].(map[string]any); len(sc) != 1 || sc["runAsUser"] != 0 {
+		t.Fatalf("the root shape says runAsUser 0 and nothing else, got %v", c["securityContext"])
 	}
 	if _, has := env[smbListenEnv]; has {
 		t.Fatal("the root shape listens on 445 and says nothing about it")
@@ -736,6 +737,17 @@ func TestMountStatusLine(t *testing.T) {
 	for _, c := range [][]string{{"mount-status"}, {"mount-status", "web", "data"}, {"mount-status", "Web", "data", "40000"}, {"mount-status", "web", "data", "x"}} {
 		if answered := refusalFor(t, c...); !strings.HasPrefix(answered, "error: ") {
 			t.Errorf("%v: expected a refusal, got %q", c, answered)
+		}
+	}
+}
+
+// A namespace that forbids root without being OpenShift says so on the agent;
+// anything but 1 or true leaves the platform to decide.
+func TestMountForcedUnprivilegedReadsTheAgentsEnvironment(t *testing.T) {
+	for v, want := range map[string]bool{"1": true, "true": true, " TRUE ": true, "0": false, "": false, "yes": false} {
+		t.Setenv("PLUG_MOUNT_UNPRIVILEGED", v)
+		if got := mountForcedUnprivileged(); got != want {
+			t.Errorf("%q: got %v, want %v", v, got, want)
 		}
 	}
 }

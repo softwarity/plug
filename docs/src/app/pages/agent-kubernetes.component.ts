@@ -57,8 +57,11 @@ import { FileComponent } from '../file/file.component';
       the uid from the namespace's range and refuses a pod that names its own), Samba listening on a
       high port with the helper's Service mapping 445 to it, so the client is told 445 as everywhere.
       Files are then written by that uid rather than the volume's owner, which is what OpenShift sets
-      volumes up for (group 0 writable). Everywhere else the helper runs as root and writes as the
-      volume's owner, as before.
+      volumes up for (group 0 writable). Everywhere else the helper runs as root, said explicitly in
+      its spec so that it holds even when the image serving as helper ships a user of its own, and
+      writes as the volume's owner, as before. A namespace that forbids root without being OpenShift
+      (Pod Security <code>restricted</code>) gets the same unprivileged shape by setting
+      <code>PLUG_MOUNT_UNPRIVILEGED=1</code> on the agent.
     </p>
 
     <h3>Reaching it</h3>

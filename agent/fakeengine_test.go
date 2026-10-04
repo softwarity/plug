@@ -48,6 +48,7 @@ type fakeContainer struct {
 	Labels     map[string]string
 	Entrypoint []string
 	Env        []string
+	User       string
 	Running    bool
 	Networks   map[string]*fakeEndpoint
 	Mounts     []dockerMount    // as inspect reports them
@@ -235,6 +236,7 @@ func (fe *fakeEngine) createContainer(w http.ResponseWriter, name string, body m
 	c.Image, _ = body["Image"].(string)
 	c.Entrypoint = anyStrings(body["Entrypoint"])
 	c.Env = anyStrings(body["Env"])
+	c.User, _ = body["User"].(string)
 	for k, v := range anyMap(body["Labels"]) {
 		c.Labels[k], _ = v.(string)
 	}
@@ -686,6 +688,7 @@ type serviceSpec struct {
 			Image   string
 			Command []string
 			Env     []string
+			User    string
 			Mounts  []map[string]any
 			Secrets []struct {
 				SecretName string

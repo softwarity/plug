@@ -2,6 +2,18 @@
 
 ## NEXT RELEASE
 
+### The mount helper says it runs as root, instead of assuming it
+
+The root shape of the helper (Docker, Swarm, Kubernetes outside OpenShift)
+named no user and relied on the image's default. A gateway that embeds the
+agent and serves as its own helper ships `USER 65532` for Pod Security, so
+the helper it started ran unprivileged by accident: files were written as
+65532 instead of the volume's owner, and binding 445 depended on the runtime.
+The three root shapes now say `User 0` (`runAsUser: 0` on Kubernetes).
+A Kubernetes namespace that forbids root without being OpenShift (Pod
+Security `restricted`) takes the unprivileged shape of 2.21.5 by setting
+`PLUG_MOUNT_UNPRIVILEGED=1` on the agent.
+
 ---
 
 ## 2.21.5
