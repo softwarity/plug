@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.21.8
+
 ### Live mounts: the Finder and the Explorer
 
 A mounted volume is at home in the desktop's own file manager. Copying a file
