@@ -32,6 +32,11 @@ export const routes: Routes = [
     loadComponent: () => import('./pages/how-it-works.component').then((m) => m.HowItWorksComponent),
   },
   {
+    path: 'under-the-hood',
+    title: 'plug - Under the hood',
+    loadComponent: () => import('./pages/under-the-hood.component').then((m) => m.UnderTheHoodComponent),
+  },
+  {
     path: 'profiles',
     title: 'plug - Profiles & versions',
     loadComponent: () => import('./pages/profiles.component').then((m) => m.ProfilesComponent),

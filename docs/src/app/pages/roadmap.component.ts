@@ -31,7 +31,7 @@ import { MatIconModule } from '@angular/material/icon';
       <strong>userspace TUN</strong>. Answering DNS in-stack and capturing at the IP layer is what
       finally made it work under a corporate VPN <em>and</em> cover every runtime (Go and gRPC
       included) with no per-service config, while keeping several clusters isolated. See
-      <a routerLink="/how-it-works">How it works</a>.
+      <a routerLink="/under-the-hood">Under the hood</a>.
     </div>
 
     <h3>Kubernetes transport</h3>
@@ -52,7 +52,7 @@ import { MatIconModule } from '@angular/material/icon';
     <p>
       The tunnel carries <strong>TCP only</strong> - SSH's <code>direct-tcpip</code> is stream-only,
       so UDP to a cluster service is not forwarded today (DNS is the exception, answered in-stack;
-      see <a routerLink="/how-it-works">How it works</a>). Planned: a <strong>datagram relay</strong>.
+      see <a routerLink="/under-the-hood">Under the hood</a>). Planned: a <strong>datagram relay</strong>.
       The agent gains a small <code>udp-relay</code> helper - invoked over SSH exactly like the
       <code>-s</code> provisioning - while plug frames datagrams over a channel and pumps them both
       ways, reusing the same by-name lookup and per-cluster attribution as TCP. The trade-off is

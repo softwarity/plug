@@ -60,7 +60,7 @@ plug -p staging -s my-app:8080:3000 npm run start   # → cluster staging, side 
       The same service names resolve to the right backend in each. How plug keeps the two apart
       differs by OS (a private resolver per launch on Linux, one tunnel per cluster attributed at
       <code>connect()</code> on macOS and Windows): see
-      <a routerLink="/how-it-works">how plug tells them apart</a> and the
+      <a routerLink="/under-the-hood">how plug tells them apart</a> and the
       <a routerLink="/coverage">coverage matrix</a>.
     </p>
 
