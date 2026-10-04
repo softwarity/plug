@@ -2,37 +2,27 @@
 
 ## NEXT RELEASE
 
-### The mount helper has one shape: the workload's uid, port 1445
+### Live mounts: the helper runs as the workload, on every platform
 
-2.21.5 taught the helper of a live mount to run without privilege on
-OpenShift, and kept the root helper everywhere else: two shapes, two ports, a
-detection and a switch. There is one shape now, the same on Docker, Swarm,
-Kubernetes, OpenShift and OKD.
+The helper that serves a workload's volume to your machine now runs with the
+workload's own user, the same way on Docker, Swarm, Kubernetes, OpenShift and
+OKD.
 
-- The helper runs with the uid and gid of the workload itself. The agent
-  reads them on the workload's first process (`/proc/1/status`, through the
-  exec it already uses for the environment), falls back to the user the
-  workload declares, and names none when it cannot tell. Files written
-  through the mount belong to the workload's user, as they did, without root
-  and without Samba's `force user`. A helper that still starts as root (no
-  uid could be told and the image runs as root) serves as the owner of the
-  volume's root.
-- It listens on 1445, everywhere, which needs no privilege. The client is
-  still told 445, the only port Windows speaks: on Kubernetes the helper's
-  Service maps 445 to 1445, and on Docker and Swarm, where there is no
-  Service, the agent translates a helper's address asked on 445.
-- Gone with the second shape: the detection of OpenShift, the creation of a
-  Unix account in the helper, `PLUG_SMB_LISTEN`. A gateway embedding the
-  agent no longer depends on its image's default user.
+- **Files keep the right owner.** The agent reads the user the workload runs
+  as and starts the helper with it, so what your process writes through the
+  mount belongs to that user, exactly as if the workload had written it.
+- **No privilege.** The helper listens on a high port and needs no capability;
+  on Kubernetes its pod drops them all, which is what the `restricted`
+  profiles of OpenShift, OKD and Pod Security admit. A workload that runs as
+  root is served the same way, by a helper that runs as root too.
+- **Nothing changes on your side.** The mount is reached through the tunnel
+  as before, with the SMB client your OS already has, on macOS, Linux and
+  Windows.
+- **One behaviour everywhere.** The same helper on every cluster, whatever
+  image serves as helper: plug's own, or a gateway that embeds the agent.
 
-On Kubernetes the helper's pod drops every capability when the workload's uid
-is known and not root, which is what the `restricted` profiles of OpenShift
-and Pod Security admit. A root workload gets a helper with the three
-capabilities Samba needs to serve as the volume's owner (CHOWN, SETUID,
-SETGID); such a workload is not admitted under `restricted` to begin with.
-
-An image that serves as helper must carry `nss_wrapper` beside Samba in every
-case now, not only on OpenShift. plug's own images do.
+An image that serves as helper carries `nss_wrapper` beside Samba. plug's
+images do.
 
 ---
 
