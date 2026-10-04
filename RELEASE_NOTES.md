@@ -2,6 +2,13 @@
 
 ## NEXT RELEASE
 
+### Live mounts: the Finder and the Explorer
+
+A mounted volume is at home in the desktop's own file manager. Copying a file
+or a folder into it with the Finder goes through without a question asked, and
+a copy made with the Windows Explorer carries its metadata along; neither
+leaves a file of its own in the workload's volume.
+
 ---
 
 ## 2.21.7
