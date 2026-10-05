@@ -52,6 +52,7 @@ export class AppComponent {
     { path: '/comparison', label: 'Compared to others', icon: 'compare_arrows' },
     { path: '/getting-started', label: 'Getting started', icon: 'rocket_launch' },
     { path: '/cli', label: 'CLI reference', icon: 'terminal' },
+    { path: '/build-tools', label: 'From your build tool', icon: 'integration_instructions' },
     { path: '/how-it-works', label: 'How it works', icon: 'account_tree' },
     { path: '/under-the-hood', label: 'Under the hood', icon: 'build' },
     { path: '/profiles', label: 'Profiles & versions', icon: 'settings' },

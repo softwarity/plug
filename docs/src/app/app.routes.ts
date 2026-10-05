@@ -22,6 +22,11 @@ export const routes: Routes = [
     loadComponent: () => import('./pages/cli.component').then((m) => m.CliComponent),
   },
   {
+    path: 'build-tools',
+    title: 'plug - From your build tool',
+    loadComponent: () => import('./pages/build-tools.component').then((m) => m.BuildToolsComponent),
+  },
+  {
     path: 'comparison',
     title: 'plug - How it compares',
     loadComponent: () => import('./pages/comparison.component').then((m) => m.ComparisonComponent),

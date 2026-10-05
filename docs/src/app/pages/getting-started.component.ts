@@ -111,6 +111,10 @@ ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get&#64;
       name - <code>http://pdfbox:8080</code>, <code>mongodb:27017</code>. <kbd>Ctrl-C</kbd> stops
       your process; when the last one exits, your machine is back exactly as it was.
     </p>
+    <p>
+      To keep that command with the project, in <code>package.json</code>, a Maven or Gradle build,
+      or a Makefile, see <a routerLink="/build-tools">From your build tool</a>.
+    </p>
 
     <h3>4. Run your process as a pure client</h3>
     <p>
