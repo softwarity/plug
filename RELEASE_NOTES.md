@@ -2,6 +2,21 @@
 
 ## NEXT RELEASE
 
+### Profiles: every one of them is yours to manage
+
+`plug rm`, `plug rn`, `plug config` and `plug -p <name> -H <host>` now work on
+every profile in `~/.plug`, including one an earlier version of plug wrote on
+macOS and left owned by root. Redefining such a profile hands it back to you.
+
+A first profile created on a machine with no `~/.plug` yet makes the directory
+yours as well.
+
+Profiles are now rewritten as a new file put in place of the old one. An edit
+that is interrupted leaves the previous profile intact, and plug, which holds
+root on macOS, only ever does what you could do yourself in your own
+directory: it never writes into a file that is not yours, and never follows a
+link out of `~/.plug`.
+
 ---
 
 ## 2.21.8

@@ -1,8 +1,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
-	"os"
+	"io/fs"
 	"path/filepath"
 	"regexp"
 )
@@ -30,10 +31,19 @@ func cmdRemoveProfile(args []string) {
 		fatal("usage: plug rm <profile>")
 	}
 	name := args[0]
-	path := profilePath(name)
-	guardUserPath(path) // plug may hold root here — never act outside the caller's tree
-	if err := os.Remove(path); err != nil {
-		if os.IsNotExist(err) {
+	file := profileFile(name)
+	// plug may hold root here: the entry goes, in a directory proven the
+	// user's (profileDir), whoever owns the file.
+	d, err := openProfileDir(false)
+	if errors.Is(err, fs.ErrNotExist) {
+		fatal("no profile %q in %s", name, plugDir())
+	}
+	if err != nil {
+		fatal("%v", err)
+	}
+	defer d.Close()
+	if err := d.remove(file); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
 			fatal("no profile %q in %s", name, plugDir())
 		}
 		fatal("%v", err)
@@ -50,16 +60,23 @@ func cmdRenameProfile(args []string) {
 		fatal("usage: plug rn <old> <new>")
 	}
 	old, name := args[0], args[1]
-	oldPath, newPath := profilePath(old), profilePath(name)
-	guardUserPath(oldPath) // plug may hold root here — never act outside the caller's tree
-	guardUserPath(newPath)
-	if _, err := os.Stat(oldPath); err != nil {
+	oldFile, newFile := profileFile(old), profileFile(name)
+	// plug may hold root here: the entry moves within a directory proven the
+	// user's (profileDir), whoever owns the file.
+	d, err := openProfileDir(false)
+	if errors.Is(err, fs.ErrNotExist) {
 		fatal("no profile %q in %s", old, plugDir())
 	}
-	if _, err := os.Stat(newPath); err == nil {
-		fatal("profile %q already exists", name)
+	if err != nil {
+		fatal("%v", err)
 	}
-	if err := os.Rename(oldPath, newPath); err != nil {
+	defer d.Close()
+	switch err := d.rename(oldFile, newFile); {
+	case errors.Is(err, fs.ErrExist):
+		fatal("profile %q already exists", name)
+	case errors.Is(err, fs.ErrNotExist):
+		fatal("no profile %q in %s", old, plugDir())
+	case err != nil:
 		fatal("%v", err)
 	}
 	renameProfileKeys(old, name) // the pair moves with the profile that names it
@@ -117,8 +134,5 @@ func checkProfileName(name string) error {
 // first, so no caller can forget. Fatal on a bad name — every caller but
 // doctor's soft read wants to stop there anyway.
 func profilePath(name string) string {
-	if err := checkProfileName(name); err != nil {
-		fatal("%v", err)
-	}
-	return filepath.Join(plugDir(), name+".conf")
+	return filepath.Join(plugDir(), profileFile(name))
 }

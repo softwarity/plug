@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 )
@@ -93,11 +92,7 @@ func configTarget(profile string) string {
 // writeProfile it refuses to create the file: a key or an update policy with no
 // host to go with it is not a profile anyone can use.
 func setProfileKey(name, key, val string) {
-	path := profilePath(name)
-	guardUserPath(path) // plug may hold root here — never write outside the caller's tree
-	data, err := os.ReadFile(path)
-	if err != nil {
-		fatal("no profile %q in %s — create one with 'plug init'", name, plugDir())
-	}
-	saveProfileText(path, upsertProfileKeys(string(data), [2]string{key, val}))
+	editProfile(name, false, func(text string) string {
+		return upsertProfileKeys(text, [2]string{key, val})
+	})
 }

@@ -154,6 +154,9 @@ func cmdPubkey(args []string) {
 func writeKeyPair(name, priv, pub string) {
 	guardUserPath(priv) // plug may hold root here, never write outside the caller's tree
 	guardUserPath(pub)
+	if err := ensurePlugDir(); err != nil {
+		fatal("cannot create %s: %v", plugDir(), err)
+	}
 	if err := os.MkdirAll(keysDir(), 0o700); err != nil {
 		fatal("cannot create %s: %v", keysDir(), err)
 	}

@@ -772,7 +772,7 @@ type mountRecord struct {
 func markMounted(spec mountSpec, local, cluster string) func() {
 	file := filepath.Join(mountsDir(), recordName(spec.path))
 	guardUserPath(file)
-	if os.MkdirAll(mountsDir(), 0o700) != nil {
+	if ensurePlugDir() != nil || os.MkdirAll(mountsDir(), 0o700) != nil {
 		return func() {}
 	}
 	auto := "no"

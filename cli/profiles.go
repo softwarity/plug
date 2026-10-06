@@ -208,18 +208,66 @@ func wizard(defaultName string, confirmOverwrite bool) string {
 // gateway had enrolled, one hostname change away from anything that mentions
 // keys. A file that does not exist yet is created.
 func writeProfile(name, host, port string) string {
-	path := profilePath(name)
-	guardUserPath(path)
-	if err := os.MkdirAll(plugDir(), 0o700); err != nil {
+	editProfile(name, true, func(text string) string {
+		return upsertProfileKeys(text, [2]string{"host", host}, [2]string{"port", port})
+	})
+	info("profile %q saved to %s", name, profilePath(name))
+	return name
+}
+
+// editProfile rewrites a profile through edit, which is handed its current
+// text ("" for a profile that does not exist yet). create says a missing
+// profile may be made, ~/.plug with it; otherwise a missing one ends the
+// command. Every writer of a profile goes through here (writeProfile,
+// setProfileKey), so every one of them replaces the file rather than writing
+// into it (profileDir).
+func editProfile(name string, create bool, edit func(string) string) {
+	file := profileFile(name)
+	missing := func() {
+		fatal("no profile %q in %s: create one with 'plug init'", name, plugDir())
+	}
+	d, err := openProfileDir(create)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) && !create {
+			missing()
+		}
 		fatal("%v", err)
 	}
+	defer d.Close()
+	if d.isSymlink(file) {
+		editThroughLink(filepath.Join(plugDir(), file), create, edit, missing)
+		return
+	}
+	text, exists, err := d.read(file)
+	if err != nil {
+		fatal("%v", err)
+	}
+	if !exists && !create {
+		missing()
+	}
+	if err := d.write(file, edit(text)); err != nil {
+		fatal("cannot write %s: %v", profilePath(name), err)
+	}
+}
+
+// editThroughLink is the edit of a profile that is itself a symlink: a dotfile
+// kept elsewhere (~/.plug/prod.conf -> ~/dotfiles/plug/prod.conf). Replacing
+// the entry would turn the link into a copy and the dotfile would stop being
+// the profile, so the write goes THROUGH the link, where it lands, and only
+// where the user owns that landing (guardUserPath), as profiles always were.
+func editThroughLink(path string, create bool, edit func(string) string, missing func()) {
+	guardUserPath(path)
 	data, err := os.ReadFile(path)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+	switch {
+	case errors.Is(err, fs.ErrNotExist) && !create:
+		missing()
+	case err != nil && !errors.Is(err, fs.ErrNotExist):
 		fatal("cannot read %s: %v", path, err)
 	}
-	saveProfileText(path, upsertProfileKeys(string(data), [2]string{"host", host}, [2]string{"port", port}))
-	info("profile %q saved to %s", name, path)
-	return name
+	if err := os.WriteFile(path, []byte(edit(string(data))), 0o600); err != nil {
+		fatal("cannot write %s: %v", path, err)
+	}
+	chownToUser(path)
 }
 
 // upsertProfileKeys rewrites the given keys in a profile's text, in place: the
@@ -250,16 +298,6 @@ func upsertProfileKeys(text string, pairs ...[2]string) string {
 		lines = append(lines, fmt.Sprintf("%s = %s", key, val), "")
 	}
 	return strings.Join(lines, "\n")
-}
-
-// saveProfileText is the one write of a profile file: 0600, and handed back to
-// the user because the launcher writes it as euid 0 on the setuid path. The
-// caller has run guardUserPath on the path.
-func saveProfileText(path, text string) {
-	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
-		fatal("cannot write %s: %v", path, err)
-	}
-	chownToUser(path)
 }
 
 func initProfile() {

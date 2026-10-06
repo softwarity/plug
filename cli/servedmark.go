@@ -41,7 +41,7 @@ type servedRecord struct {
 func markServed(name, agentPort string, cmdArgs []string) func() {
 	path := filepath.Join(servedDir(), name) // name is a validated DNS label
 	guardUserPath(path)
-	if os.MkdirAll(servedDir(), 0o700) != nil {
+	if ensurePlugDir() != nil || os.MkdirAll(servedDir(), 0o700) != nil {
 		return func() {}
 	}
 	cwd, _ := os.Getwd()

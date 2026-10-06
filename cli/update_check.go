@@ -89,7 +89,7 @@ func loadUpdateState(cfg config) updateState {
 func saveUpdateState(cfg config, st updateState) {
 	path := updateStatePath(cfg)
 	guardUserPath(path) // the core may hold root here — never write outside the caller's tree
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := ensurePlugDir(); err != nil {
 		return
 	}
 	body := fmt.Sprintf("checked=%d\navailable=%s\nimage=%s\n",
