@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.21.9
+
 ### Profiles: every one of them is yours to manage
 
 `plug rm`, `plug rn`, `plug config` and `plug -p <name> -H <host>` now work on
