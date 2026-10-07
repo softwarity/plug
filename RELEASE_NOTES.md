@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.21.10
+
 ### A plug installed from a gateway leaves updates to the gateway
 
 A plug installed from a gateway, such as Meerkat, no longer looks for agent
