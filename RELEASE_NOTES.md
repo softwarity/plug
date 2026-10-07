@@ -2,6 +2,14 @@
 
 ## NEXT RELEASE
 
+### A plug installed from a gateway leaves updates to the gateway
+
+A plug installed from a gateway, such as Meerkat, no longer looks for agent
+updates, announces them or asks whether to apply one: its version, and the
+version of the agents it reaches, are the gateway's to decide. Your command
+starts without the question. `plug config` says so, instead of showing an
+update mode that would have no effect.
+
 ---
 
 ## 2.21.9

@@ -46,6 +46,17 @@ func cmdConfig(args []string) {
 	name := configTarget(profile)
 	cfg := loadProfile(name)
 
+	if !updatesOffered() {
+		// The one setting here is about `plug update`, which a hosted plug does
+		// not carry: showing a mode, or taking one, would promise what it
+		// cannot do.
+		if setting != "" {
+			refuseVerb("config update", "the gateway that serves this plug decides its version, and its agent's")
+		}
+		fmt.Printf("- update    decided by the gateway that serves this plug\n")
+		fmt.Printf("\nprofile %q, stored in %s\n", name, profilePath(name))
+		return
+	}
 	if setting == "" {
 		fmt.Printf("- update    %s\n", cfg.updateMode)
 		fmt.Printf("  %s\n", strings.Join(updateModes, " | "))

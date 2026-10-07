@@ -307,3 +307,45 @@ func TestTheAgentFallbackOnlyTrustsAnExplicitAnswer(t *testing.T) {
 		}
 	}
 }
+
+// A hosted plug carries no `plug update` (the gateway decides its version), so
+// it must not offer one either: no notice, no prompt, no background check, no
+// automatic apply. It used to ask "apply it now?" on every launch and then
+// refuse the update it had just offered. Would have caught: any of the three
+// entry points left ungated.
+func TestAHostedPlugNeverOffersAnUpdateItCannotMake(t *testing.T) {
+	withVersion(t, "2.21.9", func() {
+		if !updatesOffered() {
+			t.Fatal("a standalone plug carries plug update, and must offer it")
+		}
+	})
+	withVersion(t, "2.21.9-hosted", func() {
+		if updatesOffered() {
+			t.Fatal("a hosted plug offers an update it refuses to make")
+		}
+		sandboxHome(t)
+		cfg := config{host: "cluster.example", port: "2222", updateMode: updateNotify}
+		saveUpdateState(cfg, updateState{checked: time.Now(), available: "2.21.9"})
+
+		lines := captureStderr(t)
+		announceUpdate(cfg)
+		if out := lines(); out != "" {
+			t.Fatalf("a hosted plug announced an update:\n%s", out)
+		}
+
+		// The background check returns before anything: an expired state is
+		// left as it is, where a check would have rewritten it.
+		stale := config{host: "other.example", port: "2222", updateMode: updateAuto}
+		saveUpdateState(stale, updateState{checked: time.Now().Add(-72 * time.Hour)})
+		done := make(chan struct{})
+		go func() { backgroundUpdateCheck(stale); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("a hosted plug started an update check")
+		}
+		if got := loadUpdateState(stale).checked; time.Since(got) < 71*time.Hour {
+			t.Fatalf("a hosted plug recorded a check at %v", got)
+		}
+	})
+}

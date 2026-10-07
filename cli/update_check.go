@@ -100,6 +100,18 @@ func saveUpdateState(cfg config, st updateState) {
 	chownToUser(path) // written as euid 0 on the setuid path
 }
 
+// updatesOffered says whether this build looks for agent updates at all. A
+// hosted plug does not: its version is the gateway's to decide, so it carries
+// no `plug update` (flavour.go), and a notice, a prompt or an automatic apply
+// for a verb it refuses is a question it cannot act on. It used to ask anyway,
+// on every launch: "apply it now?", then "plug update is not part of this
+// install". Whichever cluster the profile names, a gateway's or a standalone
+// one, the answer is the same: the update is not this plug's to make.
+func updatesOffered() bool {
+	_, ok := verbAvailable("update")
+	return ok
+}
+
 // backgroundUpdateCheck asks, at most once a day, whether the registry carries a
 // release this cluster's agent does not. Started by the core in its own
 // goroutine and left to run: it never blocks the session, never prints, and a
@@ -118,7 +130,7 @@ func backgroundUpdateCheck(cfg config) {
 		}
 	}()
 
-	if !shouldCheck(normalizeUpdateMode(cfg.updateMode), loadUpdateState(cfg), time.Now()) {
+	if !updatesOffered() || !shouldCheck(normalizeUpdateMode(cfg.updateMode), loadUpdateState(cfg), time.Now()) {
 		return
 	}
 	// Let the datapath settle first. This goroutine starts while the core is
@@ -282,7 +294,7 @@ func parseAgentUpdateAnswer(out string) string {
 // the way past. Only in notify — auto is applied by the core, which is the only
 // side that outlives the exec.
 func announceUpdate(cfg config) {
-	if normalizeUpdateMode(cfg.updateMode) != updateNotify {
+	if !updatesOffered() || normalizeUpdateMode(cfg.updateMode) != updateNotify {
 		return
 	}
 	if st := loadUpdateState(cfg); st.available != "" {
