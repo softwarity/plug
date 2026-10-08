@@ -2,6 +2,20 @@
 
 ## NEXT RELEASE
 
+### The install line names the profile
+
+The install command takes the profile name you want: the one you will type
+after `-p`. Useful when the host says nothing about the cluster (`localhost`
+behind a port-forward), or when a gateway names the application.
+
+```sh
+ssh -p 2222 ... get@<cluster-host> install my-cluster | sh
+```
+
+On Windows, from Git Bash, the name comes after the port:
+`... install-windows | bash -s -- <cluster-host> 2222 my-cluster`. Without a
+name, the profile is named after the host, as before.
+
 ---
 
 ## 2.21.10

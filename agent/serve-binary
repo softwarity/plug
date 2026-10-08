@@ -1,8 +1,9 @@
 #!/bin/sh
 # ForceCommand for the anonymous "get" user. It can only:
 #   version                    print the agent version
-#   install                    emit a self-contained installer (all binaries embedded;
-#                              the script picks yours with uname)
+#   install [<profile>]        emit a self-contained installer (all binaries embedded;
+#                              the script picks yours with uname), saving the cluster
+#                              as that profile (default: named after the host)
 #   install-windows, install.sh  the Windows installer script
 #   wintun[-amd64|-arm64]      stream the WinTUN driver DLL
 #   digest <os>-<arch>|wintun[-arch]  the sha256 and release signature of that file
@@ -65,11 +66,24 @@ fi
 # genuinely can't know the address you reached it on — a routing mesh hides it —
 # so the cluster is set on the CLI's first run.)
 if [ "$verb" = "install" ]; then
+  # The profile name, when the command gives one (`install <name>`): what the
+  # developer will type after -p, which the host often says nothing about
+  # (localhost behind a port-forward, a gateway's app name). Checked here, with
+  # the rule plug applies to every profile name (cli/profiles_cmd.go), because
+  # it is written into the script: only those characters ever reach it.
+  # Lower case, as the whole command is above.
+  name=${2:-}
+  if [ -n "$name" ] && ! printf '%s\n' "$name" | grep -Eqx '[a-z0-9][a-z0-9._-]{0,62}'; then
+    echo "plug: '$name' is not a profile name: a letter or digit, then letters, digits, dot, dash or underscore (63 max)" >&2
+    exit 1
+  fi
+  printf '#!/bin/sh\n_name=%s\n' "$name"
   cat <<'HEAD'
 #!/bin/sh
 set -e
 
-# Pre-create a profile from *your* ssh command, named after the cluster host.
+# Pre-create a profile from *your* ssh command, named after the cluster host,
+# or as the command said (`install <name>`, set above as _name).
 # The agent can't know which address you reached it on (a routing mesh hides
 # it), but your `ssh ... get@<host>` line does — and while this installer
 # streams, that ssh is still alive in the process table (blocked sending the
@@ -82,14 +96,15 @@ set -e
 _cmd=$(ps -A -o args= 2>/dev/null | grep 'get@' | grep -w install | grep -v grep | head -n1)
 _host=$(printf '%s\n' "$_cmd" | sed -n 's/.*get@\([A-Za-z0-9._-]*\).*/\1/p')
 _port=$(printf '%s\n' "$_cmd" | sed -n 's/.*-p[ =]*\([0-9][0-9]*\).*/\1/p')
+_pname=${_name:-$_host}
 if [ -n "$_host" ]; then
-  _conf="$HOME/.plug/$_host.conf"
+  _conf="$HOME/.plug/$_pname.conf"
   if [ -e "$_conf" ]; then
-    _profile="'$_host' (already configured)"
+    _profile="'$_pname' (already configured)"
   else
     mkdir -p "$HOME/.plug"
     printf 'host = %s\nport = %s\n' "$_host" "${_port:-2222}" > "$_conf"
-    _profile="'$_host' -> $_host:${_port:-2222}"
+    _profile="'$_pname' -> $_host:${_port:-2222}"
   fi
 fi
 
@@ -163,7 +178,7 @@ fi
 case ":$PATH:" in *":$dest:"*) : ;; *) echo "plug: add $dest to your PATH" ;; esac
 if [ -n "$_profile" ]; then
   echo "plug: profile $_profile"
-  echo "plug: run 'plug <your command>'  (several clusters? 'plug -p <name> <your command>')"
+  echo "plug: run 'plug -p $_pname <your command>'  (the only profile? 'plug <your command>' is enough)"
 else
   echo "plug: run 'plug <your command>' — the first run asks for your cluster"
 fi

@@ -98,6 +98,17 @@ ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get&#64;
       away. Install from a second cluster and you get a second profile to run alongside. (No live
       <code>ssh</code>? The <a routerLink="/profiles">first run</a> asks once, via a short wizard.)
     </p>
+    <p>
+      To give the profile a name of your own, the one you will type after <code>-p</code>, add it
+      to the command: useful when the host says nothing (<code>localhost</code> behind a
+      port-forward) or when a gateway names the application.
+    </p>
+    @if (os() === 'windows') {
+      <app-code lang="bash">ssh -n -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get&#64;$cluster install-windows \\
+  | bash -s -- $cluster 2222 my-cluster</app-code>
+    } @else {
+      <app-code lang="bash">ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get&#64;&lt;cluster-host&gt; install my-cluster | sh</app-code>
+    }
 
     <h3>3. Run your process as a service of the cluster</h3>
     <p>

@@ -2,7 +2,11 @@
 # Windows installer, run from Git Bash (the assumed Windows dev shell):
 #
 #   ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-#       get@<host> install-windows | bash -s -- <host> <port>
+#       get@<host> install-windows | bash -s -- <host> <port> [<profile>]
+#
+# The profile is named after the host unless a name is given: what the
+# developer will type after -p, which the host often says nothing about
+# (localhost behind a port-forward, a gateway's app name).
 #
 # Bash — not PowerShell — on purpose: Git Bash is mandatory on Windows anyway, a
 # piped bash script's `exit` is reliable (a piped `powershell -Command -` script's
@@ -18,8 +22,12 @@ die()  { echo "plug: $1" >&2; exit 1; }
 
 HOST="${1:-}"
 PORT="${2:-2222}"
+PROFILE="${3:-$HOST}"
 [ -n "$HOST" ] || die "pass the cluster host on the bash side of the pipe:
   ... get@<host> install-windows | bash -s -- <host> [port]"
+# The rule plug applies to every profile name (cli/profiles_cmd.go): the name
+# becomes a file under ~/.plug.
+[[ "$PROFILE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$ ]] || die "'$PROFILE' is not a profile name: a letter or digit, then letters, digits, dot, dash or underscore (63 max)"
 command -v ssh >/dev/null 2>&1 || die "ssh not found — install the Windows OpenSSH client (or use Git's ssh)"
 
 # Install dir: %LOCALAPPDATA%\Programs\plug (also the service's binPath). Keep a
@@ -73,14 +81,15 @@ ssh "${SSH_OPTS[@]}" "get@$HOST" "$_wv" > "$DIR/wintun.dll"
   die "wintun.dll download failed (asked '$_wv'; an agent older than windows-arm64 support does not serve it)"
 info "installed wintun.dll"
 
-# 3. Profile, named after the host (a second cluster adds a second profile).
+# 3. Profile, named after the host or as given (a second cluster adds a second
+#    profile).
 mkdir -p "$HOME/.plug"
-conf="$HOME/.plug/$HOST.conf"
+conf="$HOME/.plug/$PROFILE.conf"
 if [ -e "$conf" ]; then
-  info "profile '$HOST' already configured"
+  info "profile '$PROFILE' already configured"
 else
   printf 'host = %s\nport = %s\n' "$HOST" "$PORT" > "$conf"
-  info "profile '$HOST' -> $HOST:$PORT"
+  info "profile '$PROFILE' -> $HOST:$PORT"
 fi
 
 # 4. PATH (user scope) — append via the registry + setx, only if missing. setx
@@ -120,4 +129,4 @@ if "$DIR/plug.exe" install-service >/dev/null 2>&1; then
 else
   info "not elevated: to enable no-admin runs, once — open Git Bash as Administrator and run: plug install-service"
 fi
-info "ready. Open a new Git Bash and:  plug -p $HOST <your command>"
+info "ready. Open a new Git Bash and:  plug -p $PROFILE <your command>"

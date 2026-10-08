@@ -87,6 +87,10 @@ The install prepares your machine once - it may ask for your password (or, on
 Windows, to run as Administrator) a single time - so that every later `plug` run
 needs no privilege. After that you are ready.
 
+The cluster is saved as a profile named after its host. To name it yourself,
+the name you will type after `-p`, add it to the command: `install my-cluster`
+on Linux and macOS, `bash -s -- $cluster 2222 my-cluster` on Windows.
+
 ## Use
 
 ```bash

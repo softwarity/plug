@@ -37,12 +37,12 @@ do_setup() {
   echo "=== install plug from the cluster (real user flow) ==="
   case "$os" in
     win)
-      ssh -n $SSH_OPTS "get@$ip" install-windows | bash -s -- "$ip" "$port" || { echo "windows install failed" >&2; exit 1; }
+      ssh -n $SSH_OPTS "get@$ip" install-windows | bash -s -- "$ip" "$port" e2e-a || { echo "windows install failed" >&2; exit 1; }
       PLUG="$(cygpath "$LOCALAPPDATA")/Programs/plug/plug.exe"
       ;;
     *)
       # No -n: the unix installer reads the cluster host off this live ssh command.
-      ssh $SSH_OPTS "get@$ip" install </dev/null | sh || { echo "install failed" >&2; exit 1; }
+      ssh $SSH_OPTS "get@$ip" install e2e-a </dev/null | sh || { echo "install failed" >&2; exit 1; }
       PLUG=""
       for c in "$(command -v plug 2>/dev/null || true)" "$HOME/.local/bin/plug" /usr/local/bin/plug; do
         [ -n "$c" ] && [ -x "$c" ] && PLUG="$c" && break
@@ -51,6 +51,12 @@ do_setup() {
   esac
   [ -n "$PLUG" ] && [ -x "$PLUG" ] || { echo "plug not found after install" >&2; exit 1; }
   echo "installed: $PLUG"
+  # The installer was given a profile name: the profile must carry it, and point
+  # at the host and port the install came from.
+  if ! grep -qx "host = $ip" "$HOME/.plug/e2e-a.conf" 2>/dev/null || ! grep -qx "port = $port" "$HOME/.plug/e2e-a.conf"; then
+    echo "the installer did not save the cluster as profile e2e-a: $(ls "$HOME/.plug" 2>/dev/null | tr '\n' ' ')" >&2; exit 1
+  fi
+  echo "profile e2e-a saved by the installer -> $ip:$port"
   "$PLUG" test --host "$ip" --port "$port" || { echo "installed plug cannot reach cluster A" >&2; exit 1; }
 
   echo "=== build clients ==="
