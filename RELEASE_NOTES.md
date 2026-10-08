@@ -11,13 +11,13 @@ moment the install is over. No key to press.
 
 On a cluster served by a gateway, such as Meerkat, the install now ends with the
 step that cluster requires: giving the machine its own key, with the exact
-`plug keygen -p` and `plug pubkey -p` commands for the new profile and the page
-where the key is registered. The profile can also be named by the gateway, after
-its application, so the install command needs no name at all.
+`plug keygen -p` and `plug pubkey -p` commands for the new profile, then where
+the key goes, in the gateway's own words.
 
-For a gateway that embeds the agent: `Config.InstallProfile` and `Config.KeyURL`
-give the installer that name and that page. Both are asked at each install, so
-a rename applies without a restart.
+For a gateway that embeds the agent: `Config.KeyInstruction` is that sentence,
+said after "and " (for instance "register the key it prints in your dev
+profile"). Without it, the install says to give the key to whoever operates the
+cluster.
 
 ### The install line names the profile
 

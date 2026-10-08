@@ -1065,9 +1065,8 @@ func TestStdinStillReachesTheCommand(t *testing.T) {
 	}
 }
 
-// What the embedder tells the installer (InstallProfile, KeyURL) reaches the
-// download account's command, asked at each session, and only that account's:
-// the verbs have no use for it.
+// What the embedder tells the installer (KeyInstruction) reaches the download
+// account's command, and only that account's: the verbs have no use for it.
 func TestTheInstallerIsToldWhatTheEmbedderDecided(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the agent only ever runs in a Linux container")
@@ -1077,17 +1076,14 @@ func TestTheInstallerIsToldWhatTheEmbedderDecided(t *testing.T) {
 		t.Fatal(err)
 	}
 	signer, pub := newTestKey(t)
-	name := "meteo-brest"
 	srv := &sshServer{
 		host:    &standaloneHost{authorized: []ssh.PublicKey{pub}},
 		hostKey: hk,
 		execFor: func(string) []string {
-			return []string{"/bin/sh", "-c", `printf '%s|%s' "$PLUG_INSTALL_PROFILE" "$PLUG_KEY_URL"`}
+			return []string{"/bin/sh", "-c", `printf '%s' "$PLUG_KEY_INSTRUCTION"`}
 		},
-		logf: func(string, ...any) {},
-		installEnv: func() []string {
-			return []string{installProfileEnv + "=" + name, keyURLEnv + "=https://gw.example/k"}
-		},
+		logf:       func(string, ...any) {},
+		installEnv: []string{keyInstructionEnv + "=register the key it prints in your dev profile"},
 	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -1112,14 +1108,10 @@ func TestTheInstallerIsToldWhatTheEmbedderDecided(t *testing.T) {
 		}
 		return string(out)
 	}
-	if got := run(downloadUser); got != "meteo-brest|https://gw.example/k" {
+	if got := run(downloadUser); got != "register the key it prints in your dev profile" {
 		t.Fatalf("the installer was told %q", got)
 	}
-	name = "renamed" // a rename in the gateway applies to the next install
-	if got := run(downloadUser); got != "renamed|https://gw.example/k" {
-		t.Fatalf("after a rename the installer was told %q", got)
-	}
-	if got := run(tunnelUser, ssh.PublicKeys(signer)); got != "|" {
-		t.Fatalf("a verb was told the installer's values: %q", got)
+	if got := run(tunnelUser, ssh.PublicKeys(signer)); got != "" {
+		t.Fatalf("a verb was told the installer's sentence: %q", got)
 	}
 }

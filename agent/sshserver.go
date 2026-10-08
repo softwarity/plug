@@ -98,9 +98,9 @@ type sshServer struct {
 	execFor func(user string) []string // argv for this account's ForceCommand
 	logf    func(string, ...any)
 	verbEnv []string // embedder decisions the verb subprocess cannot ask for
-	// installEnv is what the download account's installer is told, asked at
-	// each session (InstallProfile, KeyURL in Config); nil tells it nothing.
-	installEnv func() []string
+	// installEnv is what the download account's installer is told by the
+	// embedder (KeyInstruction in Config), and nothing else is.
+	installEnv []string
 	// noDownloadAccount closes the anonymous `get` account entirely.
 	noDownloadAccount bool
 	idleEvry          time.Duration // keepalive period; 0 disables (tests)
@@ -802,8 +802,8 @@ func (s *sshServer) runForced(ch ssh.Channel, user, who string, fwd *forwardSet,
 		"PLUG_WHO="+who,
 	)
 	cmd.Env = append(cmd.Env, s.verbEnv...)
-	if user == downloadUser && s.installEnv != nil {
-		cmd.Env = append(cmd.Env, s.installEnv()...)
+	if user == downloadUser {
+		cmd.Env = append(cmd.Env, s.installEnv...)
 	}
 	// The verb's answer goes to the client untouched; a copy of the tail stays
 	// here, because "ok" and "ok reassigned" mean different things to the Host

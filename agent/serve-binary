@@ -18,27 +18,35 @@ set -f
 
 # install_vars prints the lines an installer starts with: what the command and
 # whoever runs this agent decided for it. The profile to save is the name the
-# command gave (`install <name>`), else the embedder's (PLUG_INSTALL_PROFILE: a
-# gateway's application name), else none and the installer names it after the
-# host. The key URL is where a hosted cluster has its developers register a
-# key (PLUG_KEY_URL). Every value is checked here, because it is written into
-# a script the developer runs: only the characters the rules allow reach it.
+# command gave (`install <name>`), else none and the installer names it after
+# the host. A hosted image adds what to do with the key a hosted cluster
+# requires, in the words of the gateway that embeds this agent
+# (PLUG_KEY_INSTRUCTION, Config.KeyInstruction). Every value is checked here,
+# because it is written into a script the developer runs: only what the rules
+# allow reaches it.
 # $1 is the script's first line, printed once everything is checked: a refusal
 # emits no script at all, so nothing runs on the other side of the pipe.
 install_vars() {
-  _iv_name=${2:-$(printf '%s' "${PLUG_INSTALL_PROFILE:-}" | tr 'A-Z' 'a-z')}
+  _iv_name=${2:-}
   # The rule plug applies to every profile name (cli/profiles_cmd.go).
   if [ -n "$_iv_name" ] && ! printf '%s\n' "$_iv_name" | grep -Eqx '[a-z0-9][a-z0-9._-]{0,62}'; then
     echo "plug: '$_iv_name' is not a profile name: a letter or digit, then letters, digits, dot, dash or underscore (63 max)" >&2
     exit 1
   fi
-  _iv_url=${PLUG_KEY_URL:-}
-  if [ -n "$_iv_url" ] && ! printf '%s\n' "$_iv_url" | grep -Eqx 'https?://[A-Za-z0-9._~:/?#@%=+&-]+'; then
-    _iv_url=""
+  # Inside single quotes in the script: no quote, no backslash, no control
+  # character (a line break among them), and bounded. Anything else is not
+  # said, and the installer falls back to its own sentence.
+  # grep reads line by line and never sees a line break, so that one is
+  # caught apart.
+  _iv_key=${PLUG_KEY_INSTRUCTION:-}
+  _iv_nl=$(printf '\n_'); _iv_nl=${_iv_nl%_}
+  case "$_iv_key" in *"$_iv_nl"*) _iv_key="" ;; esac
+  if [ "${#_iv_key}" -gt 200 ] || printf '%s' "$_iv_key" | LC_ALL=C grep -q "['\\[:cntrl:]]"; then
+    _iv_key=""
   fi
   _iv_hosted=""
   case "$(cat /opt/plug/VERSION 2>/dev/null)" in *-hosted) _iv_hosted=1 ;; esac
-  printf "%s\n_name=%s\n_keyurl='%s'\n_hosted=%s\n" "$1" "$_iv_name" "$_iv_url" "$_iv_hosted"
+  printf "%s\n_name=%s\n_keyhint='%s'\n_hosted=%s\n" "$1" "$_iv_name" "$_iv_key" "$_iv_hosted"
 }
 
 cmd=$(printf '%s' "$SSH_ORIGINAL_COMMAND" | tr 'A-Z' 'a-z')
@@ -200,17 +208,13 @@ if [ -n "$_profile" ]; then
 fi
 # A hosted cluster lets in only the keys it knows: without this step, the
 # first run is refused. Said with the profile it applies to, and where to
-# register the key when the cluster said.
+# register the key, in the gateway's words when it gave them.
 if [ -n "$_hosted" ]; then
   _kp=${_pname:-<profile>}
   echo "plug: this cluster lets in only the keys it knows. Give this machine its own, once:"
   echo "        plug keygen -p $_kp"
   echo "        plug pubkey -p $_kp"
-  if [ -n "$_keyurl" ]; then
-    echo "      and register the key it prints at $_keyurl"
-  else
-    echo "      and give the key it prints to whoever operates the cluster"
-  fi
+  echo "      and ${_keyhint:-give the key it prints to whoever operates the cluster}"
 fi
 if [ -n "$_profile" ]; then
   echo "plug: then run 'plug -p $_pname <your command>'  (the only profile? 'plug <your command>' is enough)"
