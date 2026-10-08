@@ -98,6 +98,9 @@ type sshServer struct {
 	execFor func(user string) []string // argv for this account's ForceCommand
 	logf    func(string, ...any)
 	verbEnv []string // embedder decisions the verb subprocess cannot ask for
+	// installEnv is what the download account's installer is told, asked at
+	// each session (InstallProfile, KeyURL in Config); nil tells it nothing.
+	installEnv func() []string
 	// noDownloadAccount closes the anonymous `get` account entirely.
 	noDownloadAccount bool
 	idleEvry          time.Duration // keepalive period; 0 disables (tests)
@@ -799,14 +802,34 @@ func (s *sshServer) runForced(ch ssh.Channel, user, who string, fwd *forwardSet,
 		"PLUG_WHO="+who,
 	)
 	cmd.Env = append(cmd.Env, s.verbEnv...)
+	if user == downloadUser && s.installEnv != nil {
+		cmd.Env = append(cmd.Env, s.installEnv()...)
+	}
 	// The verb's answer goes to the client untouched; a copy of the tail stays
 	// here, because "ok" and "ok reassigned" mean different things to the Host
 	// and the exit status tells them apart in neither case (answer() exits 0
 	// even for an error line).
 	tail := &tailWriter{max: 4096}
-	cmd.Stdin = ch
 	cmd.Stdout = io.MultiWriter(ch, tail)
 	cmd.Stderr = ch.Stderr()
+	// Stdin through a pipe of our own, not the channel itself. Handed the
+	// channel, exec.Cmd copies it in a goroutine that Wait waits for, and that
+	// copy ends only when the client's stdin does: from a terminal (`ssh get@host
+	// install | sh` typed at a prompt) the keyboard never ends, so a command long
+	// finished kept the session open, and the install sat there until someone
+	// pressed Enter. The command is over when it exits: Wait closes this pipe
+	// then, and the copy below ends on its next write, or when the channel
+	// closes as this session returns.
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		fmt.Fprintf(ch.Stderr(), "plug: %v\n", err)
+		sendExit(ch, 1)
+		return
+	}
+	go func() {
+		_, _ = io.Copy(stdin, ch)
+		_ = stdin.Close()
+	}()
 
 	code := 0
 	if err := cmd.Run(); err != nil {

@@ -1,9 +1,11 @@
 package agent
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -39,6 +41,13 @@ func newTestKey(t *testing.T) (ssh.Signer, ssh.PublicKey) {
 // prove the request reached the account's command and nothing else.
 func startServer(t *testing.T, host Host) string {
 	t.Helper()
+	return startServerWith(t, host, nil)
+}
+
+// startServerWith is startServer with one argv for every account, nil for the
+// default that echoes the account and the request.
+func startServerWith(t *testing.T, host Host, argv []string) string {
+	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("the agent only ever runs in a Linux container")
 	}
@@ -50,6 +59,9 @@ func startServer(t *testing.T, host Host) string {
 		host:    host,
 		hostKey: hk,
 		execFor: func(user string) []string {
+			if argv != nil {
+				return argv
+			}
 			// One script per account: whoever answers must be able to say which
 			// command it was, which is what ForceCommand separation means.
 			return []string{"/bin/sh", "-c", "printf '%s:%s' " + user + " \"$SSH_ORIGINAL_COMMAND\""}
@@ -988,3 +1000,126 @@ func (h *panicHost) Verify(key ssh.PublicKey) (string, bool) {
 }
 func (h *panicHost) Served(NameEvent) {}
 func (h *panicHost) Unserved(string)  {}
+
+// `ssh get@host install | sh` from a terminal: the client's stdin is the
+// keyboard, which sends nothing and never ends. The command is over the moment
+// it exits, and the session must end with it. It did not: exec.Cmd waits for
+// the goroutine copying a non-file Stdin, which waited for the keyboard, so the
+// install sat there finished until someone pressed Enter. Would have caught:
+// Stdin handed to exec.Cmd as the channel itself.
+func TestTheSessionEndsWithTheCommandWhateverStdinDoes(t *testing.T) {
+	_, pub := newTestKey(t)
+	addr := startServer(t, &standaloneHost{authorized: []ssh.PublicKey{pub}})
+	cl, err := dial(t, addr, downloadUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	sess, err := cl.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	keyboard, typing := io.Pipe() // open, silent: a terminal nobody types in
+	defer typing.Close()
+	sess.Stdin = keyboard
+	var out bytes.Buffer
+	sess.Stdout = &out
+	done := make(chan error, 1)
+	go func() { done <- sess.Run("install") }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("exec: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the command exited but the session waited for stdin: a piped install hangs until Enter")
+	}
+	if got := out.String(); got != "get:install" {
+		t.Errorf("output: %q", got)
+	}
+}
+
+// What the command reads on stdin still reaches it: the fix must not cut the
+// input of a verb that wants one.
+func TestStdinStillReachesTheCommand(t *testing.T) {
+	_, pub := newTestKey(t)
+	addr := startServerWith(t, &standaloneHost{authorized: []ssh.PublicKey{pub}}, []string{"/bin/sh", "-c", "cat"})
+	cl, err := dial(t, addr, downloadUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	sess, err := cl.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	sess.Stdin = strings.NewReader("hello\n")
+	out, err := sess.Output("anything")
+	if err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	if string(out) != "hello\n" {
+		t.Errorf("stdin did not reach the command: %q", out)
+	}
+}
+
+// What the embedder tells the installer (InstallProfile, KeyURL) reaches the
+// download account's command, asked at each session, and only that account's:
+// the verbs have no use for it.
+func TestTheInstallerIsToldWhatTheEmbedderDecided(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the agent only ever runs in a Linux container")
+	}
+	hk, err := hostKeySigner(filepath.Join(t.TempDir(), "host_key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, pub := newTestKey(t)
+	name := "meteo-brest"
+	srv := &sshServer{
+		host:    &standaloneHost{authorized: []ssh.PublicKey{pub}},
+		hostKey: hk,
+		execFor: func(string) []string {
+			return []string{"/bin/sh", "-c", `printf '%s|%s' "$PLUG_INSTALL_PROFILE" "$PLUG_KEY_URL"`}
+		},
+		logf: func(string, ...any) {},
+		installEnv: func() []string {
+			return []string{installProfileEnv + "=" + name, keyURLEnv + "=https://gw.example/k"}
+		},
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go srv.Serve(ln)
+	defer ln.Close()
+	run := func(user string, auth ...ssh.AuthMethod) string {
+		cl, err := dial(t, ln.Addr().String(), user, auth...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cl.Close()
+		sess, err := cl.NewSession()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer sess.Close()
+		out, err := sess.Output("install")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(out)
+	}
+	if got := run(downloadUser); got != "meteo-brest|https://gw.example/k" {
+		t.Fatalf("the installer was told %q", got)
+	}
+	name = "renamed" // a rename in the gateway applies to the next install
+	if got := run(downloadUser); got != "renamed|https://gw.example/k" {
+		t.Fatalf("after a rename the installer was told %q", got)
+	}
+	if got := run(tunnelUser, ssh.PublicKeys(signer)); got != "|" {
+		t.Fatalf("a verb was told the installer's values: %q", got)
+	}
+}

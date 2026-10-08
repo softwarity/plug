@@ -15,6 +15,32 @@
 # would expand against the current directory, making the verb we run depend on
 # whatever files happen to sit there. Keep the splitting, drop the globbing.
 set -f
+
+# install_vars prints the lines an installer starts with: what the command and
+# whoever runs this agent decided for it. The profile to save is the name the
+# command gave (`install <name>`), else the embedder's (PLUG_INSTALL_PROFILE: a
+# gateway's application name), else none and the installer names it after the
+# host. The key URL is where a hosted cluster has its developers register a
+# key (PLUG_KEY_URL). Every value is checked here, because it is written into
+# a script the developer runs: only the characters the rules allow reach it.
+# $1 is the script's first line, printed once everything is checked: a refusal
+# emits no script at all, so nothing runs on the other side of the pipe.
+install_vars() {
+  _iv_name=${2:-$(printf '%s' "${PLUG_INSTALL_PROFILE:-}" | tr 'A-Z' 'a-z')}
+  # The rule plug applies to every profile name (cli/profiles_cmd.go).
+  if [ -n "$_iv_name" ] && ! printf '%s\n' "$_iv_name" | grep -Eqx '[a-z0-9][a-z0-9._-]{0,62}'; then
+    echo "plug: '$_iv_name' is not a profile name: a letter or digit, then letters, digits, dot, dash or underscore (63 max)" >&2
+    exit 1
+  fi
+  _iv_url=${PLUG_KEY_URL:-}
+  if [ -n "$_iv_url" ] && ! printf '%s\n' "$_iv_url" | grep -Eqx 'https?://[A-Za-z0-9._~:/?#@%=+&-]+'; then
+    _iv_url=""
+  fi
+  _iv_hosted=""
+  case "$(cat /opt/plug/VERSION 2>/dev/null)" in *-hosted) _iv_hosted=1 ;; esac
+  printf "%s\n_name=%s\n_keyurl='%s'\n_hosted=%s\n" "$1" "$_iv_name" "$_iv_url" "$_iv_hosted"
+}
+
 cmd=$(printf '%s' "$SSH_ORIGINAL_COMMAND" | tr 'A-Z' 'a-z')
 set -- $cmd
 verb=$1
@@ -54,6 +80,7 @@ fi
 #   ssh get@<host> install-windows | bash -s -- <host> <port>
 if [ "$verb" = "install-windows" ] || [ "$verb" = "install.sh" ]; then
   if [ -f /opt/plug/install.sh ]; then
+    install_vars '#!/bin/bash' "${2:-}"
     exec cat /opt/plug/install.sh
   fi
   echo "plug: install.sh missing from this agent image" >&2
@@ -66,18 +93,10 @@ fi
 # genuinely can't know the address you reached it on — a routing mesh hides it —
 # so the cluster is set on the CLI's first run.)
 if [ "$verb" = "install" ]; then
-  # The profile name, when the command gives one (`install <name>`): what the
-  # developer will type after -p, which the host often says nothing about
-  # (localhost behind a port-forward, a gateway's app name). Checked here, with
-  # the rule plug applies to every profile name (cli/profiles_cmd.go), because
-  # it is written into the script: only those characters ever reach it.
-  # Lower case, as the whole command is above.
-  name=${2:-}
-  if [ -n "$name" ] && ! printf '%s\n' "$name" | grep -Eqx '[a-z0-9][a-z0-9._-]{0,62}'; then
-    echo "plug: '$name' is not a profile name: a letter or digit, then letters, digits, dot, dash or underscore (63 max)" >&2
-    exit 1
-  fi
-  printf '#!/bin/sh\n_name=%s\n' "$name"
+  # The profile name: what the developer will type after -p, which the host
+  # often says nothing about (localhost behind a port-forward, a gateway's app
+  # name). See install_vars. Lower case, as the whole command is above.
+  install_vars '#!/bin/sh' "${2:-}"
   cat <<'HEAD'
 #!/bin/sh
 set -e
@@ -178,9 +197,25 @@ fi
 case ":$PATH:" in *":$dest:"*) : ;; *) echo "plug: add $dest to your PATH" ;; esac
 if [ -n "$_profile" ]; then
   echo "plug: profile $_profile"
-  echo "plug: run 'plug -p $_pname <your command>'  (the only profile? 'plug <your command>' is enough)"
+fi
+# A hosted cluster lets in only the keys it knows: without this step, the
+# first run is refused. Said with the profile it applies to, and where to
+# register the key when the cluster said.
+if [ -n "$_hosted" ]; then
+  _kp=${_pname:-<profile>}
+  echo "plug: this cluster lets in only the keys it knows. Give this machine its own, once:"
+  echo "        plug keygen -p $_kp"
+  echo "        plug pubkey -p $_kp"
+  if [ -n "$_keyurl" ]; then
+    echo "      and register the key it prints at $_keyurl"
+  else
+    echo "      and give the key it prints to whoever operates the cluster"
+  fi
+fi
+if [ -n "$_profile" ]; then
+  echo "plug: then run 'plug -p $_pname <your command>'  (the only profile? 'plug <your command>' is enough)"
 else
-  echo "plug: run 'plug <your command>' — the first run asks for your cluster"
+  echo "plug: run 'plug <your command>'; the first run asks for your cluster"
 fi
 TAIL
   exit 0

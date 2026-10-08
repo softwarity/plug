@@ -120,6 +120,21 @@ type Config struct {
 	// cluster, so removing it means the embedder distributes plug some other
 	// way. Said out loud because it is a surface, not a detail.
 	NoDownloadAccount bool
+
+	// InstallProfile names the profile the installer saves on the developer's
+	// machine when the install command names none (`install <name>` still
+	// wins): a gateway's application name, so the profile is called what the
+	// developer knows the cluster as, not `localhost`. It must follow plug's
+	// profile-name rule, or installs are refused with that rule. Asked at each
+	// install, so a rename applies without a restart. Nil, or "", names the
+	// profile after the host.
+	InstallProfile func() string
+
+	// KeyURL is where a developer registers the public key `plug keygen`
+	// makes, said at the end of an install from a hosted image, whose clusters
+	// let in only the keys they know. Asked at each install. Nil, or "", and
+	// the install says to give it to whoever operates the cluster.
+	KeyURL func() string
 }
 
 // Start serves until ctx is cancelled or the listener fails.
@@ -215,6 +230,9 @@ func Start(ctx context.Context, cfg Config) error {
 			noSelfUpdateEnv + "=" + boolEnv(cfg.NoSelfUpdate),
 		},
 		noDownloadAccount: cfg.NoDownloadAccount,
+		installEnv: func() []string {
+			return []string{installProfileEnv + "=" + call(cfg.InstallProfile), keyURLEnv + "=" + call(cfg.KeyURL)}
+		},
 	}
 
 	ln, err := net.Listen("tcp", cfg.Addr)
@@ -353,4 +371,19 @@ func serve(args []string) {
 	if err != nil {
 		fatal("plug-agent: %v", err)
 	}
+}
+
+// What the download account's installer is told by the embedder (Config):
+// the profile to save, and where a key is registered.
+const (
+	installProfileEnv = "PLUG_INSTALL_PROFILE"
+	keyURLEnv         = "PLUG_KEY_URL"
+)
+
+// call is f(), or "" for a nil f: an embedder that sets nothing.
+func call(f func() string) string {
+	if f == nil {
+		return ""
+	}
+	return f()
 }

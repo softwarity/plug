@@ -2,6 +2,23 @@
 
 ## NEXT RELEASE
 
+### The install returns the prompt as soon as it is done
+
+`ssh ... get@<host> install | sh`, typed at a prompt, gives the prompt back the
+moment the install is over. No key to press.
+
+### A gateway's install says what comes next
+
+On a cluster served by a gateway, such as Meerkat, the install now ends with the
+step that cluster requires: giving the machine its own key, with the exact
+`plug keygen -p` and `plug pubkey -p` commands for the new profile and the page
+where the key is registered. The profile can also be named by the gateway, after
+its application, so the install command needs no name at all.
+
+For a gateway that embeds the agent: `Config.InstallProfile` and `Config.KeyURL`
+give the installer that name and that page. Both are asked at each install, so
+a rename applies without a restart.
+
 ### The install line names the profile
 
 The install command takes the profile name you want: the one you will type

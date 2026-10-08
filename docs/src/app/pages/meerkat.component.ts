@@ -66,6 +66,15 @@ softwarity/plug:&lt;version&gt;-hosted    # for a gateway that embeds the agent<
       <a routerLink="/how-it-works">data path</a>, the <a routerLink="/security">security model</a>
       - is the same plug, so nothing you learn here has to be relearned there.
     </p>
+    <p>
+      Installing it ends with the one step a gateway requires: the machine's own key. The installer
+      saves the profile under the name the gateway gives (its application's, unless the install
+      command names another), and says what to run and where to register the key:
+    </p>
+    <app-code lang="text">plug: this cluster lets in only the keys it knows. Give this machine its own, once:
+        plug keygen -p my-app
+        plug pubkey -p my-app
+      and register the key it prints at https://my-gateway.example/profile/dev/key</app-code>
 
     <p>
       This page is a summary and will grow. See

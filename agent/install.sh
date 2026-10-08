@@ -22,7 +22,9 @@ die()  { echo "plug: $1" >&2; exit 1; }
 
 HOST="${1:-}"
 PORT="${2:-2222}"
-PROFILE="${3:-$HOST}"
+# The name given here wins; then the one the agent was told to suggest (the
+# lines serve-binary writes above this script: install_vars), then the host.
+PROFILE="${3:-${_name:-$HOST}}"
 [ -n "$HOST" ] || die "pass the cluster host on the bash side of the pipe:
   ... get@<host> install-windows | bash -s -- <host> [port]"
 # The rule plug applies to every profile name (cli/profiles_cmd.go): the name
@@ -128,5 +130,17 @@ if "$DIR/plug.exe" install-service >/dev/null 2>&1; then
   info "service installed — 'plug <cmd>' now runs without admin, multicluster included"
 else
   info "not elevated: to enable no-admin runs, once — open Git Bash as Administrator and run: plug install-service"
+fi
+# A hosted cluster lets in only the keys it knows: without this step, the first
+# run is refused. _hosted and _keyurl come from the agent (install_vars).
+if [ -n "${_hosted:-}" ]; then
+  info "this cluster lets in only the keys it knows. Give this machine its own, once:"
+  echo "        plug keygen -p $PROFILE"
+  echo "        plug pubkey -p $PROFILE"
+  if [ -n "${_keyurl:-}" ]; then
+    echo "      and register the key it prints at $_keyurl"
+  else
+    echo "      and give the key it prints to whoever operates the cluster"
+  fi
 fi
 info "ready. Open a new Git Bash and:  plug -p $PROFILE <your command>"
