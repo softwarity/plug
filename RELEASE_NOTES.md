@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.22.0
+
 ### The install returns the prompt as soon as it is done
 
 `ssh ... get@<host> install | sh`, typed at a prompt, gives the prompt back the
