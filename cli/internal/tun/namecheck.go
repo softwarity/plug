@@ -1,6 +1,7 @@
 package tun
 
 import (
+	"strings"
 	"sync"
 	"time"
 )
@@ -41,8 +42,12 @@ const checkTTL = 5 * time.Second
 
 // newNameChecker builds the pre-mint existence check: ask every current
 // transport, present in ANY cluster means mint. When nobody can answer (no
-// transport yet, old agents), mint as plug always did: a fake IP whose
-// connect is refused with a log, never a hang.
+// transport yet, old agents), a BARE name is minted as plug always did: a fake
+// IP whose connect is refused with a log, never a hang. A DOTTED name is not:
+// it is minted only on a cluster's yes. A dotted name the stub may claim
+// (<service>.<namespace>, see clusterShortName) can just as well be a name of
+// the local network, jira.corp or odb.lan, and minting it on nobody's word
+// would take it from the whole machine for as long as no agent answers.
 func newNameChecker(dialers func() []Dialer, log logfn) nameChecker {
 	return newNameCache(dialers, log).check
 }
@@ -128,9 +133,10 @@ func (c *nameCache) check(name string) bool {
 	found, answered := askEveryCluster(resolvers, name)
 	took := c.now().Sub(started)
 
-	// Nobody could answer (no transport yet, an agent too old): mint, as
-	// plug always did, and do NOT cache a verdict we never got.
-	result := true
+	// Nobody could answer (no transport yet, an agent too old): mint a bare
+	// name, as plug always did, but not a dotted one (newNameChecker), and do
+	// NOT cache a verdict we never got.
+	result := !strings.Contains(name, ".")
 	c.mu.Lock()
 	delete(c.inflight, name)
 	if answered {

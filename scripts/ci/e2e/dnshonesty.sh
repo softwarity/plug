@@ -14,4 +14,26 @@ do_dnshonesty() {
     echo "--- dns FAIL - expected a resolution error, got: ${nx:-<nothing>}"
     sum "**dns honesty (absent → NXDOMAIN)** ❌ - \`${nx:-nothing}\`"; return 1
   fi
+  dns_short_form
+}
+
+# <service>.<namespace>, the way a pod names a Service of another namespace and
+# a Helm chart writes it (http://opentelemetry.monitoring:4318). A pod resolves
+# it through its search domains; a plugged process must too. Kubernetes only:
+# Compose and Swarm have no namespaces. httpbin is in `default`
+# (e2e/k8s.cluster.yaml carries no namespace).
+dns_short_form() {
+  if [ "$family" != k8s ]; then
+    echo "service.namespace: not measured on $family (no namespaces)"
+    return 0
+  fi
+  local code
+  code="$(plug curl -sS --max-time 15 -o /dev/null -w '%{http_code}' "http://httpbin.default:8080/get" 2>/tmp/dns-short.err | tr -d '\r' | tail -1)"
+  if [ "$code" = 200 ]; then
+    echo "dns OK - httpbin.default (service.namespace) answered 200"
+    sum "**service.namespace resolves** ✅"
+  else
+    echo "--- dns FAIL - httpbin.default (service.namespace) answered '${code:-nothing}': $(head -c 200 /tmp/dns-short.err 2>/dev/null)"
+    sum "**service.namespace resolves** ❌ - \`${code:-nothing}\`"; return 1
+  fi
 }

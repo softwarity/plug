@@ -2,6 +2,18 @@
 
 ## NEXT RELEASE
 
+### Kubernetes names in their short form: service.namespace
+
+A Service of another namespace now resolves the way a pod writes it:
+`http://opentelemetry.monitoring:4318` reaches `opentelemetry` in `monitoring`,
+as `opentelemetry.monitoring.svc.cluster.local` already did. A chart's
+configuration works unchanged under plug.
+
+Only names that cannot be public ones are asked of your clusters: a last label
+such as `monitoring` or `shop`, never `com`, `dev` or `app`. A name no cluster
+holds, `github.com` or one of your local network, resolves as it always did. A
+namespace named after a public top-level domain is reached by its long name.
+
 ---
 
 ## 2.22.0

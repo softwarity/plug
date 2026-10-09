@@ -226,7 +226,12 @@ import { RouterLink } from '@angular/router';
       The helper is tied to the session as the name is: reaped by the agent when the session
       dies, re-provisioned after a reconnect with the mount left untouched. The peers those variables name the Kubernetes way,
       <code>rabbitmq.shop.svc.cluster.local</code>, resolve through plug like the bare name does,
-      whole, so a Service in another namespace is reached as the pod reaches it. A name held by another live plug session is refused, and the refusal
+      whole, so a Service in another namespace is reached as the pod reaches it. So does the short
+      form a chart often writes, <code>rabbitmq.shop</code>: plug asks the clusters for it when its
+      last label cannot be a public domain (<code>shop</code>, <code>monitoring</code>), and leaves
+      it to your usual DNS otherwise, so a name like <code>github.com</code> or one of your local
+      network never changes hands. A namespace named after a public top-level domain
+      (<code>dev</code>, <code>app</code>) is reached by its long name. A name held by another live plug session is refused, and the refusal
       <a routerLink="/troubleshooting">names the process holding it</a>. That claim is the agent's,
       not the signpost's: it leases the name to the session serving it, so the name stays that
       session's even in the moments no signpost exists - right after an agent restart, for

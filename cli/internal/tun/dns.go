@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/net/publicsuffix"
 )
 
 const (
@@ -474,7 +476,12 @@ func answerDNS(q []byte, tab *faketab, upstream *upstreamDNS, check nameChecker)
 
 	var answerIP net.IP
 	rcode := byte(0)
+	// <service>.<namespace>, held by a cluster: a name of ours, asked whatever
+	// the type, so an A and its AAAA agree (see the AAAA case below on why
+	// they must). Asked once, here: the check is cached and shared.
+	short, shortHeld := clusterHoldsShortName(name, check)
 	switch {
+	case qtype != 1 && shortHeld: // anything but an address, for a name of ours → NODATA
 	case qtype == 28 && !relayable(name, tab): // AAAA for a name of ours → NODATA (force v4)
 	case qtype == 28:
 		// AAAA for a name that is NOT ours. Still NODATA, never a real v6 - a v6
@@ -530,9 +537,15 @@ func answerDNS(q []byte, tab *faketab, upstream *upstreamDNS, check nameChecker)
 		// Windows appended plug0's search suffix (my-service → my-service.plug) to
 		// force a DNS query. Strip it and mint the SAME fake IP as the bare name, so
 		// the connect maps back to "my-service" for the agent to resolve.
-		if base := name[:len(name)-len(searchSuffix)-1]; base != "" && !strings.Contains(base, ".") {
+		// The same suffix completes <service>.<namespace> on macOS too, whose
+		// search list carries it: opentelemetry.monitoring.plug.
+		base := name[:len(name)-len(searchSuffix)-1]
+		switch long, held := clusterHoldsShortName(base, check); {
+		case base != "" && !strings.Contains(base, "."):
 			answerIP, rcode = mintAnswer(base, tab, check)
-		} else {
+		case held:
+			answerIP, rcode = mintAnswer(long, tab, check)
+		default:
 			rcode = 3
 		}
 	case !strings.Contains(name, "."): // single-label cluster name → fake
@@ -543,6 +556,11 @@ func answerDNS(q []byte, tab *faketab, upstream *upstreamDNS, check nameChecker)
 		// carries the namespace to the agent (see clusterLongName).
 		long, _ := clusterLongName(name)
 		answerIP, rcode = mintAnswer(long, tab, check)
+	case shortHeld:
+		// <service>.<namespace> a cluster holds: minted under its long form,
+		// which the agent dials (see clusterShortName). One it does not hold
+		// falls to the default below, upstream, as every dotted name did.
+		answerIP, rcode = mintAnswer(short, tab, check)
 	default: // dotted → resolve for real via the saved upstream
 		if upstream == nil {
 			// The second of the two places this pointer is followed. Guarded for
@@ -650,6 +668,49 @@ func mintAnswer(name string, tab *faketab, check nameChecker) (net.IP, byte) {
 		return nil, 3 // this instance's /24 is exhausted
 	}
 	return net.IPv4(byte(ip>>24), byte(ip>>16), byte(ip>>8), byte(ip)), 0
+}
+
+// clusterShortName recognises a Kubernetes Service named the way a pod names
+// one in another namespace, <service>.<namespace> (opentelemetry.monitoring),
+// and gives back the long form the agent dials, <service>.<namespace>.svc. A
+// pod resolves it through its search domains; a Helm chart writes it that way
+// (`http://opentelemetry.monitoring:4318`), and a process standing in for that
+// pod got NXDOMAIN for it.
+//
+// Two labels look like a name in a real domain, and this stub answers the
+// whole machine on macOS, so only a name that CANNOT be a public one is
+// claimed: its last label is not an ICANN top-level domain (the public suffix
+// list says so, compiled in). monitoring, canopy, kube-system qualify; com,
+// dev, app, io never do, so a namespace called like a public TLD does not
+// capture that TLD for every process on the machine, and is reached by its
+// long name instead. local is mDNS's (RFC 6762) and svc is the long form's own
+// marker; neither is a namespace to ask about.
+//
+// Claiming is not answering: the name is minted only when a cluster says it
+// holds it, and otherwise goes upstream as before (answerDNS), which is what
+// keeps jira.corp and odb.lan, names of the local network that are no public
+// domain either, resolving as they always did.
+func clusterShortName(name string) (string, bool) {
+	n := strings.ToLower(strings.TrimSuffix(name, "."))
+	labels := strings.Split(n, ".")
+	if len(labels) != 2 || labels[0] == "" || labels[1] == "" || labels[1] == "local" || labels[1] == "svc" {
+		return "", false
+	}
+	if _, icann := publicsuffix.PublicSuffix(n); icann {
+		return "", false
+	}
+	return n + ".svc", true
+}
+
+// clusterHoldsShortName says whether name is <service>.<namespace> and a
+// connected cluster holds it, giving back the long form to mint. A cluster's
+// yes is required (no check, no claim): see clusterShortName.
+func clusterHoldsShortName(name string, check nameChecker) (string, bool) {
+	long, ok := clusterShortName(name)
+	if !ok || check == nil || !check(long) {
+		return "", false
+	}
+	return long, true
 }
 
 // isClusterLongName is clusterLongName as a predicate, for the switch above.
