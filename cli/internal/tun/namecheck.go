@@ -205,11 +205,15 @@ func askEveryCluster(resolvers []clusterNameResolver, name string) (found, answe
 	}
 	type reply struct{ found, ok bool }
 	replies := make(chan reply, len(resolvers))
+	// The cap is read once, here: a question outlives this call when another
+	// cluster answered first, and it must give its token back to the channel
+	// it took it from, not to whatever askSlots names by then.
+	slots := askSlots
 	for _, cr := range resolvers {
 		go func(cr clusterNameResolver) {
-			askSlots <- struct{}{}
+			slots <- struct{}{}
 			f, ok := cr.ResolveInCluster(name)
-			<-askSlots
+			<-slots
 			replies <- reply{f, ok}
 		}(cr)
 	}
