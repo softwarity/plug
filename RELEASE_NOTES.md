@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.23.0
+
 ### Kubernetes names in their short form: service.namespace
 
 A Service of another namespace now resolves the way a pod writes it:
