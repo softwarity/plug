@@ -44,9 +44,14 @@ import { CtaComponent } from '../cta/cta.component';
          th look (shaded, bold) is undone here. */
       .cmp tbody th {
         color: var(--text-secondary);
-        white-space: nowrap;
         font-weight: 400;
         background: transparent;
+      }
+      /* The criteria column is narrow and its labels wrap: the room goes to the
+         three columns being compared, which carry the sentences. */
+      .cmp th:first-child {
+        width: 16%;
+        min-width: 7.5rem;
       }
       .sr-only {
         position: absolute;
@@ -60,6 +65,18 @@ import { CtaComponent } from '../cta/cta.component';
       .cmp td:nth-child(2) {
         background: var(--accent-purple-tint);
         color: var(--text-primary);
+        border-left: 2px solid var(--accent-purple);
+        border-right: 2px solid var(--accent-purple);
+      }
+      /* plug's column, framed top to bottom. With collapsed borders the wider
+         line wins where two meet, so the frame stays whole across the 1px row
+         separators; the last row keeps its bottom edge for the frame alone. */
+      .cmp thead th:nth-child(2) {
+        border-top: 2px solid var(--accent-purple);
+        color: var(--accent-purple);
+      }
+      .cmp tbody tr:last-child td:nth-child(2) {
+        border-bottom: 2px solid var(--accent-purple);
       }
       /* Where plug is ahead. Declared AFTER the column rule on purpose: both have
          the same specificity, so the later one wins and the green replaces the
