@@ -92,12 +92,16 @@ spec:
       labels: { app: plug }
     spec:
       serviceAccountName: plug
-      # The agent starts as root for two reasons: it binds the privileged port 22,
-      # and it reaches the service-account token (the docker socket, on Swarm).
-      # It no longer forks to unprivileged users per session - there are no Unix
-      # accounts in the image at all, and no setuid binary - so we do NOT force
-      # runAsNonRoot or a read-only rootfs here; we keep the one hardening that
-      # is safe: the default seccomp profile.
+      # The agent needs no root here: it listens on 2222 (args below), reads the
+      # service-account token, and writes its state under a directory group 0
+      # may write, which is the group every arbitrary uid gets. So the pod is
+      # one OpenShift and OKD admit under the default restricted-v2 SCC, which
+      # runs it as a uid of the namespace's range. No uid is pinned: that SCC
+      # refuses a pod naming one outside the range, and elsewhere the image's
+      # own user applies. Root stays what the image starts as on plain
+      # Kubernetes, for Compose and Swarm need it for the docker socket and it
+      # is one image; nothing here depends on it. The one hardening kept
+      # explicit is the default seccomp profile.
       securityContext:
         seccompProfile:
           type: RuntimeDefault
@@ -105,9 +109,13 @@ spec:
         - name: plug
           image: docker.io/softwarity/plug:latest
           imagePullPolicy: Always # image is a moving `latest` (rebuilt in place)
+          # Above 1024, so no uid needs a capability to bind it. The image's
+          # default, 22, stays for Docker, Compose and Swarm, whose files map
+          # their published port onto it.
+          args: ["--addr", ":2222"]
           ports:
             - name: ssh
-              containerPort: 22
+              containerPort: 2222
           env:
             # The address a served name is pointed at: THIS pod, not the agent's
             # deployment. The agent can work it out on its own (the source address
@@ -117,14 +125,14 @@ spec:
             - name: PLUG_POD_IP
               valueFrom:
                 fieldRef: { fieldPath: status.podIP }
-          # The agent is up as soon as it accepts TCP on 22; a plain TCP probe
-          # avoids needing credentials.
+          # The agent is up as soon as it accepts TCP on its port; a plain TCP
+          # probe avoids needing credentials.
           readinessProbe:
-            tcpSocket: { port: 22 }
+            tcpSocket: { port: ssh }
             initialDelaySeconds: 3
             periodSeconds: 10
           livenessProbe:
-            tcpSocket: { port: 22 }
+            tcpSocket: { port: ssh }
             initialDelaySeconds: 10
             periodSeconds: 20
           # Modest footprint: the agent only shuttles bytes over ssh.
@@ -143,7 +151,7 @@ spec:
   ports:
     - name: ssh
       port: 2222
-      targetPort: 22
+      targetPort: ssh
       nodePort: 32222
 ---
 # The agent's grant: this namespace only, and more than Services - each rule

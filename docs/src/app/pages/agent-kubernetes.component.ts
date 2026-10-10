@@ -50,8 +50,15 @@ import { FileComponent } from '../file/file.component';
 
     <h3>OpenShift and OKD</h3>
     <p>
-      The same manifest, the same Role, and the mount works under the default <code>restricted</code>
-      SCC, with nothing particular to it: the helper has one shape on every cluster. It runs with
+      The same manifest and the same Role, admitted by the default <code>restricted-v2</code> SCC
+      with nothing to grant: the agent runs as the uid the cluster picks from the namespace's
+      range, never root. It listens on 2222 inside its pod and keeps its state in a directory that
+      uid can write, so it asks for no capability and pins no uid. CI runs it on MicroShift built
+      from OKD at every commit, installs plug from it and opens sessions through it.
+    </p>
+    <p>
+      The mount works under the same SCC, with nothing particular to it: the helper has one shape
+      on every cluster. It runs with
       the uid and gid of the workload whose volume it serves, which the agent reads on the
       workload's own process (<code>exec cat /proc/1/status</code>, the <code>pods/exec</code> rule
       above) or, failing that, in its <code>securityContext</code>; it carries the workload's

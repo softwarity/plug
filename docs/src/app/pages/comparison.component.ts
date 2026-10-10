@@ -112,6 +112,13 @@ import { CtaComponent } from '../cta/cta.component';
       developer's machine, and a closer integration on many points, from the workload's
       environment and secret files to its volumes, live.
     </p>
+    <p>
+      One difference shapes the others: <strong>plug needs no existing service to mirror or
+      intercept</strong>. <code>plug -s my-api:8080:3000 npm run start:dev</code> puts the name
+      <code>my-api</code> in the cluster for the session, and the cluster reaches your process by
+      it, whether a <code>my-api</code> was deployed or not. When one is, plug takes its place and
+      gives it back on exit.
+    </p>
 
     <div class="cmp">
       <table>
@@ -128,7 +135,7 @@ import { CtaComponent } from '../cta/cta.component';
           <tr><th scope="row">Several clusters on several versions</th><td class="win">one launcher, one cached core per version - each profile runs what its agent serves, nothing to pick</td><td>one CLI version at a time</td><td>one CLI version at a time</td></tr>
           <tr><th scope="row">Setup, cluster side</th><td>one agent container</td><td class="win">none</td><td>traffic-manager</td></tr>
           <tr><th scope="row">Reach cluster services by name</th><td>✓</td><td>✓</td><td>✓</td></tr>
-          <tr><th scope="row">Be reachable by a cluster name</th><td class="win">✓ <code>-s name:8080:3000</code> - the name is provisioned for the session</td><td>by stealing or mirroring an existing pod's traffic</td><td>by intercepting an existing service</td></tr>
+          <tr><th scope="row">Be reachable by a cluster name</th><td class="win">✓ <code>-s name:8080:3000</code> - the name is deployed for the session, no existing service needed</td><td>by stealing or mirroring an existing pod's traffic</td><td>by intercepting an existing service</td></tr>
           <tr><th scope="row">Any runtime, no code change</th><td>✓ (IP layer)</td><td>✓</td><td>✓</td></tr>
           <tr><th scope="row">Run a container as a member</th><td>✓ <code>--dockerrun</code></td><td>✓ <code>mirrord container</code></td><td>✓ <code>--docker-run</code></td></tr>
           <tr><th scope="row">Inherit the workload's environment</th><td class="win">✓ by default on a takeover, secrets as the pod has them; the <strong>cluster's value wins</strong> over an inherited one (behaves as in the cluster), and <code>--no-env</code> keeps yours instead - whole OR key by key (<code>--no-env DB_URL,API_KEY</code>)</td><td>✓ by default, from the target pod</td><td>✓ on intercept, or <code>--env-file</code></td></tr>

@@ -2,6 +2,18 @@
 
 ## NEXT RELEASE
 
+### The agent runs on OpenShift and OKD as published
+
+`deploy/plug-k8s.yaml` deploys the agent on OpenShift and OKD with nothing to
+grant: the default `restricted-v2` SCC admits it, and it runs as the uid the
+cluster picks, never as root. The agent listens on 2222 inside its pod, and the
+Service keeps the same ports, so nothing changes for the machines that connect
+to it. Every commit now runs it on a real OpenShift (MicroShift built from OKD),
+installs plug from it and opens sessions through it.
+
+On OpenShift or OKD, apply the new manifest: `oc -n <namespace> apply -f plug-k8s.yaml`.
+Elsewhere there is nothing to do.
+
 ---
 
 ## 2.23.0

@@ -506,7 +506,7 @@ jobs:
     # markers those jobs wrote, which is the only record that cannot lie: without
     # it the image of 33f8c40 shipped with a red Windows selftest, past a comment
     # promising the opposite.
-    needs: [image-build, image-build-hosted, build, selftest, platforms, ci-shape, e2e-compose, e2e-k8s, e2e-swarm, e2e-arm64]
+    needs: [image-build, image-build-hosted, build, selftest, platforms, ci-shape, e2e-compose, e2e-k8s, e2e-swarm, e2e-arm64, okd]
     if: success() && needs.platforms.outputs.verdict == 'pass' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
@@ -1112,6 +1112,28 @@ jobs:
   # architectures apart (before that, this leg claimed exposed-linux and took
   # the amd64 leg down with it, measured). `full: false` is the subset it runs,
   # and _e2e.yml says which cells that leaves out and why.
+  # OpenShift for real: MicroShift built from OKD, one node, on this runner. kind
+  # admits any pod; OpenShift's default restricted-v2 SCC runs the agent as a uid
+  # the cluster picks, never root, which is what this checks along with an
+  # install from that agent and a session through it (scripts/ci/okd.sh). Its own
+  # runner, no tailnet: the cluster is a container beside the client. Not named
+  # e2e-*: it is not a cell chain of _e2e.yml, and abort-on-fail and
+  # check-e2e-cells.sh read that prefix as one.
+  okd:
+    name: OpenShift (MicroShift, restricted-v2)
+    needs: [test, image-build]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: plug on MicroShift
+        run: scripts/ci/okd.sh "${{ needs.image-build.outputs.image }}"
+
   e2e-arm64:
     needs: [test, start-cluster, build-clients]
     permissions:

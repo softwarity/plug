@@ -167,7 +167,13 @@ RUN mkdir -p /opt/plug && chmod 755 /opt/plug
 # Created FIRST, for the same reason /opt/plug is: a `COPY --chmod` that creates
 # the directory applies its mode to the DIRECTORY too, and 0644 on a directory
 # has no traverse bit. Caught by building the image and looking, not by reading.
-RUN mkdir -p /var/lib/plug/state && chmod 755 /var/lib/plug && chmod 700 /var/lib/plug/state
+#
+# Group 0 may write it, the OpenShift convention: a pod admitted under the
+# restricted SCC runs as a uid of the namespace's range, unknown to the image,
+# and always in group 0. Owned by root and nobody else's group, it was not
+# writable by that uid and the agent could not keep its host key there.
+RUN mkdir -p /var/lib/plug/state && chmod 755 /var/lib/plug \
+    && chgrp 0 /var/lib/plug/state && chmod 770 /var/lib/plug/state
 COPY --chmod=644 agent/authorized_keys /var/lib/plug/authorized_keys
 COPY --chmod=755 agent/serve-binary /usr/local/bin/serve-binary
 COPY --from=build /out/bin/ /opt/plug/bin/
