@@ -101,8 +101,10 @@ import { CtaComponent } from '../cta/cta.component';
       <a href="https://metalbear.com/mirrord/" target="_blank" rel="noopener">mirrord</a> and
       <a href="https://telepresence.io/" target="_blank" rel="noopener">Telepresence</a> are the
       well-known <strong>Kubernetes-native</strong> tools for running local code against a remote
-      cluster. plug's angle is different: the same behaviour on Docker, Compose, Swarm
-      <em>and</em> Kubernetes, and nothing to hold on a developer's machine.
+      cluster. plug goes further, with the developer's experience first: the same behaviour on
+      Docker, Compose, Swarm <em>and</em> Kubernetes, nothing to install or keep up to date on a
+      developer's machine, and a closer integration on many points, from the workload's
+      environment and secret files to its volumes, live.
     </p>
 
     <div class="cmp">

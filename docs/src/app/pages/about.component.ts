@@ -199,8 +199,9 @@ import { MatIconModule } from '@angular/material/icon';
       plug isn't the only way to run local code against a remote cluster:
       <a href="https://metalbear.com/mirrord/" target="_blank" rel="noopener">mirrord</a> and
       <a href="https://telepresence.io/" target="_blank" rel="noopener">Telepresence</a> are the
-      well-known Kubernetes-native tools. plug's angle is that it works the same on Docker,
-      Compose, Swarm <em>and</em> Kubernetes, from Linux, macOS and Windows.
+      well-known Kubernetes-native tools. plug goes further, with the developer's experience
+      first: it works the same on Docker, Compose, Swarm <em>and</em> Kubernetes, from Linux,
+      macOS and Windows, and integrates more closely on many points.
       <a routerLink="/comparison">Side by side, including where they are ahead</a>.
     </p>
 
