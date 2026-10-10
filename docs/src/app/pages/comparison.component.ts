@@ -15,6 +15,10 @@ import { CtaComponent } from '../cta/cta.component';
       }
       .cmp table {
         border-collapse: collapse;
+        /* Fixed: the widths below are kept, not stretched to the longest
+           sentence, so plug's column, which says the most, gets no more room
+           than the others. */
+        table-layout: fixed;
         width: 100%;
         min-width: 660px;
         font-size: 0.85rem;
@@ -48,10 +52,12 @@ import { CtaComponent } from '../cta/cta.component';
         background: transparent;
       }
       /* The criteria column is narrow and its labels wrap: the room goes to the
-         three columns being compared, which carry the sentences. */
-      .cmp th:first-child {
+         three columns being compared, which carry the sentences, in equal shares. */
+      .cmp thead th:first-child {
         width: 16%;
-        min-width: 7.5rem;
+      }
+      .cmp thead th:not(:first-child) {
+        width: 28%;
       }
       .sr-only {
         position: absolute;
