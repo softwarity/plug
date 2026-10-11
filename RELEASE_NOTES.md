@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.24.0
+
 ### The agent runs on OpenShift and OKD as published
 
 `deploy/plug-k8s.yaml` deploys the agent on OpenShift and OKD with nothing to
