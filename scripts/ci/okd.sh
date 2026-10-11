@@ -7,8 +7,9 @@
 #   scripts/ci/okd.sh <image>
 #
 # <image> is the agent image under test, already published for this commit
-# (sha-<commit>-amd64). It is pulled here and copied into the node's own
-# storage, so what runs is what was built.
+# (sha-<commit>-amd64). It is pulled here, unless this machine already has it
+# (a local build), and copied into the node's own storage, so what runs is
+# what was built.
 #
 # The manifest is the PUBLISHED one, deploy/plug-k8s.yaml, with only its image
 # swapped, as on kind. Then plug is installed from that agent and used: a
@@ -70,7 +71,7 @@ node_ready() { oc get nodes --no-headers | grep -q ' Ready'; }
 until_ok 1200 "the node is Ready" node_ready
 
 say "the image under test, copied into the cluster"
-docker pull -q "$IMAGE" >/dev/null
+docker image inspect "$IMAGE" >/dev/null 2>&1 || docker pull -q "$IMAGE" >/dev/null
 docker save "$IMAGE" | node sh -c 'cat > /tmp/image.tar && skopeo copy -q docker-archive:/tmp/image.tar containers-storage:localhost/plug:under-test && rm /tmp/image.tar'
 ok "$IMAGE is localhost/plug:under-test in the node"
 
@@ -92,14 +93,17 @@ ok "the agent rolled out"
 say "admitted by the SCC, as the uid the cluster chose"
 pod=$(oc -n $NS get pod -l app=plug -o name | head -1)
 expect "SCC" restricted-v2 "$(oc -n $NS get "$pod" -o jsonpath='{.metadata.annotations.openshift\.io/scc}')"
-uid=$(oc -n $NS exec "$pod" -- id -u)
+# Read off the pod rather than exec'd in it: the image has no shell and no
+# `id`. status.user is what the container runtime says the process runs as.
+uid=$(oc -n $NS get "$pod" -o jsonpath='{.status.containerStatuses[0].user.linux.uid}')
+[ -n "$uid" ] || die "the pod's status says nothing of the uid it runs as"
 [ "$uid" -ge 1000000000 ] || die "the agent runs as uid $uid: the SCC did not allocate it"
 ok "the agent runs as uid $uid, not root"
-expect "group" 0 "$(oc -n $NS exec "$pod" -- id -g)"
-oc -n $NS exec "$pod" -- test -s /var/lib/plug/state/host_key || die "no host key in /var/lib/plug/state: the state directory is not writable by the pod's uid"
-ok "the agent wrote its host key"
-oc -n $NS logs "$pod" | grep -q "ready (v" || die "the agent's log does not say it is ready"
-ok "the agent says it is ready"
+expect "group" 0 "$(oc -n $NS get "$pod" -o jsonpath='{.status.containerStatuses[0].user.linux.gid}')"
+# Ready means the host key was written: the agent stops at boot when it cannot
+# keep one in /var/lib/plug/state, which only group 0 may write.
+oc -n $NS logs "$pod" | grep -q "ready (v" || die "the agent's log does not say it is ready: is /var/lib/plug/state writable by the pod's uid?"
+ok "the agent says it is ready, so it wrote its host key"
 
 say "a service to reach, admitted the same way"
 oc -n $NS apply -f - >/dev/null <<'HTTPBIN'

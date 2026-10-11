@@ -805,6 +805,10 @@ func (s *sshServer) runForced(ch ssh.Channel, user, who string, fwd *forwardSet,
 	if user == downloadUser {
 		cmd.Env = append(cmd.Env, s.installEnv...)
 	}
+	// Last, so it wins over anything of that name the agent's own environment
+	// carries: the same binary may answer both accounts, and this is how the
+	// process it starts knows the anonymous one from the tunnel.
+	cmd.Env = append(cmd.Env, accountEnv+"="+user)
 	// The verb's answer goes to the client untouched; a copy of the tail stays
 	// here, because "ok" and "ok reassigned" mean different things to the Host
 	// and the exit status tells them apart in neither case (answer() exits 0

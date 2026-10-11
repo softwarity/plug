@@ -1115,3 +1115,55 @@ func TestTheInstallerIsToldWhatTheEmbedderDecided(t *testing.T) {
 		t.Fatalf("a verb was told the installer's sentence: %q", got)
 	}
 }
+
+// The same binary answers both accounts, so the process the server starts is
+// told which one asked, and the server's word is final: an agent whose own
+// environment says `get` still runs the tunnel's verbs as the tunnel's.
+func TestEachCommandIsToldItsAccount(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the agent only ever runs in a Linux container")
+	}
+	t.Setenv(accountEnv, downloadUser)
+	hk, err := hostKeySigner(filepath.Join(t.TempDir(), "host_key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, pub := newTestKey(t)
+	srv := &sshServer{
+		host:    &standaloneHost{authorized: []ssh.PublicKey{pub}},
+		hostKey: hk,
+		execFor: func(string) []string {
+			return []string{"/bin/sh", "-c", `printf '%s' "$` + accountEnv + `"`}
+		},
+		logf: func(string, ...any) {},
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go srv.Serve(ln)
+	defer ln.Close()
+	run := func(user string, auth ...ssh.AuthMethod) string {
+		cl, err := dial(t, ln.Addr().String(), user, auth...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cl.Close()
+		sess, err := cl.NewSession()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer sess.Close()
+		out, err := sess.Output("version")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(out)
+	}
+	if got := run(downloadUser); got != downloadUser {
+		t.Fatalf("the download account's command was told %q", got)
+	}
+	if got := run(tunnelUser, ssh.PublicKeys(signer)); got != tunnelUser {
+		t.Fatalf("the tunnel's command was told %q", got)
+	}
+}

@@ -42,27 +42,27 @@ Sources / copyright holders / full texts:
 
 ## plug agent — the `docker.io/softwarity/plug` image
 
-The agent is an Alpine image bundling these **independent programs**. This is
-*mere aggregation* — each keeps its own license, and plug's FSL-1.1-Apache-2.0
-covers only the `plug-agent` binary plug adds, not the programs below.
+The agent image is the `plug-agent` binary on a distroless base, which carries
+no program at all: no shell, no libc, no package manager. Only data files, each
+under its own license. This is *mere aggregation*: plug's FSL-1.1-Apache-2.0
+covers only the `plug-agent` binary plug adds, not the files below.
 
 | Component | Role | License |
 |---|---|---|
-| Alpine Linux (base image) | minimal userland | MIT (+ per-package) |
+| distroless `static-debian13` (base image) | the image's skeleton | Apache-2.0 |
 | `golang.org/x/crypto` | SSH **server** - the agent's own, doing the `direct-tcpip` dials and the remote forwards | BSD-3-Clause |
-| musl libc | C library | MIT |
-| BusyBox | shell / coreutils | GPL-2.0 |
+| Debian `ca-certificates` | the root certificates the agent's HTTPS requests trust | MPL-2.0 |
+| Debian `base-files`, `netbase`, `media-types`, `tzdata` | `/etc` skeleton, protocol and service names, MIME types, time zones | GPL-2.0+ · public domain |
 
 Sources:
 
-- **Alpine Linux** — <https://www.alpinelinux.org>
-- **musl** — <https://musl.libc.org>
-- **BusyBox** — <https://busybox.net>
+- **distroless** - <https://github.com/GoogleContainerTools/distroless>
+- **Debian** - <https://sources.debian.org>
 
 ---
 
 None of these licenses restrict redistribution alongside a source-available
 license like FSL: BSD, MIT and Apache-2.0 are permissive (no obligation flows
-back onto plug), and BusyBox's GPL-2.0 only reaches the aggregated image, not
-plug's own code — the image programs run as separate processes (mere
-aggregation), not linked into plug's code.
+back onto plug), and the GPL of Debian's base files only reaches the aggregated
+image, not plug's own code: they are data files beside it (mere aggregation),
+not linked into plug's code.

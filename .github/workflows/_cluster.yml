@@ -154,10 +154,11 @@ jobs:
         if: inputs.image == ''
         run: gunzip -c /tmp/agent-image.tar.gz | docker load
       - name: Say what it serves
-        # --entrypoint: the image's entrypoint ignores its args and runs the agent
-        # in the foreground; without the override this docker run never returns.
+        # Asked of the download account, as a launcher asks it: the image has no
+        # shell and no cat. --entrypoint: the image's own runs the server in the
+        # foreground, and this docker run would never return.
         run: |
-          echo "agent image ready, serves plug version: $(docker run --rm --entrypoint cat softwarity/plug:e2e /opt/plug/VERSION)" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "agent image ready, serves plug version: $(docker run --rm --entrypoint /usr/local/bin/plug-agent -e PLUG_ACCOUNT=get -e SSH_ORIGINAL_COMMAND=version softwarity/plug:e2e)" | tee -a "$GITHUB_STEP_SUMMARY"
       # The node's name is the contract the legs read: ci.yml hands each leg
       # plug-<family>-<corr> as A and B, scripts/ci/e2e/lib.sh reads the family
       # off it, and the multicluster cell strips the prefix to get the corr id

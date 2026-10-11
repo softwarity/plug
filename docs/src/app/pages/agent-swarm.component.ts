@@ -10,8 +10,8 @@ import { FileComponent } from '../file/file.component';
     <h2>Swarm</h2>
 
     <p>
-      The agent is deliberately boring: a small Alpine image running one static Go binary, an SSH
-      server with no shell behind it. No state, no volume, no configuration. Its only job is to
+      The agent is deliberately boring: a small image holding one static Go binary and no shell at
+      all, an SSH server with nothing behind it to reach. No state, no volume, no configuration. Its only job is to
       <em>be inside</em> the overlay networks and dial services on the CLI's behalf
       (<code>direct-tcpip</code>). The
       same image runs on <a routerLink="/kubernetes">Kubernetes</a> too.

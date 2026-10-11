@@ -46,7 +46,7 @@ import { CodeComponent } from '../code/code.component';
       user named <code>get</code>. It is <em>more</em> locked down than the tunnel user, not less:
     </p>
     <ul>
-      <li>The server replaces whatever the client asks with a single script that can only print the version, <code>cat</code> a binary, or emit the install script - no shell, ever. There is no Unix account behind it and no shell in reach to fall back to.</li>
+      <li>Whatever the client asks is handed to the agent binary itself, which can only print the version, send a binary with its digest, or emit the install script - no shell, ever. There is no Unix account behind it, and no shell in the image at all: the agent image holds <code>plug-agent</code> and nothing else that runs, so a request has no interpreter to reach, and an image scanner finds no shell or C library to report.</li>
       <li>Forwarding is refused outright for <code>get</code>: it cannot open the network tunnel, only the <code>plug</code> account (public-key) can.</li>
       <li>Empty password is intentional and harmless here: there is nothing to protect behind it - the whole surface is "download a public binary".</li>
     </ul>

@@ -21,7 +21,7 @@ func raiseAmbientCaps() {
 		return // root: the euid crosses exec by itself
 	}
 	// CAP_NET_BIND_SERVICE=10, CAP_NET_ADMIN=12, CAP_SYS_ADMIN=21 — the install's
-	// setcap trio (see agent/serve-binary and route_linux.go).
+	// setcap trio (see agent/install-unix.sh and route_linux.go).
 	caps := []int{10, 12, 21}
 
 	hdr := unix.CapUserHeader{Version: unix.LINUX_CAPABILITY_VERSION_3}

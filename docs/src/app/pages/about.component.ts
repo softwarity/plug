@@ -155,8 +155,8 @@ import { MatIconModule } from '@angular/material/icon';
     </div>
 
     <div class="callout">
-      <strong>Two pieces.</strong> A tiny <a routerLink="/swarm">agent container</a> (Alpine, one
-      static Go binary) deployed once on the cluster - and a single static <code>plug</code> binary on each dev
+      <strong>Two pieces.</strong> A tiny <a routerLink="/swarm">agent container</a> (one static Go
+      binary, no shell) deployed once on the cluster - and a single static <code>plug</code> binary on each dev
       machine. Set up once per cluster; after that, day-to-day runs need no sudo or admin.
     </div>
 

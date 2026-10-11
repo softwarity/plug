@@ -2,6 +2,19 @@
 
 ## NEXT RELEASE
 
+### An agent image with no shell in it
+
+The agent image now holds `plug-agent` and nothing else that runs: no shell,
+no C library, no package manager, on a distroless base. The anonymous download
+account, which answers `ssh get@<host> install`, is served by the agent binary
+itself, so a request from whoever reaches that port has no interpreter to
+reach. Image scanners have no shell, busybox or musl left to report, which
+matters to the teams that scan what they deploy, on OpenShift first.
+
+Installs, updates and sessions behave exactly as before: the download account
+answers byte for byte what it answered, and every commit checks it against
+the former implementation. There is nothing to do.
+
 ---
 
 ## 2.24.0

@@ -1,4 +1,9 @@
 #!/bin/sh
+# FROZEN. This is the script that served the anonymous `get` account while the
+# image had a shell. The account is now download.go, and download_test.go runs
+# this script beside it as the reference it must match byte for byte. Never
+# edit it to make that test pass: a difference is a change for every launcher
+# already installed.
 # ForceCommand for the anonymous "get" user. It can only:
 #   version                    print the agent version
 #   install [<profile>]        emit a self-contained installer (all binaries embedded;

@@ -40,7 +40,7 @@ import { RouterLink } from '@angular/router';
     <p>
       <strong>One mechanism: a userspace TUN, over an SSH tunnel.</strong> plug captures your
       command's cluster traffic at the <strong>IP layer</strong> and splices it, by name, to a tiny
-      agent (Alpine, one static Go binary) running in the cluster. Your app's socket is never touched,
+      agent (one static Go binary, no shell) running in the cluster. Your app's socket is never touched,
       and nothing but a private, reserved IP range is ever intercepted.
     </p>
 
@@ -252,7 +252,7 @@ import { RouterLink } from '@angular/router';
         <tr><td><a href="https://github.com/WireGuard/wireguard-go" target="_blank" rel="noopener">wireguard-go</a> + <a href="https://gvisor.dev/" target="_blank" rel="noopener">gVisor</a></td><td>The userspace TUN device and network stack that answer DNS and terminate flows in-process</td><td>MIT · Apache-2.0</td></tr>
         <tr><td><a href="https://github.com/softwarity/smbserver" target="_blank" rel="noopener">smbserver</a></td><td>The SMB server of a live mount, compiled into the agent: the helper serves a workload's volume with the binary alone, without privilege</td><td>Apache-2.0</td></tr>
         <tr><td><a href="https://go.dev/" target="_blank" rel="noopener">Go</a></td><td>The CLI - one static binary per platform, no runtime dependencies</td><td>BSD</td></tr>
-        <tr><td><a href="https://www.alpinelinux.org/" target="_blank" rel="noopener">Alpine Linux</a></td><td>Base of the agent image - one static Go binary + the binaries it serves</td><td>MIT</td></tr>
+        <tr><td><a href="https://github.com/GoogleContainerTools/distroless" target="_blank" rel="noopener">distroless</a></td><td>Base of the agent image: no shell, no libc, no package manager - one static Go binary, the binaries it serves, and the root certificates</td><td>Apache-2.0</td></tr>
       </tbody>
     </table>
   `,

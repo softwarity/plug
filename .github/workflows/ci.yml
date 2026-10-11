@@ -569,7 +569,9 @@ jobs:
             # that core would be told a version its bytes do not carry.
             #
             # Costs one pull of an image this job is already authenticated for.
-            got=$(docker run --rm --entrypoint cat "$SRC" /opt/plug/VERSION 2>/dev/null || echo "?")
+            # Asked of the download account, as a launcher asks it: the image
+            # has no shell and no cat.
+            got=$(docker run --rm --entrypoint /usr/local/bin/plug-agent -e PLUG_ACCOUNT=get -e SSH_ORIGINAL_COMMAND=version "$SRC" 2>/dev/null || echo "?")
             if [ "$got" != "$ver" ]; then
               echo "::error::the image is stamped '$got' and is about to be published as $ver." >&2
               echo "         The build ran before the tag existed. Re-run the CI on this commit," >&2
@@ -823,9 +825,14 @@ jobs:
           set -e
           for suffix in "" "-hosted"; do
             ref="$IMAGE:$VERSION$suffix"
-            got=$(docker run --rm --platform linux/amd64 --entrypoint cat "$ref" /opt/plug/VERSION)
+            # Asked of the download account, as a launcher asks it (the image
+            # has no shell): the version it serves, and the signature it hands
+            # out with the digest a launcher checks before running a core.
+            get() { docker run --rm --platform linux/amd64 --entrypoint /usr/local/bin/plug-agent -e PLUG_ACCOUNT=get -e "SSH_ORIGINAL_COMMAND=$1" "$ref"; }
+            got=$(get version)
             [ "$got" = "$VERSION$suffix" ] || { echo "::error::$ref is stamped '$got'"; exit 1; }
-            docker run --rm --platform linux/amd64 --entrypoint sh "$ref" -c 'test -s /opt/plug/bin/plug-linux-amd64.sig' \
+            digest=$(get "digest linux-amd64")
+            grep -q '^sig=.' <<<"$digest" \
               || { echo "::error::$ref carries no release signature: was PLUG_RELEASE_KEY set?"; exit 1; }
             echo "$ref: stamped $got, signed"
           done

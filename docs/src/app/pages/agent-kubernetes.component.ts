@@ -10,8 +10,8 @@ import { FileComponent } from '../file/file.component';
     <h2>Kubernetes</h2>
 
     <p>
-      The <a routerLink="/swarm">same agent image</a> runs on Kubernetes - a small Alpine pod
-      running one static Go binary, sitting inside the cluster and dialing services on the CLI's
+      The <a routerLink="/swarm">same agent image</a> runs on Kubernetes - a small pod
+      running one static Go binary and nothing else, no shell, sitting inside the cluster and dialing services on the CLI's
       behalf.
       Nothing Kubernetes-specific is baked in; only the way you deploy and reach it differs.
     </p>

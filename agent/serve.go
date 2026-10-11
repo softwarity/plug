@@ -47,9 +47,6 @@ const (
 	// person. Beside the state, for the same reason.
 	authorizedKeysPath = "/var/lib/plug/authorized_keys"
 
-	// The download account's command. Still a separate program, still no shell.
-	downloadCommand = "/usr/local/bin/serve-binary"
-
 	// What ClientAliveInterval 30 / ClientAliveCountMax 3 bought: a tunnel that
 	// dies without saying so is noticed within ~90s, which frees its
 	// remote-forward binds before a reconnecting session tries to re-arm them.
@@ -76,7 +73,10 @@ type Config struct {
 	VerbCommand []string
 
 	// DownloadCommand serves the CLI binaries to the anonymous account.
-	// Defaults to /usr/local/bin/serve-binary.
+	// Defaults to VerbCommand: the agent answers that account itself, from
+	// /opt/plug, told by the server which account is asking (download.go). An
+	// embedder whose VerbCommand reaches Main has nothing to set, and only has
+	// to carry plug's /opt/plug.
 	DownloadCommand []string
 
 	// Logf receives one line per notable event. Defaults to stderr.
@@ -142,8 +142,9 @@ func Start(ctx context.Context, cfg Config) error {
 	if len(cfg.VerbCommand) == 0 {
 		cfg.VerbCommand = []string{os.Args[0]}
 	}
-	if len(cfg.DownloadCommand) == 0 {
-		cfg.DownloadCommand = []string{downloadCommand}
+	defaultDownload := len(cfg.DownloadCommand) == 0
+	if defaultDownload {
+		cfg.DownloadCommand = cfg.VerbCommand
 	}
 	if cfg.Version == "" {
 		if b, err := os.ReadFile(versionFile); err == nil {
@@ -174,14 +175,14 @@ func Start(ctx context.Context, cfg Config) error {
 		cfg.Logf("no version to report: the CLI turns that answer into a cache path and " +
 			"will refuse to run a core it cannot verify. Set Config.Version")
 	}
-	if !cfg.NoDownloadAccount && len(cfg.DownloadCommand) == 1 && cfg.DownloadCommand[0] == downloadCommand {
-		if _, err := os.Stat(downloadCommand); err != nil {
-			cfg.Logf("%s is not here, so the download account can serve nothing. That account is "+
-				"where the LAUNCHER reads this cluster's version and the digest of the core it "+
-				"then runs, so clients cannot install and cannot start at all. Set "+
-				"Config.DownloadCommand (it must answer `version` with %q, `install`, "+
+	if !cfg.NoDownloadAccount && defaultDownload {
+		if !isRegular(downloadDir + "/VERSION") {
+			cfg.Logf("%s holds no client to hand out, so the download account can serve nothing. That "+
+				"account is where the LAUNCHER reads this cluster's version and the digest of the core "+
+				"it then runs, so clients cannot install and cannot start at all. Copy plug's %s into "+
+				"this image, set Config.DownloadCommand (it must answer `version` with %q, `install`, "+
 				"`<os>-<arch>` and `wintun`), or Config.NoDownloadAccount to close it on purpose",
-				downloadCommand, cfg.Version)
+				downloadDir, downloadDir, cfg.Version)
 		}
 	}
 

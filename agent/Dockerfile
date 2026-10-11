@@ -104,18 +104,65 @@ RUN --mount=type=secret,id=release_key \
     { [ ! -f /out/wintun-amd64.dll.sig ] || cp /out/wintun-amd64.dll.sig /out/wintun/wintun.dll.sig; } && \
     { [ ! -f /out/wintun-arm64.dll.sig ] || cp /out/wintun-arm64.dll.sig /out/wintun/wintun-arm64.dll.sig; }
 
-# The agent: its SSH server, the -s provisioning verbs, the signpost relay and
-# the boot gc. Copied file by file rather than as a directory, because the Go
-# sources now sit beside the image files (Dockerfile, install.sh, serve-binary)
-# so that the module path is github.com/softwarity/plug/agent - what Meerkat
-# imports when it links the agent into its own binary.
-COPY agent/*.go agent/go.mod agent/go.sum /src/agent/
+# The agent: its SSH server, the -s provisioning verbs, the signpost relay, the
+# boot gc and the anonymous download account. Copied file by file rather than
+# as a directory, because the Go sources sit beside the image files
+# (Dockerfile, install.sh) so that the module path is
+# github.com/softwarity/plug/agent - what Meerkat imports when it links the
+# agent into its own binary. install-unix.sh is Go's too: the installer the
+# download account emits, embedded in the binary.
+COPY agent/*.go agent/go.mod agent/go.sum agent/install-unix.sh /src/agent/
 COPY agent/cmd/ /src/agent/cmd/
 # ./cmd/plug-agent, not "." - the package is importable now (Meerkat links it
 # into its own binary), so the main lives in a cmd of its own.
 RUN CGO_ENABLED=0 GOARCH=$TARGETARCH go build -C /src/agent -trimpath -ldflags "-s -w" -o /out/plug-agent ./cmd/plug-agent
 
-FROM alpine:3.24
+# Everything the image holds beyond its base, laid out HERE with its modes: the
+# final stage has no shell, so no mkdir or chmod can run there, and a COPY
+# --from keeps the modes it finds. Owned by root (COPY gives uid and gid 0).
+#
+# /opt/plug holds ONLY what this agent hands out: the client binaries, the
+# version they answer to, the Windows installer and the WinTUN DLLs, each .sig
+# beside its file. Nothing that is this agent's own running state, because an
+# embedder copies this directory wholesale into its image, and admission keys
+# or a host key travelling there are read as meaningful when they are not: a
+# gateway takes its identity from its vault and its admissions from its
+# database.
+#
+# The amd64 DLL keeps the unsuffixed name, and that is a compatibility decision
+# rather than tidiness: the `wintun` verb has always answered one file, and
+# every Windows launcher already installed asks for it by that name. It must
+# keep getting an amd64 DLL, or an update would hand an arm64 driver to an
+# amd64 machine and break a datapath that was working.
+#
+# /var/lib/plug is the standalone agent's own state, outside what is handed
+# out: the keys it admits, and what must outlive a process restart (the host
+# key today). Not a volume: a pod that is recreated legitimately starts fresh.
+# state/ may be written by group 0, the OpenShift convention: a pod admitted
+# under the restricted SCC runs as a uid of the namespace's range, unknown to
+# the image, and always in group 0.
+COPY agent/authorized_keys agent/install.sh /src/image/
+RUN mkdir -p /rootfs/opt/plug /rootfs/var/lib/plug/state /rootfs/usr/local/bin && \
+    cp -R /out/bin /rootfs/opt/plug/bin && \
+    cp /out/VERSION /out/wintun/* /src/image/install.sh /rootfs/opt/plug/ && \
+    cp /src/image/authorized_keys /rootfs/var/lib/plug/authorized_keys && \
+    cp /out/plug-agent /rootfs/usr/local/bin/plug-agent && \
+    chmod -R a+rX,go-w /rootfs/opt/plug /rootfs/var/lib/plug && \
+    chmod 755 /rootfs/usr/local/bin/plug-agent && \
+    chmod 770 /rootfs/var/lib/plug/state
+
+# No shell, no package manager, no libc: plug-agent is a static Go binary and
+# runs nothing of the system's. What the base brings is what Go reads, the root
+# certificates (the agent asks the registry over HTTPS for updates;
+# SSL_CERT_FILE and SSL_CERT_DIR add a company's own) and a /tmp with its
+# sticky bit, where the name leases live. Root by default, as the agent must be
+# to reach the docker socket on Compose and Swarm; Kubernetes and OpenShift run
+# it as whatever uid they choose.
+#
+# The anonymous download account was the last reason for a shell here: a /bin/sh
+# script answered it. It is plug-agent now (download.go), so a command from
+# whoever reaches that account has no interpreter left to reach.
+FROM gcr.io/distroless/static-debian13
 
 # A live mount (--mount) needs no package here: the agent starts a HELPER
 # beside the workload - this very image, running `plug-agent mount-serve` with
@@ -127,77 +174,14 @@ FROM alpine:3.24
 # nothing for an embedder to add to its own image: the helper is the agent, as
 # the signpost is.
 
-# No sshd. The SSH server is `plug-agent serve` (agent/sshserver.go),
-# which speaks the same protocol to the same CLI and replaces the whole of what
-# OpenSSH did here: two Unix accounts, two ForceCommands, and nineteen lines of
-# sshd_config generated by `echo` and therefore never tested.
-#
-# What that buys, beyond the image being smaller:
-#   * plug-agent is no longer setuid root. It was, ONLY because sshd ran it as
-#     the unprivileged `plug` user while it needed the docker socket or the
-#     pod's SA token. The server process holds those directly now.
-#   * no `apk add` in this stage: the failure that killed 2.7.3 (one TLS error
-#     on dl-cdn, "no such package", three e2e legs timed out) was an install
-#     this stage no longer needs.
-#   * the host key is kept rather than regenerated. On its own that changes
-#     nothing, since the CLI re-pins whatever answers; it only puts the key
-#     where it will have to be the day identity is actually verified. See
-#     sshserver.go.
-#
-# What it must keep doing is unchanged and enumerated in sshserver.go: the two
-# accounts, publickey for the tunnel and none for downloads, no shell for
-# either, direct-tcpip and remote forwards binding the address the client names.
-
-# /opt/plug holds ONLY what this agent hands out: the client binaries, the
-# version they answer to, the installer and the WinTUN DLL. Nothing that is this
-# agent's own running state, because an embedder copies this directory wholesale
-# into its image, and admission keys or a host key travelling there are read as
-# meaningful when they are not: a gateway takes its identity from its vault and
-# its admissions from its database.
-#
-# Created and moded explicitly rather than by whichever COPY happens to be first:
-# a `COPY --chmod` that CREATES the directory applies its mode to the directory
-# too, and serve-binary has to traverse it.
-RUN mkdir -p /opt/plug && chmod 755 /opt/plug
-
-# The standalone agent's own state, outside what is handed out. The keys it
-# admits, and what must outlive a process restart (the host key today). Not a
-# volume: a pod that is recreated legitimately starts fresh.
-#
-# Created FIRST, for the same reason /opt/plug is: a `COPY --chmod` that creates
-# the directory applies its mode to the DIRECTORY too, and 0644 on a directory
-# has no traverse bit. Caught by building the image and looking, not by reading.
-#
-# Group 0 may write it, the OpenShift convention: a pod admitted under the
-# restricted SCC runs as a uid of the namespace's range, unknown to the image,
-# and always in group 0. Owned by root and nobody else's group, it was not
-# writable by that uid and the agent could not keep its host key there.
-RUN mkdir -p /var/lib/plug/state && chmod 755 /var/lib/plug \
-    && chgrp 0 /var/lib/plug/state && chmod 770 /var/lib/plug/state
-COPY --chmod=644 agent/authorized_keys /var/lib/plug/authorized_keys
-COPY --chmod=755 agent/serve-binary /usr/local/bin/serve-binary
-COPY --from=build /out/bin/ /opt/plug/bin/
-COPY --from=build /out/VERSION /opt/plug/VERSION
-# 0755, not 4755. The setuid bit existed only to bridge the gap sshd created by
-# running this binary as an unprivileged user; `plug-agent serve` IS the process
-# that holds the docker socket and the SA token, so there is no gap to bridge.
-COPY --from=build --chmod=755 /out/plug-agent /usr/local/bin/plug-agent
-# The WinTUN DLL (served on the `wintun` verb) and the Git Bash installer (served
-# on `install-windows`). MUST come AFTER the COPYs above: a COPY that is the FIRST
-# to create /opt/plug would apply its mode to the directory itself, and the
-# serve-binary script has to traverse it. By now /opt/plug is already 0755, so
-# these only set their own files' modes.
-# The amd64 DLL keeps the unsuffixed name, and that is a compatibility decision
-# rather than tidiness: the `wintun` verb has always answered one file, and every
-# Windows launcher already installed asks for it by that name. It must keep
-# getting an amd64 DLL after this image ships, or an update would hand an arm64
-# driver to an amd64 machine and break a datapath that was working.
-# One glob per driver: wintun.dll always matches, wintun.dll.sig only when the
-# build signed it, and a COPY with a source that matches nothing fails the
-# build. Files into an existing directory, never the directory itself.
-COPY --from=build /out/wintun/wintun.dll* /opt/plug/
-COPY --from=build /out/wintun/wintun-arm64.dll* /opt/plug/
-COPY --chmod=644 agent/install.sh /opt/plug/install.sh
+# No sshd. The SSH server is `plug-agent serve` (agent/sshserver.go), which
+# speaks the same protocol to the same CLI: two accounts, publickey for the
+# tunnel and none for downloads, no shell for either, direct-tcpip and remote
+# forwards binding the address the client names. plug-agent is not setuid: the
+# server process holds the docker socket or the pod's SA token directly.
+COPY --from=build /rootfs/opt/plug /opt/plug
+COPY --from=build /rootfs/var/lib/plug /var/lib/plug
+COPY --from=build /rootfs/usr/local/bin/plug-agent /usr/local/bin/plug-agent
 
 EXPOSE 22
 ENTRYPOINT ["/usr/local/bin/plug-agent", "serve"]

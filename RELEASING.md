@@ -91,7 +91,7 @@ The file is base64 of the 64-byte ed25519 private key, one line.
 
 `agent/Dockerfile` mounts it for the length of one `RUN` and calls
 `cli/cmd/plug-sign`, which writes a `.sig` next to each `plug-<os>-<arch>`
-binary. `agent/serve-binary` then answers `sig=` alongside `sha256=` on the
+binary. The download account (`agent/download.go`) then answers `sig=` alongside `sha256=` on the
 `digest` verb, and the launcher verifies it before executing the core, on a
 cache hit as well as on a download, and before `plug update` overwrites plug
 itself.

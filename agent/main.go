@@ -98,6 +98,12 @@ func Main() {
 		}
 	}
 	// ForceCommand path: the client's command line arrives in SSH_ORIGINAL_COMMAND.
+	// The anonymous account is served by this same binary (download.go): the
+	// server says which account a command came from, and that one gets the
+	// download verbs and nothing else.
+	if os.Getenv(accountEnv) == downloadUser {
+		os.Exit(serveDownload(os.Getenv("SSH_ORIGINAL_COMMAND"), os.Getenv(keyInstructionEnv), downloadDir, os.Stdout, os.Stderr))
+	}
 	dispatch(strings.Fields(os.Getenv("SSH_ORIGINAL_COMMAND")))
 }
 
