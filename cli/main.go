@@ -113,6 +113,12 @@ func main() {
 		}
 		return
 	}
+	// The --dockerrun sidecar's command (sidecarHold): before PLUG_CORE, which the
+	// sidecar's environment sets and its command inherits.
+	if len(os.Args) == 2 && os.Args[1] == sidecarHoldVerb {
+		sidecarHold()
+		return
+	}
 	// The persistent macOS datapath daemon: a detached re-exec that holds the
 	// datapath for one cluster (see daemonMain). Checked before PLUG_CORE.
 	//
@@ -138,12 +144,6 @@ func main() {
 	if len(args) == 0 {
 		fmt.Print(usage())
 		os.Exit(2)
-	}
-	// A verb this build does not carry is refused here, before the switch. It
-	// must not reach launcherRun either: that would take `update` for the name of
-	// a program to run inside the cluster and fail on something unrelated.
-	if why, ok := verbAvailable(args[0]); !ok {
-		refuseVerb(args[0], why)
 	}
 	switch args[0] {
 	case "-h", "--help":

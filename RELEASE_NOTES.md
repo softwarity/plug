@@ -15,6 +15,21 @@ Installs, updates and sessions behave exactly as before: the download account
 answers byte for byte what it answered, and every commit checks it against
 the former implementation. There is nothing to do.
 
+### plug on Linux needs nothing installed beside it
+
+plug now sets up its network interface, address and route by talking to the
+kernel directly. iproute2 (`ip`) is no longer a requirement, on a developer's
+machine or in a container image, and the `--dockerrun` sidecar runs from the
+shell-less agent image as it is.
+
+### One plug for every cluster, gateway or standalone
+
+On a machine with profiles of both kinds, `plug update` now follows the
+cluster the profile names: it updates a standalone cluster's agent, and says
+that a gateway's cluster decides its own version. `plug versions`,
+`plug keygen` and `plug pubkey` are there for every profile, whichever cluster
+the plug on the machine was installed from.
+
 ---
 
 ## 2.24.0

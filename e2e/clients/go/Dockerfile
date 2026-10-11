@@ -14,7 +14,7 @@ RUN CGO_ENABLED=0 go build -o /eclient .
 FROM debian:bookworm-slim
 ARG TARGETARCH
 # openssh-client: plug's launcher shells out to ssh for its version check.
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates openssh-client iptables iproute2 \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates openssh-client iptables \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=agentimg /opt/plug/bin/plug-linux-${TARGETARCH} /usr/local/bin/plug
 COPY --from=build /eclient /usr/local/bin/eclient

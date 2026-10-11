@@ -100,17 +100,13 @@ func saveUpdateState(cfg config, st updateState) {
 	chownToUser(path) // written as euid 0 on the setuid path
 }
 
-// updatesOffered says whether this build looks for agent updates at all. A
-// hosted plug does not: its version is the gateway's to decide, so it carries
-// no `plug update` (flavour.go), and a notice, a prompt or an automatic apply
-// for a verb it refuses is a question it cannot act on. It used to ask anyway,
-// on every launch: "apply it now?", then "plug update is not part of this
-// install". Whichever cluster the profile names, a gateway's or a standalone
-// one, the answer is the same: the update is not this plug's to make.
-func updatesOffered() bool {
-	_, ok := verbAvailable("update")
-	return ok
-}
+// updatesOffered says whether a cluster whose agent announces clusterVersion
+// takes agent updates from plug. A gateway's does not: its version is the
+// gateway's to decide, so `plug update` refuses it, and a notice, a prompt or an
+// automatic apply would be a question nobody can act on. Asked of the CLUSTER,
+// never of the plug on this machine: one plug serves every profile, gateway's
+// and standalone alike.
+func updatesOffered(clusterVersion string) bool { return !hostedVersion(clusterVersion) }
 
 // backgroundUpdateCheck asks, at most once a day, whether the registry carries a
 // release this cluster's agent does not. Started by the core in its own
@@ -130,7 +126,10 @@ func backgroundUpdateCheck(cfg config) {
 		}
 	}()
 
-	if !updatesOffered() || !shouldCheck(normalizeUpdateMode(cfg.updateMode), loadUpdateState(cfg), time.Now()) {
+	// In the core, the running build IS the one the cluster served (the launcher
+	// fetched it by the version the agent announced), so its own version is the
+	// cluster's.
+	if !updatesOffered(version) || !shouldCheck(normalizeUpdateMode(cfg.updateMode), loadUpdateState(cfg), time.Now()) {
 		return
 	}
 	// Let the datapath settle first. This goroutine starts while the core is
@@ -292,9 +291,10 @@ func parseAgentUpdateAnswer(out string) string {
 
 // announceUpdate is the launcher's half: say what a previous session found, on
 // the way past. Only in notify — auto is applied by the core, which is the only
-// side that outlives the exec.
-func announceUpdate(cfg config) {
-	if !updatesOffered() || normalizeUpdateMode(cfg.updateMode) != updateNotify {
+// side that outlives the exec. clusterVersion is what the cluster's agent
+// announced to the launcher.
+func announceUpdate(cfg config, clusterVersion string) {
+	if !updatesOffered(clusterVersion) || normalizeUpdateMode(cfg.updateMode) != updateNotify {
 		return
 	}
 	if st := loadUpdateState(cfg); st.available != "" {

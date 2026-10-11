@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 )
 
 // The update policy is a property of the CLUSTER, not of this machine: `auto`
@@ -46,14 +47,15 @@ func cmdConfig(args []string) {
 	name := configTarget(profile)
 	cfg := loadProfile(name)
 
-	if !updatesOffered() {
-		// The one setting here is about `plug update`, which a hosted plug does
-		// not carry: showing a mode, or taking one, would promise what it
-		// cannot do.
+	// The one setting here is about `plug update`, which a gateway's cluster
+	// refuses: showing a mode, or taking one, would promise what it cannot do.
+	// Asked of this profile's agent, briefly. A cluster that does not answer now
+	// keeps the setting: it only matters to a check that asks the agent again.
+	if v, err := agentVersionTimeout(cfg, 5*time.Second); err == nil && !updatesOffered(v) {
 		if setting != "" {
-			refuseVerb("config update", "the gateway that serves this plug decides its version, and its agent's")
+			fatal("plug config %s does not apply to profile %q: %s", setting, name, gatewayDecides)
 		}
-		fmt.Printf("- update    decided by the gateway that serves this plug\n")
+		fmt.Printf("- update    decided by the gateway that serves this cluster\n")
 		fmt.Printf("\nprofile %q, stored in %s\n", name, profilePath(name))
 		return
 	}

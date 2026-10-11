@@ -106,7 +106,7 @@ func launcherRun(args []string) {
 		runCore(finalizeInProcess(cfg, opts), cmdArgs)
 		return
 	}
-	announceUpdate(cfg) // what a previous session found, said before the core takes over
+	announceUpdate(cfg, remote) // what a previous session found, said before the core takes over
 	core, err := ensureVersion(remote, cfg)
 	if err != nil {
 		info("cannot fetch v%s (%v) — falling back to this launcher (v%s)", remote, err, version)
@@ -142,12 +142,6 @@ func launcherRun(args []string) {
 func redispatchSubcommand(opts options, cmdArgs []string) bool {
 	if len(cmdArgs) == 0 || (cmdArgs[0] != "update" && cmdArgs[0] != "doctor" && cmdArgs[0] != "version") {
 		return false
-	}
-	// The same refusal as the top-level dispatch. `plug -p X update` gets here
-	// with "-p" as args[0], so the guard up there never saw the verb: without
-	// this, the one spelling refuses and the other runs.
-	if why, ok := verbAvailable(cmdArgs[0]); !ok {
-		refuseVerb(cmdArgs[0], why)
 	}
 	if len(opts.exposes) > 0 || opts.client {
 		fatal("-s/-c don't apply to %q", cmdArgs[0])

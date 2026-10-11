@@ -18,10 +18,10 @@ package main
 //     (2.12.0-hosted). A flavoured build is still a published one, naming one
 //     commit, so a digest mismatch on it is corruption and not a new build. But
 //     it is not a newer version of a standalone one, so lineages never compare:
-//     letting a hosted tag win newestOf would point a cluster at an image whose
-//     client has no `update`. The image build appends the flavour LAST, after
-//     the revision (2.12.0+9f2a1c-hosted), and hosted() reads it as a suffix of
-//     the whole string; both placements are read here.
+//     letting a hosted tag win newestOf would point a standalone cluster at a
+//     gateway's image. The image build appends the flavour LAST, after the
+//     revision (2.12.0+9f2a1c-hosted), and hostedVersion() reads it as a suffix
+//     of the whole string; both placements are read here.
 //   - +REV: build metadata, not inspected. Releases before 2.4.1 were stamped
 //     x.y.z+<rev>; a release already names one commit, so the suffix changes
 //     nothing about what it is.
@@ -78,7 +78,7 @@ func parseVersion(s string) (v semver, ok bool) {
 
 // flavourOK: a flavour is a lowercase word, letters then letters or digits.
 // "hosted-something" is not one, so a build stamped that way is not read as a
-// hosted release by accident; hosted() applies the same strictness to the
+// hosted release by accident; hostedVersion() applies the same strictness to the
 // suffix.
 func flavourOK(s string) bool {
 	for i, c := range s {

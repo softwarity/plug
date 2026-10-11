@@ -38,74 +38,42 @@ func TestTheFlavourComesFromTheVersionString(t *testing.T) {
 		{"2.12.0-hosted-something", false}, // only the exact suffix counts
 		{"hosted", false},                  // not a suffix of the form -hosted
 	} {
-		withVersion(t, c.v, func() {
-			if got := hosted(); got != c.want {
-				t.Errorf("version %q -> hosted()=%v, want %v", c.v, got, c.want)
-			}
-		})
+		if got := hostedVersion(c.v); got != c.want {
+			t.Errorf("version %q -> hostedVersion()=%v, want %v", c.v, got, c.want)
+		}
 	}
 }
 
-func TestEachFlavourCarriesItsOwnVerbs(t *testing.T) {
-	common := []string{"init", "ls", "rm", "rn", "config", "test", "doctor",
-		"prune", "down", "uninstall", "version", "about", "selftest",
-		"install-service", "remove-service"}
-
-	withVersion(t, "2.12.0", func() {
-		for _, v := range append([]string{"update", "versions"}, common...) {
-			if _, ok := verbAvailable(v); !ok {
-				t.Errorf("standalone build refuses %q, which belongs to it", v)
-			}
-		}
-		for _, v := range []string{"keygen", "pubkey"} {
-			if _, ok := verbAvailable(v); ok {
-				t.Errorf("standalone build carries %q, which needs a host that checks keys", v)
-			}
-		}
-	})
-
-	withVersion(t, "2.12.0-hosted", func() {
-		for _, v := range append([]string{"keygen", "pubkey"}, common...) {
-			if _, ok := verbAvailable(v); !ok {
-				t.Errorf("hosted build refuses %q, which belongs to it", v)
-			}
-		}
-		for _, v := range []string{"update", "versions"} {
-			if _, ok := verbAvailable(v); ok {
-				t.Errorf("hosted build carries %q: the gateway decides its client's version", v)
-			}
-		}
-	})
-}
-
-// A help that advertises a command which then refuses is worse than no help.
-// This is the case a reader hits first, so it is the one that must not slip.
-func TestTheHelpNeverAdvertisesAVerbThisBuildRefuses(t *testing.T) {
+// The commands are the same in both builds, so the help is too. A plug
+// installed from a gateway also serves this machine's standalone profiles, and
+// the reverse: a verb missing from one help is a verb missing for a cluster
+// that has it.
+func TestEveryBuildListsEveryCommand(t *testing.T) {
 	for _, v := range []string{"2.12.0", "2.12.0-hosted"} {
 		withVersion(t, v, func() {
 			help := usage()
-			for _, verb := range []string{"update", "versions", "keygen", "pubkey"} {
-				listed := strings.Contains(help, "plug "+verb+" ")
-				_, available := verbAvailable(verb)
-				if listed != available {
-					t.Errorf("version %q: help lists %q=%v but the build answers it=%v",
-						v, verb, listed, available)
-				}
-			}
-		})
-	}
-}
-
-// Every verb the help DOES list has to work, in both flavours. Trimming a
-// section by hand is how a common verb disappears from one of the two.
-func TestTheHelpKeepsEveryCommonVerb(t *testing.T) {
-	for _, v := range []string{"2.12.0", "2.12.0-hosted"} {
-		withVersion(t, v, func() {
-			help := usage()
-			for _, verb := range []string{"ls", "test", "doctor", "rn", "rm", "prune", "uninstall", "about"} {
+			for _, verb := range []string{"update", "versions", "keygen", "pubkey",
+				"ls", "test", "doctor", "rn", "rm", "prune", "uninstall", "about"} {
 				if !strings.Contains(help, "plug "+verb+" ") {
-					t.Errorf("version %q: the help lost the common verb %q", v, verb)
+					t.Errorf("version %q: the help does not list %q", v, verb)
 				}
+			}
+		})
+	}
+}
+
+// Whether a cluster takes agent updates is the CLUSTER's answer, read from the
+// version its agent announces, whatever the plug on this machine is. Would have
+// caught: `plug -p <standalone> update` refused as "not part of this install"
+// on a machine whose plug had last been installed from a gateway.
+func TestTheClusterDecidesWhetherItTakesUpdates(t *testing.T) {
+	for _, build := range []string{"2.24.0", "2.22.0-hosted"} {
+		withVersion(t, build, func() {
+			if !updatesOffered("2.24.0") {
+				t.Errorf("a %s plug refuses updates to a standalone cluster", build)
+			}
+			if updatesOffered("2.22.0-hosted") {
+				t.Errorf("a %s plug offers updates to a gateway's cluster", build)
 			}
 		})
 	}
@@ -113,37 +81,25 @@ func TestTheHelpKeepsEveryCommonVerb(t *testing.T) {
 
 // The refusal has to say WHY, and must not talk about build flags: the person
 // reading it did not choose this build, they installed from a cluster.
-func TestTheRefusalNamesTheReasonAndNotTheMechanism(t *testing.T) {
-	withVersion(t, "2.12.0-hosted", func() {
-		why, ok := verbAvailable("update")
-		if ok {
-			t.Fatal("hosted must refuse update")
+func TestTheGatewaysReasonNamesNoMechanism(t *testing.T) {
+	for _, forbidden := range []string{"ldflags", "build tag", "flavour", "compile", "install"} {
+		if strings.Contains(strings.ToLower(gatewayDecides), forbidden) {
+			t.Errorf("the reason talks about the mechanism: %q", gatewayDecides)
 		}
-		if why == "" {
-			t.Error("the refusal carries no reason")
-		}
-		for _, forbidden := range []string{"ldflags", "build tag", "flavour", "compile"} {
-			if strings.Contains(strings.ToLower(why), forbidden) {
-				t.Errorf("the reason talks about the mechanism: %q", why)
-			}
-		}
-	})
+	}
 }
 
-// Both spellings of the same command must agree. `plug update -p X` is caught by
-// the top-level dispatch, `plug -p X update` only reaches launcherRun, and a
-// guard in one place leaves the other running the verb this build should not
-// carry.
-func TestBothSpellingsOfASubcommandAreGuarded(t *testing.T) {
-	b, err := os.ReadFile("launcher.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	src := string(b)
-	// The re-route block must consult verbAvailable before dispatching.
-	route := src[strings.Index(src, "func launcherRun("):]
-	route = route[:strings.Index(route, "switch sub {")]
-	if !strings.Contains(route, "verbAvailable(cmdArgs[0])") {
-		t.Error("launcherRun re-routes `plug -p X update` without checking the flavour")
+// No command is refused for the flavour of the BUILD any more: both entry
+// points (`plug update -p X` in main, `plug -p X update` in the launcher) let
+// it through to the command, which asks the cluster.
+func TestNoEntryPointRefusesByTheBuildsFlavour(t *testing.T) {
+	for _, f := range []string{"main.go", "launcher.go"} {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), "hosted()") {
+			t.Errorf("%s decides something by the flavour of this build: the cluster's is the one that counts", f)
+		}
 	}
 }

@@ -14,8 +14,7 @@ RUN mvn -q -e -B package
 FROM eclipse-temurin:21-jre-noble
 ARG TARGETARCH
 # openssh-client: plug's launcher shells out to ssh for its version check.
-# iproute2: the TUN root mode configures the device + routes with `ip`.
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates openssh-client iproute2 \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates openssh-client \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /src/target/client.jar /app/client.jar

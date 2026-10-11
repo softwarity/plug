@@ -308,33 +308,29 @@ func TestTheAgentFallbackOnlyTrustsAnExplicitAnswer(t *testing.T) {
 	}
 }
 
-// A hosted plug carries no `plug update` (the gateway decides its version), so
-// it must not offer one either: no notice, no prompt, no background check, no
-// automatic apply. It used to ask "apply it now?" on every launch and then
-// refuse the update it had just offered. Would have caught: any of the three
-// entry points left ungated.
-func TestAHostedPlugNeverOffersAnUpdateItCannotMake(t *testing.T) {
-	withVersion(t, "2.21.9", func() {
-		if !updatesOffered() {
-			t.Fatal("a standalone plug carries plug update, and must offer it")
+// A gateway's cluster takes no update from plug (the gateway decides its
+// version), so it must not be offered one either: no notice, no prompt, no
+// background check, no automatic apply. And that is the cluster's answer, not
+// the plug's: a gateway's plug on a standalone cluster is still offered one.
+// Would have caught: any of the entry points left ungated, or gated by the
+// flavour of the build.
+func TestAGatewaysClusterIsNeverOfferedAnUpdate(t *testing.T) {
+	sandboxHome(t)
+	cfg := config{host: "cluster.example", port: "2222", updateMode: updateNotify}
+	saveUpdateState(cfg, updateState{checked: time.Now(), available: "2.21.9"})
+
+	withVersion(t, "2.21.8", func() {
+		lines := captureStderr(t)
+		announceUpdate(cfg, "2.21.8-hosted")
+		if out := lines(); out != "" {
+			t.Fatalf("a gateway's cluster was announced an update:\n%s", out)
 		}
 	})
+
+	// The core runs the build its cluster served, so a hosted core is a
+	// gateway's cluster: the background check returns before anything, and an
+	// expired state is left as it is, where a check would have rewritten it.
 	withVersion(t, "2.21.9-hosted", func() {
-		if updatesOffered() {
-			t.Fatal("a hosted plug offers an update it refuses to make")
-		}
-		sandboxHome(t)
-		cfg := config{host: "cluster.example", port: "2222", updateMode: updateNotify}
-		saveUpdateState(cfg, updateState{checked: time.Now(), available: "2.21.9"})
-
-		lines := captureStderr(t)
-		announceUpdate(cfg)
-		if out := lines(); out != "" {
-			t.Fatalf("a hosted plug announced an update:\n%s", out)
-		}
-
-		// The background check returns before anything: an expired state is
-		// left as it is, where a check would have rewritten it.
 		stale := config{host: "other.example", port: "2222", updateMode: updateAuto}
 		saveUpdateState(stale, updateState{checked: time.Now().Add(-72 * time.Hour)})
 		done := make(chan struct{})
@@ -342,10 +338,10 @@ func TestAHostedPlugNeverOffersAnUpdateItCannotMake(t *testing.T) {
 		select {
 		case <-done:
 		case <-time.After(2 * time.Second):
-			t.Fatal("a hosted plug started an update check")
+			t.Fatal("a gateway's cluster started an update check")
 		}
 		if got := loadUpdateState(stale).checked; time.Since(got) < 71*time.Hour {
-			t.Fatalf("a hosted plug recorded a check at %v", got)
+			t.Fatalf("a gateway's cluster recorded a check at %v", got)
 		}
 	})
 }

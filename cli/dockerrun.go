@@ -5,10 +5,12 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/softwarity/plug/cli/internal/tun"
@@ -314,8 +316,11 @@ const sidecarReadyWait = 30 * time.Second
 // is the only piece of the user's identity that crosses.
 //
 // Readiness is not scraped from a log. plug runs the command it was given only
-// once the tunnel is up, so the command is what reports it: it touches a file,
-// and the file appearing is plug's own definition of ready.
+// once the tunnel is up, so the command is what reports it: the command is plug
+// itself, holding the session (sidecarHoldVerb), and that process appearing in
+// `docker top` is plug's own definition of ready. Read from the daemon, not by
+// an exec in the container: the image is distroless, there is no shell, no
+// `test`, no `sleep` in it, and nothing here needs one.
 func startDockerSidecar(cfg config, network string, plugFlags []string) (string, func(), error) {
 	arch, err := dockerServerArch()
 	if err != nil {
@@ -346,7 +351,7 @@ func startDockerSidecar(cfg config, network string, plugFlags []string) (string,
 
 	deadline := time.Now().Add(sidecarReadyWait)
 	for time.Now().Before(deadline) {
-		if dockerCommand("exec", name, "test", "-f", "/tmp/plug-ready").Run() == nil {
+		if top, err := dockerCommand("top", name).Output(); err == nil && strings.Contains(string(top), sidecarHoldVerb) {
 			return name, stop, nil
 		}
 		if dockerCommand("inspect", "-f", "{{.State.Running}}", name).Run() != nil {
@@ -494,14 +499,29 @@ func sidecarArgs(cfg config, network string, plugFlags []string, arch, name, ima
 	if cfg.key != "" {
 		args = append(args, "-v", cfg.key+":/plug/key:ro", "-e", "PLUG_CORE_KEY=/plug/key")
 	}
-	args = append(args, "--entrypoint", "/opt/plug/bin/plug-linux-"+arch, image)
+	plugBin := "/opt/plug/bin/plug-linux-" + arch
+	args = append(args, "--entrypoint", plugBin, image)
 	// -s and -c are the user's, forwarded rather than swallowed. A container in a
 	// cluster is a member of it exactly as a process is, so the rule that a member
 	// either has a name or declares itself a pure client holds here too. -s costs
 	// nothing extra to honour: the user's container shares this one's network, so
 	// a port it listens on is already on this one's loopback.
 	args = append(args, plugFlags...)
-	return append(args, "sh", "-c", "touch /tmp/plug-ready; sleep infinity")
+	return append(args, plugBin, sidecarHoldVerb)
+}
+
+// sidecarHoldVerb is the sidecar's command: plug itself, doing nothing until it
+// is told to stop. The core runs it once the tunnel is up, which makes it the
+// readiness signal too (startDockerSidecar). Hidden, dispatched at the top of
+// main(), and harmless whoever runs it: it takes no argument, touches nothing,
+// and waits.
+const sidecarHoldVerb = "__plug-hold"
+
+// sidecarHold waits for the INT or TERM the core forwards when the session ends.
+func sidecarHold() {
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	<-sig
 }
 
 // runDockerRun is the whole mode: hold the datapath in a sidecar, run the user's

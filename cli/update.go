@@ -62,6 +62,11 @@ func cmdUpdate(args []string) {
 		fatal("cannot reach the agent at %s:%s: %v", cfg.host, cfg.port, err)
 	}
 	info("agent v%s at %s", shortVersion(before), label)
+	// Decided here, by what this cluster's agent announces, and not by which
+	// flavour the plug on this machine is: one plug serves every profile.
+	if hostedVersion(before) {
+		fatal("plug update does not apply to %s: %s", label, gatewayDecides)
+	}
 
 	// An agent from before this existed runs `self-update <tag>` as a plain
 	// self-update: it ignores the word and refreshes along the tag it already

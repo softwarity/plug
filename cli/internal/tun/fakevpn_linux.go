@@ -4,6 +4,7 @@ package tun
 
 import (
 	"fmt"
+	"net/netip"
 	"os"
 	"strings"
 )
@@ -31,11 +32,12 @@ func newVPNRig(original []string, _ string, log logfn) (*vpnRig, error) {
 
 	// The address has to exist here before the fake resolver can bind port 53 on
 	// it. /32 on lo: local delivery, no route to anywhere, nothing else affected.
-	if err := run("ip", "addr", "add", probeResolverAddr+"/32", "dev", "lo"); err != nil {
+	probeAddr := netip.PrefixFrom(netip.MustParseAddr(probeResolverAddr), 32)
+	if err := addrAdd("lo", probeAddr); err != nil {
 		return nil, fmt.Errorf("add %s on lo: %w", probeResolverAddr, err)
 	}
 	dropAddr := func() {
-		if err := run("ip", "addr", "del", probeResolverAddr+"/32", "dev", "lo"); err != nil {
+		if err := addrDel("lo", probeAddr); err != nil {
 			log.f("vpn probe: WARNING %s left on lo: %v", probeResolverAddr, err)
 		}
 	}

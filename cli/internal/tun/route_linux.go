@@ -4,6 +4,7 @@ package tun
 
 import (
 	"fmt"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -62,15 +63,19 @@ func configure(_ any, n int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 
 	// Per-instance link-local address (10.99.99.1, 10.99.100.1, ...): simultaneous
 	// instances must not share it, or their connected routes become ambiguous.
-	local := fmt.Sprintf("10.99.%d.1/24", 99+n)
-	for _, cmd := range [][]string{
-		{"ip", "link", "set", ifname, "up"},
-		{"ip", "addr", "add", local, "dev", ifname},
-		{"ip", "route", "add", cidr, "dev", ifname},
-	} {
-		if err := run(cmd[0], cmd[1:]...); err != nil {
-			return nil, "", func() {}, err
-		}
+	local := netip.MustParsePrefix(fmt.Sprintf("10.99.%d.1/24", 99+n))
+	dst, err := netip.ParsePrefix(cidr)
+	if err != nil {
+		return nil, "", func() {}, fmt.Errorf("route %q: %w", cidr, err)
+	}
+	if err := linkUp(ifname); err != nil {
+		return nil, "", func() {}, err
+	}
+	if err := addrAdd(ifname, local); err != nil {
+		return nil, "", func() {}, err
+	}
+	if err := routeAdd(ifname, dst); err != nil {
+		return nil, "", func() {}, err
 	}
 	// Replies to the child arrive on the TUN with a 198.18/15 source; their route
 	// back is the TUN itself, so strict reverse-path filtering would drop them.
@@ -79,12 +84,16 @@ func configure(_ any, n int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 	// `all`. This used to set `all` as well, which relaxed anti-spoofing for
 	// every interface of the machine and was never put back; the TUN's entry
 	// disappears with the TUN.
-	_ = run("sysctl", "-w", "net.ipv4.conf."+ifname+".rp_filter=2")
+	//
+	// Written to /proc/sys, which is all `sysctl -w` does, and best effort as it
+	// always was: a container gets /proc/sys read-only, and there the setting
+	// is the container's own and already loose.
+	_ = os.WriteFile("/proc/sys/net/ipv4/conf/"+ifname+"/rp_filter", []byte("2\n"), 0o644)
 
 	// /etc/resolv.conf is never touched here (the repoint is a bind-mount inside
 	// the child's own mount namespace) so re-reading it later is honest, and it
 	// is where a VPN client writes its servers. Started once the link is up:
-	// before, a failed `ip` command returned without ever closing stopWatch and
+	// before, a failed link setup returned without ever closing stopWatch and
 	// the watcher outlived the datapath it was watching for.
 	stopWatch := make(chan struct{})
 	go watchUpstreams(up, resolvNameservers, upstreamPoll, log, stopWatch)
@@ -102,8 +111,8 @@ func configure(_ any, n int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 
 	cleanup := func() {
 		close(stopWatch)
-		_ = run("ip", "route", "del", cidr, "dev", ifname)
-		_ = run("ip", "addr", "del", local, "dev", ifname)
+		_ = routeDel(ifname, dst)
+		_ = addrDel(ifname, local)
 		if privResolv != "" {
 			_ = os.Remove(privResolv)
 		}
