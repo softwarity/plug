@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.25.0
+
 ### An agent image with no shell in it
 
 The agent image now holds `plug-agent` and nothing else that runs: no shell,
