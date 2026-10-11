@@ -868,6 +868,31 @@ jobs:
             echo "- images: \`$IMAGE:$VERSION\`, \`$IMAGE:$VERSION-hosted\` (also latest, hosted, and the x.y / x tags)"
             echo "- built from ${TESTED::7}, tagged $TAG on the notes commit $(git rev-parse --short HEAD)"
           } >> "$GITHUB_STEP_SUMMARY"
+      # Meerkat hands out the hosted client and links the agent: it is told, and
+      # its own workflow (plug-bump.yml) moves its pin, tests it and commits it.
+      # Same App as the push above, a token for that one repository; a dispatch
+      # needs no more than contents: write there. Told AFTER the release exists,
+      # and never failing it: plug is released either way, and Meerkat's daily
+      # run catches up with a dispatch that did not arrive.
+      - id: meerkat
+        uses: actions/create-github-app-token@v2
+        continue-on-error: true
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: softwarity
+          repositories: meerkat
+      - name: Tell Meerkat
+        if: steps.meerkat.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ steps.meerkat.outputs.token }}
+          VERSION: ${{ steps.next.outputs.version }}
+        run: |
+          if gh api repos/softwarity/meerkat/dispatches -f event_type=plug-released -f "client_payload[version]=$VERSION"; then
+            echo "- Meerkat told: plug-released $VERSION" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Meerkat was not told of $VERSION; its daily plug-bump run will catch up"
+          fi
 
   # The clusters for the mesh e2e (see _e2e.yml for the e2e itself). THREE
   # FAMILIES, the same chain against each: compose-for.yml (docker compose),
