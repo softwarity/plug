@@ -140,6 +140,9 @@ fi
 case "$phase" in
   # The last cell of the chain closes the leg's summary with the count of what
   # was skipped (see skip_cell), whatever its own verdict.
-  updatejump) do_updatejump; rc=$?; leg_tally; exit "$rc" ;;
-  *)          "do_$phase" ;;
+  updatejump) do_updatejump; rc=$?; leg_tally ;;
+  *)          "do_$phase"; rc=$? ;;
 esac
+# A red cell is checked for the symptoms lib.sh knows, whatever it asserted.
+[ "$rc" = 0 ] || name_held_check
+exit "$rc"

@@ -292,6 +292,65 @@ is_addr() {
 glyph() { case "$1" in PASS) printf "✅" ;; FAIL) printf "❌" ;; SKIP) printf "·" ;; *) printf "?" ;; esac; }
 sum()   { echo "$*" >> "${GITHUB_STEP_SUMMARY:-/dev/stderr}"; }
 
+# --- symptoms: what recurs, made countable -----------------------------------
+# symptom <slug> <one line> marks something worth counting across runs: a line
+# scripts/ci/symptoms.sh greps from the logs, a ::warning:: on the job, a line in
+# the summary. It does not decide the verdict; the cell still passes or fails on
+# what it asserts. A red cell seen once is an anecdote, and the question "has
+# this happened before?" deserves a better answer than memory.
+symptom() {
+  echo "E2E-SYMPTOM $1 leg=$leg family=$family cell=$phase: $2"
+  echo "::warning title=e2e symptom $1::leg=$leg family=$family cell=$phase: $2"
+  sum "**symptom \`$1\`** ⚠️ $2"
+}
+
+# The leg's name ($serve) refused because the agent still sees the PREVIOUS
+# cell's session listening on it. First seen 2026-10-11 (run 38157010400, swarm
+# ubuntu): dnshonesty claimed run-<leg> five seconds after privdrop's session
+# had returned, and the cell kept only the last line of the refusal. The agent
+# judges a holder alive by its agent port still answering, so the question is
+# whether that session was still up on THIS side (a plug process, a TCP
+# connection to the agent) or only on the agent's, and for how long.
+held_re='already exposed by another live session'
+held_seen=""
+# name_held_diag <what plug said> - mark it, show the whole refusal and the
+# runner's side, then measure how long the name stays held.
+name_held_diag() {
+  held_seen=1
+  symptom name-held "$(printf '%s' "$1" | grep -E "$held_re" | head -1 | cut -c1-240)"
+  echo "    --- plug said ---"
+  printf '%s\n' "$1" | sed 's/^/    /' | tail -12
+  echo "    --- plug processes on this runner ---"
+  ps_all | grep -E '(/|[[:space:]])plug(\.exe)?([[:space:]]|$)|plug-(linux|darwin|windows)|__plug' |
+    grep -v grep | cut -c1-200 | sed 's/^/    /' | head -12
+  echo "    --- TCP between this runner and the agent ($ip:$port) ---"
+  { ss -tn 2>/dev/null || netstat -an 2>/dev/null; } | grep -F "$ip:$port" | sed 's/^/    /' | head -10
+  local t0=$SECONDS out
+  while [ $((SECONDS - t0)) -lt 60 ]; do
+    out="$(plug_bounded 20 --host "$ip" --port "$port" $serve curl --version 2>&1)"
+    if ! printf '%s' "$out" | grep -qE "$held_re"; then
+      echo "    the name was claimed again $((SECONDS - t0))s after the refusal was seen"
+      sum "  name-held: claimed again $((SECONDS - t0))s later"
+      return 0
+    fi
+    sleep 2
+  done
+  echo "    the name was STILL held 60s after the refusal was seen"
+  sum "  name-held: still held 60s later"
+}
+
+# name_held_check - after a failed cell: is the leg's name held right now? Run
+# whatever the cell captured or cut, so the symptom is caught in every cell, not
+# only in the ones that look for it.
+name_held_check() {
+  [ -z "$held_seen" ] && [ -n "${PLUG:-}" ] && [ -n "${ip:-}" ] || return 0
+  local out
+  out="$(plug_bounded 20 --host "$ip" --port "$port" $serve curl --version 2>&1)"
+  if printf '%s' "$out" | grep -qE "$held_re"; then
+    name_held_diag "$out"
+  fi
+}
+
 # skip_cell <label> <reason>: a cell that could not measure what it is named
 # for, for a reason that belongs to the RUNNER and not to plug (a registry this
 # machine cannot reach). It exits 0, because a red for the runner's network
