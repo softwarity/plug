@@ -108,7 +108,8 @@ import { CtaComponent } from '../cta/cta.component';
       <a href="https://telepresence.io/" target="_blank" rel="noopener">Telepresence</a> are the
       well-known <strong>Kubernetes-native</strong> tools for running local code against a remote
       cluster. plug goes further, with the developer's experience first: the same behaviour on
-      Docker, Compose, Swarm <em>and</em> Kubernetes, nothing to install or keep up to date on a
+      Docker, Compose, Swarm, Kubernetes <em>and</em> OpenShift, nothing to install or keep up to
+      date on a
       developer's machine, and a closer integration on many points, from the workload's
       environment and secret files to its volumes, live.
     </p>
@@ -126,7 +127,7 @@ import { CtaComponent } from '../cta/cta.component';
           <tr><th scope="col"><span class="sr-only">Criterion</span></th><th scope="col">plug</th><th scope="col">mirrord</th><th scope="col">Telepresence</th></tr>
         </thead>
         <tbody>
-          <tr><th scope="row">Cluster targets</th><td class="win">Docker · Compose · Swarm · Kubernetes</td><td>Kubernetes</td><td>Kubernetes / OpenShift</td></tr>
+          <tr><th scope="row">Cluster targets</th><td class="win">Docker · Compose · Swarm · Kubernetes · OpenShift / OKD</td><td>Kubernetes</td><td>Kubernetes / OpenShift</td></tr>
           <tr><th scope="row">Your machine</th><td class="win">Linux - amd64, arm64<br />macOS - amd64, arm64<br />Windows - amd64, arm64</td><td>Linux - amd64, arm64<br />macOS - amd64, arm64<br />Windows - amd64</td><td class="win">Linux - amd64, arm64<br />macOS - amd64, arm64<br />Windows - amd64, arm64</td></tr>
           <tr><th scope="row">What a developer needs</th><td class="win">the cluster's address - plug installs itself from it</td><td>a kubeconfig with rights on the cluster</td><td>a kubeconfig with rights on the cluster</td></tr>
           <tr><th scope="row">What you point it at</th><td class="win">a name - which need not exist in the cluster yet, and can still take over one that does</td><td>an existing workload, named with <code>--target</code></td><td>an existing service, to intercept</td></tr>

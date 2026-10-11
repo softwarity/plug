@@ -200,7 +200,7 @@ import { MatIconModule } from '@angular/material/icon';
       <a href="https://metalbear.com/mirrord/" target="_blank" rel="noopener">mirrord</a> and
       <a href="https://telepresence.io/" target="_blank" rel="noopener">Telepresence</a> are the
       well-known Kubernetes-native tools. plug goes further, with the developer's experience
-      first: it works the same on Docker, Compose, Swarm <em>and</em> Kubernetes, from Linux,
+      first: it works the same on Docker, Compose, Swarm, Kubernetes <em>and</em> OpenShift, from Linux,
       macOS and Windows, and integrates more closely on many points.
       <a routerLink="/comparison">Side by side, including where they are ahead</a>.
     </p>

@@ -146,6 +146,9 @@ the fly, which it does per engine:
   in the manifest and on the [Kubernetes page](https://softwarity.github.io/plug/kubernetes).
   **Re-apply it when you upgrade the agent**: `plug update` moves the image, never
   the manifest, and `plug doctor` names any rule a newer agent is missing.
+- **OpenShift and OKD** - the same manifest, admitted by the default
+  `restricted-v2` SCC with nothing to grant: the agent runs as the uid the cluster
+  picks, never root. Every commit runs it on MicroShift built from OKD.
 - **No socket, no RBAC** - the agent **refuses to start**, naming what is
   missing. Provisioning is the feature; an agent that cannot do it is a
   deployment mistake, not a degraded mode.
@@ -347,7 +350,7 @@ corrupted. Maintainers: the key and its rotation are in [RELEASING.md](RELEASING
 
 ## Documentation
 
-Everything else - how it works, deployment on Swarm and Kubernetes, profiles and
+Everything else - how it works, deployment on Swarm, Kubernetes and OpenShift, profiles and
 versions, the security model, and the per-OS coverage matrix:
 
 **https://softwarity.github.io/plug/**
