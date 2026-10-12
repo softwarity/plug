@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.25.1
+
 ### Images you can verify with cosign
 
 Every published image, the release tags, `latest` and the `-hosted` ones, is
