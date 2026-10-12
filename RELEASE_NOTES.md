@@ -2,6 +2,14 @@
 
 ## NEXT RELEASE
 
+### Images you can verify with cosign
+
+Every published image, the release tags, `latest` and the `-hosted` ones, is
+now signed with cosign, keyless: the signature carries the identity of the
+workflow that built it, and an admission policy or a single `cosign verify`
+can require it before the agent is deployed. The command is on the security
+page of the docs.
+
 ---
 
 ## 2.25.0

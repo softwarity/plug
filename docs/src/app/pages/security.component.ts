@@ -53,6 +53,35 @@ import { CodeComponent } from '../code/code.component';
     <app-code lang="bash">ssh -p 2222 get@&lt;host&gt; install                         # returns the installer
 ssh -p 2222 get@&lt;host&gt; cat /etc/shadow                  # ForceCommand ignores this</app-code>
 
+    <h3>Verifying the image</h3>
+    <p>
+      Every published image is signed with <a href="https://docs.sigstore.dev/">cosign</a>, and
+      no key. There is no public key to fetch: the signature carries the identity of the GitHub
+      Actions workflow that pushed the image, <code>ci.yml</code> of
+      <code>softwarity/plug</code> on <code>main</code>, and that identity is what you check.
+    </p>
+    <app-code lang="bash">cosign verify \\
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \\
+  --certificate-identity-regexp '^https://github\\.com/softwarity/plug/\\.github/workflows/ci\\.yml&#64;refs/heads/main$' \\
+  docker.io/softwarity/plug:latest</app-code>
+    <p>
+      The same command verifies every tag: a release (<code>x.y.z</code>, <code>x.y</code>,
+      <code>x</code>), <code>latest</code>, and their <code>-hosted</code> counterparts. A workflow
+      on another branch, or another file, does not pass. Versions up to 2.25.0 carry no signature.
+    </p>
+    <p>
+      What is signed is the <strong>digest</strong>, recursively: the manifest list and each
+      per-architecture image under it. A node that pulled the arm64 image verifies what it
+      actually runs, and an admission policy (Kyverno, Sigstore's policy-controller) that pins
+      digests finds a signature on the one it pinned.
+    </p>
+    <p>
+      The CLI binaries inside the image are signed too, separately, with plug's release key: a
+      launcher checks that signature before it runs a core it downloaded from the agent, so the
+      image signature is for whoever deploys the agent, and the binary signature for whoever
+      runs <code>plug</code>.
+    </p>
+
     <h3>Where it is a fine trade-off</h3>
     <p>
       Internal <strong>development clusters</strong> on trusted networks (office LAN, VPN). The
