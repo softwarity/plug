@@ -35,6 +35,8 @@ admission_run() {
   adm_fail() {
     echo "--- admission FAIL - $1"
     printf '%s\n' "$out" | tail -10 | sed 's/^/    /'
+    # The agent's own account of the handshakes it refused, and why.
+    [ -n "${ip_b:-}" ] && agent_state "$ip_b" "$aagent"
     sum "**admission by approval** ❌ - $1"
   }
   echo "=== admission (cluster B): $aagent lets in only the keys a member accepted ==="

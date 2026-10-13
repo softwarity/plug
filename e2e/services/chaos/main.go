@@ -104,6 +104,49 @@ func agentNamespace(svc string) string {
 // answered 500 "no pod labelled", and the resilience cell, which discarded
 // the reply, went on to assert a recovery from a restart that never happened.
 // Three k8s legs were green on it from the day the cell was written.
+// k8sAgentState is /agent-state on Kubernetes: the agent pod's phase and
+// restarts, then its own last lines, which is where an agent says why a
+// handshake failed. Reading the log needs `get` on pods/log in the agent's
+// namespace, granted beside the delete in the chaos-crash Roles.
+func k8sAgentState(w http.ResponseWriter, svc string) {
+	ns := agentNamespace(svc)
+	code, body, err := k8sDo("GET", "/api/v1/namespaces/"+ns+"/pods?labelSelector="+url.QueryEscape("app=plug"))
+	if err != nil || code != 200 {
+		http.Error(w, fmt.Sprintf("listing pods app=plug in %s: HTTP %d %v", ns, code, err), 500)
+		return
+	}
+	var list struct {
+		Items []struct {
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+			Status struct {
+				Phase             string `json:"phase"`
+				ContainerStatuses []struct {
+					RestartCount int `json:"restartCount"`
+				} `json:"containerStatuses"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	for _, p := range list.Items {
+		restarts := 0
+		for _, c := range p.Status.ContainerStatuses {
+			restarts += c.RestartCount
+		}
+		fmt.Fprintf(w, "pod=%s/%s phase=%s restarts=%d\n", ns, p.Metadata.Name, p.Status.Phase, restarts)
+		code, logs, err := k8sDo("GET", "/api/v1/namespaces/"+ns+"/pods/"+p.Metadata.Name+"/log?tailLines=30")
+		if err != nil || code != 200 {
+			fmt.Fprintf(w, "(no log: HTTP %d %v)\n", code, err)
+			continue
+		}
+		fmt.Fprintf(w, "--- last lines ---\n%s", logs)
+	}
+}
+
 func k8sRestartAgent(svc string) error {
 	ns := agentNamespace(svc)
 	code, body, err := k8sDo("GET", "/api/v1/namespaces/"+ns+"/pods?labelSelector="+url.QueryEscape("app=plug"))
@@ -337,7 +380,7 @@ func main() {
 			svc = "agent"
 		}
 		if onK8s() {
-			http.Error(w, "agent-state is docker/swarm only (a pod's state is kubectl's job)", 501)
+			k8sAgentState(w, svc)
 			return
 		}
 		id, err := agentID(svc)
