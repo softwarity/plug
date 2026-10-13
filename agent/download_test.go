@@ -115,11 +115,42 @@ func referenceScript(t *testing.T, dir string) string {
 	if !bytes.Contains(src, []byte("/opt/plug")) {
 		t.Fatal("the frozen script no longer names /opt/plug")
 	}
+	src = withTodaysInstaller(t, src)
 	path := filepath.Join(t.TempDir(), "serve-binary")
 	if err := os.WriteFile(path, bytes.ReplaceAll(src, []byte("/opt/plug"), []byte(dir)), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// withTodaysInstaller puts install-unix.sh as it is today where the frozen
+// script carries the installer it had then: its two heredocs, HEAD and TAIL,
+// are the halves of that file around binariesMarker, which they were byte for
+// byte when it was frozen. The installer is read by sh on the developer's side
+// and evolves with plug; what the reference pins is everything around it (the
+// variables, the binaries, every verb and refusal), which no launcher must see
+// change. The frozen file itself stays as it was.
+func withTodaysInstaller(t *testing.T, src []byte) []byte {
+	t.Helper()
+	head, tail, ok := strings.Cut(unixInstaller, binariesMarker)
+	if !ok {
+		t.Fatal("install-unix.sh no longer carries the binaries marker")
+	}
+	for _, h := range []struct{ tag, body string }{{"HEAD", head}, {"TAIL", tail}} {
+		open := []byte("cat <<'" + h.tag + "'\n")
+		i := bytes.Index(src, open)
+		if i < 0 {
+			t.Fatalf("the frozen script no longer has its %s heredoc", h.tag)
+		}
+		start := i + len(open)
+		end := bytes.Index(src[start:], []byte("\n"+h.tag+"\n"))
+		if end < 0 {
+			t.Fatalf("the frozen script's %s heredoc has no end", h.tag)
+		}
+		body := strings.TrimSuffix(h.body, "\n")
+		src = append(append(append([]byte{}, src[:start]...), body...), src[start+end:]...)
+	}
+	return src
 }
 
 // The account answers what the shell script answered, byte for byte: stdout,
