@@ -227,6 +227,10 @@ jobs:
         if: success() && inputs.full
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh resilience "$A" "$B" 2222
+      - name: "Admission by approval: first member, request, accept, restart, revoke"
+        if: success() && inputs.full
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh admission "$A" "$B" 2222
       - name: "Update: plug update verb + launcher path (per-leg agent)"
         if: success() && inputs.full
         shell: bash
@@ -239,10 +243,6 @@ jobs:
         if: success() && inputs.full
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh updatenotify "$A" "$B" 2222
-      - name: "Admission by approval: first member, request, accept, restart, revoke"
-        if: success() && inputs.full
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh admission "$A" "$B" 2222
       - name: "Launcher compat: latest published launcher, this branch's core"
         if: success() && inputs.full
         shell: bash

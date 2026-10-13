@@ -28,7 +28,11 @@ envfile="${RUNNER_TEMP:-/tmp}/plug-e2e-env" # shared state, survives across step
 # launcher to that release (the launcher follows its cluster, in every
 # direction), and every cell after it would run the old launcher. It stays the
 # last cell of the chain, in the foreground, where nothing runs after it.
-bg_cells="resilience update updatetag updatenotify admission"
+#
+# admission before the update cells: updatenotify runs a session of the
+# previous release's core, and on macOS that core is what the shared daemon
+# runs afterwards for a while, one that predates admission by approval.
+bg_cells="resilience admission update updatetag updatenotify"
 bgdir="${RUNNER_TEMP:-/tmp}/plug-e2e-bg"
 
 # All four languages, on every family. The override exists for a bench run, not
