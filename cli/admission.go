@@ -107,6 +107,10 @@ func admissionRefusal(cfg config, af *tunnel.AuthFailure) string {
 		return fmt.Sprintf("%s admits its members by approval, and this machine has no key of its own for it yet.\n"+
 			"      Run '%s requests' once: plug makes the key and asks to join", clusterName(cfg), plugFor(cfg))
 	}
+	if af.Unavailable() {
+		return fmt.Sprintf("%s admits its members by approval, and could not read or write them just now: "+
+			"nothing was recorded. Try again in a moment; if it lasts, its members' store is what to look at", clusterName(cfg))
+	}
 	short, members, ok := af.Pending()
 	if !ok {
 		return ""

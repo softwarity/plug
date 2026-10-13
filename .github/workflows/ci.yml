@@ -1088,8 +1088,11 @@ jobs:
           run="${{ github.run_id }}"; repo="${{ github.repository }}"
           seen=0
           while :; do
+            # An API that answers 502 for a minute is weather, not a verdict:
+            # ask again rather than end the watch, which used to leave a red
+            # leg uncancelled and this job red for a reason of its own.
             legs=$(gh api "repos/$repo/actions/runs/$run/jobs?per_page=100" \
-              --jq '[.jobs[] | select(.name|test("^e2e-"))]')
+              --jq '[.jobs[] | select(.name|test("^e2e-"))]') || { sleep 15; continue; }
             failed=$(printf '%s' "$legs" | jq '[.[] | select(.conclusion=="failure")] | length')
             if [ "${failed:-0}" -gt 0 ]; then
               echo "an e2e leg failed -> cancelling the run (the failed leg keeps its red)"

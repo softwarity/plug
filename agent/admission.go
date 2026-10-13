@@ -70,7 +70,8 @@ const (
 	// seenEvery bounds how often a member's last connection is written: once
 	// an hour is a useful "seen" and keeps the store from being rewritten on
 	// every command.
-	seenEvery = time.Hour
+	seenEvery      = time.Hour
+	requestRefresh = time.Minute // how often a retried request is written back
 
 	// shortFingerprint is how much of the SHA256 fingerprint names a key to a
 	// human: 12 base64 characters, 72 bits. Nobody makes a second key that
@@ -328,10 +329,17 @@ func (h *inviteHost) admit(key ssh.PublicKey, name, from string) admitted {
 		h.logf("first member: %s %s from %s", name, fp, from)
 		return admitted{ok: true, who: name, say: sayWelcome}
 	}
+	// A request already recorded keeps the name it came with: the later tries
+	// are often not the developer's own (on macOS and Windows the datapath
+	// service dials, under its own account), and the member reads that name.
+	// And it is written back at most once a minute: a refused machine retries
+	// on its own, and every write rotates a Swarm config or patches a Secret.
+	dirty := true
 	found := false
 	for i := range h.r.Requests {
 		if q := &h.r.Requests[i]; q.Fingerprint == fp {
-			q.Name, q.From, q.Last = name, from, now
+			dirty = now.Sub(q.Last) >= requestRefresh
+			q.From, q.Last = from, now
 			found = true
 		}
 	}
@@ -339,7 +347,9 @@ func (h *inviteHost) admit(key ssh.PublicKey, name, from string) admitted {
 		h.r.Requests = append(h.r.Requests, rosterRequest{Name: name, Key: line, Fingerprint: fp, From: from, First: now, Last: now})
 		h.logf("request from %s %s at %s, waiting for a member", name, fp, from)
 	}
-	_ = h.write() // the request is a courtesy; the refusal stands either way
+	if dirty {
+		_ = h.write() // the request is a courtesy; the refusal stands either way
+	}
 	return admitted{say: fmt.Sprintf("%s fp=%s members=%s", sayPending, shortFP(fp), strings.Join(h.r.memberNames(), ","))}
 }
 

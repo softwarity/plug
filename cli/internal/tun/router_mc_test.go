@@ -90,6 +90,31 @@ func TestMultiDialSoleTransparent(t *testing.T) {
 	}
 }
 
+// The only tunnel is not the only cluster. This process is a client of a
+// cluster that has no tunnel (its agent refused the key), while another
+// cluster's tunnel lingers through its grace: the flow must be refused, never
+// sent out through the other cluster's tunnel.
+func TestMultiDialNeverLendsAnotherClustersTunnel(t *testing.T) {
+	graftDir = t.TempDir()
+	unreg := RegisterClient("refused:2230", os.Getpid(), "")
+	defer unreg()
+	ct := NewClusterTransports()
+	ct.Set("other:2227", loopbackDialer{addr: "other"})
+	ct.SetActive([]string{"refused:2230", "other:2227"})
+
+	srcPort, done := localSocket(t)
+	defer done()
+	if d, key, ok := multiDial(ct)(srcPort, "svc"); ok {
+		t.Fatalf("a flow of a cluster with no tunnel went out through %q (%v)", key, d)
+	}
+
+	// And the cluster still in use alone keeps the transparent route.
+	ct.SetActive([]string{"other:2227"})
+	if _, key, ok := multiDial(ct)(40000, "svc"); !ok || key != "other:2227" {
+		t.Fatalf("the one cluster in use lost its transparent route: %q %v", key, ok)
+	}
+}
+
 // A name pinned by a live client goes to that client's cluster before any
 // attribution - the live-mount helper's, dialled by the kernel's SMB client on
 // Windows, where no ancestry leads to a launcher. Unpinned, the flow takes the

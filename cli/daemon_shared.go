@@ -239,6 +239,11 @@ func reconcile(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transport, 
 		})
 	}
 	activeLastTick = active
+	keys := make([]string, 0, len(active))
+	for k := range active {
+		keys = append(keys, k)
+	}
+	ct.SetActive(keys)
 	for key := range tunnels {
 		if active[key] {
 			delete(tunnelIdleSince, key) // in use — reset the idle timer

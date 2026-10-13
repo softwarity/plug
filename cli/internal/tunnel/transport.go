@@ -246,6 +246,10 @@ func (e *AuthFailure) Error() string {
 	return msg
 }
 
+// Unavailable reports an agent that admits by approval and could not read or
+// write its members when this key came: nobody got in, nothing was recorded.
+func (e *AuthFailure) Unavailable() bool { return e.Admission == admissionDown }
+
 // NeedsOwnKey reports an agent that admits by approval refusing the key built
 // into plug: the caller makes the profile a key of its own and dials again.
 func (e *AuthFailure) NeedsOwnKey() bool { return e.Admission == admissionOwnKey }

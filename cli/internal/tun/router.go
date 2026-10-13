@@ -56,6 +56,22 @@ func multiDial(ct *ClusterTransports) dialFunc {
 type ClusterTransports struct {
 	mu sync.Mutex
 	m  map[string]Dialer
+	// active is the clusters with a live client, as the daemon last counted
+	// them (SetActive); nil until it has. A tunnel is not a cluster in use: it
+	// outlives its last client by a grace, and a cluster in use may have none
+	// (its dial refused, or still in flight).
+	active map[string]bool
+}
+
+// SetActive records the clusters that have a live client right now.
+func (c *ClusterTransports) SetActive(keys []string) {
+	m := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		m[k] = true
+	}
+	c.mu.Lock()
+	c.active = m
+	c.mu.Unlock()
 }
 
 // NewClusterTransports returns an empty transport set.
@@ -115,8 +131,17 @@ func (c *ClusterTransports) get(key string) (Dialer, bool) {
 	return d, ok
 }
 
-// sole returns the only transport (and its key) when exactly one cluster is
-// active, so the datapath can route transparently with no attribution; else ok=false.
+// sole returns the only transport (and its key) when it is the only cluster in
+// use, so the datapath can route transparently with no attribution; else
+// ok=false.
+//
+// The only TUNNEL is not enough. A cluster whose agent refuses this machine
+// (a key revoked, a request waiting) has no tunnel while its sessions run,
+// and another cluster's tunnel lingers through its grace: counted by tunnels,
+// that one was "the only cluster", and the refused session's flows went out
+// through it, reaching services the agent had just refused them. A cluster
+// with a live client and no tunnel now sends every flow to attribution, where
+// a flow of that cluster finds no tunnel and is refused.
 func (c *ClusterTransports) sole() (Dialer, string, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -124,6 +149,11 @@ func (c *ClusterTransports) sole() (Dialer, string, bool) {
 		return nil, "", false
 	}
 	for k, d := range c.m {
+		for a := range c.active {
+			if a != k {
+				return nil, "", false
+			}
+		}
 		return d, k, true
 	}
 	return nil, "", false

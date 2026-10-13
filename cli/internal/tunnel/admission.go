@@ -25,6 +25,7 @@ const (
 	admissionWelcome   = "welcome"
 	admissionOwnKey    = "own-key"
 	admissionPending   = "pending"
+	admissionDown      = "unavailable"
 )
 
 // MachineName is how this machine introduces itself to an agent that admits by

@@ -164,6 +164,37 @@ func TestAnUnknownKeyIsRecordedAndRefused(t *testing.T) {
 	}
 }
 
+// A retried request keeps the name it came with, and is not written back on
+// every try. The later tries are often the datapath service's, under its own
+// account ("runnervm@runnervm" where the developer was "alice@laptop"), and a
+// refused machine retries by itself: each write is a Swarm config or a patch.
+func TestARetriedRequestKeepsItsNameAndIsNotRewritten(t *testing.T) {
+	store := &memStore{}
+	h := newTestInviteHost(t, store)
+	addr := startServer(t, h)
+	first, _ := newTestKey(t)
+	cl, err := join(t, addr, first, &admissionClient{name: "francois@mac"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl.Close()
+	other, _ := newTestKey(t)
+	if cl, err := join(t, addr, other, &admissionClient{name: "alice@laptop"}); err == nil {
+		cl.Close()
+	}
+	written := string(store.b)
+	if cl, err := join(t, addr, other, &admissionClient{name: "service@laptop"}); err == nil {
+		cl.Close()
+	}
+	if string(store.b) != written {
+		t.Error("a retry within the minute rewrote the roster")
+	}
+	r := store.roster(t)
+	if len(r.Requests) != 1 || r.Requests[0].Name != "alice@laptop" {
+		t.Errorf("the retry renamed the request: %+v", r.Requests)
+	}
+}
+
 // signOnly offers a key and cannot sign with it: the client asks "would this
 // key do?", which is all a stranger holding only somebody's PUBLIC key can do.
 type signOnly struct{ ssh.Signer }
