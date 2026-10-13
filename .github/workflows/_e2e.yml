@@ -24,8 +24,9 @@ name: _e2e
 # cells, before the protocol matrix, so a flake costs minutes rather than a run.
 #
 # The cluster-B cells (resilience, the update cells, admission) run BESIDE the
-# chain, started right after setup (e2e-background.sh): each touches only what
-# cluster B keeps for this leg, and together they were a third of a leg spent
+# chain, started after setup and the two NXDOMAIN cells (e2e-background.sh,
+# the step says why): each touches only what cluster B keeps for this leg,
+# and together they were a third of a leg spent
 # waiting on agents to restart. Their steps keep their place in the list and
 # show each one's output and verdict when the chain reaches them; a red one
 # stops the chain at its next cell all the same. The compat step closes the
@@ -129,10 +130,24 @@ jobs:
       - name: "Setup: install plug from the cluster + build clients"
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh setup "$A" "$B" 2222
+      - name: "DNS honesty: an absent name answers NXDOMAIN"
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh dnshonesty "$A" "$B" 2222
+      - name: "Expose: serve a local port to the cluster (-s)"
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh expose "$A" "$B" 2222
       # The cluster-B cells (bg_cells in scripts/ci/e2e/lib.sh, which says why
       # they can) start here and run beside the chain; each keeps its step
       # below, which shows its output and its verdict. Not on the arm64 subset,
       # which runs none of them.
+      #
+      # AFTER the two cells that assert a name does NOT resolve. On macOS and
+      # Windows one daemon answers every lookup and asks every connected
+      # cluster, and a cluster whose tunnel is hiccuping answers "found", on
+      # purpose: a reconnect must never break resolution. The cells beside the
+      # chain restart and roll cluster B's agents, so while they run an absent
+      # name resolves on those machines, which is right for a user and wrong
+      # for a cell that waits for NXDOMAIN.
       - name: "Start the cluster-B cells beside the chain (each shows below, in its own step)"
         if: success() && inputs.full
         shell: bash
@@ -146,9 +161,6 @@ jobs:
       - name: "Privilege drop: the child runs as the caller, with no capabilities"
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh privdrop "$A" "$B" 2222
-      - name: "DNS honesty: an absent name answers NXDOMAIN"
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh dnshonesty "$A" "$B" 2222
       - name: "DNS relay: a non-A question reaches the upstream"
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh dnsrelay "$A" "$B" 2222
@@ -193,9 +205,6 @@ jobs:
         if: success() && inputs.full
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh outage "$A" "$B" 2222
-      - name: "Expose: serve a local port to the cluster (-s)"
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh expose "$A" "$B" 2222
       - name: "Expose, named port: plug picks it, {PORT} carries it into the command"
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh exposevar "$A" "$B" 2222

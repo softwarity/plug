@@ -15,8 +15,9 @@ clients="$root/e2e/clients"
 cd "$root" || exit 1
 envfile="${RUNNER_TEMP:-/tmp}/plug-e2e-env" # shared state, survives across steps
 
-# The cells that run BESIDE the rest of the leg, in this order, started right
-# after setup by scripts/ci/e2e-background.sh. Each touches only what cluster B
+# The cells that run BESIDE the rest of the leg, in this order, started after
+# setup and the NXDOMAIN cells by scripts/ci/e2e-background.sh (the step in
+# _e2e.yml says why those come first). Each touches only what cluster B
 # keeps for this leg alone (res-agent-<os>, prev-agent-<os>, adm-agent-<os> and
 # the service res-tko-<os>), nothing another cell reads, which is what lets
 # them overlap: together they were a third of a leg, mostly spent waiting on an

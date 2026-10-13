@@ -26,12 +26,13 @@ def fail(msg): bad.append(msg)
 # cell is scripts/ci/e2e/<cell>.sh through e2e-matrix.sh. The arm64 client runs
 # the cells NOT marked subset-skipped (see _e2e.yml for why those are skipped).
 CHAIN = [
-    ("setup", False), ("env", False), ("workloadenv", False), ("privdrop", False),
-    ("dnshonesty", False), ("dnsrelay", False), ("clientonly", False), ("doctor", False),
+    ("setup", False), ("dnshonesty", False), ("expose", False),
+    ("env", False), ("workloadenv", False), ("privdrop", False),
+    ("dnsrelay", False), ("clientonly", False), ("doctor", False),
     ("takeover", True), ("orphan", True), ("mount", True),
     ("matrix", False), ("multicluster", False),
     ("dockerrun", True), ("keymount", True), ("outage", True),
-    ("expose", False), ("exposevar", False), ("gateway", False), ("collision", False),
+    ("exposevar", False), ("gateway", False), ("collision", False),
     ("lease", False), ("sameport", False), ("multiport", False),
     ("resilience", True), ("update", True), ("updatetag", True), ("updatenotify", True),
     ("updatejump", True), ("admission", True),
@@ -81,8 +82,13 @@ if bg_start is None:
     fail("_e2e.yml has no step running scripts/ci/e2e-background.sh: the cluster-B cells would each run in the foreground")
 else:
     at, cond, shell = bg_start
-    if at != 1:
-        fail(f"_e2e.yml starts the background after cell {at}, not right after setup")
+    # Right after the cells that assert a name does NOT resolve (see the step's
+    # comment in _e2e.yml): while the background restarts cluster B's agents,
+    # an absent name resolves on the machines where one daemon asks every
+    # cluster.
+    before = ["setup", "dnshonesty", "expose"]
+    if [c for c, _ in cells[:at]] != before:
+        fail(f"_e2e.yml starts the background after {[c for c, _ in cells[:at]]}, not right after {before}")
     if cond != "success() && inputs.full" or shell != "bash":
         fail("_e2e.yml's background step must be `if: success() && inputs.full`, shell bash, like the cells it starts")
 joined = [c for c, _ in cells if c in BG]
