@@ -198,5 +198,18 @@ if [ "$rc" != 0 ] && [ -z "${PLUG_E2E_BACKGROUND:-}" ] && [ -d "$bgdir" ]; then
     echo "    $c: $st"
     [ "$st" = RUNNING ] && tail -6 "$bgdir/$c.log" | sed 's/^/      /'
   done
+  # Which cluster a session of this chain reaches right now, by the identity
+  # each cluster's `ident` answers: on macOS and Windows one daemon carries the
+  # flows of both chains, and a flow of cluster A answered by cluster B would
+  # read exactly like a takeover that never parked (B has the same services).
+  want_a="${peer#plug-compose-}"; want_a="${want_a#plug-k8s-}"; want_a="${want_a#plug-swarm-}"
+  for _ in 1 2 3; do
+    got_a="$(plug_to "$ip" curl -s --max-time 8 http://ident:5678/ 2>/dev/null | tr -d '\r' | tail -1)"
+    echo "    ident through cluster A's chain: '${got_a:-nothing}' (cluster A is '$want_a')"
+  done
+  if [ "$os" = mac ]; then
+    echo "--- the datapath daemon, last lines (which cluster each flow went via):"
+    sudo tail -40 /var/run/plug/daemon.log 2>/dev/null | sed 's/^/    /'
+  fi
 fi
 exit "$rc"
