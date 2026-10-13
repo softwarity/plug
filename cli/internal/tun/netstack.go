@@ -195,7 +195,9 @@ func handleTCP(r *tcp.ForwarderRequest, tab *faketab, df dialFunc, log logfn) {
 			return
 		}
 		r.Complete(false) // accept — established end to end
-		if connLimiter.allow(target) {
+		// Per cluster as well as per name: a name two clusters hold is two
+		// routes, and a flow that went to the other one must show in the log.
+		if connLimiter.allow(target + via) {
 			log.f("tun: %s:%d → %s%s (by name; more flows to it stay quiet)", ipStr(fake), id.LocalPort, target, via)
 		}
 		relay(gonet.NewTCPConn(&wq, ep), up)

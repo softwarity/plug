@@ -50,6 +50,13 @@ do_takeover() {
     assert_all probe "local-$tname" 10 "deployed- local-" $((t0 + 60)) 5 || during="$aa_why"
     seq_during="$aa_seq"
   fi
+  # Not ours: ask the same prober, at once, which cluster it stands in. Cluster
+  # B holds a tko-mac of its own, deployed and answering the same text, so a
+  # read that crossed to the other cluster looks exactly like a park that did
+  # not happen.
+  if [ "$during" != "local-$tname" ]; then
+    echo "    the prober these reads went through stands in cluster '$(prober_fetch "http://ident:5678/")' (cluster A is $peer)"
+  fi
   # The reads are in: end the session the natural way (the ttl is the bound
   # for a runner where they take a minute, not a wait for every leg).
   : > "$tko_stop"
