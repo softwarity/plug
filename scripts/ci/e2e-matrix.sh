@@ -71,8 +71,6 @@ if [ -z "${PLUG_E2E_BACKGROUND:-}" ] && [ -f "$bgdir/$phase.queued" ]; then
   bg_show
   [ -f "$bgdir/$phase.summary" ] && cat "$bgdir/$phase.summary" >> "${GITHUB_STEP_SUMMARY:-/dev/stderr}"
   rc="$(cat "$bgdir/$phase.rc")"
-  # The last of them closes the leg's summary (see skip_cell).
-  [ "$phase" = "${bg_cells##* }" ] && leg_tally
   exit "${rc:-1}"
 fi
 
@@ -183,10 +181,22 @@ fi
 # shellcheck disable=SC1090 # the cell named on the command line
 . "$cell"
 "do_$phase"; rc=$?
-# The last of the cells closes the leg's summary with the count of what was
-# skipped (see skip_cell), whatever its own verdict: here when it ran in the
-# foreground (a bench), at its join above when it ran beside the chain.
-[ "$phase" = "${bg_cells##* }" ] && [ -z "${PLUG_E2E_BACKGROUND:-}" ] && leg_tally
+# The last cell of the chain closes the leg's summary with the count of what
+# was skipped (see skip_cell), whatever its own verdict.
+[ "$phase" = updatejump ] && leg_tally
 # A red cell is checked for the symptoms lib.sh knows, whatever it asserted.
 [ "$rc" = 0 ] || name_held_check
+# And a red cell of the chain says what ran beside it at that moment: the
+# cells there restart agents of cluster B, and whether one was doing so when
+# this one failed is the first question its failure raises.
+if [ "$rc" != 0 ] && [ -z "${PLUG_E2E_BACKGROUND:-}" ] && [ -d "$bgdir" ]; then
+  echo "--- beside the chain when $phase failed:"
+  for c in $bg_cells; do
+    if [ -f "$bgdir/$c.rc" ]; then st="done, exit $(cat "$bgdir/$c.rc")"
+    elif [ -f "$bgdir/$c.log" ]; then st="RUNNING"
+    else st="not started"; fi
+    echo "    $c: $st"
+    [ "$st" = RUNNING ] && tail -6 "$bgdir/$c.log" | sed 's/^/      /'
+  done
+fi
 exit "$rc"

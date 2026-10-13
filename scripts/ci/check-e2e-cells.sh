@@ -35,8 +35,8 @@ CHAIN = [
     ("exposevar", False), ("gateway", False), ("collision", False),
     ("lease", False), ("sameport", False), ("multiport", False),
     ("resilience", True), ("update", True), ("updatetag", True), ("updatenotify", True),
-    ("updatejump", True), ("admission", True),
-    ("compat", True),
+    ("admission", True),
+    ("compat", True), ("updatejump", True),
 ]
 
 # The cells that run beside the chain, as lib.sh lists them for
@@ -98,6 +98,12 @@ for c, gated in cells:
     if c in BG and not gated:
         fail(f"{c} runs in the background on the full legs only, so its step must carry the subset gate")
 names = [c for c, _ in cells]
+# updatejump moves the machine's launcher to a release: nothing may run after
+# it, beside the chain or in it.
+if "updatejump" in BG:
+    fail("updatejump replaces this machine's launcher: it cannot run beside the chain")
+if names and names[-1] != "updatejump":
+    fail(f"the chain ends with {names[-1]}, not updatejump: a cell after it would run the release's launcher")
 if BG and "compat" in names and BG[-1] in names and names.index("compat") < names.index(BG[-1]):
     fail("compat runs another launcher on the machine: its step must come after every background cell's")
 

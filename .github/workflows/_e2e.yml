@@ -239,10 +239,6 @@ jobs:
         if: success() && inputs.full
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh updatenotify "$A" "$B" 2222
-      - name: "Update: a release agent retargets to the newest release"
-        if: success() && inputs.full
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh updatejump "$A" "$B" 2222
       - name: "Admission by approval: first member, request, accept, restart, revoke"
         if: success() && inputs.full
         shell: bash
@@ -251,3 +247,9 @@ jobs:
         if: success() && inputs.full
         shell: bash
         run: bash scripts/ci/compat-launcher.sh "$A" 2222
+      # Last, in the foreground: against a release agent, `plug update` moves
+      # this machine's launcher to that release, and nothing may run after it.
+      - name: "Update: a release agent retargets to the newest release"
+        if: success() && inputs.full
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh updatejump "$A" "$B" 2222

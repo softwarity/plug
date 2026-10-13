@@ -23,7 +23,12 @@ envfile="${RUNNER_TEMP:-/tmp}/plug-e2e-env" # shared state, survives across step
 # them overlap: together they were a third of a leg, mostly spent waiting on an
 # agent to restart or roll. Their steps in _e2e.yml show each one's output and
 # verdict when the chain reaches them (see the join in e2e-matrix.sh).
-bg_cells="resilience update updatetag updatenotify updatejump admission"
+#
+# Not updatejump: `plug update` against a release agent moves THIS machine's
+# launcher to that release (the launcher follows its cluster, in every
+# direction), and every cell after it would run the old launcher. It stays the
+# last cell of the chain, in the foreground, where nothing runs after it.
+bg_cells="resilience update updatetag updatenotify admission"
 bgdir="${RUNNER_TEMP:-/tmp}/plug-e2e-bg"
 
 # All four languages, on every family. The override exists for a bench run, not
