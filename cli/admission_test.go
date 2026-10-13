@@ -30,6 +30,17 @@ type inviteAgent struct {
 // revoke makes fp no longer a member, someone else being one, and cuts every
 // connection, the way the real agent ends a revoked member's sessions.
 func (a *inviteAgent) revoke(fp string) {
+	// The connection is recorded once the server side of its handshake has
+	// returned, which can be just after the client side did: wait for it, or
+	// the revoke cuts nothing and the test asserts a reconnect that never was.
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		a.mu.Lock()
+		n := len(a.conns)
+		a.mu.Unlock()
+		if n > 0 {
+			break
+		}
+	}
 	a.mu.Lock()
 	delete(a.members, fp)
 	a.members["SHA256:someone-else"] = "alice@laptop"
