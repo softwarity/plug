@@ -97,6 +97,15 @@ if [ -n "$_hosted" ]; then
   echo "        plug pubkey -p $_kp"
   echo "      and ${_keyhint:-give the key it prints to whoever operates the cluster}"
 fi
+# A cluster that admits its members by approval: the first contact, made now so
+# the newcomer leaves the install knowing what to ask of whom. plug makes this
+# machine a key of its own and presents it; the first member is let in, anyone
+# after is recorded and told the line a member runs. Stdin closed: this script
+# arrives on plug's stdin's pipe, and a prompt must not swallow the rest of it.
+if [ -n "${_admission:-}" ] && [ -n "$_profile" ]; then
+  echo "plug: this cluster admits its members by approval; presenting this machine to it…"
+  "$dest/plug" -p "$_pname" requests </dev/null || true
+fi
 if [ -n "$_profile" ]; then
   echo "plug: then run 'plug -p $_pname <your command>'  (the only profile? 'plug <your command>' is enough)"
 else

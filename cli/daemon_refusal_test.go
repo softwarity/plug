@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/softwarity/plug/cli/internal/tun"
 	"github.com/softwarity/plug/cli/internal/tunnel"
@@ -58,5 +59,27 @@ func TestAMissingProfileKeyDoesNotEndTheDaemon(t *testing.T) {
 	}
 	if _, backedOff := authRefused[key]; !backedOff {
 		t.Error("a local refusal is retried on every tick: it will not change until a file does, and the log fills")
+	}
+}
+
+// A refusal is asked again when someone runs plug for the cluster again. The
+// newcomer to an agent that admits by approval is refused, a member accepts the
+// key, and the newcomer's next plug must reach the agent, not the answer the
+// daemon kept from a minute ago. A cluster that stays in use keeps its backoff.
+func TestARefusalIsAskedAgainWhenPlugRunsAgain(t *testing.T) {
+	const key = "cluster.example:2222"
+	saved := activeLastTick
+	defer func() { activeLastTick = saved; delete(authRefused, key) }()
+
+	authRefused[key] = time.Now()
+	activeLastTick = map[string]bool{key: true}
+	askAgainOnReturn(key)
+	if _, kept := authRefused[key]; !kept {
+		t.Error("a cluster still in use forgot its refusal: the agent would be asked three times a second")
+	}
+	activeLastTick = map[string]bool{}
+	askAgainOnReturn(key)
+	if _, kept := authRefused[key]; kept {
+		t.Error("a plug run after the cluster was idle got the refusal the daemon kept, without asking the agent")
 	}
 }

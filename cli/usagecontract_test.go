@@ -27,7 +27,7 @@ func TestEveryExampleInTheHelpIsAValidInvocation(t *testing.T) {
 		"rm": true, "version": true, "versions": true, "prune": true,
 		"uninstall": true, "about": true, "init": true, "down": true,
 		"install-service": true, "remove-service": true, "selftest": true, "mcp": true,
-		"keygen": true, "pubkey": true,
+		"keygen": true, "pubkey": true, "members": true, "requests": true, "accept": true, "revoke": true,
 	}
 
 	// Indented, which is what tells an invocation from the title line: every
@@ -50,6 +50,9 @@ func TestEveryExampleInTheHelpIsAValidInvocation(t *testing.T) {
 		i := 0
 		for i < len(fields) && strings.HasPrefix(fields[i], "[") {
 			i++ // an optional part, written as [-p profile]
+		}
+		if i+1 < len(fields) && fields[i] == "-p" {
+			i += 2 // flag-first, `plug -p <profile> accept`: the launcher re-dispatches it
 		}
 		if i >= len(fields) || subcommands[fields[i]] {
 			continue

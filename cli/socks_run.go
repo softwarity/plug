@@ -66,6 +66,18 @@ func dialTunnel(cfg config) (*tunnel.Transport, error) {
 		return nil, err
 	}
 	tr, err := tunnel.Dial(cfg.host, cfg.port, sshUser, keys, knownHosts, info)
+	// An agent that admits by approval refused the key built into plug: give
+	// the profile its own and present that one (adoptOwnKey). Once, and only
+	// where the profile is known.
+	if needsOwnKey(err) && adoptOwnKey(&cfg) {
+		if keys, err = cfg.authKeysErr(); err != nil {
+			return nil, err
+		}
+		tr, err = tunnel.Dial(cfg.host, cfg.port, sshUser, keys, knownHosts, info)
+	}
+	if err == nil {
+		welcome(cfg, tr)
+	}
 	// The host key is pinned into knownHosts on first connect. Off localhost the
 	// dialer may be the setuid daemon (euid 0), which would leave the pin file
 	// root-owned under the user's ~/.plug — and the "key changed, remove the line"
@@ -89,6 +101,9 @@ func explainRefusal(cfg config, err error) error {
 	var af *tunnel.AuthFailure
 	if !errors.As(err, &af) {
 		return err
+	}
+	if msg := admissionRefusal(cfg, af); msg != "" {
+		return errors.New(msg)
 	}
 	names := cfg.authKeyNames()
 	var b strings.Builder

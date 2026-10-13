@@ -82,6 +82,17 @@ type Transport struct {
 	// itself, and the version it answers afterwards is the new one — comparing
 	// the two is how a running session finds out it is now the older side.
 	agentVer atomic.Value // string
+
+	// admission is what an agent that admits by approval said when it let this
+	// connection in: "welcome" for the first member. See Welcomed.
+	admission atomic.Value // string
+}
+
+// Welcomed reports that this connection made its key the first member of an
+// agent that admits by approval.
+func (t *Transport) Welcomed() bool {
+	s, _ := t.admission.Load().(string)
+	return s == admissionWelcome
 }
 
 // Dial opens the SSH transport to the agent as the tunnel user. keys are the
@@ -169,18 +180,25 @@ func (t *Transport) dial() (*ssh.Client, error) {
 		return nil, fmt.Errorf("no private key to authenticate with")
 	}
 	addr := net.JoinHostPort(t.host, t.port)
+	var adm admissionExchange
 	cfg := &ssh.ClientConfig{
-		User:            t.user,
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signers...)},
+		User: t.user,
+		// Keyboard-interactive comes second and is only ever reached on an agent
+		// that admits by approval: it offers that step after a key it does not
+		// know has signed, and every other agent never offers it at all.
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signers...), ssh.KeyboardInteractive(adm.answer)},
 		HostKeyCallback: tofuHostKey(t.knownHosts, addr, t.note),
 		Timeout:         dialTimeout,
 	}
 	client, err := DialSSH(addr, cfg, dialTimeout)
 	if err != nil {
 		if isAuthFailure(err) {
-			return nil, &AuthFailure{Addr: addr, Err: err, Offered: fingerprints(signers)}
+			return nil, &AuthFailure{Addr: addr, Err: err, Offered: fingerprints(signers), Admission: adm.said()}
 		}
 		return nil, fmt.Errorf("ssh to %s: %w", addr, err)
+	}
+	if said := adm.said(); said != "" {
+		t.admission.Store(said)
 	}
 	return client, nil
 }
@@ -193,10 +211,47 @@ type AuthFailure struct {
 	Addr    string
 	Err     error
 	Offered []string // fingerprints, in the order they were presented
+	// Admission is what an agent that admits by approval said about the key,
+	// empty from every other agent (see admissionExchange).
+	Admission string
 }
 
 func (e *AuthFailure) Error() string {
-	return fmt.Sprintf("%s refused every key offered (%s)", e.Addr, strings.Join(e.Offered, ", "))
+	msg := fmt.Sprintf("%s refused every key offered (%s)", e.Addr, strings.Join(e.Offered, ", "))
+	switch {
+	case e.NeedsOwnKey():
+		msg += ": this cluster admits its members by approval, and plug needs a key of its own for it"
+	case e.Admission != "":
+		if short, _, ok := e.Pending(); ok {
+			msg += ": this cluster admits its members by approval, and key " + short + " is waiting for a member to accept it"
+		}
+	}
+	return msg
+}
+
+// NeedsOwnKey reports an agent that admits by approval refusing the key built
+// into plug: the caller makes the profile a key of its own and dials again.
+func (e *AuthFailure) NeedsOwnKey() bool { return e.Admission == admissionOwnKey }
+
+// Pending reports a key recorded as a request: the part of its fingerprint a
+// member types to accept it, and the members to ask.
+func (e *AuthFailure) Pending() (short string, members []string, ok bool) {
+	f := strings.Fields(e.Admission)
+	if len(f) == 0 || f[0] != admissionPending {
+		return "", nil, false
+	}
+	for _, kv := range f[1:] {
+		k, v, _ := strings.Cut(kv, "=")
+		switch k {
+		case "fp":
+			short = v
+		case "members":
+			if v != "" {
+				members = strings.Split(v, ",")
+			}
+		}
+	}
+	return short, members, short != ""
 }
 
 func (e *AuthFailure) Unwrap() error { return e.Err }

@@ -140,13 +140,40 @@ func launcherRun(args []string) {
 // and reports whether it did. Any other command word is the person's own
 // program, and launcherRun runs it.
 func redispatchSubcommand(opts options, cmdArgs []string) bool {
-	if len(cmdArgs) == 0 || (cmdArgs[0] != "update" && cmdArgs[0] != "doctor" && cmdArgs[0] != "version") {
+	if len(cmdArgs) == 0 {
+		return false
+	}
+	switch cmdArgs[0] {
+	case "update", "doctor", "version", "members", "requests", "accept", "revoke":
+	default:
 		return false
 	}
 	if len(opts.exposes) > 0 || opts.client {
 		fatal("-s/-c don't apply to %q", cmdArgs[0])
 	}
 	sub, rest := cmdArgs[0], cmdArgs[1:]
+	// The admission commands act on a profile, the cluster whose members they
+	// list: `plug -p X accept <key>` is the line a newcomer is told to send.
+	switch sub {
+	case "members", "requests", "accept", "revoke":
+		if opts.host != "" || opts.port != "" {
+			fatal("%s acts on a profile: plug -p <profile> %s", sub, sub)
+		}
+		if opts.profile != "" {
+			rest = append([]string{"-p", opts.profile}, rest...)
+		}
+		switch sub {
+		case "members":
+			cmdMembers(rest)
+		case "requests":
+			cmdRequests(rest)
+		case "revoke":
+			cmdRevoke(rest)
+		default:
+			cmdAccept(rest)
+		}
+		return true
+	}
 	if sub != "doctor" { // doctor has no host flags — profiles only
 		if opts.port != "" {
 			rest = append([]string{"--port", opts.port}, rest...)

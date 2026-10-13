@@ -7,6 +7,14 @@ services:
     # required - the agent creates your -s name through it
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      # - plug-members:/var/lib/plug/members   # with PLUG_ADMISSION, Compose only
+    # Admission by approval: only the keys a member accepts get in, the first
+    # key to connect being the first member. Unset, the agent admits whoever
+    # reaches its port. On Compose the members live in the volume above (and
+    # `volumes: { plug-members: {} }` at the top level); on Swarm the agent
+    # keeps them in a Swarm config by itself.
+    # environment:
+    #   PLUG_ADMISSION: invite
     # Swarm only, for -s: the signpost is a service, so run the agent on a
     # manager (any single-node swarm node IS a manager) as a single replica.
     # Ignored by plain Compose.

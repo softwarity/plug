@@ -2,6 +2,43 @@
 
 ## NEXT RELEASE
 
+### A cluster can admit only its members
+
+Deploy the agent with `PLUG_ADMISSION=invite` and it lets in only the keys a
+member has accepted. The first key to connect becomes the first member; every
+later one is recorded as a request, and the newcomer's plug prints the line a
+member runs to let them in:
+
+```
+plug -p demo accept 9kcQ2m7xT4bW
+```
+
+`plug -p demo requests` lists the keys waiting and accepts the ones picked,
+`plug -p demo members` lists the members and revokes the ones picked, ending
+their open sessions at once (`plug -p demo revoke <key>` does it from a script). A newcomer types nothing more than before: the
+install line is the same, plug gives the machine a key of its own when the
+agent asks for one, and the installer makes the first contact so the message
+is there before the install ends.
+
+The members live in a `plug-members` Secret on Kubernetes (the manifest now
+creates it empty, with a Role rule on that one name), in Swarm configs of
+its own on Swarm, so two agents on one swarm keep two rosters, and in a volume
+at `/var/lib/plug/members` on Compose. An agent that cannot read them does not
+start. Without the variable, nothing changes: the agent admits whoever reaches
+its port, as before.
+
+### plug asks its questions in Git Bash
+
+The profile picker, the wizard for a new profile, the confirmations and the
+admission lists now ask in Git Bash's terminal (mintty) on Windows, the way
+they ask in a console.
+
+### plug update returns as soon as the agent is back
+
+On Swarm and Kubernetes, `plug update` now ends when the redeployed agent
+answers, and says so when the tag still named the build it was running,
+instead of waiting a minute and a half for a version that was not coming.
+
 ---
 
 ## 2.25.1

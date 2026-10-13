@@ -214,7 +214,14 @@ func installVars(shebang, name, keyInstruction, dir string, stderr io.Writer) (s
 	if v, err := os.ReadFile(dir + "/VERSION"); err == nil && strings.HasSuffix(strings.TrimRight(string(v), "\n"), "-hosted") {
 		hosted = "1"
 	}
-	return fmt.Sprintf("%s\n_name=%s\n_keyhint='%s'\n_hosted=%s\n", shebang, name, keyInstruction, hosted), true
+	vars := fmt.Sprintf("%s\n_name=%s\n_keyhint='%s'\n_hosted=%s\n", shebang, name, keyInstruction, hosted)
+	// An agent that admits by approval has the installer make the first
+	// contact, so the newcomer reads what to ask of whom before they leave the
+	// install. Absent otherwise: an open agent's installer is what it was.
+	if os.Getenv(admissionEnv) == "invite" {
+		vars += "_admission=invite\n"
+	}
+	return vars, true
 }
 
 // sayable reports whether the gateway's sentence can go inside single quotes

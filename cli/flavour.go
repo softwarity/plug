@@ -60,6 +60,11 @@ func usageFor(section string) string {
                                        with whoever operates the cluster
   plug pubkey [-p profile]             print that profile's public key, ready to
                                        paste where the operator enrols it
+  plug -p <profile> requests           on a cluster that admits by approval: the
+                                       keys waiting, pick the ones to accept
+  plug -p <profile> accept <key>       accept one, by the key its plug printed
+  plug -p <profile> members            who is a member, pick the ones to revoke
+  plug -p <profile> revoke <key>       revoke one, by the key members shows
 `
 	}
 	return ""

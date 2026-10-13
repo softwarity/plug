@@ -301,6 +301,10 @@ func routeVerb(cmd []string) {
 		doMountStatus(cmd)
 	case "self-update":
 		doSelfUpdate(cmd)
+	case "members", "requests", "accept", "revoke":
+		// An invite agent answers these in its server process (admission.go);
+		// reaching here means this agent keeps no roster, and says why.
+		doAdmission(cmd)
 	default:
 		answer("error: unknown command %q", cmd[0])
 	}

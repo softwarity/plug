@@ -139,4 +139,10 @@ if [ -n "${_hosted:-}" ]; then
   echo "        plug pubkey -p $PROFILE"
   echo "      and ${_keyhint:-give the key it prints to whoever operates the cluster}"
 fi
+# A cluster that admits its members by approval: the first contact, made now
+# (see install-unix.sh for why, and why stdin is closed).
+if [ -n "${_admission:-}" ]; then
+  info "this cluster admits its members by approval; presenting this machine to it..."
+  "$DIR/plug.exe" -p "$PROFILE" requests </dev/null || true
+fi
 info "ready. Open a new Git Bash and:  plug -p $PROFILE <your command>"

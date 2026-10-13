@@ -44,6 +44,12 @@ type config struct {
 	// enrols and revokes, and a single key shared across clusters could not be
 	// withdrawn from one of them.
 	key string
+	// profile is the profile this cluster came from, empty when it came from
+	// --host alone or to a process that was given a cluster and not a profile
+	// (the shared datapath daemon). It is what lets plug give the profile a key
+	// of its own when an agent that admits by approval asks for one
+	// (adoptOwnKey), and what the messages name.
+	profile string
 }
 
 // authKeys is what plug offers the agent, in order: this profile's personal key
@@ -197,6 +203,18 @@ func main() {
 	case "pubkey":
 		cmdPubkey(args[1:])
 		return
+	case "members":
+		cmdMembers(args[1:])
+		return
+	case "requests":
+		cmdRequests(args[1:])
+		return
+	case "accept":
+		cmdAccept(args[1:])
+		return
+	case "revoke":
+		cmdRevoke(args[1:])
+		return
 	case "uninstall":
 		uninstall(args[1:])
 		return
@@ -241,6 +259,10 @@ func coreEnv(cfg config) []string {
 		// for the same reason the update policy does - the core is given a
 		// cluster, not a profile name.
 		"PLUG_CORE_KEY="+cfg.key,
+		// The profile's name, so a core refused for want of a key of its own
+		// can make one where `plug keygen` would (adoptOwnKey). An older
+		// launcher does not set it, and that core then says what to run.
+		"PLUG_CORE_PROFILE="+cfg.profile,
 		// The core runs the background check but never knows which profile it
 		// came from — it is given a host and a port, not a name. So the policy
 		// travels with them.
@@ -274,6 +296,7 @@ func coreConfigFromEnv() config {
 		port:       coreGetenv("PLUG_CORE_PORT", "PLUG_PORT"),
 		updateMode: os.Getenv("PLUG_CORE_UPDATE"),
 		key:        os.Getenv("PLUG_CORE_KEY"),
+		profile:    os.Getenv("PLUG_CORE_PROFILE"),
 	}
 	if cfg.port == "" {
 		cfg.port = defaultPort

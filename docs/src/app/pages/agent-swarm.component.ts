@@ -23,6 +23,12 @@ import { FileComponent } from '../file/file.component';
       plug into. It joins that stack's network automatically - nothing else to declare:
     </p>
     <app-file src="assets/plug-service.yml" download="plug-service.yml" [initial]="'opened'" [preview]="16" />
+    <p>
+      To let in only the developers a member accepts, uncomment <code>PLUG_ADMISSION: invite</code>.
+      On Swarm the agent keeps its members in a Swarm config by itself; on plain Compose, mount the
+      <code>plug-members</code> volume the comment shows, or the agent refuses to start. How it
+      works under <a routerLink="/security" fragment="admission">admission by approval</a>.
+    </p>
 
     <h3>Standalone - one agent for several stacks</h3>
     <p>

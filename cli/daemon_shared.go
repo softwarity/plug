@@ -43,6 +43,21 @@ var authRefused = map[string]time.Time{}
 // mean hunting down a daemon to restart.
 const authRetryAfter = 60 * time.Second
 
+// The clusters that had a live client at the previous tick. A cluster coming
+// back is someone running plug for it again, and that is when a refusal is
+// worth asking about again: on an agent that admits by approval, the newcomer
+// refused a minute ago runs plug once more right after a member accepted the
+// key, and must not be told the old answer for the rest of the minute.
+var activeLastTick = map[string]bool{}
+
+// askAgainOnReturn forgets the refusal of a cluster that had no client at the
+// previous tick (see activeLastTick).
+func askAgainOnReturn(key string) {
+	if !activeLastTick[key] {
+		delete(authRefused, key)
+	}
+}
+
 // applyDial records a finished dial. Called only from the reconcile goroutine,
 // so every map it touches has a single owner.
 func applyDial(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transport, r dialOutcome) {
@@ -164,6 +179,7 @@ func reconcile(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transport, 
 	active := map[string]bool{}
 	for _, key := range tun.ActiveClusters() {
 		active[key] = true
+		askAgainOnReturn(key)
 		if _, have := tunnels[key]; have {
 			continue
 		}
@@ -215,6 +231,7 @@ func reconcile(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transport, 
 			dialOut <- dialOutcome{key: k, tr: tr, err: err}
 		})
 	}
+	activeLastTick = active
 	for key, tr := range tunnels {
 		if active[key] {
 			delete(tunnelIdleSince, key) // in use — reset the idle timer

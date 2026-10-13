@@ -27,7 +27,7 @@ func resolveConfig(o options) config {
 			port = defaultPort
 		}
 		writeProfile(o.profile, o.host, port)
-		cfg = config{host: o.host, port: port}
+		cfg = config{host: o.host, port: port, profile: o.profile}
 	case o.host != "":
 	case o.profile != "":
 		// An unknown -p profile isn't an error: offer the wizard to create it, so
@@ -105,6 +105,7 @@ func loadProfile(name string) config {
 	for _, n := range notes {
 		info("profile %s: %s", name, n)
 	}
+	cfg.profile = name
 	return cfg
 }
 
@@ -357,7 +358,13 @@ var noTerminalFatal = fatal
 // profile picker or the wizard can ask them there, as they always could. What
 // the guard refuses is the run with no terminal on either side, which is the
 // CI job, the script and the detached service.
+//
+// Git Bash is the one terminal neither test sees: under mintty, stdin is a
+// pipe, and the question is asked on that pipe (minttyInput).
 func openTerminal() (*os.File, error) {
+	if in := minttyInput(); in != nil {
+		return in, nil
+	}
 	if !term.IsTerminal(int(os.Stdin.Fd())) && !term.IsTerminal(int(os.Stderr.Fd())) {
 		return nil, errors.New("neither stdin nor stderr is a terminal")
 	}

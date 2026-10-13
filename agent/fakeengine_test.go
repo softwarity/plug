@@ -91,6 +91,7 @@ type fakeEngine struct {
 	containers map[string]*fakeContainer // by id
 	services   map[string]*fakeService   // by id
 	secrets    map[string]*fakeSecret    // by id
+	configs    map[string]*fakeSecret    // by id: a config is a secret the API calls by another name
 	networks   map[string]*fakeNetwork   // by name
 	tasks      []map[string]any
 	images     map[string][]string // image name -> RepoDigests
@@ -109,6 +110,7 @@ func newFakeEngine(t *testing.T) *fakeEngine {
 		containers: map[string]*fakeContainer{},
 		services:   map[string]*fakeService{},
 		secrets:    map[string]*fakeSecret{},
+		configs:    map[string]*fakeSecret{},
 		networks:   map[string]*fakeNetwork{},
 		images:     map[string][]string{},
 		execOut:    map[string]string{},
@@ -204,11 +206,17 @@ func (fe *fakeEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case p == "/tasks":
 		fe.listTasks(w, q)
 	case p == "/secrets":
-		fe.listSecrets(w, q)
+		fe.listSecrets(w, fe.secrets, q)
 	case p == "/secrets/create" && r.Method == "POST":
-		fe.createSecret(w, body)
+		fe.createSecret(w, fe.secrets, "secret", body)
 	case strings.HasPrefix(p, "/secrets/"):
-		fe.secretOp(w, r.Method, strings.TrimPrefix(p, "/secrets/"))
+		fe.secretOp(w, fe.secrets, "secret", r.Method, strings.TrimPrefix(p, "/secrets/"))
+	case p == "/configs":
+		fe.listSecrets(w, fe.configs, q)
+	case p == "/configs/create" && r.Method == "POST":
+		fe.createSecret(w, fe.configs, "config", body)
+	case strings.HasPrefix(p, "/configs/"):
+		fe.secretOp(w, fe.configs, "config", r.Method, strings.TrimPrefix(p, "/configs/"))
 	default:
 		jsonReply(w, 404, apiMsg("page not found"))
 	}
@@ -429,10 +437,10 @@ func (fe *fakeEngine) listTasks(w http.ResponseWriter, q url.Values) {
 	jsonReply(w, 200, out)
 }
 
-func (fe *fakeEngine) listSecrets(w http.ResponseWriter, q url.Values) {
+func (fe *fakeEngine) listSecrets(w http.ResponseWriter, m map[string]*fakeSecret, q url.Values) {
 	f := parseFilters(q.Get("filters"))
 	out := []map[string]any{}
-	for _, s := range fe.sortedSecrets() {
+	for _, s := range sortedSecrets(m) {
 		if labelsMatch(specLabels(s.Spec), f["label"]) {
 			out = append(out, map[string]any{"ID": s.ID, "Spec": s.Spec})
 		}
@@ -440,28 +448,28 @@ func (fe *fakeEngine) listSecrets(w http.ResponseWriter, q url.Values) {
 	jsonReply(w, 200, out)
 }
 
-func (fe *fakeEngine) createSecret(w http.ResponseWriter, body map[string]any) {
+func (fe *fakeEngine) createSecret(w http.ResponseWriter, m map[string]*fakeSecret, kind string, body map[string]any) {
 	name, _ := body["Name"].(string)
-	if fe.findSecret(name) != nil {
-		jsonReply(w, 409, apiMsg("rpc error: code = AlreadyExists desc = secret "+name+" already exists"))
+	if findSecret(m, name) != nil {
+		jsonReply(w, 409, apiMsg("rpc error: code = AlreadyExists desc = "+kind+" "+name+" already exists"))
 		return
 	}
 	s := &fakeSecret{ID: fe.serviceID(), Spec: roundTrip(body)}
-	fe.secrets[s.ID] = s
+	m[s.ID] = s
 	jsonReply(w, 201, map[string]any{"ID": s.ID})
 }
 
-func (fe *fakeEngine) secretOp(w http.ResponseWriter, method, id string) {
-	s := fe.findSecret(id)
+func (fe *fakeEngine) secretOp(w http.ResponseWriter, m map[string]*fakeSecret, kind, method, id string) {
+	s := findSecret(m, id)
 	if s == nil {
-		jsonReply(w, 404, apiMsg("secret "+id+" not found"))
+		jsonReply(w, 404, apiMsg(kind+" "+id+" not found"))
 		return
 	}
 	if method != "DELETE" {
 		jsonReply(w, 405, apiMsg("method not allowed"))
 		return
 	}
-	delete(fe.secrets, s.ID)
+	delete(m, s.ID)
 	w.WriteHeader(204)
 }
 
@@ -486,7 +494,11 @@ func (fe *fakeEngine) findService(idOrName string) *fakeService {
 }
 
 func (fe *fakeEngine) findSecret(idOrName string) *fakeSecret {
-	for _, s := range fe.secrets {
+	return findSecret(fe.secrets, idOrName)
+}
+
+func findSecret(m map[string]*fakeSecret, idOrName string) *fakeSecret {
+	for _, s := range m {
 		if s.ID == idOrName || specName(s.Spec) == idOrName {
 			return s
 		}
@@ -512,9 +524,9 @@ func (fe *fakeEngine) sortedServices() []*fakeService {
 	return out
 }
 
-func (fe *fakeEngine) sortedSecrets() []*fakeSecret {
+func sortedSecrets(m map[string]*fakeSecret) []*fakeSecret {
 	var out []*fakeSecret
-	for _, s := range fe.secrets {
+	for _, s := range m {
 		out = append(out, s)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })

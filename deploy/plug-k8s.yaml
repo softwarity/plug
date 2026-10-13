@@ -125,6 +125,12 @@ spec:
             - name: PLUG_POD_IP
               valueFrom:
                 fieldRef: { fieldPath: status.podIP }
+            # Admission by approval: only the keys a member accepts get in, the
+            # first key to connect being the first member. Unset, the agent
+            # admits whoever reaches its port. The members live in the
+            # plug-members Secret below.
+            # - name: PLUG_ADMISSION
+            #   value: invite
           # The agent is up as soon as it accepts TCP on its port; a plain TCP
           # probe avoids needing credentials.
           readinessProbe:
@@ -153,6 +159,17 @@ spec:
       port: 2222
       targetPort: ssh
       nodePort: 32222
+---
+# The members of an agent that admits by approval (PLUG_ADMISSION=invite). No
+# data on purpose: the agent writes it, and re-applying this file leaves what it
+# wrote alone. Deleting the Secret and re-applying resets the members: the next
+# key to connect becomes the first.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: plug-members
+  labels: { app: plug }
+type: Opaque
 ---
 # The agent's grant: this namespace only, and more than Services - each rule
 # says what it reaches, the header above says what that adds up to.
@@ -233,6 +250,12 @@ rules:
   - apiGroups: [""]
     resources: ["pods/exec"]
     verbs: ["get", "create"]
+  # The members of an agent that admits by approval, in the Secret above and
+  # no other: a rule with resourceNames reaches that one name.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["plug-members"]
+    verbs: ["get", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

@@ -304,3 +304,22 @@ func TestBinaryNameAcceptsUnameSpellings(t *testing.T) {
 		}
 	}
 }
+
+// An agent that admits by approval tells its installer so, and the installer
+// makes the first contact. An open agent's installer starts exactly as before:
+// the variable is absent, not empty.
+func TestTheInstallerKnowsTheAgentAdmitsByApproval(t *testing.T) {
+	dir := fakeDownloadDir(t, "2.26.0")
+	t.Setenv(admissionEnv, "")
+	if got := runDownload("install demo", "", dir); strings.Contains(got.stdout, "_admission=") {
+		t.Errorf("an open agent's installer carries the admission variable")
+	}
+	t.Setenv(admissionEnv, "invite")
+	got := runDownload("install demo", "", dir)
+	if !strings.HasPrefix(got.stdout, "#!/bin/sh\n_name=demo\n_keyhint=''\n_hosted=\n_admission=invite\n#!/bin/sh\n") {
+		t.Fatalf("an invite agent's installer starts:\n%.120s", got.stdout)
+	}
+	if !strings.Contains(got.stdout, `"$dest/plug" -p "$_pname" requests </dev/null`) {
+		t.Error("the installer does not make the first contact")
+	}
+}

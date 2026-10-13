@@ -223,6 +223,7 @@ func Start(ctx context.Context, cfg Config) error {
 			versionEnv + "=" + cfg.Version,
 			signpostImageEnv + "=" + cfg.SignpostImage,
 			noSelfUpdateEnv + "=" + boolEnv(cfg.NoSelfUpdate),
+			admissionModeEnv + "=" + admissionMode(cfg.Host),
 		},
 		noDownloadAccount: cfg.NoDownloadAccount,
 		installEnv:        []string{keyInstructionEnv + "=" + cfg.KeyInstruction},
@@ -352,7 +353,18 @@ func serve(args []string) {
 	state := fs.String("state", stateDir, "directory for state that must outlive a restart")
 	_ = fs.Parse(args)
 
-	host, err := Standalone(*keys, *state)
+	var host Host
+	var err error
+	switch mode := os.Getenv(admissionEnv); mode {
+	case "", "open":
+		host, err = Standalone(*keys, *state)
+	case "invite":
+		// Closed on any doubt: an agent that cannot read its members does not
+		// start (see Invite), it never falls back to letting anyone in.
+		host, err = Invite(*keys, *state)
+	default:
+		err = fmt.Errorf("%s=%q: the agent admits anyone (open, the default) or by approval (invite)", admissionEnv, mode)
+	}
 	if err != nil {
 		fatal("plug-agent: %v", err)
 	}

@@ -14,7 +14,8 @@ import { CodeComponent } from '../code/code.component';
       not a secret. Treat the agent's published port as an open door to the attached networks,
       and to what the agent can do in them on a developer's behalf: read a workload's environment
       and secret files, mount its volumes, point a name at a machine. The sections below list
-      exactly that.
+      exactly that. Unless the agent is deployed to <a routerLink="/security" fragment="admission">admit by approval</a>:
+      then only the keys a member accepted get in.
     </div>
 
     <h3>What this means, concretely</h3>
@@ -38,6 +39,60 @@ import { CodeComponent } from '../code/code.component';
       without <a routerLink="/meerkat">Meerkat</a>. Drop the NodePort from the manifest if that is
       your model. On Docker and Swarm the published port is the boundary: firewall it to your
       office or VPN range.
+    </p>
+
+    <h3 id="admission">Admission by approval</h3>
+    <p>
+      One line at deploy time, <code>PLUG_ADMISSION=invite</code>, and the agent lets in its
+      <strong>members</strong> only. Nothing changes for a developer beyond reading one message:
+      the install line is the same, plug gives the machine a key of its own the first time the
+      agent asks for one, presents it, and says what to ask of whom.
+    </p>
+    <ul>
+      <li><strong>The first key to connect becomes the first member</strong>, typically whoever
+        deployed the agent and installed plug right after. The agent's log names it
+        (<code>first member: &lt;name&gt; SHA256:… from &lt;ip&gt;</code>), and anyone who arrives
+        later sees the members' names, so a key that got there first does not go unnoticed.</li>
+      <li><strong>Every later key is recorded as a request, and refused.</strong> The newcomer's
+        plug prints the line to send to a member:</li>
+    </ul>
+    <app-code lang="text">plug: demo admits its members by approval. Your request is registered.
+      Ask a member to run:
+        plug -p demo accept 9kcQ2m7xT4bW
+      or to pick you in: plug -p demo requests
+      Members: francois, alice</app-code>
+    <ul>
+      <li><strong>A member accepts or revokes</strong>, and nobody else can: the three commands
+        ride the tunnel. <code>plug -p demo accept &lt;key&gt;</code> takes the key the newcomer's
+        plug printed, the first 12 characters of its fingerprint (too long to forge a second key
+        that starts the same). <code>plug -p demo requests</code> lists the keys waiting and
+        accepts the ones picked, <code>plug -p demo members</code> lists the members and revokes
+        the ones picked (<code>plug -p demo revoke &lt;key&gt;</code> in a script). A revoked member's open sessions end at once. The last member cannot be
+        revoked: the next key would become the first.</li>
+      <li><strong>Members are equal.</strong> Every member can accept and revoke. Telling who may
+        invite from who may only use is a matter of identity, which is what the hosted version
+        (below) brings.</li>
+      <li><strong>A request is forgotten</strong> after 7 days without a new attempt, and at
+        most 20 wait at once, the oldest dropped first: anyone who reaches the port can add to
+        the list, and it stays one a member can read. A machine that tries again keeps its one
+        request, with the date of its latest attempt.</li>
+      <li><strong>An offered key is never recorded.</strong> A request is written only once the
+        client has signed with the key, so nobody holding a colleague's public half can put it on
+        the list.</li>
+    </ul>
+    <p>
+      The members live where the orchestrator keeps state: a Secret named
+      <code>plug-members</code> on Kubernetes (the manifest creates it empty, and the Role reaches
+      that one name, nothing else), a Swarm config the agent keeps by itself on Swarm, a volume at
+      <code>/var/lib/plug/members</code> on Compose. <strong>An agent that cannot read its members
+      does not start</strong>: it never falls back to letting anyone in. Deleting the Secret, the
+      configs or the volume resets them, and the next key to connect becomes the first member,
+      which is also the way back when every member has lost their key.
+    </p>
+    <p>
+      What it closes is the open door the rest of this page describes: the port is no longer the
+      whole authorization. What it does not change is what a member can do once in, which is
+      everything above, and the traffic itself, which was already encrypted by SSH.
     </p>
 
     <h3>The download user (<code>get</code>)</h3>

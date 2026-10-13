@@ -232,19 +232,92 @@ func (s *sshServer) serverConfig() *ssh.ServerConfig {
 			}
 			who, ok := s.host.Verify(key)
 			if !ok {
+				if _, admits := s.host.(*inviteHost); admits {
+					// Not a member, and not refused yet: this agent admits by
+					// approval, and what it does with the key waits for the
+					// client to prove it holds it (VerifiedPublicKeyCallback).
+					return &ssh.Permissions{Extensions: map[string]string{"admit": "1"}}, nil
+				}
 				// Fingerprint, never the key: enough to recognise a legitimate
 				// client that was never enrolled, useless to an attacker.
 				return nil, fmt.Errorf("key %s is not authorized", ssh.FingerprintSHA256(key))
 			}
-			return &ssh.Permissions{Extensions: map[string]string{
-				"user": tunnelUser,
-				"who":  who,
-			}}, nil
+			return tunnelPermissions(who, key), nil
 		},
 		ServerVersion: "SSH-2.0-plug",
 	}
+	if ih, admits := s.host.(*inviteHost); admits {
+		// Called once the signature checked, which is what makes it the place
+		// to record anything: PublicKeyCallback is also asked about keys a
+		// client only OFFERS, and recording those would let anyone put a
+		// colleague's public key on the waiting list.
+		cfg.VerifiedPublicKeyCallback = func(c ssh.ConnMetadata, key ssh.PublicKey, perms *ssh.Permissions, _ string) (*ssh.Permissions, error) {
+			if perms == nil || perms.Extensions["admit"] != "1" {
+				return perms, nil
+			}
+			return nil, &ssh.PartialSuccessError{Next: ssh.ServerAuthCallbacks{
+				KeyboardInteractiveCallback: s.admission(ih, key),
+			}}
+		}
+	}
 	cfg.AddHostKey(s.hostKey)
 	return cfg
+}
+
+// tunnelPermissions is what an accepted tunnel key carries into its
+// connection: the account, the identity the Host gave it, and its fingerprint,
+// by which a revoked member's sessions are found and ended.
+func tunnelPermissions(who string, key ssh.PublicKey) *ssh.Permissions {
+	return &ssh.Permissions{Extensions: map[string]string{
+		"user": tunnelUser,
+		"who":  who,
+		"fp":   ssh.FingerprintSHA256(key),
+	}}
+}
+
+// admission is the exchange with a key an invite agent does not know, after it
+// proved itself. Keyboard-interactive because it is the one step of SSH
+// authentication that carries text both ways: the client says which machine it
+// is, the agent says what became of the key. The client recognises the
+// exchange by its name and answers it; the words a person reads are the
+// client's, since the client knows the profile and the agent does not.
+func (s *sshServer) admission(h *inviteHost, key ssh.PublicKey) func(ssh.ConnMetadata, ssh.KeyboardInteractiveChallenge) (*ssh.Permissions, error) {
+	return func(c ssh.ConnMetadata, challenge ssh.KeyboardInteractiveChallenge) (*ssh.Permissions, error) {
+		answers, err := challenge(admissionChallenge, sayAskName, []string{"name: "}, []bool{true})
+		if err != nil {
+			return nil, err
+		}
+		name := "unnamed"
+		if len(answers) == 1 {
+			name = cleanName(answers[0])
+		}
+		from, _ := splitAddr(c.RemoteAddr())
+		res := h.admit(key, name, from)
+		if res.say != "" {
+			// No question: the instruction is the whole message.
+			_, _ = challenge(admissionChallenge, res.say, nil, nil)
+		}
+		if !res.ok {
+			return nil, fmt.Errorf("key %s is not a member: %s", ssh.FingerprintSHA256(key), res.say)
+		}
+		return tunnelPermissions(res.who, key), nil
+	}
+}
+
+// endSessionsOf closes every connection a key authenticated: a revoked member
+// stops at once, not at their next reconnect.
+func (s *sshServer) endSessionsOf(fp string) {
+	s.mu.Lock()
+	var gone []*ssh.ServerConn
+	for c := range s.conns {
+		if c.Permissions != nil && c.Permissions.Extensions["fp"] == fp {
+			gone = append(gone, c)
+		}
+	}
+	s.mu.Unlock()
+	for _, c := range gone {
+		_ = c.Close()
+	}
 }
 
 // Serve accepts until ln is closed, then waits for live connections to finish.
@@ -774,6 +847,21 @@ func (s *sshServer) session(nch ssh.NewChannel, user, who string, fwd *forwardSe
 // runForced executes the account's command with the client's request in
 // SSH_ORIGINAL_COMMAND, exactly as sshd does, and returns its exit status.
 func (s *sshServer) runForced(ch ssh.Channel, user, who string, fwd *forwardSet, original string, remote, local net.Addr) {
+	// The admission verbs of an invite agent are answered here, in the process
+	// that holds the roster: a subprocess writing it would race this one.
+	if ih, admits := s.host.(*inviteHost); admits && user == tunnelUser {
+		if cmd := strings.Fields(original); len(cmd) > 0 && admissionVerbs[cmd[0]] {
+			reply, revoked := ih.verb(who, cmd)
+			if reply != "" {
+				fmt.Fprintln(ch, reply)
+			}
+			sendExit(ch, 0)
+			if revoked != "" {
+				s.endSessionsOf(revoked)
+			}
+			return
+		}
+	}
 	argv := s.execFor(user)
 	if len(argv) == 0 {
 		fmt.Fprintf(ch.Stderr(), "plug: no command for %q\n", user)

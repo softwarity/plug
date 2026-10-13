@@ -486,6 +486,7 @@ func readProfileSoft(name string) (config, error) {
 	if cfg.port == "" {
 		cfg.port = defaultPort
 	}
+	cfg.profile = name
 	return cfg, nil
 }
 

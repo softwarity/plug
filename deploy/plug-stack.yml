@@ -30,6 +30,11 @@ services:
       # the mount to keep plug to the forward direction (plug <cmd>), which
       # needs none of it.
       - /var/run/docker.sock:/var/run/docker.sock
+    # Admission by approval: only the keys a member accepts get in, the first
+    # key to connect being the first member, and the agent keeps the members
+    # in a Swarm config by itself. Unset, it admits whoever reaches its port.
+    # environment:
+    #   PLUG_ADMISSION: invite
     networks:
       - app_net
     deploy:

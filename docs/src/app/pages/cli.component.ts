@@ -76,6 +76,29 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
         <td><a routerLink="/getting-started">Getting started</a></td>
       </tr>
       <tr>
+        <td><code>plug -p &lt;profile&gt; requests</code></td>
+        <td>
+          on a cluster that admits by approval: the keys waiting to be let in, numbered; the ones
+          you pick are accepted. A member's command, like the two below
+        </td>
+        <td><a routerLink="/security" fragment="admission">Admission by approval</a></td>
+      </tr>
+      <tr>
+        <td><code>plug -p &lt;profile&gt; accept &lt;key&gt;</code></td>
+        <td>accept one key, by the 12 characters the newcomer's plug printed</td>
+        <td><a routerLink="/security" fragment="admission">Admission by approval</a></td>
+      </tr>
+      <tr>
+        <td><code>plug -p &lt;profile&gt; members</code></td>
+        <td>the members, numbered; the ones you pick are revoked, after a confirmation each</td>
+        <td><a routerLink="/security" fragment="admission">Admission by approval</a></td>
+      </tr>
+      <tr>
+        <td><code>plug -p &lt;profile&gt; revoke &lt;key&gt;</code></td>
+        <td>revoke one member, by the key <code>members</code> shows: the form a script runs</td>
+        <td><a routerLink="/security" fragment="admission">Admission by approval</a></td>
+      </tr>
+      <tr>
         <td><code>plug rn &lt;old&gt; &lt;new&gt;</code></td>
         <td>rename a profile (alias: <code>mv</code>)</td>
         <td><a routerLink="/profiles">Profiles</a></td>
