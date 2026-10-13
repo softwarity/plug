@@ -28,6 +28,12 @@ root="$(cd "$(dirname "$0")/../.." && pwd)"
 [ -f "$envfile" ] || { echo "no e2e state at $envfile - run the setup cell first" >&2; exit 1; }
 
 rm -rf "$bgdir"; mkdir -p "$bgdir"
+# TEMPORARY, one run: compose/mac keeps the cluster-B cells in the foreground,
+# to tell whether running them beside the chain is what fails takeover there.
+if [ "$family/$os" = compose/mac ]; then
+  echo "experiment: on compose/mac the cluster-B cells run in the foreground this time"
+  exit 0
+fi
 for c in $bg_cells; do : > "$bgdir/$c.queued"; done
 (
   for c in $bg_cells; do

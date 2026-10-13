@@ -56,6 +56,11 @@ do_takeover() {
   # not happen.
   if [ "$during" != "local-$tname" ]; then
     echo "    the prober these reads went through stands in cluster '$(prober_fetch "http://ident:5678/")' (cluster A is $peer)"
+    # And what agent A says it did with the name, from inside the cluster.
+    agent_state "$ip" agent | grep -iE "$tname|park|restor|sweep|unserve|lease" | tail -25
+    # And the deployed container itself: stopped by the park, or started again
+    # (and when) by something other than this session's restore.
+    agent_state "$ip" "$tname" | head -3
   fi
   # The reads are in: end the session the natural way (the ttl is the bound
   # for a runner where they take a minute, not a wait for every leg).
