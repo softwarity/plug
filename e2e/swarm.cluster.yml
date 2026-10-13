@@ -77,6 +77,55 @@ services:
       placement:
         constraints: [node.role == manager]
 
+  # Per-leg agents that admit by approval, for the admission cell (one per leg:
+  # the first key to connect becomes the first member). On Swarm the members
+  # live in Swarm configs the agent writes itself, labelled with its service,
+  # so these three on one swarm keep three rosters, and a restarted task reads
+  # its own back. Manager placement: configs are a manager API.
+  adm-agent-linux:
+    image: softwarity/plug:e2e
+    environment:
+      PLUG_ADMISSION: invite
+    ports:
+      - "2229:22"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [internal]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+  adm-agent-mac:
+    image: softwarity/plug:e2e
+    environment:
+      PLUG_ADMISSION: invite
+    ports:
+      - "2230:22"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [internal]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+  adm-agent-win:
+    image: softwarity/plug:e2e
+    environment:
+      PLUG_ADMISSION: invite
+    ports:
+      - "2231:22"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [internal]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+  adm-echo:
+    image: hashicorp/http-echo:1.0.0
+    command: ["-listen=:8150", "-text=admitted"]
+    networks: [internal]
+
   # Agent-crash simulator, same image as the Compose family: GET
   # chaos:8095/restart-agent?svc=<service> restarts an agent task through the
   # mounted socket, and /rm-signpost?name=<n> deletes a live session's signpost.

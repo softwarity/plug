@@ -44,6 +44,15 @@ do_update() {
   if ! printf '%s' "$out" | grep -Eq "agent: (current|pulled|updating)"; then
     echo "--- update FAIL - no agent verdict (want current/pulled/updating)"; sum "**plug update** ❌ - no agent verdict"; return 1
   fi
+  # And on Swarm and k8s the roll is seen to land: plug tells the new instance by
+  # its host key and stops waiting when it answers, so a rollout that never
+  # happened (or never finished) shows here instead of as 90s of silence.
+  case "$family" in
+    swarm|k8s)
+      if ! printf '%s' "$out" | grep -Eq "agent (restarted on the same build|updated:)"; then
+        echo "--- update FAIL - plug never saw the rolled agent answer"; sum "**plug update** ❌ - the rollout was not seen to land"; return 1
+      fi ;;
+  esac
   if ! printf '%s' "$out" | grep -Eq "launcher (already matches|is a dev build)"; then
     echo "--- update FAIL - no launcher line"; sum "**plug update** ❌ - no launcher line"; return 1
   fi

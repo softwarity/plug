@@ -33,6 +33,7 @@ $compose up -d --build --wait \
   chaos res-tko-linux res-tko-mac res-tko-win \
   res-agent-linux res-agent-mac res-agent-win \
   prev-agent-linux prev-agent-mac prev-agent-win \
+  adm-agent-linux adm-agent-mac adm-agent-win adm-echo \
   vol-linux vol-mac vol-win
 $compose ps
 

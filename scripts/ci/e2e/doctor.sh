@@ -5,10 +5,14 @@
 # stdin, so the issue prompt never fires. Exit 0 = no ✗ finding on a machine
 # the install one-liner just set up. Sourced by scripts/ci/e2e-matrix.sh after
 # lib.sh.
+#
+# -p e2e-a, the profile the installer saved: the cluster-B cells run beside this
+# one (e2e-background.sh) and the admission cell adds profiles of its own for a
+# while, which a doctor reading every profile would check too.
 do_doctor() {
   echo "=== doctor: the health checks must pass on a healthy leg ==="
   local dr
-  dr="$(plug_bounded 60 doctor </dev/null 2>&1)"
+  dr="$(plug_bounded 60 doctor -p e2e-a </dev/null 2>&1)"
   if [ $? -eq 0 ] && printf '%s' "$dr" | grep -q "agent"; then
     echo "doctor OK - all checks green on this leg"
     sum "**doctor** ✅"; return 0

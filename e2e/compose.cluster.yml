@@ -195,6 +195,50 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     networks: [internal]
 
+  # Per-leg agents that admit by approval (PLUG_ADMISSION=invite), for the
+  # admission cell. One per leg because the first key to connect becomes the
+  # first member: three legs racing for one agent would test the race. Each
+  # keeps its members on a volume of its own, the way the snippet tells a
+  # Compose user to, and the cell restarts it (chaos) to prove they stay.
+  adm-agent-linux:
+    image: softwarity/plug:e2e
+    restart: unless-stopped
+    environment:
+      PLUG_ADMISSION: invite
+    ports:
+      - "2229:22"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - adm-members-linux:/var/lib/plug/members
+    networks: [internal]
+  adm-agent-mac:
+    image: softwarity/plug:e2e
+    restart: unless-stopped
+    environment:
+      PLUG_ADMISSION: invite
+    ports:
+      - "2230:22"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - adm-members-mac:/var/lib/plug/members
+    networks: [internal]
+  adm-agent-win:
+    image: softwarity/plug:e2e
+    restart: unless-stopped
+    environment:
+      PLUG_ADMISSION: invite
+    ports:
+      - "2231:22"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - adm-members-win:/var/lib/plug/members
+    networks: [internal]
+  # What an admitted member reaches through those agents.
+  adm-echo:
+    image: hashicorp/http-echo:1.0.0
+    command: ["-listen=:8150", "-text=admitted"]
+    networks: [internal]
+
   # Resilience takeover targets — one per OS leg, one port per leg (same
   # reasons as tko-*): the resilience cell parks these, RESTARTS THE AGENT
   # mid-session, and asserts the park comes back (boot-gc restores, the
@@ -251,3 +295,6 @@ volumes:
   vol-linux: {}
   vol-mac: {}
   vol-win: {}
+  adm-members-linux: {}
+  adm-members-mac: {}
+  adm-members-win: {}

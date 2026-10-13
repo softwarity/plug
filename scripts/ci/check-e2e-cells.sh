@@ -28,17 +28,30 @@ def fail(msg): bad.append(msg)
 CHAIN = [
     ("setup", False), ("env", False), ("workloadenv", False), ("privdrop", False),
     ("dnshonesty", False), ("dnsrelay", False), ("clientonly", False), ("doctor", False),
-    ("takeover", True), ("orphan", True), ("resilience", True), ("mount", True),
+    ("takeover", True), ("orphan", True), ("mount", True),
     ("matrix", False), ("multicluster", False),
     ("dockerrun", True), ("keymount", True), ("outage", True),
     ("expose", False), ("exposevar", False), ("gateway", False), ("collision", False),
     ("lease", False), ("sameport", False), ("multiport", False),
-    ("compat", True), ("update", True), ("updatetag", True), ("updatenotify", True), ("updatejump", True),
+    ("resilience", True), ("update", True), ("updatetag", True), ("updatenotify", True),
+    ("updatejump", True), ("admission", True),
+    ("compat", True),
 ]
+
+# The cells that run beside the chain, as lib.sh lists them for
+# e2e-background.sh. Their steps join them, in the same order, and only where
+# the background was started (the full legs): a step for one of them on a leg
+# that never started it would run it in the foreground, as if nothing had
+# changed, which is a slower leg and no error.
+m = re.search(r'^bg_cells="([^"]*)"', open("scripts/ci/e2e/lib.sh", encoding="utf-8").read(), re.M)
+BG = m.group(1).split() if m else []
+if not BG:
+    bad.append("scripts/ci/e2e/lib.sh no longer declares bg_cells")
 
 leg = yaml.safe_load(open(".github/workflows/_e2e.yml", encoding="utf-8"))
 steps = leg["jobs"]["leg"]["steps"]
 cells = []
+bg_start = None
 for s in steps:
     run = " ".join(str(s.get("run", "")).split())
     m = re.match(r"bash scripts/ci/e2e-matrix\.sh (\S+) ", run)
@@ -46,6 +59,9 @@ for s in steps:
         cell = m.group(1)
     elif run.startswith("bash scripts/ci/compat-launcher.sh "):
         cell = "compat"
+    elif run.startswith("bash scripts/ci/e2e-background.sh "):
+        bg_start = (len(cells), str(s.get("if", "")), s.get("shell"))
+        continue
     elif "run" in s:
         continue  # the job clock
     else:
@@ -60,6 +76,24 @@ for s in steps:
     if "continue-on-error" in s:
         fail(f"_e2e.yml step {s.get('name')!r} ({cell}): a cell that cannot fail is not a test (continue-on-error)")
     cells.append((cell, gated))
+
+if bg_start is None:
+    fail("_e2e.yml has no step running scripts/ci/e2e-background.sh: the cluster-B cells would each run in the foreground")
+else:
+    at, cond, shell = bg_start
+    if at != 1:
+        fail(f"_e2e.yml starts the background after cell {at}, not right after setup")
+    if cond != "success() && inputs.full" or shell != "bash":
+        fail("_e2e.yml's background step must be `if: success() && inputs.full`, shell bash, like the cells it starts")
+joined = [c for c, _ in cells if c in BG]
+if joined != BG:
+    fail(f"the background cells' steps are {joined}, not lib.sh's bg_cells {BG} in that order")
+for c, gated in cells:
+    if c in BG and not gated:
+        fail(f"{c} runs in the background on the full legs only, so its step must carry the subset gate")
+names = [c for c, _ in cells]
+if BG and "compat" in names and BG[-1] in names and names.index("compat") < names.index(BG[-1]):
+    fail("compat runs another launcher on the machine: its step must come after every background cell's")
 
 if cells != CHAIN:
     fail("_e2e.yml does not run the chain this script expects, in this order:")

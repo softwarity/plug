@@ -133,9 +133,11 @@ jobs:
   # traffic through a real TUN device BY NAME (no agent, no Docker). macOS/Linux
   # run it under sudo and MUST pass. Windows is best-effort (WinTUN driver): the
   # step records the honest PASS/FAIL and never masquerades as a pass it isn't.
+  # Not after `test`: the two answer different questions on different runners,
+  # and the selftest is the longer one (3 minutes on windows-11-arm), so
+  # waiting for the unit tests only pushed the e2e legs, which need both, back.
   selftest:
     name: TUN selftest (${{ matrix.os }})
-    needs: test
     strategy:
       fail-fast: false
       matrix:
@@ -449,7 +451,7 @@ jobs:
   # Nothing is loosened by it: this image only ever carries `sha-<short>`, and
   # the `image` job below still requires test, selftest, platforms, ci-shape and
   # all four e2e jobs before a single name is put on that digest. The e2e legs
-  # keep their own `needs: test`, so a red test still skips them — the whole cost
+  # keep their own `needs: test, selftest`, so a red test still skips them: the whole cost
   # of a failing run is one runner building an image nobody will publish.
   image-build:
     name: Build the standalone image (immutable tag only)
@@ -937,11 +939,11 @@ jobs:
   # and needs the Tailscale/Docker secrets, absent on fork PRs.
   #
   # This job only DISPATCHES the cluster workflows; the e2e legs then wait for
-  # those clusters to come up inside their own setup step. It is gated on the
-  # selftest (see `needs` below for why) and on nothing else: the e2e jobs
-  # carry their own `needs: test`, so nothing is ever exercised against code
-  # whose unit tests are red, and the kill jobs reap whatever was dispatched
-  # (they run on always() as long as this job succeeded, e2e skipped or not).
+  # those clusters to come up inside their own setup step. It waits for
+  # nothing (see below for why): the e2e jobs carry their own `needs: test,
+  # selftest`, so nothing is ever exercised against code whose tests are red,
+  # and the kill jobs reap whatever was dispatched (they run on always() as long
+  # as this job succeeded, e2e skipped or not).
   start-cluster:
     name: start clusters
     # NOT waiting for image-build. This job only DISPATCHES; what needs the image
@@ -950,15 +952,16 @@ jobs:
     # The cluster's pull waits for it while the runner boots, checks out and
     # joins the tailnet. Making the dispatch wait for the build serialised two
     # things that have no reason to be in sequence.
-    # Gated on the selftest, which is 3 minutes and decides the run: a red
-    # selftest means the image is never published, and until now the ten e2e
-    # legs ran their 20 minutes on six clusters anyway, for a run already lost.
-    # fail-fast stays off INSIDE the matrices, so one OS failing still shows
-    # what the others do; this only stops dispatching clusters for a run the
-    # gate has already refused. The kill jobs are conditioned on this job's
-    # result and are skipped with it: nothing dispatched, nothing to kill.
-    needs: [selftest]
-    if: github.event_name != 'pull_request' && needs.selftest.result == 'success'
+    #
+    # Nor for the selftest, for the same reason: a cluster takes three to four
+    # minutes to stand up, the tests and the selftest about as long, and the
+    # legs used to wait for one and then the other (87s for kind to be up, after
+    # the selftest had already taken its three minutes). The LEGS are what the
+    # selftest gates, which is what the gate was for: a red selftest means the
+    # image is never published, and the ten legs no longer run their 20
+    # minutes for a run already lost. The clusters it costs are cancelled by
+    # the kill jobs as soon as the legs are skipped, minutes into their boot.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       actions: write # dispatch the cluster runs
@@ -1067,7 +1070,9 @@ jobs:
   # job cannot `needs:` a sibling that is still running; it exits on its own once
   # every e2e leg it has seen running has finished, so a green run is not held up.
   abort-on-fail:
-    needs: [start-cluster]
+    # The selftest too, like the legs it watches: started with the clusters and
+    # no leg ever coming, it would poll for its whole timeout.
+    needs: [start-cluster, selftest]
     runs-on: ubuntu-latest
     permissions:
       actions: write # cancel the run when a leg fails
@@ -1107,15 +1112,15 @@ jobs:
   # that use its clusters, and `needs` cannot name a subset of a matrix.
   #
   # Off PRs: start-cluster is, so these are skipped with it (the secrets are
-  # absent on a fork PR, and the run is heavy). Each carries `needs: test`, so
-  # nothing is ever exercised against code whose unit tests are red.
+  # absent on a fork PR, and the run is heavy). Each carries `needs: test,
+  # selftest`, so nothing is ever exercised against code whose tests are red.
   #
   # The job names the other readers rely on: abort-on-fail selects the legs by
   # `^e2e-` on the job name (a called workflow's jobs are named
   # "<caller> / <job>", so the key here is the prefix); image and the kill
   # jobs `needs` these keys; scripts/ci/check-e2e-cells.sh asserts all of it.
   e2e-compose:
-    needs: [test, start-cluster, build-clients]
+    needs: [test, selftest, start-cluster, build-clients]
     permissions:
       contents: read
     uses: ./.github/workflows/_e2e.yml
@@ -1133,7 +1138,7 @@ jobs:
   # compose's 25 + the extra wait for the kind rollout; a hung cell must still
   # not run the cluster for hours.
   e2e-k8s:
-    needs: [test, start-cluster, build-clients]
+    needs: [test, selftest, start-cluster, build-clients]
     permissions:
       contents: read
     uses: ./.github/workflows/_e2e.yml
@@ -1149,7 +1154,7 @@ jobs:
       TAILSCALE_CLIENT_ID: ${{ secrets.TAILSCALE_CLIENT_ID }}
       TAILSCALE_CLIENT_SECRET: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
   e2e-swarm:
-    needs: [test, start-cluster, build-clients]
+    needs: [test, selftest, start-cluster, build-clients]
     permissions:
       contents: read
     uses: ./.github/workflows/_e2e.yml
@@ -1200,7 +1205,7 @@ jobs:
         run: scripts/ci/okd.sh "${{ needs.image-build.outputs.image }}"
 
   e2e-arm64:
-    needs: [test, start-cluster, build-clients]
+    needs: [test, selftest, start-cluster, build-clients]
     permissions:
       contents: read
     uses: ./.github/workflows/_e2e.yml

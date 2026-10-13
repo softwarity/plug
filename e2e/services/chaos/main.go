@@ -79,11 +79,15 @@ func k8sNamespace() string {
 // sessions. They keep the label `app: plug` (their own self-update looks for
 // it, and the update cells drive them), so they cannot be told apart by label:
 // the fixture naming is the mapping, and it is a fixture, so that is fair —
-// res-agent-<leg> is deployed in plug-res-<leg>. Anything else is looked for
-// here, which is what the main agent needs.
+// res-agent-<leg> is deployed in plug-res-<leg>, adm-agent-<leg> in
+// plug-adm-<leg>. Anything else is looked for here, which is what the main
+// agent needs.
 func agentNamespace(svc string) string {
 	if leg, ok := strings.CutPrefix(svc, "res-agent-"); ok {
 		return "plug-res-" + leg
+	}
+	if leg, ok := strings.CutPrefix(svc, "adm-agent-"); ok {
+		return "plug-adm-" + leg
 	}
 	return k8sNamespace()
 }

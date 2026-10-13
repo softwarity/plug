@@ -342,7 +342,9 @@ func listVersions() {
 // key when its container is recreated. That is detection rather than prevention,
 // and it is what an agent whose identity does not survive a redeploy can carry.
 // Blocking would fail every session after a routine redeploy.
-func dialGetUser(cfg config) (*ssh.Client, error) {
+func dialGetUser(cfg config) (*ssh.Client, error) { return dialGetUserSeen(cfg, nil) }
+
+func dialGetUserSeen(cfg config, seen *string) (*ssh.Client, error) {
 	addr := net.JoinHostPort(cfg.host, cfg.port)
 	pin := knownHostsFor(cfg.host)
 	if pin != "" {
@@ -365,9 +367,17 @@ func dialGetUser(cfg config) (*ssh.Client, error) {
 	// does - it is how the agent's version is asked - so it hung before plug had
 	// printed a single line, and what the person saw was a command that never
 	// started. See DialSSH for the whole story.
+	check := tunnel.HostKeyCallback(pin, addr, info)
+	if seen != nil {
+		inner := check
+		check = func(host string, remote net.Addr, key ssh.PublicKey) error {
+			*seen = ssh.FingerprintSHA256(key)
+			return inner(host, remote, key)
+		}
+	}
 	return tunnel.DialSSH(addr, &ssh.ClientConfig{
 		User:            getUser,
-		HostKeyCallback: tunnel.HostKeyCallback(pin, addr, info),
+		HostKeyCallback: check,
 	}, agentDialTimeout)
 }
 
@@ -413,12 +423,26 @@ func bounded(c io.Closer, d time.Duration, what string, f func() error) error {
 	}
 }
 
-func agentVersion(cfg config) (string, error) { return getExec(cfg, "version") }
+func agentVersion(cfg config) (string, error) {
+	v, _, err := agentVersionAndKey(cfg)
+	return v, err
+}
+
+// agentVersionAndKey is agentVersion with the fingerprint of the host key the
+// agent presented, which says which INSTANCE answered: an agent makes a key of
+// its own each time it starts (hence the "re-pinned" notice after a restart).
+var agentVersionAndKey = func(cfg config) (version, hostKey string, err error) {
+	version, err = getExecSeen(cfg, "version", &hostKey)
+	return version, hostKey, err
+}
 
 // getExec runs one verb on the agent's download channel and returns its output.
 // The `get` user has a ForceCommand, so the verb is all it will ever run.
-func getExec(cfg config, verb string) (string, error) {
-	client, err := dialGetUser(cfg)
+func getExec(cfg config, verb string) (string, error) { return getExecSeen(cfg, verb, nil) }
+
+// getExecSeen is getExec, recording the agent's host key fingerprint in seen.
+func getExecSeen(cfg config, verb string, seen *string) (string, error) {
+	client, err := dialGetUserSeen(cfg, seen)
 	if err != nil {
 		return "", err
 	}

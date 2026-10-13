@@ -60,7 +60,7 @@ do_updatenotify() {
   # about the background check, not about being reachable. (-s or -c is
   # mandatory since 2.0: plug refuses to guess what a process is to the cluster.)
   "$PLUG" --host "$ip_b" --port "$oldport" -c \
-    "$root/echo-local$ext" -addr 127.0.0.1:18141 -text "notify-$leg" -ttl 40s >/tmp/notify1.out 2>&1 || true
+    "$root/echo-local$ext" -addr 127.0.0.1:18181 -text "notify-$leg" -ttl 40s >/tmp/notify1.out 2>&1 || true
 
   # Session 1 records its verdict in ~/.plug/update-<hash of host:port>; session 2
   # does nothing but read it. Waiting for that file to actually carry one is the
@@ -82,7 +82,7 @@ do_updatenotify() {
   # Session 2 - the launcher reads what session 1 recorded, on its way past.
   local out2 rc2=0
   out2="$("$PLUG" --host "$ip_b" --port "$oldport" -c \
-          "$root/echo-local$ext" -addr 127.0.0.1:18142 -text "notify2-$leg" -ttl 3s </dev/null 2>&1)" || rc2=$?
+          "$root/echo-local$ext" -addr 127.0.0.1:18182 -text "notify2-$leg" -ttl 3s </dev/null 2>&1)" || rc2=$?
   printf '%s\n' "$out2" | sed 's/^/    /'
 
   # An invocation plug REFUSES prints its usage and exits - which reads as "said

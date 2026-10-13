@@ -410,7 +410,7 @@ func TestBothChannelsGuardAndHandBackThePinFile(t *testing.T) {
 	// with an index out of range instead of saying the thing it exists to say.
 	// Its two siblings guard their extraction; this one relied on that panic.
 	for _, want := range []struct{ file, fn string }{
-		{"coredl.go", "dialGetUser"},
+		{"coredl.go", "dialGetUserSeen"}, // dialGetUser is it, with no observer
 		{"socks_run.go", "dialTunnel"},
 	} {
 		bodies := funcBodies(t, want.file)

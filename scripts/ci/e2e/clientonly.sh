@@ -39,7 +39,7 @@ do_clientonly() {
     # doctor, NOT inside a plug session: it is read-only and needs no datapath,
     # and nesting it in the very session under suspicion would tell us about the
     # wrong thing (and can take longer than the answer is worth).
-    plug_bounded 40 doctor 2>&1 \
+    plug_bounded 40 doctor -p e2e-a 2>&1 \
       | grep -iE "resolver|daemon|datapath|agent|profile" | head -8 | sed 's/^/    /'
     sum "**client-only (-c)** ❌ - \`${co:-nothing}\` · $(tr -d '\r' < /tmp/client-only.err | tail -1)"; return 1
   fi

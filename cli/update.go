@@ -57,7 +57,7 @@ func cmdUpdate(args []string) {
 	}
 	cfg, label := updateTarget(profile, host, port)
 
-	before, err := agentVersion(cfg)
+	before, beforeKey, err := agentVersionAndKey(cfg)
 	if err != nil {
 		fatal("cannot reach the agent at %s:%s: %v", cfg.host, cfg.port, err)
 	}
@@ -92,10 +92,15 @@ func cmdUpdate(args []string) {
 	switch updateWord(verdict) {
 	case "updating":
 		info("agent: %s", verdict)
-		after = waitNewVersion(cfg, before)
+		var restarted bool
+		after, restarted = waitNewVersion(cfg, before, beforeKey)
 		switch {
 		case after != before:
 			info("agent updated: v%s → v%s", shortVersion(before), shortVersion(after))
+		case restarted:
+			// A new instance answered with the version the old one had: the
+			// rollout landed, on the build the tag already named.
+			info("agent restarted on the same build, v%s: its tag names what it already ran", shortVersion(after))
 		case want != "":
 			// Switching channels does not have to change the version — `latest`
 			// and the newest release routinely name the same build. The image
@@ -332,29 +337,36 @@ func askSelfUpdate(cfg config, want string) string {
 // agentRollWait bounds the wait for a redeployed agent to answer with its new
 // version, polled every agentRollPoll: an image pull plus a rolling restart on
 // a slow node is most of a minute, and the poll is one dial each time.
-const (
-	agentRollWait = 90 * time.Second
-	agentRollPoll = 3 * time.Second
-)
+const agentRollWait = 90 * time.Second
+
+var agentRollPoll = 3 * time.Second // a var only so a test does not sit through it
 
 // waitNewVersion polls the agent version while its redeploy rolls, and returns
 // the first version that differs from before (early exit), or before after the
 // timeout — the caller words that case honestly (already newest, or a pinned
 // tag: the poll cannot tell those apart, only the registry knows).
-func waitNewVersion(cfg config, before string) string {
+//
+// restarted reports the other early exit: a NEW instance (a host key other
+// than beforeKey) answering with the same version. The rollout has landed and
+// the tag named the build already running; waiting out the 90s for a version
+// that cannot come only ended in a warning that the rollout was stuck.
+func waitNewVersion(cfg config, before, beforeKey string) (after string, restarted bool) {
 	info("waiting for the new agent to come up…")
 	deadline := time.Now().Add(agentRollWait)
 	for time.Now().Before(deadline) {
 		time.Sleep(agentRollPoll)
-		v, err := agentVersion(cfg)
+		v, key, err := agentVersionAndKey(cfg)
 		if err != nil {
 			continue // mid-roll — keep waiting
 		}
 		if v != before {
-			return v
+			return v, false
+		}
+		if beforeKey != "" && key != "" && key != beforeKey {
+			return v, true
 		}
 	}
-	return before
+	return before, false
 }
 
 // updateLauncher refreshes THIS binary to the agent's exact build — in EVERY

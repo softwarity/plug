@@ -20,10 +20,17 @@ name: _e2e
 # green), the leg concludes red within seconds and abort-on-fail cancels the
 # whole run, the nine other legs included. What a red run shows is the failing
 # leg's red cell and whatever the others had reached by then. The cells most
-# likely to trip on a timing (takeover, orphan, resilience) come right after
-# the env cells, before the 8-minute protocol matrix, so a flake costs minutes
-# rather than a run. The compat step closes the set: the last published
-# launcher must still drive THIS branch's core (the inter-version channel).
+# likely to trip on a timing (takeover, orphan) come right after the env
+# cells, before the protocol matrix, so a flake costs minutes rather than a run.
+#
+# The cluster-B cells (resilience, the update cells, admission) run BESIDE the
+# chain, started right after setup (e2e-background.sh): each touches only what
+# cluster B keeps for this leg, and together they were a third of a leg spent
+# waiting on agents to restart. Their steps keep their place in the list and
+# show each one's output and verdict when the chain reaches them; a red one
+# stops the chain at its next cell all the same. The compat step closes the
+# set, after them, since it runs another launcher on this machine: the last
+# published launcher must still drive THIS branch's core.
 
 on:
   workflow_call:
@@ -63,7 +70,7 @@ on:
         description: >-
           false runs the subset the arm64 client can: the cells bound to
           services the CLUSTER declares per leg (flaky-<leg>, tko-<leg>,
-          res-*, prev-agent-<leg>) exist for linux/mac/win only, and the
+          res-*, prev-agent-<leg>, adm-agent-<leg>) exist for linux/mac/win only, and the
           container cells need the amd64 sidecar image.
         type: boolean
         required: false
@@ -122,6 +129,14 @@ jobs:
       - name: "Setup: install plug from the cluster + build clients"
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh setup "$A" "$B" 2222
+      # The cluster-B cells (bg_cells in scripts/ci/e2e/lib.sh, which says why
+      # they can) start here and run beside the chain; each keeps its step
+      # below, which shows its output and its verdict. Not on the arm64 subset,
+      # which runs none of them.
+      - name: "Start the cluster-B cells beside the chain (each shows below, in its own step)"
+        if: success() && inputs.full
+        shell: bash
+        run: bash scripts/ci/e2e-background.sh "$A" "$B" 2222
       - name: Env passthrough
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh env "$A" "$B" 2222
@@ -151,10 +166,6 @@ jobs:
         if: success() && inputs.full
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh orphan "$A" "$B" 2222
-      - name: "Resilience: agent restarted mid-session (self-heal, boot-gc, re-park)"
-        if: success() && inputs.full
-        shell: bash
-        run: bash scripts/ci/e2e-matrix.sh resilience "$A" "$B" 2222
       - name: "Live mount: the workload's volumes, automatic and explicit, read and written"
         if: success() && inputs.full
         shell: bash
@@ -203,10 +214,10 @@ jobs:
       - name: "Multi-port: one name, three cluster ports"
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh multiport "$A" "$B" 2222
-      - name: "Launcher compat: latest published launcher, this branch's core"
+      - name: "Resilience: agent restarted mid-session (self-heal, boot-gc, re-park)"
         if: success() && inputs.full
         shell: bash
-        run: bash scripts/ci/compat-launcher.sh "$A" 2222
+        run: bash scripts/ci/e2e-matrix.sh resilience "$A" "$B" 2222
       - name: "Update: plug update verb + launcher path (per-leg agent)"
         if: success() && inputs.full
         shell: bash
@@ -223,3 +234,11 @@ jobs:
         if: success() && inputs.full
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh updatejump "$A" "$B" 2222
+      - name: "Admission by approval: first member, request, accept, restart, revoke"
+        if: success() && inputs.full
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh admission "$A" "$B" 2222
+      - name: "Launcher compat: latest published launcher, this branch's core"
+        if: success() && inputs.full
+        shell: bash
+        run: bash scripts/ci/compat-launcher.sh "$A" 2222

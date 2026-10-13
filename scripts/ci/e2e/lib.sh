@@ -15,6 +15,16 @@ clients="$root/e2e/clients"
 cd "$root" || exit 1
 envfile="${RUNNER_TEMP:-/tmp}/plug-e2e-env" # shared state, survives across steps
 
+# The cells that run BESIDE the rest of the leg, in this order, started right
+# after setup by scripts/ci/e2e-background.sh. Each touches only what cluster B
+# keeps for this leg alone (res-agent-<os>, prev-agent-<os>, adm-agent-<os> and
+# the service res-tko-<os>), nothing another cell reads, which is what lets
+# them overlap: together they were a third of a leg, mostly spent waiting on an
+# agent to restart or roll. Their steps in _e2e.yml show each one's output and
+# verdict when the chain reaches them (see the join in e2e-matrix.sh).
+bg_cells="resilience update updatetag updatenotify updatejump admission"
+bgdir="${RUNNER_TEMP:-/tmp}/plug-e2e-bg"
+
 # All four languages, on every family. The override exists for a bench run, not
 # for CI - and there is a reason worth keeping written down.
 #
@@ -50,7 +60,7 @@ esac
 # Two names for the machine this runs on, and they are not the same thing.
 #
 #   os   which fixtures the CLUSTER declares for it: flaky-<os>, tko-<os>,
-#        res-tko-<os>, res-agent-<os>, prev-agent-<os>, vol-<os>, and the
+#        res-tko-<os>, res-agent-<os>, prev-agent-<os>, adm-agent-<os>, vol-<os>, and the
 #        cluster ports those listen on. linux, mac or win. The arm64 leg is
 #        Linux here: it shares the Linux fixtures (the one it takes over, tko,
 #        has an -arm twin so two legs never park the same service).
@@ -87,7 +97,7 @@ case "$os" in
     flaky_name=flaky-mac      tko_name=tko-mac    tko_port=8086
     vol_name=vol-mac          vol_port=8121
     res_name=res-tko-mac      res_port=8116       res_agent=res-agent-mac   res_sshport=2224
-    prev_port=2227
+    prev_port=2227            adm_agent=adm-agent-mac   adm_sshport=2230
     expose_port=18082         exposevar_port=18102  gw_cport=18092        col_port=18085
     lease_port=18131          lease_local=18134
     sp_pa=18123 sp_pb=18124   mp_p1=18143 mp_p2=18144 mp_p3=18145 ;;
@@ -95,7 +105,7 @@ case "$os" in
     flaky_name=flaky-win      tko_name=tko-win    tko_port=8087
     vol_name=vol-win          vol_port=8122
     res_name=res-tko-win      res_port=8117       res_agent=res-agent-win   res_sshport=2225
-    prev_port=2228
+    prev_port=2228            adm_agent=adm-agent-win   adm_sshport=2231
     expose_port=18083         exposevar_port=18103  gw_cport=18093        col_port=18086
     lease_port=18132          lease_local=18135
     sp_pa=18125 sp_pb=18126   mp_p1=18146 mp_p2=18147 mp_p3=18148 ;;
@@ -103,7 +113,7 @@ case "$os" in
     flaky_name=flaky-linux    tko_name=tko-linux  tko_port=8085
     vol_name=vol-linux        vol_port=8120
     res_name=res-tko-linux    res_port=8115       res_agent=res-agent-linux res_sshport=2223
-    prev_port=2226
+    prev_port=2226            adm_agent=adm-agent-linux adm_sshport=2229
     expose_port=18081         exposevar_port=18101  gw_cport=18091        col_port=18084
     lease_port=18130          lease_local=18133
     sp_pa=18121 sp_pb=18122   mp_p1=18140 mp_p2=18141 mp_p3=18142 ;;
@@ -126,6 +136,10 @@ case "$leg" in
   *)        sport=18071 tko_fwd=18099 ;;
 esac
 serve="-s run-${leg}:${sport}:9"   # hyphen only - an underscore is not a valid DNS label
+# The background cells name themselves apart: they reach cluster B's main agent
+# (the chaos service is behind it) while multicluster, in the foreground, holds
+# run-<leg> there, and one name claimed twice is a collision.
+[ -n "${PLUG_E2E_BACKGROUND:-}" ] && serve="-s run-${leg}-b:$((sport + 100)):9"
 # A free block of cluster ports, four per leg: the cells use up to 18148, and
 # the legs are spaced so two of them never overlap (linux 18150, mac 18154,
 # win 18158, arm 18162).
@@ -241,6 +255,12 @@ plug_bounded() { pb_s="$1"; shift; perl -e 'alarm shift @ARGV; exec @ARGV or exi
 prober_fetch() {
   plug_to "${2:-$ip}" curl -s --max-time 10 "http://prober:8097/fetch?url=$1" 2>/dev/null | tr -d '\r' | tail -1
 }
+# stop_file <tag> - a fresh path for echo-local's -stop-file: the cell creates
+# it to end its session the natural way (the command exits, plug tears down and
+# restores) once it has asserted what it was waiting for, instead of sitting out
+# a ttl sized for the slowest runner. Under RUNNER_TEMP, a path the native
+# echo-local reads on Windows as well as bash writes it.
+stop_file() { sf="${RUNNER_TEMP:-/tmp}/plug-e2e-stop-$1-$leg"; rm -f "$sf"; echo "$sf"; }
 cmd_go()     { echo "$clients/go/eclient$ext"; }
 cmd_node()   { echo "node $clients/node/client.js"; }
 cmd_python() { echo "$py $clients/python/client.py"; }

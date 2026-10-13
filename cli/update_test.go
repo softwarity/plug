@@ -1,9 +1,11 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestUpdateWord(t *testing.T) {
@@ -92,5 +94,40 @@ func TestUpdateWordOnAgentReplies(t *testing.T) {
 		if got := updateWord(c.reply); got != c.want {
 			t.Errorf("updateWord(%q) = %q, want %q", c.reply, got, c.want)
 		}
+	}
+}
+
+// A rollout that lands on the build already running ends the wait as soon as
+// the new instance answers, not 90s later with a warning that it is stuck. The
+// instance is told by its host key, which an agent makes each time it starts.
+func TestARolloutOnTheSameBuildEndsWhenTheNewAgentAnswers(t *testing.T) {
+	saved, savedPoll := agentVersionAndKey, agentRollPoll
+	defer func() { agentVersionAndKey, agentRollPoll = saved, savedPoll }()
+	agentRollPoll = time.Millisecond
+
+	answers := []string{"old", "", "old", "new"} // the old pod, mid-roll, the old pod again, the new one
+	calls := 0
+	agentVersionAndKey = func(config) (string, string, error) {
+		k := answers[min(calls, len(answers)-1)]
+		calls++
+		if k == "" {
+			return "", "", errors.New("connection refused")
+		}
+		return "2.25.1", "SHA256:" + k, nil
+	}
+	after, restarted := waitNewVersion(config{}, "2.25.1", "SHA256:old")
+	if after != "2.25.1" || !restarted || calls != 4 {
+		t.Errorf("got %q restarted=%v after %d polls; want the same version, restarted, at the 4th poll", after, restarted, calls)
+	}
+
+	// A new version still wins at once, and an unknown first key never ends it early.
+	calls = 0
+	answers = []string{"old", "new"}
+	agentVersionAndKey = func(config) (string, string, error) {
+		calls++
+		return "2.26.0", "SHA256:" + answers[min(calls-1, 1)], nil
+	}
+	if after, restarted := waitNewVersion(config{}, "2.25.1", ""); after != "2.26.0" || restarted {
+		t.Errorf("a new version read as %q restarted=%v", after, restarted)
 	}
 }

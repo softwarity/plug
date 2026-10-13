@@ -114,7 +114,8 @@ yaml_docs_of_kind() {
     { doc = doc $0 "\n" }
     END { flush() }' "$2"
 }
-leg_namespaces="plug-prev-linux plug-prev-mac plug-prev-win plug-res-linux plug-res-mac plug-res-win"
+adm_namespaces="plug-adm-linux plug-adm-mac plug-adm-win"
+leg_namespaces="plug-prev-linux plug-prev-mac plug-prev-win plug-res-linux plug-res-mac plug-res-win $adm_namespaces"
 
 echo "=== the agent's RBAC, from the published manifest, into every per-leg namespace ==="
 rbac="$(yaml_docs_of_kind 'Role|RoleBinding' "$root/deploy/plug-k8s.yaml")"
@@ -123,7 +124,7 @@ rbac="$(yaml_docs_of_kind 'Role|RoleBinding' "$root/deploy/plug-k8s.yaml")"
 # would fail far from here (or, worse, a renamed rule would quietly bring the
 # drift back). Each rule the copies had lost is required by name.
 rbac_missing=""
-for needle in 'kind: Role' 'kind: RoleBinding' '"services"' '"endpoints"' '"endpointslices"' '"deployments"' '"pods"' '"pods/exec"' '"persistentvolumeclaims"'; do
+for needle in 'kind: Role' 'kind: RoleBinding' '"services"' '"endpoints"' '"endpointslices"' '"deployments"' '"pods"' '"pods/exec"' '"persistentvolumeclaims"' '"secrets"'; do
   grep -qF -- "$needle" <<<"$rbac" || rbac_missing="$rbac_missing${rbac_missing:+, }$needle"
 done
 if [ -n "$rbac_missing" ]; then
@@ -134,9 +135,22 @@ fi
 # each, then the fixtures themselves: the grant is in place before any agent
 # pod boots, so what each one logs about its rights is what a user would see.
 { yaml_docs_of_kind Namespace "$root/e2e/k8s.prev-agents.yaml"
-  yaml_docs_of_kind Namespace "$root/e2e/k8s.res-agents.yaml"; } | kubectl apply -f -
+  yaml_docs_of_kind Namespace "$root/e2e/k8s.res-agents.yaml"
+  yaml_docs_of_kind Namespace "$root/e2e/k8s.adm-agents.yaml"; } | kubectl apply -f -
 for ns in $leg_namespaces; do
   printf '%s\n' "$rbac" | kubectl -n "$ns" apply -f -
+done
+# The agents that admit by approval also take the manifest's empty plug-members
+# Secret, where they keep their members: the published file, not a copy, is
+# what has to be enough. Asserted like the RBAC: an extraction that found no
+# Secret would leave them refusing to start, far from the reason.
+secret="$(yaml_docs_of_kind Secret "$root/deploy/plug-k8s.yaml")"
+grep -qF 'name: plug-members' <<<"$secret" || {
+  echo "::error::deploy/plug-k8s.yaml has no plug-members Secret any more (or the extraction in scripts/ci/k8s-serve.sh no longer finds it): the agents that admit by approval would not start." >&2
+  exit 1
+}
+for ns in $adm_namespaces; do
+  printf '%s\n' "$secret" | kubectl -n "$ns" apply -f -
 done
 
 # The update cells start from a PUBLISHED release, so this one is NOT rewritten
@@ -148,6 +162,9 @@ envsubst '$PREV_RELEASE' < "$root/e2e/k8s.prev-agents.yaml" | kubectl apply -f -
 
 echo "=== deploy the per-leg crash-test agents + chaos (resilience, lease) ==="
 kubectl apply -f "$root/e2e/k8s.res-agents.yaml"
+
+echo "=== deploy the per-leg agents that admit by approval (admission) ==="
+kubectl apply -f "$root/e2e/k8s.adm-agents.yaml"
 
 echo "=== deploy the services ==="
 kubectl create configmap rabbitmq-config \
@@ -173,6 +190,9 @@ done
 # The per-leg agents live in their own namespaces, which the loop above does not see.
 for ns in $leg_namespaces; do
   kubectl -n "$ns" rollout status --timeout=180s deploy/plug || failed="$failed $ns/plug"
+done
+for ns in $adm_namespaces; do
+  kubectl -n "$ns" rollout status --timeout=180s deploy/adm-echo || failed="$failed $ns/adm-echo"
 done
 kubectl get deploy,svc -o wide
 if [ -n "$failed" ]; then

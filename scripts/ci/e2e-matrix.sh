@@ -41,6 +41,51 @@ if [ "$phase" != setup ]; then
   { [ -n "${PLUG:-}" ] && [ -x "$PLUG" ]; } || { echo "plug not usable ('${PLUG:-}') - did setup fail?" >&2; exit 1; }
 fi
 
+# A cell that ran BESIDE the chain (e2e-background.sh) is not run again by its
+# step: the step shows its output as it grows, then ends with its verdict, its
+# summary lines carried into the step's own. Bounded by the job, like
+# everything here: a background that died without a verdict says so in time.
+if [ -z "${PLUG_E2E_BACKGROUND:-}" ] && [ -f "$bgdir/$phase.queued" ]; then
+  echo "=== $phase ran beside the rest of the leg (e2e-background.sh); its output ==="
+  bg_until=$(( $(date +%s) + 1800 ))
+  if [ -n "${PLUG_JOB_T0:-}" ] && [ -n "${PLUG_JOB_MINUTES:-}" ]; then
+    bg_until=$(( PLUG_JOB_T0 + PLUG_JOB_MINUTES * 60 - 60 ))
+  fi
+  bg_off=0
+  bg_show() {
+    [ -f "$bgdir/$phase.log" ] || return 0
+    local size; size="$(wc -c < "$bgdir/$phase.log" | tr -d ' ')"
+    if [ "$size" -gt "$bg_off" ]; then
+      tail -c +$((bg_off + 1)) "$bgdir/$phase.log" | head -c $((size - bg_off))
+      bg_off="$size"
+    fi
+  }
+  while [ ! -f "$bgdir/$phase.rc" ]; do
+    bg_show
+    if [ "$(date +%s)" -ge "$bg_until" ]; then
+      echo "::error::$phase, running beside the chain, gave no verdict before the job's end: it is stuck, or its runner process died"
+      exit 1
+    fi
+    sleep 2
+  done
+  bg_show
+  [ -f "$bgdir/$phase.summary" ] && cat "$bgdir/$phase.summary" >> "${GITHUB_STEP_SUMMARY:-/dev/stderr}"
+  rc="$(cat "$bgdir/$phase.rc")"
+  # The last of them closes the leg's summary (see skip_cell).
+  [ "$phase" = "${bg_cells##* }" ] && leg_tally
+  exit "${rc:-1}"
+fi
+
+# And a red one beside the chain stops the chain at its next cell, with that
+# cell's output here: the step it belongs to is after this one and will not run.
+if [ -z "${PLUG_E2E_BACKGROUND:-}" ] && [ "$phase" != setup ] && [ -s "$bgdir/failed" ]; then
+  bg_red="$(cat "$bgdir/failed")"
+  echo "::error::$bg_red, running beside the chain, failed; $phase was not run. $bg_red's output:"
+  cat "$bgdir/$bg_red.log" 2>/dev/null
+  [ -f "$bgdir/$bg_red.summary" ] && cat "$bgdir/$bg_red.summary" >> "${GITHUB_STEP_SUMMARY:-/dev/stderr}"
+  exit 1
+fi
+
 # A cell that hangs must say so, not vanish.
 #
 # Everything INSIDE a cell is bounded already: plug sessions carry an alarm,
@@ -137,12 +182,11 @@ fi
 
 # shellcheck disable=SC1090 # the cell named on the command line
 . "$cell"
-case "$phase" in
-  # The last cell of the chain closes the leg's summary with the count of what
-  # was skipped (see skip_cell), whatever its own verdict.
-  updatejump) do_updatejump; rc=$?; leg_tally ;;
-  *)          "do_$phase"; rc=$? ;;
-esac
+"do_$phase"; rc=$?
+# The last of the cells closes the leg's summary with the count of what was
+# skipped (see skip_cell), whatever its own verdict: here when it ran in the
+# foreground (a bench), at its join above when it ran beside the chain.
+[ "$phase" = "${bg_cells##* }" ] && [ -z "${PLUG_E2E_BACKGROUND:-}" ] && leg_tally
 # A red cell is checked for the symptoms lib.sh knows, whatever it asserted.
 [ "$rc" = 0 ] || name_held_check
 exit "$rc"

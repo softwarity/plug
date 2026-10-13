@@ -6,6 +6,8 @@
 #   <tailnet-ip>:18090 → the gateway       (NodePort 31890, e2e/k8s.cluster.yaml)
 #   <tailnet-ip>:222[678] → the per-leg previous-release agents the update cells retarget
 #                          (NodePorts 3222[678], e2e/k8s.prev-agents.yaml)
+#   <tailnet-ip>:2229-2231 → the per-leg agents that admit by approval
+#                          (NodePorts 32229-32231, e2e/k8s.adm-agents.yaml)
 # Everything else (ClusterIP Services) stays cluster-internal — only the agent
 # can reach it, exactly like a real cluster.
 kind: Cluster
@@ -29,3 +31,9 @@ nodes:
         hostPort: 2227
       - containerPort: 32228
         hostPort: 2228
+      - containerPort: 32229
+        hostPort: 2229
+      - containerPort: 32230
+        hostPort: 2230
+      - containerPort: 32231
+        hostPort: 2231

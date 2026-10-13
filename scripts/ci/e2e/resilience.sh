@@ -42,8 +42,11 @@ do_resilience() {
   # of them landed after the restore and read "deployed", which looks exactly
   # like a failed re-park and is not one. Every read is bounded by the
   # session's own clock (res_deadline) for the same reason.
-  PLUG_KEEPALIVE_SECS=5 "$PLUG" --host "$ip_b" --port "$rsshport" -s "$rname:$rport:18123" -s "$vipname:9099:18123" \
-    "$root/echo-local$ext" -addr 127.0.0.1:18123 -text "local-res-$leg" -ttl 180s >/tmp/resilience.out 2>&1 &
+  # -stop-file ends it as soon as the post-crash reads are in: the 180s are the
+  # bound for the slowest runner, not a wait every leg has to sit out.
+  local res_stop; res_stop="$(stop_file resilience)"
+  PLUG_KEEPALIVE_SECS=5 "$PLUG" --host "$ip_b" --port "$rsshport" -s "$rname:$rport:18180" -s "$vipname:9099:18180" \
+    "$root/echo-local$ext" -addr 127.0.0.1:18180 -text "local-res-$leg" -ttl 180s -stop-file "$res_stop" >/tmp/resilience.out 2>&1 &
   local res_pid=$! during="" after_crash="" after="" t0 res_deadline
   t0=$(date +%s); res_deadline=$((t0 + 160)); aa_clock=$t0
   sleep 8
@@ -216,6 +219,8 @@ do_resilience() {
     esac
   fi
 
+  # Everything the live session had to show is read: end it now.
+  : > "$res_stop"
   # Bounded like the others: the -ttl is 180s, so 220 leaves room for a slow
   # teardown without ever becoming an unbounded wait. A session that ignores
   # its own ttl used to hold the leg until the job timeout, twenty-five

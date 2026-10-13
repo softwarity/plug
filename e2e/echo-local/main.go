@@ -25,9 +25,24 @@ func main() {
 	// TerminateProcess that never runs the teardown — the takeover cell needs the
 	// restore path to actually execute on all three OSes.
 	ttl := flag.Duration("ttl", 0, "exit 0 after this long (0 = run forever)")
+	// -stop-file is the same natural end, on the cell's word instead of a clock:
+	// exit 0 as soon as the file exists. A cell that has asserted everything it
+	// waited for no longer sits out the rest of a ttl sized for the slowest
+	// runner; the ttl stays, as the bound when the cell never says.
+	stop := flag.String("stop-file", "", "exit 0 as soon as this file exists")
 	flag.Parse()
 	if *ttl > 0 {
 		time.AfterFunc(*ttl, func() { os.Exit(0) })
+	}
+	if *stop != "" {
+		go func() {
+			for {
+				if _, err := os.Stat(*stop); err == nil {
+					os.Exit(0)
+				}
+				time.Sleep(250 * time.Millisecond)
+			}
+		}()
 	}
 	addrs := strings.Split(*addr, ",")
 	texts := strings.Split(*text, ",")

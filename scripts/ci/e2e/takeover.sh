@@ -29,8 +29,9 @@ do_takeover() {
   # exits → plug tears down and restores) - a `kill` on Windows/Git Bash is a
   # TerminateProcess that would skip the teardown, and the restore is exactly
   # what this cell asserts.
+  local tko_stop; tko_stop="$(stop_file takeover)"
   "$PLUG" --host "$ip" --port "$port" -s "$tname:$tport:18096" \
-    "$root/echo-local$ext" -addr 127.0.0.1:18096 -text "local-$tname" -ttl 75s >/tmp/takeover.out 2>&1 &
+    "$root/echo-local$ext" -addr 127.0.0.1:18096 -text "local-$tname" -ttl 75s -stop-file "$tko_stop" >/tmp/takeover.out 2>&1 &
   local tko_pid=$! during="" t0=$(date +%s)
   # 75s, not 36: the ten reads below are ten `plug curl` sessions of a second
   # or two each, after the wait for the first local answer. At 36s the session
@@ -49,7 +50,10 @@ do_takeover() {
     assert_all probe "local-$tname" 10 "deployed- local-" $((t0 + 60)) 5 || during="$aa_why"
     seq_during="$aa_seq"
   fi
-  wait_bg "$tko_pid" "the takeover session (ends on its own -ttl)" 120
+  # The reads are in: end the session the natural way (the ttl is the bound
+  # for a runner where they take a minute, not a wait for every leg).
+  : > "$tko_stop"
+  wait_bg "$tko_pid" "the takeover session (ends on its -stop-file, or its -ttl)" 120
 
   # Session over: the deployed service must be back (its container restarts),
   # and it alone: ten reads, all deployed, or the restore left our route in.
