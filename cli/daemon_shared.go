@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -43,6 +44,27 @@ var authRefused = map[string]time.Time{}
 // mean hunting down a daemon to restart.
 const authRetryAfter = 60 * time.Second
 
+// A key waiting for a member is the one refusal expected to change soon: the
+// member accepts, the newcomer runs plug again, and a minute of the old answer
+// would read as an accept that did not work. Asked again sooner; the agent
+// writes a retried request back at most once a minute, so this costs a
+// handshake, not a store write.
+const pendingRetryAfter = 5 * time.Second
+
+// retryAfter is how long a refusal is taken at its word.
+func retryAfter(err error) time.Duration {
+	var af *tunnel.AuthFailure
+	if errors.As(err, &af) {
+		if _, _, pending := af.Pending(); pending {
+			return pendingRetryAfter
+		}
+	}
+	return authRetryAfter
+}
+
+// authRetryIn is, per refused cluster, how long its refusal stands (retryAfter).
+var authRetryIn = map[string]time.Duration{}
+
 // The clusters that had a live client at the previous tick. A cluster coming
 // back is someone running plug for it again, and that is when a refusal is
 // worth asking about again: on an agent that admits by approval, the newcomer
@@ -68,6 +90,7 @@ func applyDial(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transport, 
 		// way, or it becomes three log lines a second for the rest of the day.
 		if tunnel.IsAuthFailure(r.err) || isLocalRefusal(r.err) {
 			authRefused[r.key] = time.Now()
+			authRetryIn[r.key] = retryAfter(r.err)
 		}
 		info("daemon: connect %s: %v", r.key, r.err)
 		tun.MarkClusterError(r.key, r.err.Error()) // surface the reason to a waiting launcher
@@ -203,7 +226,11 @@ func reconcile(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transport, 
 			// authorized") into a session that merely felt slow and then failed
 			// somewhere else entirely. Re-check rarely, in case a key was enrolled
 			// while this daemon kept running.
-			if time.Since(refusedAt) < authRetryAfter {
+			wait, known := authRetryIn[key]
+			if !known {
+				wait = authRetryAfter
+			}
+			if time.Since(refusedAt) < wait {
 				continue
 			}
 		}

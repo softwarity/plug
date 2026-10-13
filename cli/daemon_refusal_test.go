@@ -83,3 +83,16 @@ func TestARefusalIsAskedAgainWhenPlugRunsAgain(t *testing.T) {
 		t.Error("a plug run after the cluster was idle got the refusal the daemon kept, without asking the agent")
 	}
 }
+
+// A key waiting for a member is asked about again within seconds, so the
+// newcomer accepted a moment ago gets in on their next plug; every other
+// refusal keeps the minute.
+func TestAWaitingKeyIsAskedAboutAgainSoon(t *testing.T) {
+	pending := &tunnel.AuthFailure{Addr: "h:2230", Admission: "pending fp=j7Q/a6O4RTKp members=alice@laptop"}
+	if got := retryAfter(pending); got != pendingRetryAfter {
+		t.Errorf("a pending key waits %v, want %v", got, pendingRetryAfter)
+	}
+	if got := retryAfter(&tunnel.AuthFailure{Addr: "h:2222"}); got != authRetryAfter {
+		t.Errorf("a key refused outright waits %v, want %v", got, authRetryAfter)
+	}
+}
