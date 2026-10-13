@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/pem"
 	"net"
 	"os"
@@ -23,6 +24,20 @@ type inviteAgent struct {
 	shared   ssh.PublicKey
 	members  map[string]string // fingerprint -> name
 	requests map[string]string
+	conns    []*ssh.ServerConn
+}
+
+// revoke makes fp no longer a member, someone else being one, and cuts every
+// connection, the way the real agent ends a revoked member's sessions.
+func (a *inviteAgent) revoke(fp string) {
+	a.mu.Lock()
+	delete(a.members, fp)
+	a.members["SHA256:someone-else"] = "alice@laptop"
+	conns := a.conns
+	a.mu.Unlock()
+	for _, c := range conns {
+		c.Close()
+	}
 }
 
 func startInviteAgent(t *testing.T, members map[string]string) (*inviteAgent, string, string) {
@@ -97,6 +112,9 @@ func startInviteAgent(t *testing.T, members map[string]string) (*inviteAgent, st
 					return
 				}
 				defer sc.Close()
+				a.mu.Lock()
+				a.conns = append(a.conns, sc)
+				a.mu.Unlock()
 				go ssh.DiscardRequests(reqs)
 				for nc := range chans {
 					_ = nc.Reject(ssh.Prohibited, "test agent")
@@ -181,6 +199,47 @@ func TestTheFirstMemberIsLetIn(t *testing.T) {
 	defer tr.Close()
 	if !tr.Welcomed() {
 		t.Error("the first member was not told so")
+	}
+}
+
+// A member revoked while connected: the agent cuts the connection and refuses
+// it back. The transport says so and keeps the refusal, which is what the
+// shared datapath daemon reads to drop the tunnel and tell the next plug why;
+// without it the session only ever saw its flows fail.
+func TestARevokedMembersTransportKnowsItWasRefused(t *testing.T) {
+	sandboxHome(t)
+	newProfile(t, "demo")
+	agent, host, port := startInviteAgent(t, map[string]string{})
+	cfg := loadProfile("demo")
+	cfg.host, cfg.port = host, port
+	tr, err := dialAgent(&cfg)
+	if err != nil {
+		t.Fatalf("the first member was refused: %v", err)
+	}
+	defer tr.Close()
+	if tr.Refused() != nil {
+		t.Fatal("a transport that was let in reports a refusal")
+	}
+	agent.mu.Lock()
+	var fp string
+	for k := range agent.members {
+		fp = k
+	}
+	agent.mu.Unlock()
+	agent.revoke(fp)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if c, err := tr.DialContext(ctx, "tcp", "anything:80"); err == nil {
+		c.Close()
+		t.Fatal("a revoked member's transport still opened a connection")
+	}
+	err = tr.Refused()
+	if err == nil {
+		t.Fatal("the transport was refused on its reconnect and does not say so")
+	}
+	if !strings.Contains(err.Error(), "by approval") {
+		t.Errorf("the refusal kept is not the agent's: %v", err)
 	}
 }
 

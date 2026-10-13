@@ -86,6 +86,23 @@ type Transport struct {
 	// admission is what an agent that admits by approval said when it let this
 	// connection in: "welcome" for the first member. See Welcomed.
 	admission atomic.Value // string
+
+	// refused is the agent's refusal of this machine's keys on a RE-connection
+	// (a member revoked, a key withdrawn), the *AuthFailure. See Refused.
+	refused atomic.Pointer[AuthFailure]
+}
+
+// Refused reports that the agent refused this machine's keys when the
+// transport tried to reconnect: the connection was cut because the key is no
+// longer let in, and every later dial will be refused the same way. nil while
+// the transport has never been refused. A holder of the transport (the shared
+// datapath daemon) drops it on this, and records the refusal as it would a
+// first dial's, so the next plug says why instead of failing in silence.
+func (t *Transport) Refused() error {
+	if af := t.refused.Load(); af != nil {
+		return af
+	}
+	return nil
 }
 
 // Welcomed reports that this connection made its key the first member of an
@@ -370,6 +387,14 @@ func (t *Transport) runDial(a *dialAttempt, stale *ssh.Client) {
 	t.dialing = nil
 	switch {
 	case err != nil:
+		// Refused, not unreachable: said once, and kept for whoever holds this
+		// transport. Retrying is harmless (it is how a key accepted again comes
+		// back), but a session that only ever sees its flows fail has no way to
+		// learn that its key was revoked.
+		var af *AuthFailure
+		if errors.As(err, &af) && t.refused.Swap(af) == nil {
+			t.note("%v", err)
+		}
 	case t.closed:
 		// Close() ran while this dial was in flight. It found no client to
 		// close, so this one is ours to close: a transport that was told to go
@@ -392,6 +417,7 @@ func (t *Transport) runDial(a *dialAttempt, stale *ssh.Client) {
 		if t.connected {
 			t.note("agent connection re-established")
 		}
+		t.refused.Store(nil)
 		t.connected = true
 		t.client = nc
 		go t.checkAgentVersion()

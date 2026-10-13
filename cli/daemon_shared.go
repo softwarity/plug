@@ -180,7 +180,14 @@ func reconcile(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transport, 
 	for _, key := range tun.ActiveClusters() {
 		active[key] = true
 		askAgainOnReturn(key)
-		if _, have := tunnels[key]; have {
+		if tr, have := tunnels[key]; have {
+			// The agent cut this tunnel and refuses it back (a revoked key):
+			// dropped, and the refusal recorded like a first dial's, so a waiting
+			// plug says why instead of running on a tunnel that cannot carry it.
+			if err := tr.Refused(); err != nil {
+				dropTunnel(ct, tunnels, key)
+				applyDial(ct, tunnels, dialOutcome{key: key, err: err})
+			}
 			continue
 		}
 		host, port, err := net.SplitHostPort(key)
@@ -232,7 +239,7 @@ func reconcile(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transport, 
 		})
 	}
 	activeLastTick = active
-	for key, tr := range tunnels {
+	for key := range tunnels {
 		if active[key] {
 			delete(tunnelIdleSince, key) // in use — reset the idle timer
 			continue
@@ -246,13 +253,20 @@ func reconcile(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transport, 
 		if time.Since(tunnelIdleSince[key]) < tunnelGrace {
 			continue
 		}
-		tun.UnmarkClusterReady(key)
-		ct.Remove(key)
-		tr.Close()
-		delete(tunnels, key)
-		delete(tunnelIdleSince, key)
+		dropTunnel(ct, tunnels, key)
 		info("daemon: tunnel down for %s", key)
 	}
+}
+
+// dropTunnel closes and forgets the tunnel held for key.
+func dropTunnel(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transport, key string) {
+	tun.UnmarkClusterReady(key)
+	ct.Remove(key)
+	if tr := tunnels[key]; tr != nil {
+		tr.Close()
+	}
+	delete(tunnels, key)
+	delete(tunnelIdleSince, key)
 }
 
 // reconcileLoop keeps the tunnel set matching the live clusters until stop is
