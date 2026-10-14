@@ -65,12 +65,19 @@ admission_run() {
   short="$(printf '%s\n' "$out" | tr -d '\r' | sed -n 's/.* accept \([A-Za-z0-9+/]\{12\}\)$/\1/p' | head -1)"
   [ -n "$short" ] || { adm_fail "no 'accept <key>' line in the refusal"; return 1; }
 
-  # 3. Nor can it open a session.
-  rc=0; out="$(plug_bounded 60 -p "$adm_newcomer" -c curl -s --max-time 10 http://adm-echo:8150/ </dev/null 2>&1)" || rc=$?
-  if [ "$(printf '%s\n' "$out" | tr -d '\r' | tail -1)" = admitted ]; then
-    adm_fail "a key nobody accepted reached adm-echo"; return 1
-  fi
-  printf '%s' "$out" | grep -qi "by approval" || { adm_fail "a session of a pending key failed without saying why"; return 1; }
+  # 3. Nor can it open a session. The reason comes from the daemon's dial, and a
+  # launcher waits for it only so long (clusterReadyWait) before it starts
+  # anyway: on a busy cluster the first answer can land just after, and the next
+  # session then says it. None may reach adm-echo; one must say why.
+  local i said=""
+  for i in 1 2 3; do
+    rc=0; out="$(plug_bounded 60 -p "$adm_newcomer" -c curl -s --max-time 10 http://adm-echo:8150/ </dev/null 2>&1)" || rc=$?
+    if [ "$(printf '%s\n' "$out" | tr -d '\r' | tail -1)" = admitted ]; then
+      adm_fail "a key nobody accepted reached adm-echo"; return 1
+    fi
+    printf '%s' "$out" | grep -qi "by approval" && { said=1; break; }
+  done
+  [ -n "$said" ] || { adm_fail "a session of a pending key failed without saying why"; return 1; }
 
   # 4. The member accepts it, by the key the newcomer was told to send.
   rc=0; out="$(plug_bounded 60 -p "$adm_member" accept "$short" </dev/null 2>&1)" || rc=$?
