@@ -1086,8 +1086,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           run="${{ github.run_id }}"; repo="${{ github.repository }}"
+          corr="$run-${{ github.run_attempt }}-"
           seen=0
           while :; do
+            # The clusters first. They run as runs of their own (<family>-for-
+            # <corr>), started before anything else, so a cluster that fails
+            # (an image it could not pull, a kind that would not come up) is
+            # known minutes before the legs give up on reaching it, under a
+            # message that points at the cluster rather than at the legs.
+            # Cancelled is how every cluster normally ends; failure is not.
+            broken=$(gh run list --repo "$repo" --limit 40 --json name,conclusion,url \
+              --jq "[.[] | select((.name|contains(\"-for-$corr\")) and .conclusion==\"failure\")] | first | select(.) | \"\(.name) \(.url)\"") || broken=""
+            if [ -n "$broken" ]; then
+              echo "::error::cluster ${broken% *} failed (${broken##* }) -> cancelling the run: its legs could only wait for it and time out"
+              gh run cancel "$run" --repo "$repo" || true
+              exit 0
+            fi
             # An API that answers 502 for a minute is weather, not a verdict:
             # ask again rather than end the watch, which used to leave a red
             # leg uncancelled and this job red for a reason of its own.
