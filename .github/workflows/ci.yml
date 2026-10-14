@@ -1005,6 +1005,21 @@ jobs:
           failed=0
           for p in $(jobs -p); do wait "$p" || failed=1; done
           for s in a b ka kb sa sb; do echo "$s=$(cat "$d/$s")" >> "$GITHUB_OUTPUT"; done
+          # The clusters are runs of their own, not jobs of this one: listed
+          # here with their links, they are one click from this run's page.
+          {
+            echo "### Clusters of this run"
+            echo "| cluster | run |"
+            echo "|---|---|"
+            for c in a:compose-for b:compose-for ka:k8s-for kb:k8s-for sa:swarm-for sb:swarm-for; do
+              s=${c%%:*} id="$(cat "$d/${c%%:*}")"
+              if [ -n "$id" ]; then
+                echo "| ${c#*:}-$CORR-$s | [$id]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$id) |"
+              else
+                echo "| ${c#*:}-$CORR-$s | not dispatched |"
+              fi
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
           [ "$failed" = 0 ] || { echo "::error::a cluster run could not be dispatched (see above)"; exit 1; }
       - name: Extract the latest published launchers
         run: |
