@@ -971,12 +971,12 @@ jobs:
       # it runs was not published yet" — two states that look identical from a
       # leg, and only one of which is the cluster's fault.
       short_sha: ${{ steps.ref.outputs.short }}
-      cluster_id_a: ${{ steps.dispatch_a.outputs.id }}
-      cluster_id_b: ${{ steps.dispatch_b.outputs.id }}
-      k8s_id_a: ${{ steps.dispatch_ka.outputs.id }}
-      k8s_id_b: ${{ steps.dispatch_kb.outputs.id }}
-      swarm_id_a: ${{ steps.dispatch_sa.outputs.id }}
-      swarm_id_b: ${{ steps.dispatch_sb.outputs.id }}
+      cluster_id_a: ${{ steps.dispatch.outputs.a }}
+      cluster_id_b: ${{ steps.dispatch.outputs.b }}
+      k8s_id_a: ${{ steps.dispatch.outputs.ka }}
+      k8s_id_b: ${{ steps.dispatch.outputs.kb }}
+      swarm_id_a: ${{ steps.dispatch.outputs.sa }}
+      swarm_id_b: ${{ steps.dispatch.outputs.sb }}
     steps:
       - uses: actions/checkout@v6
       # The tag metadata-action will put on this build: sha-<7>. Computed here so
@@ -986,51 +986,26 @@ jobs:
       # TWO clusters per family, so the e2e can assert multicluster: the same
       # service name must reach the RIGHT backend through each plug (each
       # cluster's `ident` answers its own corr id).
-      - id: dispatch_a
+      # The six clusters, dispatched at once. Each dispatch costs about seven
+      # seconds (the dispatch, then finding the run it made), and in a row they
+      # put the last cluster thirty-five seconds behind the first: the two kind
+      # clusters, the slowest to stand up, started fourteen and twenty-one
+      # seconds late. Side by side they all start within the first dispatch's
+      # seven. Titles differ per cluster, so the lookups cannot cross.
+      - id: dispatch
         env:
           GH_TOKEN: ${{ github.token }}
           CLUSTER_IMAGE: docker.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}-amd64
-        # run_id AND run_attempt. A re-run keeps the run_id, so attempt 2 asked for
-        # clusters under the same names as attempt 1 and collided with its own
-        # leftovers - which is exactly what a re-run is for when something went
-        # wrong, and exactly when the collision is least welcome.
-        #
-        # The consequence for whoever re-runs this: `gh run rerun --failed`
-        # CANNOT work here. It re-runs only the jobs that failed, and this one
-        # succeeded, so no cluster is dispatched for the new attempt while the
-        # legs, whose names carry that attempt, go looking for it. They then all
-        # report "cluster ... never became reachable", which reads exactly like a
-        # broken cluster and is really a re-run that could not have worked. Use
-        # `gh run rerun <id>` and let the whole thing go round.
-        run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-${{ github.run_attempt }}-a)" >> "$GITHUB_OUTPUT"
-      - id: dispatch_b
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CLUSTER_IMAGE: docker.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}-amd64
-        run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-${{ github.run_attempt }}-b)" >> "$GITHUB_OUTPUT"
-      - id: dispatch_ka
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CLUSTER_IMAGE: docker.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}-amd64
-        run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-${{ github.run_attempt }}-ka k8s-for.yml)" >> "$GITHUB_OUTPUT"
-      - id: dispatch_kb
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CLUSTER_IMAGE: docker.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}-amd64
-        run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-${{ github.run_attempt }}-kb k8s-for.yml)" >> "$GITHUB_OUTPUT"
-      - id: dispatch_sa
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CLUSTER_IMAGE: docker.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}-amd64
-        run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-${{ github.run_attempt }}-sa swarm-for.yml)" >> "$GITHUB_OUTPUT"
-      - id: dispatch_sb
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CLUSTER_IMAGE: docker.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}-amd64
-        run: echo "id=$(bash scripts/ci/dispatch-cluster.sh ${{ github.run_id }}-${{ github.run_attempt }}-sb swarm-for.yml)" >> "$GITHUB_OUTPUT"
-      # The compat cell needs the LAST PUBLISHED launcher for every OS, but only
-      # this Linux job has Docker — extract all of them from the published image
-      # here and ship them to the mac/win legs as an artifact.
+          CORR: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          d="$RUNNER_TEMP/dispatch"; mkdir -p "$d"
+          for c in a:compose-for.yml b:compose-for.yml ka:k8s-for.yml kb:k8s-for.yml sa:swarm-for.yml sb:swarm-for.yml; do
+            bash scripts/ci/dispatch-cluster.sh "$CORR-${c%%:*}" "${c#*:}" > "$d/${c%%:*}" &
+          done
+          failed=0
+          for p in $(jobs -p); do wait "$p" || failed=1; done
+          for s in a b ka kb sa sb; do echo "$s=$(cat "$d/$s")" >> "$GITHUB_OUTPUT"; done
+          [ "$failed" = 0 ] || { echo "::error::a cluster run could not be dispatched (see above)"; exit 1; }
       - name: Extract the latest published launchers
         run: |
           docker create --name pl docker.io/softwarity/plug:latest >/dev/null
