@@ -30,7 +30,7 @@ on:
         default: false
     outputs:
       image:
-        description: The immutable reference this build published (softwarity/plug:sha-<short>)
+        description: The immutable reference this build published (ghcr.io/softwarity/plug:sha-<short> for a CI build)
         value: ${{ jobs.merge.outputs.image }}
     # Named for the same reason `permissions` is declared below: what this build
     # is handed should be what it uses, and nothing else. Callers used to say
@@ -57,14 +57,23 @@ on:
         required: false
 
 # Declared rather than inherited. A reusable workflow takes its caller's scopes,
-# so this one's were whatever ci.yml happened to have - and it pushes to Docker
-# Hub with its own secrets, so it needs nothing from the GitHub token at all.
-# Saying so here means a caller that grants more does not silently widen it.
+# so this one's were whatever ci.yml happened to have. It pushes to Docker Hub
+# with its own secrets, and a CI build pushes to GHCR with the GitHub token,
+# which is all that token is needed for. Saying so here means a caller that
+# grants more does not silently widen it.
 permissions:
   contents: read
+  packages: write
 
 env:
-  IMAGE: docker.io/softwarity/plug
+  # A CI build (immutable_only) is a TEST image: the clusters, the legs and the
+  # publish job read it, nobody else. It lives on GHCR, and the publish job
+  # copies the tested digest to Docker Hub once the e2e passed; the cleanup job
+  # of ci.yml deletes it when the run ends. On Docker Hub, every one of those
+  # reads counted against one account's pull quota, and a day of CI ran it dry,
+  # pushes included: the registry answered 429 to the HEAD a push begins with.
+  # republish-image.yml still publishes straight to Docker Hub.
+  IMAGE: ${{ inputs.immutable_only && 'ghcr.io/softwarity/plug' || 'docker.io/softwarity/plug' }}
 
 jobs:
   build:
@@ -107,6 +116,13 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_RW }}
+      - name: Log in to GHCR
+        if: inputs.immutable_only
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
       - name: Resolve version
         id: ver
         # The version comes from the TAG THAT POINTS AT THIS COMMIT — not from
@@ -271,6 +287,13 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_RW }}
+      - name: Log in to GHCR
+        if: inputs.immutable_only
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
       - name: Create and push manifest list
         working-directory: ${{ runner.temp }}/digests
         run: |

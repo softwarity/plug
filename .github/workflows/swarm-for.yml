@@ -38,6 +38,7 @@ run-name: swarm-for-${{ inputs.corr }}
 permissions:
   contents: read
   actions: read
+  packages: read # the image under test is on GHCR (_cluster.yml)
 
 jobs:
   cluster:

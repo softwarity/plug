@@ -26,6 +26,9 @@ permissions:
 jobs:
   image:
     if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write # declared by _docker.yml for its CI builds; this one pushes to Docker Hub
     uses: ./.github/workflows/_docker.yml
     # The two _docker.yml declares, not the vault. This dispatch already skips
     # the gate; it has no business also carrying PAT_TOKEN to a Docker Hub login.

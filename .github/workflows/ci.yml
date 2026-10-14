@@ -456,6 +456,9 @@ jobs:
   image-build:
     name: Build the standalone image (immutable tag only)
     if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: write # the test image goes to GHCR (_docker.yml)
     uses: ./.github/workflows/_docker.yml
     with:
       immutable_only: true
@@ -479,6 +482,9 @@ jobs:
   image-build-hosted:
     name: Build the hosted image (immutable tag only)
     if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: write # the test image goes to GHCR (_docker.yml)
     uses: ./.github/workflows/_docker.yml
     with:
       immutable_only: true
@@ -516,6 +522,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      packages: read # the tested digests are read from GHCR
     steps:
       - uses: actions/checkout@v6
         with:
@@ -547,6 +554,14 @@ jobs:
       # The one case it drops: a tag pushed onto a commit built EARLIER publishes
       # nothing, since this job has already run for it. Re-run the CI on that
       # commit and it lands.
+      # The test images live on GHCR, not Docker Hub (see _docker.yml): signed
+      # in with this run's own token.
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
       - name: Put the names this ref earns on both tested digests
         env:
           IMAGE: docker.io/softwarity/plug
@@ -587,6 +602,8 @@ jobs:
             fi
             echo "the image is stamped $got, which is the version it is being given"
           fi
+          # From GHCR to Docker Hub: the tested digest is COPIED, byte for byte,
+          # so the digest published is the digest the e2e ran.
           echo "promoting $SRC → $tags"
           docker buildx imagetools create $tags "$SRC"
           docker buildx imagetools inspect "$IMAGE:$branch" | head -5
@@ -614,11 +631,11 @@ jobs:
       # what is signed and reads every signature back.
       - name: Sign both images, and check what was signed
         if: github.ref == 'refs/heads/main'
-        env:
-          SRC: ${{ needs.image-build.outputs.image }}
-          HSRC: ${{ needs.image-build-hosted.outputs.image }}
+        # What is signed is what users pull: the Docker Hub names, resolved to
+        # the digests the step above copied there. The test images on GHCR are
+        # deleted when the run ends, and a signature there would go with them.
         run: |
-          scripts/ci/signatures.sh sign "$SRC" "$HSRC"
+          scripts/ci/signatures.sh sign docker.io/softwarity/plug:latest docker.io/softwarity/plug:hosted
           scripts/ci/signatures.sh verify docker.io/softwarity/plug:latest docker.io/softwarity/plug:hosted
 
 
@@ -1005,7 +1022,7 @@ jobs:
       - id: dispatch
         env:
           GH_TOKEN: ${{ github.token }}
-          CLUSTER_IMAGE: docker.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}-amd64
+          CLUSTER_IMAGE: ghcr.io/softwarity/plug:sha-${{ steps.ref.outputs.short }}-amd64
           CORR: ${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           d="$RUNNER_TEMP/dispatch"; mkdir -p "$d"
@@ -1140,6 +1157,7 @@ jobs:
     needs: [test, selftest, start-cluster, build-clients]
     permissions:
       contents: read
+      packages: read # the image under test is on GHCR
     uses: ./.github/workflows/_e2e.yml
     with:
       family: compose
@@ -1158,6 +1176,7 @@ jobs:
     needs: [test, selftest, start-cluster, build-clients]
     permissions:
       contents: read
+      packages: read # the image under test is on GHCR
     uses: ./.github/workflows/_e2e.yml
     with:
       family: k8s
@@ -1174,6 +1193,7 @@ jobs:
     needs: [test, selftest, start-cluster, build-clients]
     permissions:
       contents: read
+      packages: read # the image under test is on GHCR
     uses: ./.github/workflows/_e2e.yml
     with:
       family: swarm
@@ -1214,10 +1234,19 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
+      packages: read # the image under test is on GHCR
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+      # The test images live on GHCR, not Docker Hub (see _docker.yml): signed
+      # in with this run's own token.
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
       - name: plug on MicroShift
         run: scripts/ci/okd.sh "${{ needs.image-build.outputs.image }}"
 
@@ -1225,6 +1254,7 @@ jobs:
     needs: [test, selftest, start-cluster, build-clients]
     permissions:
       contents: read
+      packages: read # the image under test is on GHCR
     uses: ./.github/workflows/_e2e.yml
     with:
       family: compose
@@ -1301,3 +1331,31 @@ jobs:
           A: ${{ needs.start-cluster.outputs.swarm_id_a }}
           B: ${{ needs.start-cluster.outputs.swarm_id_b }}
         run: bash scripts/ci/kill-clusters.sh "$A:swarm-a" "$B:swarm-b"
+
+  # The run's test images, deleted from GHCR once nothing reads them any more:
+  # after the publish job (which copies the tested digest to Docker Hub), OKD,
+  # and the kill jobs (each waits for its family's legs, which wait for the
+  # clusters). always(): a red or cancelled run leaves its images exactly like
+  # a green one, and they are nobody's either way. Leftovers of runs that died
+  # before getting here go too, past two days (scripts/ci/ghcr-cleanup.sh).
+  ghcr-cleanup:
+    name: delete this run's test images from GHCR
+    needs: [start-cluster, image-build, image-build-hosted, image, okd, kill-compose, kill-k8s, kill-swarm]
+    if: always() && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/ghcr-cleanup.sh "${GITHUB_SHA::7}"

@@ -15,12 +15,17 @@
 why_no_cluster() {
   [ -n "${AGENT_IMAGE:-}" ] || return 0
   wn_repo="${AGENT_IMAGE#*/}"; wn_repo="${wn_repo%%:*}"; wn_tag="${AGENT_IMAGE##*:}"
-  wn_tok="$(curl -s --max-time 20 "https://auth.docker.io/token?service=registry.docker.io&scope=repository:${wn_repo}:pull" \
-            | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
+  # The registry the image is on: GHCR for a CI build (_docker.yml), Docker Hub
+  # otherwise. Each hands out its own pull token.
+  case "$AGENT_IMAGE" in
+    ghcr.io/*) wn_auth="https://ghcr.io/token?scope=repository:${wn_repo}:pull"; wn_reg="https://ghcr.io" ;;
+    *) wn_auth="https://auth.docker.io/token?service=registry.docker.io&scope=repository:${wn_repo}:pull"; wn_reg="https://registry-1.docker.io" ;;
+  esac
+  wn_tok="$(curl -s --max-time 20 "$wn_auth" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
   [ -n "$wn_tok" ] || { echo "    (could not ask the registry - no verdict on the image)" >&2; return 0; }
   wn_code="$(curl -s --max-time 20 -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $wn_tok" \
              -H "Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json" \
-             "https://registry-1.docker.io/v2/${wn_repo}/manifests/${wn_tag}")"
+             "${wn_reg}/v2/${wn_repo}/manifests/${wn_tag}")"
   if [ "$wn_code" = 200 ]; then
     echo "    $AGENT_IMAGE IS published - so the image is not the reason; look at the cluster run" >&2
   else
