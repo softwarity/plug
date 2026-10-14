@@ -125,6 +125,20 @@ jobs:
             exit 0
           fi
           printf '%s' "$DOCKERHUB_RW" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+      # Docker Hub pulls on this runner through mirror.gcr.io, Google's public
+      # cache of Docker Hub, falling back to Docker Hub for what it does not
+      # hold (our own image, the less common fixtures). Every pull counts
+      # against one account's quota shared by the whole CI, and a day of runs
+      # ran it dry; the official images (golang, alpine, postgres, mongo…) need
+      # not touch it. Set before anything here pulls.
+      - name: Pull Docker Hub images through mirror.gcr.io
+        run: |
+          cfg=/etc/docker/daemon.json
+          { sudo cat "$cfg" 2>/dev/null || echo '{}'; } \
+            | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' > /tmp/daemon.json
+          sudo install -m 0644 /tmp/daemon.json "$cfg"
+          sudo systemctl restart docker
+          docker info --format 'registry mirrors: {{.RegistryConfig.Mirrors}}'
       # The fixtures' Docker Hub images (e2e/images.txt), from the Actions cache.
       # Each of the six clusters of a run is a fresh runner with an empty
       # Docker, and each pulled the same dozen images: about seventy pulls a run

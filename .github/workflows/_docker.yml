@@ -91,7 +91,17 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
         with:
           images: ${{ env.IMAGE }}
+      # The base images (golang, alpine…) through mirror.gcr.io, Google's public
+      # cache of Docker Hub, falling back to Docker Hub for what it does not hold.
+      # Docker Hub counts every resolution of a base against one account's quota,
+      # shared by every job of every run, and a day of CI ran it dry: the build
+      # died resolving golang:1.26-alpine before compiling a line. Pushes still go
+      # to Docker Hub; a mirror only serves pulls.
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
       - name: Log in to Docker Hub
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
