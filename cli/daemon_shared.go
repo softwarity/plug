@@ -208,18 +208,12 @@ func reconcile(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transport, 
 			draining = false
 		}
 	}
+	dropRefused(ct, tunnels)
 	active := map[string]bool{}
 	for _, key := range tun.ActiveClusters() {
 		active[key] = true
 		askAgainOnReturn(key)
-		if tr, have := tunnels[key]; have {
-			// The agent cut this tunnel and refuses it back (a revoked key):
-			// dropped, and the refusal recorded like a first dial's, so a waiting
-			// plug says why instead of running on a tunnel that cannot carry it.
-			if err := tr.Refused(); err != nil {
-				dropTunnel(ct, tunnels, key)
-				applyDial(ct, tunnels, dialOutcome{key: key, err: err})
-			}
+		if _, have := tunnels[key]; have {
 			continue
 		}
 		host, port, err := net.SplitHostPort(key)
@@ -296,6 +290,25 @@ func reconcile(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transport, 
 		}
 		dropTunnel(ct, tunnels, key)
 		info("daemon: tunnel down for %s", key)
+	}
+}
+
+// dropRefused drops every tunnel the agent cut and refuses back (a revoked
+// key), and records the refusal like a first dial's, so the next plug says why
+// instead of running on a tunnel that cannot carry it.
+//
+// Every tunnel, not only those with a client attached at this tick. The
+// refusal is learnt when a flow finds the connection cut and re-dials, and the
+// session that sent it often ends at once, its flow failed, before the next
+// tick: looked for among the clusters in use, the refusal was never seen, the
+// tunnel stayed "ready" through its grace, and every plug run meanwhile started
+// on it and failed without a word.
+func dropRefused(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transport) {
+	for key, tr := range tunnels {
+		if err := tr.Refused(); err != nil {
+			dropTunnel(ct, tunnels, key)
+			applyDial(ct, tunnels, dialOutcome{key: key, err: err})
+		}
 	}
 }
 
