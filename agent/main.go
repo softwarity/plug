@@ -526,9 +526,7 @@ func doResolve(cmd []string) {
 	witness := make(chan bool, 1)
 	go func() { witness <- clusterResolverHealthy() }()
 
-	ctx, cancel := context.WithTimeout(context.Background(), resolveLookupBudget)
-	addrs, lerr := net.DefaultResolver.LookupHost(ctx, cmd[1])
-	cancel()
+	addrs, lerr := lookupHedged(net.DefaultResolver.LookupHost, cmd[1], resolveLookupBudget, resolveHedgeEvery)
 	for _, a := range addrs {
 		// 198.18.0.0/15 is the range plug itself mints fakes from — an
 		// answer there can only be an ECHO of a plug resolver upstream
@@ -562,6 +560,53 @@ func doResolve(cmd []string) {
 		answer("unreachable")
 	}
 	answer("nxdomain")
+}
+
+// lookupHedged asks the cluster's resolver about name, and asks again every
+// `every` while nothing has answered, all within budget. The first lookup to
+// come back with an answer wins: addresses, or the resolver saying the name
+// does not exist. Only when every one of them ran out of time does the caller
+// see a timeout.
+//
+// One lookup is one UDP exchange, and the resolver library waits seconds
+// before it sends a lost query again, far past this budget. On Kubernetes the
+// A and AAAA queries leave together from one socket, and a node under load
+// drops one of them often enough (the conntrack race behind the well-known 5s
+// DNS delay) that a single lookup timed out on a name the cluster has. A
+// timeout with a healthy witness reads as "absent", so the CLI answered
+// NXDOMAIN for a live service, and kept answering it while each retry met
+// the same luck. A second lookup is a fresh socket and a fresh pair of
+// packets, which is all a dropped one needs.
+func lookupHedged(lookup func(context.Context, string) ([]string, error), name string, budget, every time.Duration) ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	defer cancel()
+	type result struct {
+		addrs []string
+		err   error
+	}
+	out := make(chan result, int(budget/every)+2)
+	ask := func() {
+		addrs, err := lookup(ctx, name)
+		out <- result{addrs, err}
+	}
+	go ask()
+	tick := time.NewTicker(every)
+	defer tick.Stop()
+	var last error = context.DeadlineExceeded
+	for {
+		select {
+		case r := <-out:
+			var dnsErr *net.DNSError
+			if r.err == nil || (errors.As(r.err, &dnsErr) && dnsErr.IsNotFound) {
+				return r.addrs, r.err
+			}
+			last = r.err
+		case <-tick.C:
+			go ask()
+		case <-ctx.Done():
+			return nil, last
+		}
+	}
 }
 
 func doSelfUpdate(cmd []string) {
@@ -658,6 +703,9 @@ func clusterResolverHealthy() bool {
 // question that has left the cluster.
 const (
 	resolveLookupBudget = 800 * time.Millisecond
+	// Within that budget a lookup with no answer yet is asked again this often
+	// (lookupHedged): a query lost on the way costs one interval, not the budget.
+	resolveHedgeEvery = 250 * time.Millisecond
 	// 1.5s, and it costs nothing it did not already: the witness runs BESIDE the
 	// lookup now, so the worst case is the longer of the two (1.5s) rather than
 	// their sum — less than the 1.5s the old 800+700 cascade spent, with twice

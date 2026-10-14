@@ -39,6 +39,12 @@ On Swarm and Kubernetes, `plug update` now ends when the redeployed agent
 answers, and says so when the tag still named the build it was running,
 instead of waiting a minute and a half for a version that was not coming.
 
+### Names resolve on a busy Kubernetes DNS
+
+The agent asks the cluster's resolver again within its short budget when a
+lookup has not answered yet, so a service is found by name even on a node
+whose DNS drops a query under load.
+
 ---
 
 ## 2.25.1

@@ -95,7 +95,17 @@ admission_run() {
     plug_bounded 90 -p "$adm_newcomer" -c curl -s --max-time 10 http://adm-echo:8150/ </dev/null 2>/dev/null | tr -d '\r' | tail -1
   }
   if ! retry_until 3 5 admitted newcomer_reach; then
-    out="$(plug_bounded 90 -p "$adm_newcomer" -c curl -s --max-time 10 http://adm-echo:8150/ </dev/null 2>&1)"
+    # -sS: curl says what went wrong (a name that did not resolve, a refused
+    # connect), which -s keeps to itself.
+    out="$(plug_bounded 90 -p "$adm_newcomer" -c curl -sS --max-time 10 http://adm-echo:8150/ </dev/null 2>&1)"
+    # And what the agent answers about the name, asked with the accepted key:
+    # "nxdomain" here is the cluster's resolver, not the datapath.
+    local i
+    for i in 1 2 3; do
+      echo "    agent's own resolve adm-echo ($i): $(ssh -n -p "$aport" -i "$HOME/.plug/keys/$adm_newcomer" -o IdentitiesOnly=yes \
+        -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o BatchMode=yes -o ConnectTimeout=5 \
+        "get@$ip_b" resolve adm-echo 2>&1 | tr -d '\r' | tail -1)"
+    done
     adm_fail "the accepted key did not reach adm-echo (got '${ru_out:-nothing}')"; return 1
   fi
 
