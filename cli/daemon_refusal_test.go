@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -94,5 +95,34 @@ func TestAWaitingKeyIsAskedAboutAgainSoon(t *testing.T) {
 	}
 	if got := retryAfter(&tunnel.AuthFailure{Addr: "h:2222"}); got != authRetryAfter {
 		t.Errorf("a key refused outright waits %v, want %v", got, authRetryAfter)
+	}
+}
+
+// A cluster coming up flushes the system's resolver cache before the launcher
+// is told it is ready, so a name answered NXDOMAIN while the cluster was out of
+// reach is asked again. A dial that failed changes no name and flushes nothing.
+func TestATunnelComingUpFlushesTheSystemsNegativeAnswers(t *testing.T) {
+	flushes := 0
+	was := flushSystemDNS
+	flushSystemDNS = func() { flushes++ }
+	t.Cleanup(func() { flushSystemDNS = was })
+
+	key := "flush.example:2230"
+	tunnels := map[string]*tunnel.Transport{}
+	ct := tun.NewClusterTransports()
+	t.Cleanup(func() {
+		delete(authRefused, key)
+		delete(authRetryIn, key)
+		tun.ClearClusterError(key)
+		tun.UnmarkClusterReady(key)
+	})
+
+	applyDial(ct, tunnels, dialOutcome{key: key, err: errors.New("dial tcp: connection refused")})
+	if flushes != 0 {
+		t.Fatalf("a failed dial flushed the resolver cache %d time(s)", flushes)
+	}
+	applyDial(ct, tunnels, dialOutcome{key: key, tr: &tunnel.Transport{}})
+	if flushes != 1 {
+		t.Fatalf("the tunnel came up and the resolver cache was flushed %d time(s), want 1", flushes)
 	}
 }

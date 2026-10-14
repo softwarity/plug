@@ -107,9 +107,18 @@ func applyDial(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transport, 
 	tunnels[r.key] = r.tr
 	ct.Set(r.key, r.tr)
 	tun.ClearClusterError(r.key)
+	// Before the launcher is told the tunnel is ready: the names this cluster
+	// holds were answered NXDOMAIN until now (a newcomer refused a minute ago,
+	// a session started before its cluster was reachable), and the system
+	// resolver keeps a negative answer longer than plug's own five seconds
+	// when a name keeps failing. Asked again, they are found.
+	flushSystemDNS()
 	tun.MarkClusterReady(r.key)
 	info("daemon: tunnel up for %s", r.key)
 }
+
+// flushSystemDNS is tun.FlushSystemDNS, replaceable by a test.
+var flushSystemDNS = tun.FlushSystemDNS
 
 // dialSet tracks which clusters have a dial in flight, so the reconcile loop can
 // start one and move on instead of waiting for it.

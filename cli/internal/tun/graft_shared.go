@@ -50,3 +50,9 @@ func ClusterError(key string) string {
 	}
 	return string(b)
 }
+
+// FlushSystemDNS drops the operating system's resolver cache, negative answers
+// included. The shared daemon calls it when a cluster's tunnel comes up: a name
+// that was in no connected cluster a moment ago may be in this one, and the
+// system must ask again rather than repeat the old NXDOMAIN.
+func FlushSystemDNS() { flushDNS() }

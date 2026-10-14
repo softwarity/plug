@@ -45,6 +45,11 @@ The agent asks the cluster's resolver again within its short budget when a
 lookup has not answered yet, so a service is found by name even on a node
 whose DNS drops a query under load.
 
+On macOS and Windows, the names of a cluster resolve as soon as its tunnel is
+up: plug clears the system's resolver cache at that moment, so a name looked
+up while the cluster was out of reach (a newcomer waiting to be accepted, say)
+is asked again instead of failing from the cache.
+
 ---
 
 ## 2.25.1

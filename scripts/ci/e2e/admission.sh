@@ -98,14 +98,25 @@ admission_run() {
     # -sS: curl says what went wrong (a name that did not resolve, a refused
     # connect), which -s keeps to itself.
     out="$(plug_bounded 90 -p "$adm_newcomer" -c curl -sS --max-time 10 http://adm-echo:8150/ </dev/null 2>&1)"
-    # And what the agent answers about the name, asked with the accepted key:
-    # "nxdomain" here is the cluster's resolver, not the datapath.
+    # And what the agent answers about the name, asked with the accepted key on
+    # the tunnel's account: "nxdomain" here is the cluster's resolver.
     local i
     for i in 1 2 3; do
       echo "    agent's own resolve adm-echo ($i): $(ssh -n -p "$aport" -i "$HOME/.plug/keys/$adm_newcomer" -o IdentitiesOnly=yes \
         -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o BatchMode=yes -o ConnectTimeout=5 \
-        "get@$ip_b" resolve adm-echo 2>&1 | tr -d '\r' | tail -1)"
+        "plug@$ip_b" resolve adm-echo 2>&1 | tr -d '\r' | tail -1)"
     done
+    # On macOS: plug's own resolver asked straight (dig skips the system cache),
+    # then the system's answer. An address from the first and none from the
+    # second is a negative answer the system kept; NXDOMAIN from both is plug's.
+    if [ "$os" = mac ]; then
+      local ns; ns="$(awk '/^nameserver/{print $2; exit}' /etc/resolv.conf)"
+      for i in 1 2; do
+        echo "    plug's resolver ($ns) on adm-echo ($i): $(plug_bounded 40 -p "$adm_newcomer" -c dig +time=3 +tries=1 "@$ns" adm-echo A </dev/null 2>&1 \
+          | grep -E 'status:|^adm-echo' | tr '\n' ' ')"
+        echo "    the system's answer ($i): $(plug_bounded 40 -p "$adm_newcomer" -c dscacheutil -q host -a name adm-echo </dev/null 2>&1 | tr '\n' ' ')"
+      done
+    fi
     adm_fail "the accepted key did not reach adm-echo (got '${ru_out:-nothing}')"; return 1
   fi
 
