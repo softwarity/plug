@@ -144,7 +144,8 @@ import { CtaComponent } from '../cta/cta.component';
           <tr><th scope="row">Its mounted secret/config FILES (a CA, a keystore)</th><td class="win">✓ <strong>no FUSE</strong>: the files are read through the agent's existing exec/API and materialised for the session (or mounted at their exact path under <code>--dockerrun</code>); the variables that name them are repointed. Kubernetes and Compose secrets, Swarm configs</td><td>fs mirroring, live - needs its syscall layer in-process</td><td>volume mounts, live - via <strong>sshfs / FUSE</strong> (macFUSE, WinFSP)</td></tr>
           <tr><th scope="row">Its data VOLUMES / PVCs, live</th><td class="win">✓ <strong>by default, nothing to install</strong>: every volume of the workload a <code>-s</code> takes over (or <code>--env-of</code> names) is mounted on your machine read-write, and the variables naming it are repointed - the process finds its data and knows nothing (<code>--no-mount</code> to opt out, <code>--mount</code> for an exact path). Mounted with the SMB client the OS already has, on all three OSes; the agent runs a helper beside the workload, tied to the session like the name</td><td>✓ file calls hooked in your process and relayed into the pod one by one (the runtime has to be hookable)</td><td>✓ <code>--mount</code>, through sshfs - a FUSE runtime and sshfs to install first</td></tr>
           <tr><th scope="row">Several devs on one shared service</th><td>one name, one session</td><td class="win">header / queue split</td><td class="win">header / path</td></tr>
-          <tr><th scope="row">Auth</th><td>none on its own - trusted dev cluster; named per-developer identities with <a routerLink="/meerkat">Meerkat</a></td><td class="win">kubeconfig RBAC</td><td class="win">kubeconfig RBAC</td></tr>
+          <tr><th scope="row">Who gets in</th><td class="win">✓ <strong>by approval</strong>: deploy the agent with <code>PLUG_ADMISSION=invite</code> and only the keys a member accepted get in, each one revocable (<code>plug revoke</code>), with <strong>no account to create in the cluster</strong> (<a routerLink="/security" fragment="admission">how</a>). Open by default, for a trusted dev network</td><td>whoever holds a kubeconfig the cluster issued</td><td>whoever holds a kubeconfig the cluster issued</td></tr>
+          <tr><th scope="row">What each person may do</th><td>every member, everything plug does; per-person identities and rights with <a routerLink="/meerkat">Meerkat</a></td><td class="win">kubeconfig RBAC</td><td class="win">kubeconfig RBAC</td></tr>
           <tr><th scope="row">IDE extensions</th><td>none, CLI only - there is no target to pick, so nothing for a panel to show</td><td class="win">VS Code · JetBrains</td><td>JetBrains</td></tr>
           <tr><th scope="row">For an AI coding agent</th><td class="win">✓ <a routerLink="/mcp"><code>plug mcp</code></a>, an MCP server over stdio: the clusters this machine knows, <code>doctor</code> check by check, a workload's environment, whether a name exists, as tools with structured answers</td><td>the agent drives the CLI like a developer would; no MCP documented</td><td>nothing documented</td></tr>
           <tr><th scope="row">Mechanism</th><td>userspace TUN over SSH</td><td>syscall layer in your process</td><td>in-cluster traffic-manager</td></tr>
@@ -160,7 +161,8 @@ import { CtaComponent } from '../cta/cta.component';
       <strong>Why plug:</strong> it behaves the same whichever backend provisions the name, and a
       developer needs nothing but the cluster's address - no Kubernetes tooling, no account in the
       cluster. The setup lives once in the cluster instead of on every desk, which is also why it
-      works where a kubeconfig does not exist at all: Docker, Compose, Swarm.
+      works where a kubeconfig does not exist at all: Docker, Compose, Swarm. And it can still
+      choose who comes in: by approval, a newcomer asks once and a member lets them in.
     </p>
 
     <p class="note">
@@ -174,10 +176,11 @@ import { CtaComponent } from '../cta/cta.component';
     </p>
 
     <p class="note">
-      <strong>Where they are ahead:</strong> both authenticate through your kubeconfig and its RBAC,
-      where plug on its own trusts whoever reaches the agent (see the
+      <strong>Where they are ahead:</strong> both rest on your kubeconfig and its RBAC, which says
+      per person what each one may do. plug decides who gets in - by approval, or whoever reaches
+      the agent when it is left open - but not what each member may do once in (see the
       <a routerLink="/security">security model</a>, and <a routerLink="/meerkat">Meerkat</a> for
-      named identities). Both split one shared service between several developers by routing on a
+      named identities and their rights). Both split one shared service between several developers by routing on a
       header or a path. And both are older, with IDE extensions and a larger community.
     </p>
 

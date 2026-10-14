@@ -40,6 +40,12 @@ import { CodeComponent } from '../code/code.component';
       your model. On Docker and Swarm the published port is the boundary: firewall it to your
       office or VPN range.
     </p>
+    <p>
+      An agent that <a routerLink="/security" fragment="admission">admits by approval</a> moves the
+      boundary from the port to the key: reaching the port then gets a stranger a request in a
+      queue and nothing else, until a member accepts it. What a member may do once in is still
+      everything above.
+    </p>
 
     <h3 id="admission">Admission by approval</h3>
     <p>
@@ -146,7 +152,8 @@ ssh -p 2222 get@&lt;host&gt; cat /etc/shadow                  # ForceCommand ign
 
     <h3>The rules</h3>
     <ul>
-      <li><strong>Never</strong> publish the agent port on an untrusted or public network.</li>
+      <li><strong>Never</strong> publish the agent port on an untrusted or public network. Admission by approval keeps strangers out, but the port still answers them: keep it off the public internet all the same.</li>
+      <li>On a network you do not fully trust, or with more people on it than should use the cluster, deploy the agent with <code>PLUG_ADMISSION=invite</code>.</li>
       <li>Attach the agent <strong>only to the networks devs actually need</strong> - the networks list in the <a routerLink="/swarm">stack descriptor</a> is your scoping tool.</li>
       <li>Kubernetes: the Role's reach is the agent's namespace, every workload in it. Deploy the agent where the dev services live, and never in a namespace a production workload shares.</li>
       <li>Production clusters: don't. If you must debug against production-like data, use a dedicated staging cluster.</li>
@@ -156,15 +163,18 @@ ssh -p 2222 get@&lt;host&gt; cat /etc/shadow                  # ForceCommand ign
     <app-code lang="text">reachable port  =  member of the attached networks
                 +  the helper's verbs on the workloads in reach:
                    names, environment, secret files, volumes
+   by approval  =  the same, for the keys a member accepted only
         scope   =  the networks: list of the stack (Docker, Swarm)
                    the agent's namespace (Kubernetes), nothing more</app-code>
 
     <h3>For a shared cluster: the hosted version</h3>
     <p>
-      Standalone, plug is meant for a <strong>private network</strong>: whoever reaches the agent's
-      port is in. Where a cluster is shared, or that port cannot stay private, the answer is the
-      <strong>hosted</strong> version, the same agent embedded in a gateway that knows who people
-      are. <a routerLink="/meerkat">Meerkat</a> is one.
+      Standalone, plug is meant for a <strong>private network</strong>: open, whoever reaches the
+      agent's port is in; by approval, only the members are, and every member may do everything.
+      Where a cluster is shared and people need different rights, or every session must carry a
+      name the organisation knows, the answer is the <strong>hosted</strong> version, the same
+      agent embedded in a gateway that knows who people are. <a routerLink="/meerkat">Meerkat</a>
+      is one.
     </p>
     <ul>
       <li>
