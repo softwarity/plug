@@ -116,6 +116,14 @@ admission_run() {
           | grep -E 'status:|^adm-echo' | tr '\n' ' ')"
         echo "    the system's answer ($i): $(plug_bounded 40 -p "$adm_newcomer" -c dscacheutil -q host -a name adm-echo </dev/null 2>&1 | tr '\n' ' ')"
       done
+      # The form the system sends (its search domain appended), asked straight;
+      # then the system again once its cache is flushed by hand. An answer only
+      # after the flush is a negative answer the system held on to.
+      echo "    plug's resolver on adm-echo.plug: $(plug_bounded 40 -p "$adm_newcomer" -c dig +time=3 +tries=1 "@$ns" adm-echo.plug A </dev/null 2>&1 \
+        | grep -E 'status:|^adm-echo' | tr '\n' ' ')"
+      echo "    the system's resolver configuration: $(scutil --dns | grep -E 'search domain|nameserver' | sort -u | tr -s ' ' | tr '\n' ';')"
+      sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder; sleep 1
+      echo "    the system's answer after a flush: $(plug_bounded 40 -p "$adm_newcomer" -c dscacheutil -q host -a name adm-echo </dev/null 2>&1 | tr '\n' ' ')"
     fi
     adm_fail "the accepted key did not reach adm-echo (got '${ru_out:-nothing}')"; return 1
   fi

@@ -114,7 +114,7 @@ func applyDial(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transport, 
 	// when a name keeps failing. Asked again, they are found.
 	flushSystemDNS()
 	tun.MarkClusterReady(r.key)
-	info("daemon: tunnel up for %s", r.key)
+	info("daemon: tunnel up for %s (system resolver cache cleared)", r.key)
 }
 
 // flushSystemDNS is tun.FlushSystemDNS, replaceable by a test.
