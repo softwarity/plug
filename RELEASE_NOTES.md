@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.26.0
+
 ### A cluster can admit only its members
 
 Deploy the agent with `PLUG_ADMISSION=invite` and it lets in only the keys a
