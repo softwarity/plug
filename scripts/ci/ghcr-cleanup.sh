@@ -35,17 +35,27 @@ versions="$(gh api --paginate "$api?per_page=100" --jq '.[] | "\(.id) \(.name) \
   exit 1
 }
 
+# Read into an array first, and gh's stdin closed: gh reads stdin, and inside a
+# `while read` over the list it swallowed the rest of it, so the loop ended
+# after a few deletions, without an error, leaving most of the run behind.
 deleted=0 failed=0
-while read -r id name updated; do
-  [ -n "$id" ] || continue
+mapfile -t rows <<< "$versions"
+for row in "${rows[@]}"; do
+  read -r id name updated <<< "$row"
+  [ -n "${id:-}" ] || continue
   if grep -qxF "$name" "$mine" || [[ "$updated" < "$cutoff" ]]; then
-    if gh api -X DELETE "$api/$id" >/dev/null; then
+    if out="$(gh api -X DELETE "$api/$id" </dev/null 2>&1)"; then
       deleted=$((deleted + 1))
+    elif [[ "$out" == *"cannot be deleted"* ]]; then
+      # GitHub refuses to delete a PUBLIC version past 5000 downloads. Not ours
+      # to override: said, and left.
+      echo "::warning::$image@$name is kept by GitHub: $out"
     else
+      echo "$out" >&2
       failed=$((failed + 1))
     fi
   fi
-done <<< "$versions"
+done
 
 echo "deleted $deleted version(s) of $image (this run's, and leftovers older than $cutoff)"
 if [ "$failed" -gt 0 ]; then

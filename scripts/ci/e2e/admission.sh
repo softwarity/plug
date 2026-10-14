@@ -129,6 +129,12 @@ admission_run() {
       echo "    plug's resolver on adm-echo.plug: $(plug_bounded 40 -p "$adm_newcomer" -c dig +time=3 +tries=1 "@$ns" adm-echo.plug A </dev/null 2>&1 \
         | grep -E 'status:|^adm-echo' | tr '\n' ' ')"
       echo "    the system's resolver configuration: $(scutil --dns | grep -E 'search domain|nameserver' | sort -u | tr -s ' ' | tr '\n' ';')"
+      # Every question plug's resolver was asked about the name, and its answer,
+      # beside the moments the tunnel came up (PLUG_DNS_TRACE, _e2e.yml): asked
+      # and answered found means the system kept an older no; never asked means
+      # the system did not even try.
+      echo "    plug's resolver, every answer about adm-echo, and the tunnel:"
+      sudo grep -E "dns-trace adm-echo|tunnel (up|down) for [^ ]*:$aport|adm-echo" /var/run/plug/daemon.log | tail -60 | sed 's/^/      /'
       sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder; sleep 1
       echo "    the system's answer after a flush: $(plug_bounded 40 -p "$adm_newcomer" -c dscacheutil -q host -a name adm-echo </dev/null 2>&1 | tr '\n' ' ')"
     fi

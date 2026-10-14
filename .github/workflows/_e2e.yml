@@ -99,6 +99,9 @@ jobs:
       A: ${{ inputs.cluster_a }}
       B: ${{ inputs.cluster_b }}
       AGENT_IMAGE: ghcr.io/softwarity/plug:sha-${{ inputs.short_sha }}-amd64
+      # Every answer of plug's resolver in the datapath's log, unthrottled
+      # (internal/tun/netstack.go): what a red cell's diagnosis reads back.
+      PLUG_DNS_TRACE: "1"
       # Where the shared client bundle lands (relative to the workspace, so Git
       # Bash on Windows reads it the same way every other shell does).
       PREBUILT_CLIENTS: e2e-clients

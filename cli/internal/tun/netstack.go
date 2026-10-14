@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -244,6 +245,9 @@ func handleDNS(r *udp.ForwarderRequest, tab *faketab, upstream *upstreamDNS, che
 			}
 			if resp := answerDNS(buf[:n], tab, upstream, check); resp != nil {
 				_, _ = conn.Write(resp)
+				if dnsTrace {
+					traceDNS(buf[:n], resp, log)
+				}
 			}
 		}
 	}()
@@ -294,4 +298,26 @@ func addrToU32(a tcpip.Address) uint32 {
 	}
 	b := a.As4()
 	return binary.BigEndian.Uint32(b[:])
+}
+
+// dnsTrace logs every answer this resolver gives, unthrottled, when
+// PLUG_DNS_TRACE=1 is in the datapath's environment. The ordinary log keeps one
+// NXDOMAIN line per name per thirty seconds, which is right for a working day
+// and blind for a diagnosis: whether a name the system says it cannot resolve
+// was asked here at all, and what it was told, is the one question it cannot
+// answer.
+var dnsTrace = os.Getenv("PLUG_DNS_TRACE") == "1"
+
+// traceDNS writes one line for a question and its answer: name, type, rcode
+// and how many answers it carried.
+func traceDNS(q, resp []byte, log logfn) {
+	if len(q) < 13 || len(resp) < 8 {
+		return
+	}
+	name, p := parseName(q, 12)
+	qtype := 0
+	if p+2 <= len(q) {
+		qtype = int(binary.BigEndian.Uint16(q[p:]))
+	}
+	log.f("tun: dns-trace %s type=%d rcode=%d answers=%d", name, qtype, resp[3]&0x0f, binary.BigEndian.Uint16(resp[6:8]))
 }
