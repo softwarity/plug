@@ -40,6 +40,10 @@ do_takeover() {
   # and is not one. Every answer is stamped with its second for that reason.
   sleep 8 # arm + park + end-to-end verify
   retry_until 3 3 "local-$tname" probe; during="$ru_out"
+  # A session that ended on its own before its reads is the failure to read
+  # first: its teardown is what puts the deployed workload back.
+  local tko_gone=""
+  kill -0 "$tko_pid" 2>/dev/null || tko_gone=$(( $(date +%s) - t0 ))
   # Once the name answers at all, every read must be ours (see assert_all for
   # the split route this caught). Up to ten, but only while the session is
   # certainly alive: a read costs 8s on a Windows runner, so ten of them
@@ -85,6 +89,7 @@ do_takeover() {
     sum "**takeover (park+restore)** ✅"; return 0
   fi
   echo "--- takeover FAIL - during='$during' (want local-$tname, every time) after='$after' (want deployed-$tname, every time)"
-  echo "    --- takeover session output ---"; tail -12 /tmp/takeover.out 2>/dev/null | sed 's/^/    /'
+  echo "    --- takeover session output (it exited $wb_rc${tko_gone:+, and was already gone ${tko_gone}s in}) ---"
+  tail -12 /tmp/takeover.out 2>/dev/null | sed 's/^/    /'
   sum "**takeover (park+restore)** ❌ - during \`${during:-nothing}\` · after \`${after:-nothing}\`"; return 1
 }

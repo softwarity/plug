@@ -12,7 +12,10 @@ name: CI
 
 on:
   push:
-    branches: ["**"]
+    # OFF on main while .github/workflows/investigate.yml runs its narrow
+    # pipeline there (one Mac leg, two compose clusters); back to ["**"] once
+    # the investigation is over, and the full run then blesses the fix.
+    branches-ignore: [main]
   # Kept for FORK pull requests only, where no push reaches this repository.
   # A PR from a branch of this repository already has its push run, and the
   # pull_request run doubled it: two pipelines per commit, the second of which

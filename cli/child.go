@@ -142,6 +142,7 @@ func runChildEnv(cmdArgs []string, env []string) int {
 			// goroutine starts after child.Start() has returned, so the process
 			// exists before anything can signal it.
 			if s == syscall.SIGTERM {
+				info("asked to stop (SIGTERM): passing it to %s, then closing the session", filepath.Base(cmdArgs[0]))
 				child.Process.Signal(s)
 			}
 		}
@@ -152,6 +153,11 @@ func runChildEnv(cmdArgs []string, env []string) int {
 		return 0
 	}
 	if ee, ok := err.(*exec.ExitError); ok {
+		// A command killed by a signal prints nothing of its own, and the
+		// session then ends as if it had finished: say which signal it was.
+		if ws, ok := ee.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+			info("%s ended on signal %v", filepath.Base(cmdArgs[0]), ws.Signal())
+		}
 		return ee.ExitCode()
 	}
 	return 1

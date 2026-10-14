@@ -37,8 +37,10 @@ rm -rf "$bgdir"; mkdir -p "$bgdir"
 # Kubernetes on the Mac, and Linux and Windows on every family, passed. One
 # daemon carries every session of the machine there, and how one cluster's
 # reconnect reaches a takeover on another is being looked at on its own; until
-# then the Mac legs keep the order that passes.
-if [ "$os" = mac ]; then
+# then the Mac legs keep the order that passes. PLUG_E2E_BG_ON_MAC=1 runs them
+# beside the chain there anyway: what .github/workflows/investigate.yml does to
+# reproduce it.
+if [ "$os" = mac ] && [ -z "${PLUG_E2E_BG_ON_MAC:-}" ]; then
   echo "macOS: the cluster-B cells run in the foreground, each in its own step (see this script)"
   exit 0
 fi

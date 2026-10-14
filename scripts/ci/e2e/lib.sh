@@ -508,7 +508,9 @@ wait_bg() {
   else
     wb_stuck=0
   fi
-  wait "$wb_pid" 2>/dev/null || true
+  # Its exit status, for the caller's message: a session that ended early
+  # says why only through it (above 128, the signal that ended it).
+  wb_rc=0; wait "$wb_pid" 2>/dev/null || wb_rc=$?
 }
 
 stop_bg() {
