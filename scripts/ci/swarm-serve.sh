@@ -15,17 +15,28 @@ root="$(cd "$(dirname "$0")/../.." && pwd)"
 # shellcheck source=scripts/ci/build-e2e-images.sh
 . "$root/scripts/ci/build-e2e-images.sh"
 
-require_agent_image
+# Two phases (see "Prepare the cluster" in _cluster.yml): `prepare` is all that
+# does not need the tested image, the swarm and the service images, and runs
+# while ci.yml is still building that image; the serve phase deploys and
+# idles. Run alone, the serve phase prepares first.
+prepare() {
+  echo "=== swarm init (single node) ==="
+  if [ "$(docker info --format '{{.Swarm.LocalNodeState}}')" != "active" ]; then
+    # 127.0.0.1: the runner has several interfaces (tailscale up) and no node
+    # will ever join this swarm: pin the advertise addr so init can't dither.
+    docker swarm init --advertise-addr 127.0.0.1 >/dev/null
+  fi
+  docker node ls
+  build_service_images
+}
 
-echo "=== swarm init (single node) ==="
-if [ "$(docker info --format '{{.Swarm.LocalNodeState}}')" != "active" ]; then
-  # 127.0.0.1: the runner has several interfaces (tailscale up) and no node
-  # will ever join this swarm: pin the advertise addr so init can't dither.
-  docker swarm init --advertise-addr 127.0.0.1 >/dev/null
+if [ "${1:-}" = prepare ]; then
+  prepare
+  exit 0
 fi
-docker node ls
+docker image inspect plug-e2e/chaos:e2e >/dev/null 2>&1 || prepare
 
-build_service_images
+require_agent_image
 cd "$root/e2e"
 
 echo "=== deploy the stack ==="

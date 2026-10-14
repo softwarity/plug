@@ -24,27 +24,30 @@ root="$(cd "$(dirname "$0")/../.." && pwd)"
 # shellcheck source=scripts/ci/build-e2e-images.sh
 . "$root/scripts/ci/build-e2e-images.sh"
 
-require_agent_image
-
-# Pinned, checksummed and retried, because this binary is written as ROOT into
-# /usr/local/bin and then run, and it sat on the critical path of the three k8s
-# legs with none of the three.
-#
-# Pinned: `latest` meant an upstream release could change what kind-config.yaml
-# means, or what --wait does, and turn the whole k8s family red on a day nobody
-# touched this repository. Checksummed: the Dockerfile already does exactly this
-# for the WinTUN driver, for exactly this reason, and kind was the one download
-# that escaped it. Retried: a bad minute on the network must not redden a good
-# commit, which is why go-mod-download.sh exists next door.
-KIND_VERSION=v0.33.0
-KIND_SHA256=aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d
-echo "=== install kind $KIND_VERSION ==="
-curl -fsSL --retry 3 --retry-connrefused --retry-delay 2 -o /tmp/kind \
-  "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64"
-echo "$KIND_SHA256  /tmp/kind" | sha256sum -c - || {
-  echo "::error::kind $KIND_VERSION does not match the digest this script pins. Either the download was" >&2
-  echo "         corrupted, or the release was replaced upstream. Refusing to run it as root." >&2
-  exit 1
+# Two phases (see "Prepare the cluster" in _cluster.yml): `prepare` is all that
+# does not need the tested image, the kind cluster and the images it runs, and
+# runs while ci.yml is still building that image; the serve phase loads the
+# tested image, deploys and idles. Run alone, the serve phase prepares first.
+prepare() {
+  # Pinned, checksummed and retried, because this binary is written as ROOT into
+  # /usr/local/bin and then run, and it sat on the critical path of the three k8s
+  # legs with none of the three.
+  #
+  # Pinned: `latest` meant an upstream release could change what kind-config.yaml
+  # means, or what --wait does, and turn the whole k8s family red on a day nobody
+  # touched this repository. Checksummed: the Dockerfile already does exactly this
+  # for the WinTUN driver, for exactly this reason, and kind was the one download
+  # that escaped it. Retried: a bad minute on the network must not redden a good
+  # commit, which is why go-mod-download.sh exists next door.
+  KIND_VERSION=v0.33.0
+  KIND_SHA256=aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d
+  echo "=== install kind $KIND_VERSION ==="
+  curl -fsSL --retry 3 --retry-connrefused --retry-delay 2 -o /tmp/kind \
+    "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64"
+  echo "$KIND_SHA256  /tmp/kind" | sha256sum -c - || {
+    echo "::error::kind $KIND_VERSION does not match the digest this script pins. Either the download was" >&2
+    echo "         corrupted, or the release was replaced upstream. Refusing to run it as root." >&2
+    exit 1
 }
 sudo install -m 0755 /tmp/kind /usr/local/bin/kind
 rm -f /tmp/kind
@@ -54,16 +57,28 @@ echo "=== create the kind cluster ==="
 kind create cluster --config "$root/e2e/kind-config.yaml" --wait 120s
 
 build_service_images
-cd "$root/e2e"
 echo "=== load them into kind ==="
-kind load docker-image softwarity/plug:e2e \
+kind load docker-image \
   plug-e2e/grpc:e2e plug-e2e/wsserver:e2e plug-e2e/prober:e2e \
   plug-e2e/flaky:e2e plug-e2e/gateway:e2e plug-e2e/chaos:e2e
 # And the fixtures' Docker Hub images, which the workflow loaded on this runner
 # from the Actions cache (e2e/images.txt): pulled by kind's own containerd they
 # would each be one more anonymous Docker Hub pull, six clusters a run.
+local fixtures
 mapfile -t fixtures < <(bash "$root/scripts/ci/image-cache.sh" runtime "$root/e2e/images.txt")
 kind load docker-image "${fixtures[@]}"
+}
+
+if [ "${1:-}" = prepare ]; then
+  prepare
+  exit 0
+fi
+kind get clusters 2>/dev/null | grep -qx kind || prepare
+
+require_agent_image
+cd "$root/e2e"
+echo "=== load the tested image into kind ==="
+kind load docker-image softwarity/plug:e2e
 
 echo "=== deploy the agent (the PUBLISHED manifest, this commit's image) ==="
 # This rewrite is the only thing standing between the three k8s legs and a run

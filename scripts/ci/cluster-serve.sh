@@ -15,15 +15,25 @@ root="$(cd "$(dirname "$0")/../.." && pwd)"
 # shellcheck source=scripts/ci/build-e2e-images.sh
 . "$root/scripts/ci/build-e2e-images.sh"
 
+cd "$root/e2e"
+resolve_previous_release
+compose="docker compose -f compose.yml -f compose.cluster.yml"
+
+# Two phases (see "Prepare the cluster" in _cluster.yml): `prepare` builds the
+# services compose builds, which does not need the tested image, while ci.yml
+# is still building that image; the serve phase brings everything up (its
+# --build then finds them built) and idles.
+if [ "${1:-}" = prepare ]; then
+  echo "=== build the services compose builds ==="
+  $compose build grpc wsserver prober gateway flaky-linux flaky-mac flaky-win chaos
+  exit 0
+fi
+
 # The agent image is what the workflow pulled (the one ci.yml published for
 # this commit) or, on a manual dispatch, built: this script only serves it.
 require_agent_image
 
 echo "=== up agent + all services ==="
-cd "$root/e2e"
-resolve_previous_release
-
-compose="docker compose -f compose.yml -f compose.cluster.yml"
 # The full protocol matrix: one service per protocol, plus `ident` (answers this
 # cluster's PLUG_CLUSTER_IDENT, the multicluster assert). grpc/wsserver are built
 # (compose build); the rest are pulled images. --wait blocks on the healthchecks.
