@@ -5,8 +5,11 @@ package tun
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -88,9 +91,45 @@ func configure(_ any, _ int, ifname, cidr, dnsIP string, up *upstreamDNS, log lo
 
 // flushDNS makes mDNSResponder re-read the resolver configuration and drop its
 // cache, stale negatives included.
+//
+// The HUP is sent from here, by pid, and not through killall. killall signals
+// the processes whose REAL uid is its caller's, and the shared daemon runs from
+// the setuid launcher: root by its effective uid, the user by its real one. So
+// `killall -HUP mDNSResponder` from the daemon matched no process at all,
+// mDNSResponder belonging to _mdnsresponder, and said nothing, its error
+// ignored. Every flush the daemon ever did was that no-op: a name answered
+// NXDOMAIN before its cluster's tunnel was up kept failing from the system's
+// cache after it was, until something else flushed it. kill(2) checks the
+// effective uid, which is root.
 func flushDNS() {
 	_ = run("dscacheutil", "-flushcache")
-	_ = run("killall", "-HUP", "mDNSResponder")
+	hupProcesses("mDNSResponder")
+}
+
+// hupProcesses sends SIGHUP to every process named name.
+func hupProcesses(name string) {
+	path, ok := helperPath("pgrep")
+	if !ok {
+		return
+	}
+	out, err := exec.Command(path, "-x", name).Output()
+	if err != nil {
+		return // none running, or no pgrep: nothing to signal
+	}
+	for _, pid := range parsePIDs(string(out)) {
+		_ = syscall.Kill(pid, syscall.SIGHUP)
+	}
+}
+
+// parsePIDs reads pgrep's output: one pid per line.
+func parsePIDs(out string) []int {
+	var pids []int
+	for _, f := range strings.Fields(out) {
+		if pid, err := strconv.Atoi(f); err == nil && pid > 1 {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
 }
 
 // macDNSOverride is plug's hold on the machine's resolver: the three
