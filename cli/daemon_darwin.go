@@ -25,6 +25,12 @@ func daemonMain(_ []string) int {
 	if !leader {
 		return 0 // another daemon won the start race
 	}
+	// The stopping marker (reapWhenIdle): a previous daemon's, should it have
+	// died mid-stop, goes now; ours goes once the lock is released, not before
+	// (defers run last first), so a launcher waiting on it then finds no daemon
+	// and starts one rather than trusting the lock of one on its way out.
+	tun.ClearDaemonStopping()
+	defer tun.ClearDaemonStopping()
 	defer release()
 
 	// Timestamp every daemon.log line: the log is the only forensic trail of a
@@ -60,7 +66,7 @@ func daemonMain(_ []string) int {
 
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT) // `plug down`
-	go func() { <-sigs; dp.Stop() }()
+	go func() { <-sigs; tun.MarkDaemonStopping(); dp.Stop() }()
 
 	dp.Wait()
 	close(stop)

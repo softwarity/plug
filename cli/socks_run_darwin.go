@@ -30,6 +30,7 @@ func coreRun(cfg config, cmdArgs []string) int {
 	unregister := tun.RegisterClient(key, os.Getpid(), cfg.key)
 	defer unregister()
 
+	awaitStoppedDaemon(tun.DaemonStopping, daemonStopWait)
 	if !tun.DaemonAlive(globalKey) {
 		// Two `plug` launched at once both try to start the daemon; only one wins
 		// the leader flock. If OUR attempt fails but a daemon is now up (the other

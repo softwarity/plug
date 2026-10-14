@@ -50,6 +50,11 @@ up: plug clears the system's resolver cache at that moment, so a name looked
 up while the cluster was out of reach (a newcomer waiting to be accepted, say)
 is asked again instead of failing from the cache.
 
+A plug started just as the shared datapath was going idle and shutting down
+now waits for it to be gone and starts a fresh one, instead of running its
+command without the cluster's names (macOS) or failing to start the service
+(Windows).
+
 ---
 
 ## 2.25.1

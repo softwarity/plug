@@ -40,6 +40,7 @@ func coreRunViaService(cfg config, cmdArgs []string) int {
 	unregister := tun.RegisterClient(key, os.Getpid(), cfg.key)
 	defer unregister()
 
+	awaitStoppedDaemon(tun.DaemonStopping, daemonStopWait)
 	if !tun.DaemonAlive(globalKey) {
 		if err := startService(); err != nil && !tun.DaemonAlive(globalKey) {
 			info("cannot start the plug service: %v", err)

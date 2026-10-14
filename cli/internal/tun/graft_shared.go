@@ -56,3 +56,19 @@ func ClusterError(key string) string {
 // that was in no connected cluster a moment ago may be in this one, and the
 // system must ask again rather than repeat the old NXDOMAIN.
 func FlushSystemDNS() { flushDNS() }
+
+// The stopping marker is what a datapath that has decided to stop leaves for
+// the launchers. Between that decision and the process going away the daemon
+// still holds its lock (macOS) or reports StopPending (Windows), while its
+// resolver and tunnels are already being taken down: a plug started in that
+// window found a daemon "alive", started none, and ran its command with no
+// cluster names, or, on Windows, failed to start a service that was stopping.
+// A launcher that sees the marker waits for the stop to finish instead, then
+// starts a fresh datapath.
+func stoppingPath() string { return filepath.Join(graftDir, "daemon.stopping") }
+
+func MarkDaemonStopping() { _ = os.WriteFile(stoppingPath(), nil, 0o644) }
+
+func ClearDaemonStopping() { _ = os.Remove(stoppingPath()) }
+
+func DaemonStopping() bool { _, err := os.Stat(stoppingPath()); return err == nil }

@@ -357,28 +357,74 @@ func reconcileLoop(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transpo
 // reapGlobal stops the datapath once no cluster has had a live client for grace —
 // long enough to ride through a kill+relaunch of a process.
 func reapGlobal(dp *tun.Datapath, stop <-chan struct{}) {
-	const grace = 30 * time.Second
 	tk := time.NewTicker(2 * time.Second)
 	defer tk.Stop()
+	reapWhenIdle(dp, stop, tk.C, 30*time.Second,
+		func() int { return len(tun.ActiveClusters()) }, markStopping)
+}
+
+// markStopping sets or clears the marker launchers read (tun.MarkDaemonStopping).
+func markStopping(on bool) {
+	if on {
+		tun.MarkDaemonStopping()
+	} else {
+		tun.ClearDaemonStopping()
+	}
+}
+
+// reapWhenIdle is reapGlobal with its clocks, its count of clients and its
+// marker injected, the way keepaliveOn is: the rule is what matters, and
+// waiting thirty real seconds to exercise it is how a slow suite is born.
+//
+// The marker goes up BEFORE the last count. A plug that registers before it is
+// seen by that count, and the stop is called off; one that registers after it
+// finds the marker and waits for this datapath to be gone (awaitStoppedDaemon).
+// Either way no launcher meets a datapath that is going away and takes it for
+// one that serves.
+func reapWhenIdle(dp interface{ Stop() }, stop <-chan struct{}, tick <-chan time.Time, grace time.Duration,
+	clients func() int, mark func(on bool)) {
 	var emptySince time.Time
 	for {
 		select {
 		case <-stop:
 			return
-		case <-tk.C:
-			if len(tun.ActiveClusters()) > 0 {
+		case now := <-tick:
+			if clients() > 0 {
 				emptySince = time.Time{}
 				continue
 			}
 			if emptySince.IsZero() {
-				emptySince = time.Now()
+				emptySince = now
 				continue
 			}
-			if time.Since(emptySince) >= grace {
-				dp.Stop()
-				return
+			if now.Sub(emptySince) < grace {
+				continue
 			}
+			mark(true)
+			if clients() > 0 {
+				mark(false)
+				emptySince = time.Time{}
+				continue
+			}
+			dp.Stop()
+			return
 		}
+	}
+}
+
+// daemonStopWait bounds how long a launcher waits for a stopping datapath to be
+// gone. Its teardown restores the resolver and closes the tunnels, a second or
+// two; a marker still there after this is one a crashed daemon left, and the
+// next daemon clears it as it starts.
+const daemonStopWait = 15 * time.Second
+
+// awaitStoppedDaemon waits, after this launcher registered, while a datapath
+// that decided to stop is still going away, so the launcher then starts a fresh
+// one instead of running its command on the one being taken down.
+func awaitStoppedDaemon(stopping func() bool, wait time.Duration) {
+	deadline := time.Now().Add(wait)
+	for stopping() && time.Now().Before(deadline) {
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 

@@ -54,6 +54,7 @@ type plugService struct{}
 func (s *plugService) Execute(_ []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
 	const accepts = svc.AcceptStop | svc.AcceptShutdown
 	changes <- svc.Status{State: svc.StartPending}
+	tun.ClearDaemonStopping() // a previous run's, should it have died mid-stop (reapWhenIdle)
 
 	ct := tun.NewClusterTransports()
 	dp, err := tun.StartGlobalDatapath(ct, info)
@@ -90,12 +91,16 @@ loop:
 		}
 	}
 
+	tun.MarkDaemonStopping() // the reaper set it already; an SCM stop has not
 	changes <- svc.Status{State: svc.StopPending}
 	close(stop)
 	dp.Stop()
 	<-reconciled // a tick in flight still writes to `tunnels` — let it finish
 	closeAll(ct, tunnels)
 	changes <- svc.Status{State: svc.Stopped}
+	// Only once the SCM reports it stopped: a launcher waiting on the marker
+	// then starts the service again instead of failing on a StopPending one.
+	tun.ClearDaemonStopping()
 	info("service: global datapath down")
 	return false, 0
 }
