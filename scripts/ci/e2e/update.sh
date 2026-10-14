@@ -56,9 +56,16 @@ do_update() {
   if ! printf '%s' "$out" | grep -Eq "launcher (already matches|is a dev build)"; then
     echo "--- update FAIL - no launcher line"; sum "**plug update** ❌ - no launcher line"; return 1
   fi
-  # The verb must have left the agent standing.
-  local v
-  v="$(ssh_agent "$ip_b" "$rsshport" version 2>/dev/null | tr -d '\r')"
+  # The verb must have left the agent standing. plug returns as soon as the new
+  # instance answers, while the old one may still be draining behind the same
+  # port: a connection that lands on it in that second is reset, so the agent
+  # is given a few tries to be the only one there.
+  local v="" i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    v="$(ssh_agent "$ip_b" "$rsshport" version 2>/dev/null | tr -d '\r')"
+    [ -n "$v" ] && break
+    sleep 3
+  done
   if [ -z "$v" ]; then
     echo "--- update FAIL - $ragent no longer answers"; sum "**plug update** ❌ - agent down after"; return 1
   fi
