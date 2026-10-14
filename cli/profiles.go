@@ -94,9 +94,15 @@ func listProfiles() []string {
 // be separate loops, and the soft one never learnt `update`, which left the MCP
 // tool list_profiles reporting an empty policy for every cluster.
 func loadProfile(name string) config {
-	data, err := os.ReadFile(profilePath(name))
-	if err != nil {
+	// Read as the user's, on the descriptor: plug runs setuid root on macOS,
+	// and a profile replaced by a symlink to a file only root may read would
+	// otherwise hand its first lines (host = ...) to whoever looks at the error.
+	data, err := readUserOwnedFile(profilePath(name))
+	if errors.Is(err, fs.ErrNotExist) {
 		fatal("profile %q not found in %s", name, plugDir())
+	}
+	if err != nil {
+		fatal("profile %q: %v", name, err)
 	}
 	cfg, notes, err := parseProfile(data)
 	if err != nil {

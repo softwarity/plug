@@ -472,7 +472,7 @@ func readProfileSoft(name string) (config, error) {
 	if err := checkProfileName(name); err != nil {
 		return config{}, err
 	}
-	data, err := os.ReadFile(profilePath(name))
+	data, err := readUserOwnedFile(profilePath(name)) // as loadProfile reads it
 	if err != nil {
 		return config{}, fmt.Errorf("unreadable: %v", err)
 	}

@@ -9,8 +9,8 @@ import (
 )
 
 // The Windows connect-time attribution primitives, mirrors of the Linux/macOS
-// ones: ppidOf walks the process table (ToolHelp snapshot), pidForLocalPort maps
-// a local TCP source port to its owning PID (GetExtendedTcpTable). The
+// ones: ppidOf walks the process table (ToolHelp snapshot), pidForFlow maps a
+// flow to the PID owning its socket (GetExtendedTcpTable). The
 // multicluster router (router.go) feeds them to the SYSTEM service's datapath,
 // the Windows counterpart of the macOS daemon, and the client registry reads
 // procStart to stamp and verify its markers.
@@ -62,8 +62,9 @@ var (
 	procGetExtendedTcpTable = modiphlpapi.NewProc("GetExtendedTcpTable")
 )
 
-// mibTCPRowOwnerPID mirrors MIB_TCPROW_OWNER_PID. dwLocalPort holds the port in
-// network byte order in its low 16 bits.
+// mibTCPRowOwnerPID mirrors MIB_TCPROW_OWNER_PID. The ports hold the port in
+// network byte order in their low 16 bits, the addresses the address in network
+// byte order.
 type mibTCPRowOwnerPID struct {
 	state      uint32
 	localAddr  uint32
@@ -75,10 +76,10 @@ type mibTCPRowOwnerPID struct {
 
 const tcpTableOwnerPidAll = 5 // TCP_TABLE_OWNER_PID_ALL
 
-// pidForLocalPort maps a local TCP source port to the PID owning that socket, via
-// GetExtendedTcpTable (MIB_TCPTABLE_OWNER_PID). A SYSTEM service sees every
-// process's connections. Two calls: size, then the table.
-func pidForLocalPort(srcPort uint16) (int, bool) {
+// pidForFlow maps a flow to the PID owning its socket, via GetExtendedTcpTable
+// (MIB_TCPTABLE_OWNER_PID). A SYSTEM service sees every process's connections.
+// Two calls: size, then the table.
+func pidForFlow(f flow) (int, bool) {
 	var size uint32
 	procGetExtendedTcpTable.Call(0, uintptr(unsafe.Pointer(&size)), 0,
 		uintptr(windows.AF_INET), tcpTableOwnerPidAll, 0)
@@ -95,16 +96,35 @@ func pidForLocalPort(srcPort uint16) (int, bool) {
 	if n == 0 {
 		return 0, false
 	}
-	rows := unsafe.Slice((*mibTCPRowOwnerPID)(unsafe.Pointer(&buf[4])), n)
+	return pidFromTCPRows(unsafe.Slice((*mibTCPRowOwnerPID)(unsafe.Pointer(&buf[4])), n), f)
+}
+
+// pidFromTCPRows is the matching half, separated so it can be tested against
+// rows written out instead of whatever this machine happens to be doing.
+//
+// The row is the flow's when its local port is the flow's source port and its
+// remote end is exactly the flow's destination, the fake address and port.
+// The port alone named a listener on it just as well (the table holds them,
+// TCP_TABLE_OWNER_PID_ALL), or another socket of the same port to somewhere
+// else, and the first such row answered for the flow: the wrong cluster in the
+// multicluster router, the wrong owner in the single-cluster check. The fake
+// destination is minted by plug, so no other socket has it.
+func pidFromTCPRows(rows []mibTCPRowOwnerPID, f flow) (int, bool) {
+	a := f.dst.Addr().As4()
+	// The address as the row holds it: its four bytes in network order, read
+	// as a little-endian DWORD, which is how Windows lays them in memory.
+	wantAddr := uint32(a[0]) | uint32(a[1])<<8 | uint32(a[2])<<16 | uint32(a[3])<<24
 	for i := range rows {
-		lp := rows[i].localPort
-		port := uint16((lp&0xff)<<8 | (lp>>8)&0xff) // ntohs of the low 16 bits
-		if port == srcPort {
+		if ntohs(rows[i].localPort) == f.srcPort &&
+			rows[i].remoteAddr == wantAddr && ntohs(rows[i].remotePort) == f.dst.Port() {
 			return int(rows[i].owningPid), true
 		}
 	}
 	return 0, false
 }
+
+// ntohs reads a port held in network byte order in a DWORD's low 16 bits.
+func ntohs(p uint32) uint16 { return uint16((p&0xff)<<8 | (p>>8)&0xff) }
 
 // The account behind a pid, the question the single-cluster check asks on
 // every SYN, is accountOfPID in account_windows.go: a SID read off the

@@ -2,7 +2,26 @@
 
 package tun
 
-import "testing"
+import (
+	"net"
+	"net/netip"
+	"testing"
+)
+
+// flowOf is a real connection as the datapath sees one: its source port and
+// the destination it dialled.
+func flowOf(conn net.Conn) flow {
+	return flow{
+		srcPort: uint16(conn.LocalAddr().(*net.TCPAddr).Port),
+		dst:     conn.RemoteAddr().(*net.TCPAddr).AddrPort(),
+	}
+}
+
+// at is a flow from a source port, for the fakes that do not read its
+// destination.
+func at(port uint16) flow {
+	return flow{srcPort: port, dst: netip.MustParseAddrPort("198.18.0.1:80")}
+}
 
 func TestWalkToCluster(t *testing.T) {
 	// Synthetic ancestry: 100 (app's child) → 42 (plug -p B) → 7 (shell) → 1.

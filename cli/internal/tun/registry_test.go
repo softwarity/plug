@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRegistryLiveClients(t *testing.T) {
@@ -414,4 +415,52 @@ func readMarkerAccount(t *testing.T, key string, pid int) string {
 		t.Fatalf("reading the owner marker: %v", err)
 	}
 	return strings.TrimSpace(string(b))
+}
+
+// The check and the registration are one step: while a launcher holds the
+// cluster's registry lock, another one waits, and then finds its marker.
+func TestRegisteringWaitsForTheRegistryLock(t *testing.T) {
+	old := graftDir
+	graftDir = t.TempDir()
+	defer func() { graftDir = old }()
+	unlock := lockRegistry("hostL:2222")
+	done := make(chan struct{})
+	go func() {
+		unreg, _, held := RegisterClientExclusive("hostL:2222", os.Getpid(), "", ThisAccount())
+		if held {
+			t.Error("this account was refused its own cluster")
+		}
+		unreg()
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("a launcher registered while another held the cluster's registry lock")
+	case <-time.After(200 * time.Millisecond):
+	}
+	unlock()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the registration never went through once the lock was released")
+	}
+}
+
+// Refused, a launcher leaves no marker: the question is asked before the
+// registration, in the same step, never after it.
+func TestAHeldClusterIsRefusedBeforeAnyMarker(t *testing.T) {
+	old := graftDir
+	graftDir = t.TempDir()
+	defer func() { graftDir = old }()
+
+	const key = "host-x:2222"
+	holdCluster(t, key, os.Getpid(), accountA)
+	pid := os.Getppid()
+	_, other, held := RegisterClientExclusive(key, pid, "", accountB)
+	if !held || other != accountA {
+		t.Fatalf("a second account was not refused, or not told who holds it: got (%q,%v), want (%q,true)", other, held, accountA)
+	}
+	if _, err := os.Stat(filepath.Join(clientsDir(key), strconv.Itoa(pid))); err == nil {
+		t.Fatal("a refused launcher left a marker: it joined the set it was refused from")
+	}
 }

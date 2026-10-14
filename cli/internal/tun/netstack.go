@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"strconv"
 	"sync"
@@ -26,16 +27,26 @@ import (
 // ANY fake destination and may reply from it. Every accepted TCP flow is handed
 // to handleTCP, which splices it to the SSH tunnel by name; DNS (UDP:53 to the
 // instance's dnsIP) is answered in-stack by handleDNS.
-// dialFunc picks the cluster transport for an intercepted flow by its source
-// port, returning the transport and the cluster key it was attributed to (for
-// logs), or ok=false to refuse it (unattributable → RST). Single-cluster returns
-// a constant (constDial); multicluster resolves srcPort→PID→cluster→tunnel.
-type dialFunc func(srcPort uint16, name string) (d Dialer, cluster string, ok bool)
+// flow is an intercepted connection as the machine's socket table knows it:
+// the app's source port and the destination it dialled, a fake address and the
+// service's port. It takes both to name one socket. A port alone is also a
+// listener's, or another connection's to somewhere else, and the first of those
+// the table lists would answer for the flow.
+type flow struct {
+	srcPort uint16
+	dst     netip.AddrPort
+}
+
+// dialFunc picks the cluster transport for an intercepted flow, returning the
+// transport and the cluster key it was attributed to (for logs), or ok=false to
+// refuse it (unattributable → RST). Single-cluster returns a constant
+// (constDial); multicluster resolves flow→PID→cluster→tunnel.
+type dialFunc func(f flow, name string) (d Dialer, cluster string, ok bool)
 
 // constDial is the single-cluster case: every flow goes to the one transport, no
 // attribution. This keeps the proven single-cluster datapath behaviour exact.
 func constDial(tr Dialer) dialFunc {
-	return func(uint16, string) (Dialer, string, bool) { return tr, "", true }
+	return func(flow, string) (Dialer, string, bool) { return tr, "", true }
 }
 
 // refusedLimiter throttles the "unattributable flow" log. While a cluster is
@@ -155,11 +166,14 @@ func handleTCP(r *tcp.ForwarderRequest, tab *faketab, df dialFunc, log logfn) {
 		r.Complete(true) // RST — we never minted this fake
 		return
 	}
-	// Pick the cluster this flow belongs to. RemotePort is the app's source port,
-	// the key the multicluster router walks (srcPort→PID→ancestry→cluster). We
-	// refuse an unattributable flow rather than mis-route it. Single-cluster
-	// (constDial) always attributes, so this path is unchanged there.
-	dialer, cluster, ok := df(id.RemotePort, name)
+	// Pick the cluster this flow belongs to. RemotePort is the app's source port
+	// and LocalAddress:LocalPort what it dialled, the socket the multicluster
+	// router looks up (flow→PID→ancestry→cluster). We refuse an unattributable
+	// flow rather than mis-route it. Single-cluster (constDial) always
+	// attributes, so this path is unchanged there.
+	var dst [4]byte
+	binary.BigEndian.PutUint32(dst[:], fake)
+	dialer, cluster, ok := df(flow{srcPort: id.RemotePort, dst: netip.AddrPortFrom(netip.AddrFrom4(dst), id.LocalPort)}, name)
 	if !ok {
 		if refusedLimiter.allow(name) {
 			log.f("tun: → %s: refused (unattributable flow; repeats hidden)", name)

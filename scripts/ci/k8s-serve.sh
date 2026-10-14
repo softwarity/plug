@@ -58,9 +58,7 @@ kind create cluster --config "$root/e2e/kind-config.yaml" --wait 120s
 
 build_service_images
 echo "=== load them into kind ==="
-kind load docker-image \
-  plug-e2e/grpc:e2e plug-e2e/wsserver:e2e plug-e2e/prober:e2e \
-  plug-e2e/flaky:e2e plug-e2e/gateway:e2e plug-e2e/chaos:e2e
+kind load docker-image "${service_images[@]}"
 # And the fixtures' Docker Hub images, which the workflow loaded on this runner
 # from the Actions cache (e2e/images.txt): pulled by kind's own containerd they
 # would each be one more anonymous Docker Hub pull, six clusters a run.

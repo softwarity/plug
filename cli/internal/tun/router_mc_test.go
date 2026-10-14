@@ -10,9 +10,9 @@ import (
 	"time"
 )
 
-// localSocket opens a real local TCP connection and returns its source port +
-// a cleanup. The socket table lookup must see it and map it back to this process.
-func localSocket(t *testing.T) (uint16, func()) {
+// localSocket opens a real local TCP connection and returns its flow + a
+// cleanup. The socket table lookup must see it and map it back to this process.
+func localSocket(t *testing.T) (flow, func()) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -23,8 +23,7 @@ func localSocket(t *testing.T) (uint16, func()) {
 		ln.Close()
 		t.Fatal(err)
 	}
-	port := uint16(conn.LocalAddr().(*net.TCPAddr).Port)
-	return port, func() { conn.Close(); ln.Close() }
+	return flowOf(conn), func() { conn.Close(); ln.Close() }
 }
 
 // TestMultiDialSelf proves the whole macOS attribution chain against a real
@@ -39,10 +38,10 @@ func TestMultiDialSelf(t *testing.T) {
 	ct.Set("hostZ:2222", loopbackDialer{addr: "Z"})
 	ct.Set("hostX:2222", loopbackDialer{addr: "X"}) // 2 clusters → attribution
 
-	srcPort, done := localSocket(t)
+	f, done := localSocket(t)
 	defer done()
 
-	d, key, ok := multiDial(ct)(srcPort, "svc")
+	d, key, ok := multiDial(ct)(f, "svc")
 	if !ok {
 		mustWorkInCI(t, ok, "the connect-time attribution")
 		return
@@ -63,10 +62,10 @@ func TestMultiDialRefuses(t *testing.T) {
 	ct.Set("hostA:2222", loopbackDialer{addr: "A"})
 	ct.Set("hostB:2222", loopbackDialer{addr: "B"}) // ≥2 → attribution required
 
-	srcPort, done := localSocket(t)
+	f, done := localSocket(t)
 	defer done()
 
-	if _, _, ok := multiDial(ct)(srcPort, "svc"); ok {
+	if _, _, ok := multiDial(ct)(f, "svc"); ok {
 		t.Fatalf("an unattributable flow must be refused when >1 cluster is active")
 	}
 }
@@ -78,7 +77,7 @@ func TestMultiDialSoleTransparent(t *testing.T) {
 	ct := NewClusterTransports()
 	ct.Set("only:2222", loopbackDialer{addr: "only"})
 
-	d, key, ok := multiDial(ct)(40000, "svc") // arbitrary port, no attribution needed
+	d, key, ok := multiDial(ct)(at(40000), "svc") // arbitrary port, no attribution needed
 	if !ok {
 		t.Fatal("a single active cluster must route transparently")
 	}
@@ -102,15 +101,15 @@ func TestMultiDialNeverLendsAnotherClustersTunnel(t *testing.T) {
 	ct.Set("other:2227", loopbackDialer{addr: "other"})
 	ct.SetActive([]string{"refused:2230", "other:2227"})
 
-	srcPort, done := localSocket(t)
+	f, done := localSocket(t)
 	defer done()
-	if d, key, ok := multiDial(ct)(srcPort, "svc"); ok {
+	if d, key, ok := multiDial(ct)(f, "svc"); ok {
 		t.Fatalf("a flow of a cluster with no tunnel went out through %q (%v)", key, d)
 	}
 
 	// And the cluster still in use alone keeps the transparent route.
 	ct.SetActive([]string{"other:2227"})
-	if _, key, ok := multiDial(ct)(40000, "svc"); !ok || key != "other:2227" {
+	if _, key, ok := multiDial(ct)(at(40000), "svc"); !ok || key != "other:2227" {
 		t.Fatalf("the one cluster in use lost its transparent route: %q %v", key, ok)
 	}
 }
@@ -132,13 +131,13 @@ func TestPinnedNameRoutesToItsCluster(t *testing.T) {
 	PinName("cluster-b", os.Getpid(), "Plug-Mnt-Web-1234abcd")
 	defer UnpinNames("cluster-b", os.Getpid())
 	pinCache = map[string]pinEntry{}
-	d, key, ok := multiDial(ct)(40000, "plug-mnt-web-1234abcd")
+	d, key, ok := multiDial(ct)(at(40000), "plug-mnt-web-1234abcd")
 	if !ok || key != "cluster-b" || d.(loopbackDialer).addr != "B" {
 		t.Fatalf("pinned name: %v %q %v", ok, key, d)
 	}
 	// Not pinned: two clusters, an unattributable port → refused as before.
 	pinCache = map[string]pinEntry{}
-	if _, _, ok := multiDial(ct)(40000, "other"); ok {
+	if _, _, ok := multiDial(ct)(at(40000), "other"); ok {
 		t.Fatal("an unpinned name with two clusters must still be attributed")
 	}
 	// A dead pinner: its pin is nobody's.

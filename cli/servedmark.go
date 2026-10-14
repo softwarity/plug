@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -46,7 +47,7 @@ func markServed(name, agentPort string, cmdArgs []string) func() {
 	}
 	cwd, _ := os.Getwd()
 	body := fmt.Sprintf("pid = %d\nport = %s\ndir = %s\ncmd = %s\n",
-		os.Getpid(), agentPort, cwd, strings.Join(cmdArgs, " "))
+		os.Getpid(), agentPort, cwd, redactSecrets(strings.Join(cmdArgs, " ")))
 	if os.WriteFile(path, []byte(body), 0o600) != nil {
 		return func() {}
 	}
@@ -54,6 +55,20 @@ func markServed(name, agentPort string, cmdArgs []string) func() {
 	chownToUser(servedDir())
 	chownToUser(path)
 	return func() { _ = os.Remove(path) }
+}
+
+// The command line is there for a human to recognise the session, and a
+// command line can carry a password: `psql postgres://app:s3cret@db/orders`,
+// `PGPASSWORD=s3cret psql`. Those stay out of the record, which outlives the
+// session's own memory and sits in the user's home with every other file.
+var (
+	urlPassword = regexp.MustCompile(`(://[^/\s:@]*):[^@\s]*@`)
+	envSecret   = regexp.MustCompile(`(?i)\b([A-Z0-9_]*(PASSWORD|PASSWD|PASS|SECRET|TOKEN)[A-Z0-9_]*)=\S*`)
+)
+
+func redactSecrets(cmd string) string {
+	cmd = urlPassword.ReplaceAllString(cmd, "$1:***@")
+	return envSecret.ReplaceAllString(cmd, "$1=***")
 }
 
 // servedHolder reads what this machine recorded about name, or nil when there is

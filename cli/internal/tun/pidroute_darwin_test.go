@@ -4,13 +4,14 @@ package tun
 
 import (
 	"net"
+	"net/netip"
 	"os"
 	"testing"
 )
 
-// TestPidForLocalPortSelf proves the macOS connect-time lookup against a real
-// socket: a local connection's source port must resolve back to THIS process.
-func TestPidForLocalPortSelf(t *testing.T) {
+// TestPidForFlowSelf proves the macOS connect-time lookup against a real
+// socket: a local connection must resolve back to THIS process.
+func TestPidForFlowSelf(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -21,15 +22,15 @@ func TestPidForLocalPortSelf(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	srcPort := conn.LocalAddr().(*net.TCPAddr).Port
+	f := flowOf(conn)
 
-	pid, ok := pidForLocalPort(uint16(srcPort))
+	pid, ok := pidForFlow(f)
 	if !ok {
 		mustWorkInCI(t, ok, "the socket table lookup (netstat)")
 		return
 	}
 	if pid != os.Getpid() {
-		t.Fatalf("pidForLocalPort(%d) = %d, want self %d", srcPort, pid, os.Getpid())
+		t.Fatalf("pidForFlow(%v) = %d, want self %d", f, pid, os.Getpid())
 	}
 }
 
@@ -48,7 +49,15 @@ tcp4       0      0  192.168.1.48.61790     93.184.216.34.443      TIME_WAIT    
 tcp4       0      0  192.168.1.48.761       93.184.216.34.443      ESTABLISHED        0            0  131072  131072      curl:90097  00102
 tcp4       0      0  192.168.1.48.61800     93.184.216.34.443      ESTABLISHED        0            0  131072  131072          :90098  00102
 tcp4       0      0  192.168.1.48.61810     93.184.216.34.443      ESTABLISHED        0            0  131072  131072    kernel:0  00102
+tcp4       0      0  *.61820                *.*                    LISTEN             0            0  131072  131072      node:90099  00001
+tcp4       0      0  192.168.1.48.61820     192.0.2.9.5432         ESTABLISHED        0            0  131072  131072      psql:90100  00102
+tcp4       0      0  192.168.1.48.61820     198.18.0.7.5432        SYN_SENT           0            0  131072  131072      psql:90101  00104
 `
+
+// to is the flow from a source port to the destination its row names.
+func to(port uint16, dst string) flow {
+	return flow{srcPort: port, dst: netip.MustParseAddrPort(dst)}
+}
 
 // TestPidFromNetstat pins the six shapes the column layout can take. Each one
 // broke a plausible parser: the state at attribution time is SYN_SENT and not
@@ -59,26 +68,37 @@ tcp4       0      0  192.168.1.48.61810     93.184.216.34.443      ESTABLISHED  
 // hands back the hex state column instead, where "00102" parses cleanly as pid 102.
 func TestPidFromNetstat(t *testing.T) {
 	for _, c := range []struct {
-		why  string
-		port uint16
-		pid  int
-		ok   bool
+		why string
+		f   flow
+		pid int
+		ok  bool
 	}{
-		{"SYN_SENT is the state a flow is in when plug asks", 61761, 90091, true},
-		{"an established IPv4 connection", 61763, 90092, true},
-		{"IPv6 puts the port after a dot, behind a colon-filled address", 61765, 90093, true},
-		{"a listener has `*.port` where an address would be", 8080, 90094, true},
-		{"a process named like a version number", 61776, 90095, true},
-		{"a process name holding spaces spans three fields", 61780, 90096, true},
-		{"no owner recorded: unattributable, not mis-attributed", 61790, 0, false},
-		{"a nameless process still owns its socket, or blanking a name evades the check", 61800, 90098, true},
-		{"pid 0 owns no socket", 61810, 0, false},
-		{"a port nobody holds", 65000, 0, false},
+		{"SYN_SENT is the state a flow is in when plug asks", to(61761, "192.0.2.1:80"), 90091, true},
+		{"an established IPv4 connection", to(61763, "127.0.0.1:61762"), 90092, true},
+		{"IPv6 puts the port after a dot, behind a colon-filled address", to(61765, "[::1]:61764"), 90093, true},
+		{"a listener is no flow: it has `*.*` where a destination would be", to(8080, "192.0.2.1:8080"), 0, false},
+		{"a process named like a version number", to(61776, "160.79.104.10:443"), 90095, true},
+		{"a process name holding spaces spans three fields", to(61780, "93.184.216.34:443"), 90096, true},
+		{"no owner recorded: unattributable, not mis-attributed", to(61790, "93.184.216.34:443"), 0, false},
+		{"a nameless process still owns its socket, or blanking a name evades the check", to(61800, "93.184.216.34:443"), 90098, true},
+		{"pid 0 owns no socket", to(61810, "93.184.216.34:443"), 0, false},
+		{"a port nobody holds", to(65000, "93.184.216.34:443"), 0, false},
+		{"the right port to another destination is another socket", to(61761, "192.0.2.2:80"), 0, false},
 	} {
-		pid, ok := pidFromNetstat(netstatSample, c.port)
+		pid, ok := pidFromNetstat(netstatSample, c.f)
 		if ok != c.ok || pid != c.pid {
-			t.Errorf("pidFromNetstat(%d) = %d,%v; want %d,%v (%s)", c.port, pid, ok, c.pid, c.ok, c.why)
+			t.Errorf("pidFromNetstat(%v) = %d,%v; want %d,%v (%s)", c.f, pid, ok, c.pid, c.ok, c.why)
 		}
+	}
+}
+
+// One port, three sockets: a listener, a connection to somewhere else, and the
+// flow. The first two are listed before it, and taking the port alone answered
+// with the listener's owner, routing the flow by a process that never made it.
+func TestPidFromNetstatTakesTheFlowsOwnSocket(t *testing.T) {
+	pid, ok := pidFromNetstat(netstatSample, to(61820, "198.18.0.7:5432"))
+	if !ok || pid != 90101 {
+		t.Fatalf("pidFromNetstat(61820 → 198.18.0.7:5432) = %d,%v; want 90101,true: the listener and the other connection on 61820 are not this flow", pid, ok)
 	}
 }
 
@@ -87,7 +107,7 @@ func TestPidFromNetstat(t *testing.T) {
 // the digits alone attributes the flow of one process to another, silently and
 // only sometimes. The dot is what anchors it.
 func TestPidFromNetstatPortIsNotASuffix(t *testing.T) {
-	pid, ok := pidFromNetstat(netstatSample, 761)
+	pid, ok := pidFromNetstat(netstatSample, to(761, "93.184.216.34:443"))
 	if !ok || pid != 90097 {
 		t.Fatalf("pidFromNetstat(761) = %d,%v; want 90097,true; 61761 is not port 761", pid, ok)
 	}

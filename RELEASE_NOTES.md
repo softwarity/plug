@@ -2,6 +2,26 @@
 
 ## NEXT RELEASE
 
+### Each connection goes to the cluster of the session that opened it
+
+With several clusters open on macOS or Windows, plug recognises a connection
+by both of its ends, the port it leaves from and the address it dials. A
+server listening on that same port, or another connection sharing it, has no
+say in which cluster the flow reaches.
+
+### Two accounts starting on one cluster at the same moment
+
+A cluster is held by one account of a machine at a time. When two accounts
+start a session on it at the same moment, the second is told at once that the
+cluster is in use, and by whom.
+
+### Passwords stay out of the session record
+
+The record plug keeps of a running session, which it shows when a name you
+ask for is already served, keeps the command without its passwords:
+`postgres://app:***@db`, `PGPASSWORD=***`. And plug reads a profile only when
+it is a file of yours, never through a symbolic link.
+
 ---
 
 ## 2.26.0

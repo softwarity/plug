@@ -70,14 +70,14 @@ func TestTheAncestryIsWalkedOncePerProcessNotPerFlow(t *testing.T) {
 	c := newChain()
 	r := pidRouter{
 		clusterForPID: c.clusterForPID,
-		pidForConn:    func(uint16) (int, bool) { return 300, true },
+		pidForConn:    func(flow) (int, bool) { return 300, true },
 		ppidOf:        c.ppidOf,
 		startOf:       c.startOf,
 		seen:          newPidCache(),
 	}
 
 	for i := 0; i < 10; i++ {
-		key, ok := r.route(uint16(40000 + i))
+		key, ok := r.route(at(uint16(40000 + i)))
 		if !ok || key != "clusterA:2222" {
 			t.Fatalf("flow %d routed to %q,%v", i, key, ok)
 		}
@@ -103,12 +103,12 @@ func TestARecycledPidDoesNotInheritTheCachedCluster(t *testing.T) {
 	c := newChain()
 	r := pidRouter{
 		clusterForPID: c.clusterForPID,
-		pidForConn:    func(uint16) (int, bool) { return 300, true },
+		pidForConn:    func(flow) (int, bool) { return 300, true },
 		ppidOf:        c.ppidOf,
 		startOf:       c.startOf,
 		seen:          newPidCache(),
 	}
-	if key, ok := r.route(40000); !ok || key != "clusterA:2222" {
+	if key, ok := r.route(at(40000)); !ok || key != "clusterA:2222" {
 		t.Fatalf("first flow routed to %q,%v", key, ok)
 	}
 
@@ -118,7 +118,7 @@ func TestARecycledPidDoesNotInheritTheCachedCluster(t *testing.T) {
 	c.parent[300] = 1
 	c.mu.Unlock()
 
-	if key, ok := r.route(40001); ok {
+	if key, ok := r.route(at(40001)); ok {
 		t.Errorf("a recycled PID kept the cached route %q: that is a flow sent to the wrong cluster", key)
 	}
 }
@@ -130,18 +130,18 @@ func TestARefusalIsNotRememberedAsOne(t *testing.T) {
 	delete(c.launcher, 200) // nothing registered yet
 	r := pidRouter{
 		clusterForPID: c.clusterForPID,
-		pidForConn:    func(uint16) (int, bool) { return 300, true },
+		pidForConn:    func(flow) (int, bool) { return 300, true },
 		ppidOf:        c.ppidOf,
 		startOf:       c.startOf,
 		seen:          newPidCache(),
 	}
-	if _, ok := r.route(40000); ok {
+	if _, ok := r.route(at(40000)); ok {
 		t.Fatal("routed with no launcher registered")
 	}
 	c.mu.Lock()
 	c.launcher[200] = "clusterA:2222"
 	c.mu.Unlock()
-	if key, ok := r.route(40001); !ok || key != "clusterA:2222" {
+	if key, ok := r.route(at(40001)); !ok || key != "clusterA:2222" {
 		t.Errorf("after the launcher registered, the flow was still refused (%q,%v)", key, ok)
 	}
 }
@@ -158,18 +158,18 @@ func TestTwoProcessesKeepTheirOwnCluster(t *testing.T) {
 	var which int
 	r := pidRouter{
 		clusterForPID: c.clusterForPID,
-		pidForConn:    func(uint16) (int, bool) { return which, true },
+		pidForConn:    func(flow) (int, bool) { return which, true },
 		ppidOf:        c.ppidOf,
 		startOf:       c.startOf,
 		seen:          newPidCache(),
 	}
 	for i := 0; i < 5; i++ {
 		which = 300
-		if key, ok := r.route(40000); !ok || key != "clusterA:2222" {
+		if key, ok := r.route(at(40000)); !ok || key != "clusterA:2222" {
 			t.Fatalf("A routed to %q,%v", key, ok)
 		}
 		which = 500
-		if key, ok := r.route(40001); !ok || key != "clusterB:2222" {
+		if key, ok := r.route(at(40001)); !ok || key != "clusterB:2222" {
 			t.Fatalf("B routed to %q,%v", key, ok)
 		}
 	}

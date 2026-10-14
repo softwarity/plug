@@ -350,6 +350,26 @@ func ClusterHeldByOther(key, me string) (string, bool) {
 	return "", false
 }
 
+// RegisterClientExclusive is ClusterHeldByOther and RegisterClient as one step,
+// under the cluster's registry lock: what the launcher calls. Asked and then
+// registered separately, two accounts launched at the same moment both found
+// the cluster free and both registered, and the second one's flows were then
+// refused one by one (RST) with nothing to say why. Under the lock the second
+// finds the first's marker, sidecars written, and is refused with the reason.
+// A lock that cannot be taken changes nothing: the two steps run as before.
+func RegisterClientExclusive(key string, pid int, keyFile, me string) (unregister func(), other string, held bool) {
+	unlock := lockRegistry(key)
+	defer unlock()
+	if other, held := ClusterHeldByOther(key, me); held {
+		return func() {}, other, true
+	}
+	return RegisterClient(key, pid, keyFile), "", false
+}
+
+// registryLockPath is beside the cluster's clients directory, not in it: the
+// directory holds only markers and their sidecars.
+func registryLockPath(key string) string { return clientsDir(key) + ".lock" }
+
 // ThisAccount is thisAccount for the launcher, which asks the question in package
 // main and must spell the answer the same way the marker does.
 func ThisAccount() string { return thisAccount() }

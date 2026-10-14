@@ -10,21 +10,22 @@ import "sync"
 // is not free of a PID lookup though, and this comment claimed it was for as
 // long as that was true: soleAllows asks who owns the socket, because one
 // cluster on a shared machine is still not everyone's cluster. That lookup is
-// what made this path worth measuring (see pidForLocalPort).
+// what made this path worth measuring (see pidForFlow).
 //
-// With TWO OR MORE it attributes each flow: the app's source port → the PID
-// owning the socket (the kernel's socket table) → walk its ancestry (ps) → the
+// With TWO OR MORE it attributes each flow: the app's socket (its source port
+// and the fake destination it dialled) → the PID owning it (the kernel's socket
+// table) → walk its ancestry (ps) → the
 // registered `plug -p X` launcher (clusterForPID) → that cluster's tunnel,
 // refusing (RST) a flow it cannot attribute (e.g. setsid).
 func multiDial(ct *ClusterTransports) dialFunc {
 	r := pidRouter{
 		clusterForPID: clusterForPID,
-		pidForConn:    pidForLocalPort,
+		pidForConn:    pidForFlow,
 		ppidOf:        ppidOf,
 		startOf:       procStart,
 		seen:          newPidCache(),
 	}
-	return func(srcPort uint16, name string) (Dialer, string, bool) {
+	return func(f flow, name string) (Dialer, string, bool) {
 		// A name a session PINNED to its cluster is that cluster's, whoever
 		// connects: the live-mount helper's, which the OS's own SMB client dials
 		// from the kernel (Windows), where no ancestry leads to a launcher.
@@ -36,12 +37,12 @@ func multiDial(ct *ClusterTransports) dialFunc {
 			return d, key, ok
 		}
 		if d, key, ok := ct.sole(); ok {
-			if !soleAllows(srcPort, r.pidForConn, accountOfPID, clientAccounts(key)) {
+			if !soleAllows(f, r.pidForConn, accountOfPID, clientAccounts(key)) {
 				return nil, "", false
 			}
 			return d, key, true // one cluster → transparent, like constDial
 		}
-		key, ok := r.route(srcPort)
+		key, ok := r.route(f)
 		if !ok {
 			return nil, "", false
 		}
@@ -198,11 +199,11 @@ func StartGlobalDatapath(ct *ClusterTransports, logf func(string, ...any)) (*Dat
 //
 // It does not pretend to stop code running AS the user. That code can run plug
 // itself, and no check here changes that.
-func soleAllows(srcPort uint16, pidForConn func(uint16) (int, bool), accountOf func(int) (string, bool), owners map[string]bool) bool {
+func soleAllows(f flow, pidForConn func(flow) (int, bool), accountOf func(int) (string, bool), owners map[string]bool) bool {
 	if len(owners) == 0 {
 		return true // nobody recorded an owner: unknown, which is not the same as nobody
 	}
-	pid, ok := pidForConn(srcPort)
+	pid, ok := pidForConn(f)
 	if !ok {
 		return true
 	}

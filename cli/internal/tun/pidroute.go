@@ -38,9 +38,9 @@ type pidRouter struct {
 	// clusterForPID reports the cluster a live launcher PID belongs to, backed by
 	// the daemon's client registry (registry_*.go). Absent ⇒ not a launcher.
 	clusterForPID func(pid int) (string, bool)
-	// pidForConn maps a local source port to the PID owning that socket, read from
-	// the OS TCP table (pidForLocalPort, per-OS). Absent ⇒ socket gone/foreign.
-	pidForConn func(srcPort uint16) (int, bool)
+	// pidForConn maps a flow to the PID owning its socket, read from the OS TCP
+	// table (pidForFlow, per-OS). Absent ⇒ socket gone/foreign.
+	pidForConn func(f flow) (int, bool)
 	// ppidOf returns pid's parent (per-OS: /proc, sysctl, toolhelp).
 	ppidOf func(pid int) (int, bool)
 	// startOf returns pid's creation stamp (per-OS unit, monotonic within a boot).
@@ -114,8 +114,8 @@ func (c *pidCache) put(pid int, start int64, key string) {
 // chain; real ancestries (shell → plug → app → child) are only a few hops.
 const maxAncestry = 64
 
-func (r pidRouter) route(srcPort uint16) (string, bool) {
-	pid, ok := r.pidForConn(srcPort)
+func (r pidRouter) route(f flow) (string, bool) {
+	pid, ok := r.pidForConn(f)
 	if !ok {
 		return "", false // socket vanished or unattributable — refuse
 	}

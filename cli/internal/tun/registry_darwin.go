@@ -2,7 +2,27 @@
 
 package tun
 
-import "syscall"
+import (
+	"os"
+	"syscall"
+)
+
+// lockRegistry holds the cluster's registry lock until the returned func runs
+// (RegisterClientExclusive). Blocking: what it guards is a few file writes.
+func lockRegistry(key string) func() {
+	if os.MkdirAll(graftDir, 0o755) != nil {
+		return func() {}
+	}
+	f, err := os.OpenFile(registryLockPath(key), os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0o644)
+	if err != nil {
+		return func() {}
+	}
+	if syscall.Flock(int(f.Fd()), syscall.LOCK_EX) != nil {
+		f.Close()
+		return func() {}
+	}
+	return func() { f.Close() } // closing the descriptor releases the flock
+}
 
 // processAlive reports whether pid is a live process, via a signal-0 probe:
 // nil → alive; EPERM → alive (exists, not ours); ESRCH → dead. The shared

@@ -11,9 +11,9 @@
 #   build_service_images     the six service images a single-node Swarm or a
 #                            kind cluster takes from the local daemon (no
 #                            registry): grpc, prober, flaky, gateway, chaos and
-#                            the websocket server. Compose builds its own
-#                            through `compose up --build`, so it does not call
-#                            this.
+#                            the websocket server, built or loaded from the
+#                            Actions cache. Compose builds its own through
+#                            `compose up --build`, so it does not call this.
 #   resolve_previous_release exports PREV_RELEASE, the release the update
 #                            cells start from. Resolved rather than pinned: a
 #                            pinned tag re-tests bugs fixed several releases
@@ -32,13 +32,28 @@ require_agent_image() {
   }
 }
 
+# The built images are kept in $service_cache, which _cluster.yml carries
+# between runs in the Actions cache (keyed on e2e/services and the bases): six
+# Go compiles were a minute and a half of the kind cluster's preparation, the
+# one preparation still finishing after the tested image arrives. Found there,
+# they are loaded instead; built, they are written there for the next run.
+service_cache=/tmp/e2e-services.tar.zst
+service_images=(plug-e2e/grpc:e2e plug-e2e/prober:e2e plug-e2e/flaky:e2e
+                plug-e2e/gateway:e2e plug-e2e/chaos:e2e plug-e2e/wsserver:e2e)
+
 build_service_images() {
+  if [ -s "$service_cache" ]; then
+    echo "=== load the local service images (Actions cache) ==="
+    zstd -q -dc "$service_cache" | docker load -q
+    return
+  fi
   echo "=== build the local service images ==="
   local svc
   for svc in grpc prober flaky gateway chaos; do
     docker build -q -t "plug-e2e/$svc:e2e" -f "$e2e_root/e2e/services/$svc/Dockerfile" "$e2e_root/e2e" >/dev/null
   done
   docker build -q -t plug-e2e/wsserver:e2e -f "$e2e_root/e2e/services/websocket/Dockerfile" "$e2e_root/e2e" >/dev/null
+  docker save "${service_images[@]}" | zstd -q -T0 -3 -o "$service_cache"
 }
 
 resolve_previous_release() {

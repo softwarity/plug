@@ -59,9 +59,9 @@ func ppidOf(pid int) (int, bool) {
 	return ppid, true
 }
 
-// pidForLocalPort maps a local TCP source port to the PID owning that socket, via
-// `netstat -anv` (cgo-free; the datapath builds with CGO_ENABLED=0). `-a` includes
-// listeners, `-n` keeps it numeric, `-v` is what adds the `process:pid` column.
+// pidForFlow maps a flow to the PID owning its socket, via `netstat -anv`
+// (cgo-free; the datapath builds with CGO_ENABLED=0). `-a` includes listeners,
+// `-n` keeps it numeric, `-v` is what adds the `process:pid` column.
 // The daemon runs as root, so it sees every process's sockets, though this one
 // does not need the privilege: the owning pid is recorded in the kernel's PCB
 // list, which netstat reads and any user may read.
@@ -85,24 +85,30 @@ func ppidOf(pid int) (int, bool) {
 // process actually making the connection: the wrong cluster in the multicluster
 // router, and the wrong owner in the single-cluster check. Reading the kernel's
 // table cannot produce that answer, because a port with no live PCB has no row.
-func pidForLocalPort(srcPort uint16) (int, bool) {
+func pidForFlow(f flow) (int, bool) {
 	out, err := exec.Command(HelperPath("netstat"), "-anv", "-p", "tcp").Output()
 	if err != nil {
 		return 0, false
 	}
-	return pidFromNetstat(string(out), srcPort)
+	return pidFromNetstat(string(out), f)
 }
 
 // pidFromNetstat is the parsing half, separated so it can be tested against
 // captured output instead of whatever this machine happens to be doing.
 //
 // A row is: proto, Recv-Q, Send-Q, local, foreign, state, four counters, then
-// `process:pid`, then hex columns. Only the local address and the pid are read,
-// and neither is taken by column number:
+// `process:pid`, then hex columns. The two addresses and the pid are read:
 //
+//   - The row is the flow's when its local address ends in `.<source port>` and
+//     its foreign address is exactly the flow's destination, `<fake ip>.<port>`.
+//     The port alone named a listener's `*.8080` just as well, or another
+//     socket of the same port to somewhere else, and the first such row listed
+//     answered for the flow: the wrong cluster in the multicluster router, the
+//     wrong owner in the single-cluster check. The fake destination is minted
+//     by plug, so no other socket has it.
 //   - The port is what follows the LAST dot of the local address, which holds for
-//     `192.168.1.48.61761`, for `::1.61765` (IPv6 separates its port with a dot
-//     too, not a colon) and for a listener's `*.8080`.
+//     `192.168.1.48.61761` and for `::1.61765` (IPv6 separates its port with a
+//     dot too, not a colon).
 //   - The pid is what follows the last colon of the rightmost field shaped like
 //     `name:digits`, searched from the right and never before the state column.
 //     A process name may contain spaces ("Google Chrome He:1234" is three fields)
@@ -110,8 +116,9 @@ func pidForLocalPort(srcPort uint16) (int, bool) {
 //     "2.1.251"), and rows exist with no process column whatsoever. Scanning from
 //     the right lands on the pid in all three cases and finds nothing in the last,
 //     which is the honest answer: no owner, so no attribution.
-func pidFromNetstat(out string, srcPort uint16) (int, bool) {
-	want := "." + strconv.Itoa(int(srcPort))
+func pidFromNetstat(out string, fl flow) (int, bool) {
+	want := "." + strconv.Itoa(int(fl.srcPort))
+	dst := fl.dst.Addr().String() + "." + strconv.Itoa(int(fl.dst.Port()))
 	for _, line := range strings.Split(out, "\n") {
 		f := strings.Fields(line)
 		// Anything shorter is a header or a truncated line; the two address
@@ -119,7 +126,7 @@ func pidFromNetstat(out string, srcPort uint16) (int, bool) {
 		if len(f) < 6 || !strings.HasPrefix(f[0], "tcp") {
 			continue
 		}
-		if !strings.HasSuffix(f[3], want) {
+		if !strings.HasSuffix(f[3], want) || f[4] != dst {
 			continue
 		}
 		// From the right, so the process field is reached before anything else,

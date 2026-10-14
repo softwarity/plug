@@ -70,3 +70,18 @@ func TestMarkServedSurvivesAnUnwritableHome(t *testing.T) {
 		t.Errorf("holder from an unwritable home = %+v, want nil", h)
 	}
 }
+
+// The record says how to recognise a session, never what it authenticates with.
+func TestTheServedRecordKeepsNoPassword(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"-s orders:5432:PORT psql postgres://app:s3cret@db:5432/orders", "-s orders:5432:PORT psql postgres://app:***@db:5432/orders"},
+		{"-c PGPASSWORD=s3cret psql -h db", "-c PGPASSWORD=*** psql -h db"},
+		{"-c env API_TOKEN=abc DB_PASS=x ./run", "-c env API_TOKEN=*** DB_PASS=*** ./run"},
+		{"-s web:80:3000 nest start --watch", "-s web:80:3000 nest start --watch"},
+		{"curl http://user@host/", "curl http://user@host/"},
+	} {
+		if got := redactSecrets(c.in); got != c.want {
+			t.Errorf("redactSecrets(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
