@@ -92,7 +92,7 @@ jobs:
       # Not worth a release: this is a coverage report. GitHub's artifact service
       # answered FinalizeArtifact with a 403 once, the action calls that
       # non-retryable, the step failed, and everything after it in the job was
-      # skipped - the cross-compile and the binaries every e2e leg downloads.
+      # skipped.
       - uses: actions/upload-artifact@v7
         continue-on-error: true
         if: always()
@@ -214,8 +214,13 @@ jobs:
         id: grid
         run: bash scripts/platform-grid.sh plat
 
+  # The agent module's own vet and tests. It used to cross-compile the CLI for
+  # the six platforms as well and upload them as plug-binaries, which nothing
+  # downloaded: the image builds compile the same six (agent/Dockerfile), and
+  # those are the binaries the e2e legs install from the cluster and the
+  # release publishes. The compile check lives there.
   build:
-    name: Build the CLI for all six platforms
+    name: Vet and test the agent
     needs: test
     runs-on: ubuntu-latest
     steps:
@@ -240,7 +245,7 @@ jobs:
       # Not worth a release: this is a coverage report. GitHub's artifact service
       # answered FinalizeArtifact with a 403 once, the action calls that
       # non-retryable, the step failed, and everything after it in the job was
-      # skipped - the cross-compile and the binaries every e2e leg downloads.
+      # skipped.
       - uses: actions/upload-artifact@v7
         continue-on-error: true
         if: always()
@@ -249,37 +254,6 @@ jobs:
           path: agent/agent.cov
           if-no-files-found: ignore
           retention-days: 1
-      - name: Cross-compile
-        working-directory: cli
-        env:
-          CGO_ENABLED: "0"
-        run: |
-          mkdir -p ../dist
-          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
-            goos=${target%/*} goarch=${target#*/}
-            ext=""; [ "$goos" = windows ] && ext=".exe"
-            echo "building $goos/$goarch"
-            GOOS=$goos GOARCH=$goarch go build -trimpath -ldflags '-s -w' \
-              -o "../dist/plug-$goos-$goarch$ext" .
-          done
-      # Retried once. Other jobs consume this artifact, so it cannot be optional,
-      # but a transient 403 from GitHub's artifact service ("non-retryable" to the
-      # action) must not cost a 25-minute release either. The second attempt
-      # overwrites, since a failed finalize can leave the name taken.
-      - uses: actions/upload-artifact@v7
-        id: up_binaries
-        continue-on-error: true
-        with:
-          name: plug-binaries
-          path: dist/*
-          if-no-files-found: error
-      - uses: actions/upload-artifact@v7
-        if: steps.up_binaries.outcome == 'failure'
-        with:
-          overwrite: true
-          name: plug-binaries
-          path: dist/*
-          if-no-files-found: error
 
   # The number, and what it is worth. It runs after the tests rather than beside
   # them because it has nothing of its own to compute: it merges what they
@@ -343,7 +317,7 @@ jobs:
       # Not worth a release: this is a coverage report. GitHub's artifact service
       # answered FinalizeArtifact with a 403 once, the action calls that
       # non-retryable, the step failed, and everything after it in the job was
-      # skipped - the cross-compile and the binaries every e2e leg downloads.
+      # skipped.
       - uses: actions/upload-artifact@v7
         continue-on-error: true
         with:
@@ -1356,6 +1330,14 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
+      # The per-architecture digests the builds pushed (_docker.yml uploads one
+      # file per digest): no tag names them, so this is how they are found.
+      - uses: actions/download-artifact@v7
+        continue-on-error: true # a run cancelled before its builds has none
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
       - env:
           GH_TOKEN: ${{ github.token }}
-        run: bash scripts/ci/ghcr-cleanup.sh "${GITHUB_SHA::7}"
+        run: bash scripts/ci/ghcr-cleanup.sh "${GITHUB_SHA::7}" "$RUNNER_TEMP/digests"

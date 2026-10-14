@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# ghcr-cleanup.sh <short-sha> - delete this run's test images from GHCR, and any
-# a dead run left behind.
+# ghcr-cleanup.sh <short-sha> [<digests-dir>] - delete this run's test images
+# from GHCR, and any a dead run left behind.
 #
 # The CI pushes its test images to ghcr.io/softwarity/plug (_docker.yml): the
 # clusters, the legs and the publish job read them, and the publish job copies
@@ -10,14 +10,18 @@
 #
 # This run's: every version behind the three tags it pushed (the standalone and
 # hosted manifest lists, the amd64 one the clusters pull), the platform images
-# and attestations under them included, which carry no tag of their own.
+# and attestations under them included, which carry no tag of their own; and
+# the per-architecture indexes each build pushed by digest, which no tag
+# names: their digests are the files of <digests-dir> (the builds' digests-*
+# artifacts).
 # Leftovers: any version older than two days, from a run that died before its
 # own cleanup. Nothing else ever lives in this package.
 #
 # Needs GH_TOKEN with packages: write, docker logged in to ghcr.io, jq.
 set -euo pipefail
 
-short="${1:?usage: ghcr-cleanup.sh <short-sha>}"
+short="${1:?usage: ghcr-cleanup.sh <short-sha> [<digests-dir>]}"
+digests="${2:-}"
 org=softwarity pkg=plug image=ghcr.io/softwarity/plug
 api="/orgs/$org/packages/container/$pkg/versions"
 
@@ -25,9 +29,17 @@ api="/orgs/$org/packages/container/$pkg/versions"
 mine="$(mktemp)"
 for tag in "sha-$short" "sha-$short-hosted" "sha-$short-amd64"; do
   raw="$(docker buildx imagetools inspect --raw "$image:$tag" 2>/dev/null)" || continue
-  docker buildx imagetools inspect "$image:$tag" --format '{{.Manifest.Digest}}' >> "$mine"
+  # printf, not a bare append: --format prints no final newline, and the
+  # index's digest and its first child's were glued on one line that matched
+  # neither, which left both behind on every run.
+  printf '%s\n' "$(docker buildx imagetools inspect "$image:$tag" --format '{{.Manifest.Digest}}')" >> "$mine"
   printf '%s' "$raw" | jq -r '.manifests[]?.digest' >> "$mine"
 done
+if [ -n "$digests" ] && [ -d "$digests" ]; then
+  for f in "$digests"/*; do
+    [ -e "$f" ] && printf 'sha256:%s\n' "$(basename "$f")" >> "$mine"
+  done
+fi
 
 cutoff="$(date -u -d '2 days ago' +%Y-%m-%dT%H:%M:%SZ)"
 versions="$(gh api --paginate "$api?per_page=100" --jq '.[] | "\(.id) \(.name) \(.updated_at)"')" || {
