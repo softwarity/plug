@@ -14,10 +14,13 @@ do_collision() {
   if ! helper_bin echo-local; then
     echo "--- collision FAIL - echo-local did not build"; sum "**collision refused** ❌ (build)"; return 1
   fi
-  # Session A holds the name for ~35s (natural end via -ttl - see do_takeover
-  # for why kill is not an option on Windows).
+  # Session A holds the name until B has asked, then ends the natural way
+  # through its -stop-file (see do_takeover for why kill is not an option on
+  # Windows). The -ttl is only the bound: a fixed one can run out under the
+  # cells beside the chain, and B then takes a name nobody holds any more.
+  local a_stop; a_stop="$(stop_file collision)"
   "$PLUG" --host "$ip" --port "$port" -s "$cname:$cport:18098" \
-    "$root/echo-local$ext" -addr 127.0.0.1:18098 -text "col-a" -ttl 24s >/tmp/collision-a.out 2>&1 &
+    "$root/echo-local$ext" -addr 127.0.0.1:18098 -text "col-a" -ttl 120s -stop-file "$a_stop" >/tmp/collision-a.out 2>&1 &
   local a_pid=$!
   sleep 8 # arm + verify
   # Session B, same name, while A lives: must bounce (the agent-side port is
@@ -28,7 +31,8 @@ do_collision() {
   # that once - a prompt on a Windows runner with no console to answer it.
   co="$(perl -e 'alarm 60; exec @ARGV or exit 127' \
         "$PLUG" --host "$ip" --port "$port" -s "$cname:$cport:9" curl --version 2>&1 || true)"
-  wait_bg "$a_pid" "the collision session A" 60
+  : > "$a_stop"
+  wait_bg "$a_pid" "the collision session A (ends on its -stop-file, or its -ttl)" 140
   if printf '%s' "$co" | grep -qiE "another session|denied by peer|already"; then
     # The refusal must NAME the holder's agent port. That port is what lets a
     # session tell ITS OWN forgotten holder from a stranger's, and so what
