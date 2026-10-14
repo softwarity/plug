@@ -1,0 +1,21 @@
+# The images the e2e clusters take from Docker Hub, kept in the GitHub Actions
+# cache between runs (scripts/ci/image-cache.sh, .github/workflows/_cluster.yml)
+# instead of being pulled again by each of the six clusters of every run.
+#
+# One image per line. `build` marks a base the e2e service images are built
+# FROM: loaded on the runner, never into kind. Changing this list changes the
+# cache key, and the key also turns over each month, so a moving tag
+# (mongo:8, rabbitmq:4) is refreshed rather than frozen.
+#
+# Not here: softwarity/plug's own images (this commit's, pulled by the
+# workflow; the previous release, resolved at run time).
+hashicorp/http-echo:1.0.0
+busybox:1.37
+mccutchen/go-httpbin:v2.15.0
+postgres:18-alpine
+redis:8-alpine
+mongo:8
+rabbitmq:4
+eclipse-mosquitto:2
+golang:1.26-bookworm build
+alpine:3.24 build

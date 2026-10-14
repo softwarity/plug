@@ -59,6 +59,11 @@ echo "=== load them into kind ==="
 kind load docker-image softwarity/plug:e2e \
   plug-e2e/grpc:e2e plug-e2e/wsserver:e2e plug-e2e/prober:e2e \
   plug-e2e/flaky:e2e plug-e2e/gateway:e2e plug-e2e/chaos:e2e
+# And the fixtures' Docker Hub images, which the workflow loaded on this runner
+# from the Actions cache (e2e/images.txt): pulled by kind's own containerd they
+# would each be one more anonymous Docker Hub pull, six clusters a run.
+mapfile -t fixtures < <(bash "$root/scripts/ci/image-cache.sh" runtime "$root/e2e/images.txt")
+kind load docker-image "${fixtures[@]}"
 
 echo "=== deploy the agent (the PUBLISHED manifest, this commit's image) ==="
 # This rewrite is the only thing standing between the three k8s legs and a run
