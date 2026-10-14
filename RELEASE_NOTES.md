@@ -22,6 +22,13 @@ ask for is already served, keeps the command without its passwords:
 `postgres://app:***@db`, `PGPASSWORD=***`. And plug reads a profile only when
 it is a file of yours, never through a symbolic link.
 
+### A session says why its command ended
+
+When the command a session runs is ended by a signal, plug says which one
+(`echo-local ended on signal killed`) before it closes the session, and when
+plug itself is asked to stop, it says so too. A session that ends on its own
+no longer leaves you guessing.
+
 ---
 
 ## 2.26.0

@@ -185,9 +185,19 @@ prebuilt="${PREBUILT_CLIENTS:-}"
 # chmod is not belt-and-braces: a GitHub artifact is a zip, and the executable
 # bit does not survive the round trip. Without it every cell fails on
 # "permission denied" from a file that is plainly there.
+#
+# Written beside and renamed into place, never copied over the old file. A
+# cell installs echo-local while another cell's echo-local may be running from
+# it, and on macOS writing into a signed binary that is executing makes the
+# kernel kill what runs from it (SIGKILL, no sender): the takeover session's
+# command died that way seconds after the park, whenever a cell beside the
+# chain had its own echo-local up. The rename gives the new copy a file of its
+# own and leaves the running one untouched. (Linux refuses the write instead,
+# "Text file busy", and Windows locks a running exe.)
 take_prebuilt() {
   [ -n "$prebuilt" ] && [ -f "$prebuilt/$1-$gtag$ext" ] || return 1
-  cp "$prebuilt/$1-$gtag$ext" "$2" && chmod +x "$2"
+  cp "$prebuilt/$1-$gtag$ext" "$2.new.$$" && chmod +x "$2.new.$$" && mv -f "$2.new.$$" "$2" \
+    || { rm -f "$2.new.$$"; return 1; }
 }
 
 # helper_bin <name> - put e2e/<name>'s binary at $root/<name>$ext. echo-local is

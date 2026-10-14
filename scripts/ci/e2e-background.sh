@@ -28,22 +28,6 @@ root="$(cd "$(dirname "$0")/../.." && pwd)"
 [ -f "$envfile" ] || { echo "no e2e state at $envfile - run the setup cell first" >&2; exit 1; }
 
 rm -rf "$bgdir"; mkdir -p "$bgdir"
-# Not on macOS: there they stay in the foreground, each in its own step, as
-# before. Run beside the chain on a Mac, they made the takeover cell fail on
-# both Docker families, every time: the deployed tko-mac came back within
-# seconds of being parked (its container started again at 20:27:28, eight
-# seconds into the session) while the resilience cell's session to cluster B
-# was reconnecting, and the takeover session never finished proving its path.
-# Kubernetes on the Mac, and Linux and Windows on every family, passed. One
-# daemon carries every session of the machine there, and how one cluster's
-# reconnect reaches a takeover on another is being looked at on its own; until
-# then the Mac legs keep the order that passes. PLUG_E2E_BG_ON_MAC=1 runs them
-# beside the chain there anyway: what .github/workflows/investigate.yml does to
-# reproduce it.
-if [ "$os" = mac ] && [ -z "${PLUG_E2E_BG_ON_MAC:-}" ]; then
-  echo "macOS: the cluster-B cells run in the foreground, each in its own step (see this script)"
-  exit 0
-fi
 for c in $bg_cells; do : > "$bgdir/$c.queued"; done
 (
   for c in $bg_cells; do
