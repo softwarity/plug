@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.26.1
+
 ### Each connection goes to the cluster of the session that opened it
 
 With several clusters open on macOS or Windows, plug recognises a connection
