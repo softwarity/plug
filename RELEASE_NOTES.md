@@ -2,6 +2,13 @@
 
 ## NEXT RELEASE
 
+### A Windows profile key is checked on the very file that is read
+
+On Windows, plug's service opens a profile key once, checks that file (where
+it really lies, whose profile it is in) and reads the key from that same
+opening. Nothing can be moved in between to make it read a file other than
+the one it checked.
+
 ---
 
 ## 2.26.2

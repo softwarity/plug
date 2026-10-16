@@ -50,6 +50,11 @@ type config struct {
 	// of its own when an agent that admits by approval asks for one
 	// (adoptOwnKey), and what the messages name.
 	profile string
+	// keyOwner is the profile directory key must lie in: the account that
+	// registered the client, as the SYSTEM service learns it from the owner
+	// Windows recorded for that client's marker. Empty where the account reads
+	// its own key, or where its owner could not be told.
+	keyOwner string
 }
 
 // authKeys is what plug offers the agent, in order: this profile's personal key
@@ -83,10 +88,10 @@ func (c config) authKeysErr() ([][]byte, error) {
 	if err := userPathError(c.key); err != nil {
 		return nil, err
 	}
-	if err := keyPathError(c.key); err != nil {
+	personal, err := readKeyFile(c.key, c.keyOwner)
+	if isLocalRefusal(err) {
 		return nil, err
 	}
-	personal, err := readUserOwnedFile(c.key)
 	if err != nil {
 		return nil, refuse("profile key %s: %v\n"+
 			"      that path comes from `key = ...` in the profile. Regenerate it with\n"+

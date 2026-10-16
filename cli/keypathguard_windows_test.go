@@ -12,27 +12,12 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// The key guards decide on the file a path opens, not on how it is written.
+// readKeyFile decides on the file it opened, not on how its path is written.
 // The rules themselves are pure and tested everywhere (keypathguard_test.go);
-// these run the lookups around them on a real Windows filesystem, where one
-// file has a short name and may be reached through a junction any user can
-// make.
-
-// ownedDir is a directory of the test's own inside the account's profile, with
-// a marker the account owns, or a skip where the profile cannot be told.
-func ownedDir(t *testing.T) (dir, marker string) {
-	t.Helper()
-	dir = realPath(t.TempDir())
-	marker = filepath.Join(dir, "marker")
-	if err := os.WriteFile(marker, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	profile := profileOfFileOwner(marker)
-	if profile == "" || keyOutsideOwnersProfile(dir, realPath(profile)) {
-		t.Skipf("the temp directory %s is not in a profile this machine names", dir)
-	}
-	return dir, marker
-}
+// these run them on a real Windows filesystem, where one file has a short name
+// and may be reached through a junction any user can make. The profile the
+// key must lie in is a directory of the test's own: the rule is containment,
+// whoever's profile it is.
 
 func shortName(t *testing.T, long string) string {
 	t.Helper()
@@ -48,31 +33,66 @@ func shortName(t *testing.T, long string) string {
 	return windows.UTF16ToString(buf[:n])
 }
 
+// junction makes link a directory junction to target, as any account may in
+// its own profile, and removes it before the temp directory's cleanup: that
+// cleanup must never be the one to find it and walk into where it leads.
+func junction(t *testing.T, link, target string) {
+	t.Helper()
+	if out, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput(); err != nil {
+		t.Fatalf("mklink /J: %v: %s", err, out)
+	}
+	t.Cleanup(func() {
+		if err := os.Remove(link); err != nil {
+			t.Errorf("the junction %s is left in place: %v", link, err)
+		}
+	})
+}
+
+func writeKey(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAKeyNamedInShortFormInItsOwnersProfileIsRead(t *testing.T) {
-	dir, marker := ownedDir(t)
+	profile := realPath(t.TempDir())
 	// A name long enough to get an 8.3 alias of its own, so the short form
 	// differs from the long one even where the profile's own name is short.
-	long := filepath.Join(dir, "a key with a long name", "id_ed25519")
-	if err := os.MkdirAll(filepath.Dir(long), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(long, []byte("key"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	long := filepath.Join(profile, "a key with a long name", "id_ed25519")
+	writeKey(t, long)
 	short := shortName(t, long)
 	if strings.EqualFold(short, long) {
 		t.Skipf("the volume of %s makes no 8.3 names", long)
 	}
-	if err := keyOwnerError(short, marker); err != nil {
-		t.Errorf("the account's own key, named %s, was refused: %v", short, err)
+	t.Logf("reading %s, the short name of %s", short, long)
+	got, err := readKeyFile(short, profile)
+	if err != nil {
+		t.Fatalf("the account's own key, named %s, was refused: %v", short, err)
 	}
-	if err := keyPathError(short); err != nil {
-		t.Errorf("the account's own key, named %s, was refused: %v", short, err)
+	if string(got) != "key" {
+		t.Fatalf("read %q from %s, want the key written there", got, short)
 	}
 }
 
 func TestAJunctionInTheProfileDoesNotCarryAKeyOutOfIt(t *testing.T) {
-	dir, marker := ownedDir(t)
+	dir := realPath(t.TempDir())
+	profile, elsewhere := filepath.Join(dir, "home"), filepath.Join(dir, "elsewhere")
+	writeKey(t, filepath.Join(elsewhere, "id_ed25519"))
+	if err := os.MkdirAll(profile, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	junction(t, filepath.Join(profile, "j"), elsewhere)
+	key := filepath.Join(profile, "j", "id_ed25519")
+	if _, err := readKeyFile(key, profile); !isLocalRefusal(err) {
+		t.Errorf("%s, a file outside the profile, was not refused (%v): its path only starts inside it", key, err)
+	}
+}
+
+func TestAJunctionDoesNotCarryAKeyIntoTheSystemTree(t *testing.T) {
 	windir := os.Getenv("SystemRoot")
 	if windir == "" {
 		windir = `C:\Windows`
@@ -80,26 +100,24 @@ func TestAJunctionInTheProfileDoesNotCarryAKeyOutOfIt(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(windir, "win.ini")); err != nil {
 		t.Skipf("no win.ini to point at: %v", err)
 	}
-	// A junction needs no privilege: any account can make one in its profile.
-	link := filepath.Join(dir, "j")
-	if out, err := exec.Command("cmd", "/c", "mklink", "/J", link, windir).CombinedOutput(); err != nil {
-		t.Fatalf("mklink /J: %v: %s", err, out)
-	}
-	// The junction itself, before the temp directory's cleanup: that cleanup
-	// must never be the one to find it and walk into the system tree.
-	t.Cleanup(func() {
-		if err := os.Remove(link); err != nil {
-			t.Errorf("the junction %s is left in place: %v", link, err)
-		}
-	})
+	link := filepath.Join(realPath(t.TempDir()), "j")
+	junction(t, link, windir)
 	key := filepath.Join(link, "win.ini")
-	if got, want := realPath(key), realPath(filepath.Join(windir, "win.ini")); !strings.EqualFold(got, want) {
-		t.Errorf("realPath(%s) = %s, want the file the junction leads to, %s", key, got, want)
+	// No profile to lie in: the system tree is refused to everyone.
+	if _, err := readKeyFile(key, ""); !isLocalRefusal(err) {
+		t.Errorf("%s, a file of the system tree, was not refused (%v)", key, err)
 	}
-	if err := keyOwnerError(key, marker); err == nil {
-		t.Errorf("%s, a file outside the account's profile, was accepted because its path starts inside it", key)
+}
+
+func TestALinkInPlaceOfTheKeyIsNotFollowed(t *testing.T) {
+	profile := realPath(t.TempDir())
+	target := filepath.Join(profile, "real")
+	writeKey(t, target)
+	link := filepath.Join(profile, "id_ed25519")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("this account may not make a symbolic link: %v", err)
 	}
-	if err := keyPathError(key); err == nil {
-		t.Errorf("%s, a file of the system tree, was accepted because its path starts in a profile", key)
+	if _, err := readKeyFile(link, profile); !isLocalRefusal(err) {
+		t.Errorf("%s, a link, was read as a key file (%v)", link, err)
 	}
 }

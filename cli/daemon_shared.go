@@ -247,17 +247,12 @@ func reconcile(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transport, 
 		// Whose key is it meant to be? The path came out of a directory users can
 		// write; the marker beside it carries an owner the system recorded. On
 		// Windows that is the difference between reading a user's own key and
-		// reading whatever file they named, as the machine account.
-		//
-		// A refusal is this cluster's failure to dial, recorded like one: the
-		// waiting launcher reads the reason, the other clusters keep their
-		// tunnels. It used to be fatal, which ended the daemon for everyone over
-		// one user's key.
-		if err := keyOwnerError(keyFile, marker); err != nil {
-			applyDial(ct, tunnels, dialOutcome{key: key, err: err})
-			continue
-		}
-		cfg := config{host: host, port: port, key: keyFile}
+		// reading whatever file they named, as the machine account. The dial
+		// reads the key and refuses it there, on the file it opened
+		// (readKeyFile), and a refusal is this cluster's failure to dial,
+		// recorded like one: the waiting launcher reads the reason, the other
+		// clusters keep their tunnels.
+		cfg := config{host: host, port: port, key: keyFile, keyOwner: profileOfFileOwner(marker)}
 		if wait {
 			tr, err := dialClusterTunnel(cfg)
 			applyDial(ct, tunnels, dialOutcome{key: key, tr: tr, err: err})

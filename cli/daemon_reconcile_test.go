@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -143,15 +144,7 @@ func TestATunnelOpensWithTheClientsKeyAndOutlivesItThroughTheGrace(t *testing.T)
 		return reach()
 	})
 	key := net.JoinHostPort(host, port)
-	// The key sits in the account's profile, as a profile key does. Resolved,
-	// because a Windows runner names its temp directory in 8.3 form
-	// (C:\Users\RUNNER~1\...), which the guard on whose key it is
-	// (keyOwnerError) compares as text against the profile's long name.
-	dir, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	keyFile := filepath.Join(dir, "id_ed25519")
+	keyFile := filepath.Join(t.TempDir(), "id_ed25519")
 	if err := os.WriteFile(keyFile, []byte("not read: the dial is the test's"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -167,6 +160,11 @@ func TestATunnelOpensWithTheClientsKeyAndOutlivesItThroughTheGrace(t *testing.T)
 	if asked.host != host || asked.port != port || asked.key != keyFile {
 		t.Fatalf("the daemon dialled %s:%s with key %q, want %s with the key the client registered, %q",
 			asked.host, asked.port, asked.key, key, keyFile)
+	}
+	// On Windows the SYSTEM service reads that key for the account, and the
+	// profile it must lie in is what keeps it to that account's own files.
+	if runtime.GOOS == "windows" && asked.keyOwner == "" {
+		t.Error("the service dialled without the profile the client's key must lie in")
 	}
 
 	// The client leaves: the tunnel stays, so the next plug of the same

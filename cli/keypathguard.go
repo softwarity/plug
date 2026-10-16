@@ -2,56 +2,18 @@ package main
 
 import (
 	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 )
 
-// guardKeyPath vets the path of a PRIVATE KEY before it is opened, and only that.
-//
-// On Windows the daemon runs as SYSTEM and takes this path out of
+// The SYSTEM service on Windows reads a PRIVATE KEY whose path came out of
 // %ProgramData%\plug, a directory the installer deliberately makes writable by
-// users, so a plain user could name any path and have the most privileged account
-// on the machine open it. On unix there is nothing to add: guardUserPath already
-// compares the real owner, because the daemon keeps the user's real uid.
-func guardKeyPath(path string) {
-	if err := keyPathError(path); err != nil {
-		fatal("%v", err)
-	}
-}
+// users, so a plain user could name any path and have the most privileged
+// account on the machine open it. readKeyFile (keyread_windows.go) opens the
+// key once and decides on that handle with the two rules below. On unix there
+// is nothing to add: guardUserPath already compares the real owner, because
+// the daemon keeps the user's real uid.
 
-// keyPathError is guardKeyPath as a value, for the daemon and the MCP server
-// (see refusal.go). nil means the key may be opened.
-func keyPathError(path string) error {
-	if runtime.GOOS != "windows" || path == "" {
-		return nil
-	}
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return refuse("%s is not a usable path (%v)", path, err)
-	}
-	fi, err := os.Lstat(abs)
-	if err != nil {
-		return nil // absent is the caller's problem to report, not a privilege question
-	}
-	// Resolved only once it is known to be a regular file: opening a pipe or a
-	// device to ask its name would be the very thing the mode rule refuses.
-	real, roots := abs, systemRootsForKeyGuard()
-	if fi.Mode().IsRegular() {
-		real = realPath(abs)
-		for i, r := range roots {
-			if r != "" {
-				roots[i] = realPath(r)
-			}
-		}
-	}
-	if why := keyPathRefusal(real, fi.Mode(), roots); why != "" {
-		return refuse("refusing to read %s as a key: %s", abs, why)
-	}
-	return nil
-}
-
-// keyPathRefusal is the decision behind that guard, kept here without a build tag
+// keyPathRefusal is the first of those rules, kept here without a build tag
 // ON PURPOSE.
 //
 // The rule it encodes only matters on Windows, where a machine-wide SYSTEM
@@ -144,8 +106,3 @@ func keyOutsideOwnersProfile(keyPath, ownerProfile string) bool {
 	// rule that said it was would be refusing the wrong thing while looking right.
 	return !strings.HasPrefix(k, prof+`\`)
 }
-
-// guardKeyOwner has a real body only on Windows, where the daemon runs as the
-// machine account and a key path can name another user's file. Everywhere else
-// the daemon keeps the user's own real uid, so guardUserPath already compares the
-// owner and there is nothing to add.

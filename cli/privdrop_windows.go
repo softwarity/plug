@@ -21,8 +21,8 @@ func chownToUser(string) {}
 //
 // The gap is narrower than "privileged writes" and lives elsewhere: the SYSTEM
 // service READS a private key whose path came out of a directory the installer
-// makes writable by users. That is guardKeyPath, in keypathguard.go, called where
-// the key is read rather than on every path in the program. Widening this
+// makes writable by users. That is readKeyFile, in keyread_windows.go, which
+// decides where the key is read rather than on every path in the program. Widening this
 // function instead was tried and was wrong: it refused the versions store, a
 // directory, for not being a regular file, and would have refused
 // %ProgramData%\plug, which plug writes on purpose.
@@ -32,7 +32,7 @@ func guardUserPath(string) {}
 func userPathError(string) error { return nil }
 
 // readUserOwnedFile is a plain read here. The ownership question on Windows is
-// answered by guardKeyOwner, which asks who registered the client rather than
+// answered for keys by readKeyFile, which asks who registered the client rather than
 // who owns the file being read, because the account the daemon acts for is not
 // the account it runs as.
 func readUserOwnedFile(path string) ([]byte, error) { return os.ReadFile(path) }

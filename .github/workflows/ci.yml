@@ -83,7 +83,20 @@ jobs:
         # execution, and the profile is what the coverage job merges. Per OS,
         # because a file behind a build tag is not compiled on a runner that does
         # not need it - absent from the fraction rather than uncovered in it.
-        run: go test $RACE -covermode=atomic -coverprofile=coverage.out ./...
+        # -v for what a quiet run hides: which tests skipped on this OS and why,
+        # and what they logged. A test that skips where it should run passes
+        # green and proves nothing. The lines that only say a test started or
+        # passed are left out; the next step lists the skips on their own.
+        run: |
+          set -o pipefail
+          go test $RACE -v -covermode=atomic -coverprofile=coverage.out ./... 2>&1 | tee test.log |
+            { grep -vE '^ *(=== (RUN|PAUSE|CONT|NAME)|--- PASS)' || true; }
+      - name: The tests that skipped here
+        if: always()
+        working-directory: cli
+        shell: bash
+        # With the line before each, which is the reason the test gave.
+        run: grep -B1 -E '^ *--- SKIP' test.log | grep -v '^--$' || echo "none"
       - name: Keep the coverage profile for the merge
         if: always()
         working-directory: cli
