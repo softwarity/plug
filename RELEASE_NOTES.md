@@ -16,6 +16,14 @@ change cannot take cluster names away. It now reads them all in two calls
 every few seconds instead of up to eight, which is less work for the machine
 over a long session.
 
+### Profile keys on Windows, whatever name they go by
+
+On Windows, plug's service decides whether a profile key belongs to the
+account asking for it by the file its path leads to, not by how the path is
+written. A key named in its short form (`C:\Users\JOHNDO~1\...`) is read like
+the same path written in full, and a directory junction cannot lead the check
+into a place the account has no business reading.
+
 ---
 
 ## 2.26.1

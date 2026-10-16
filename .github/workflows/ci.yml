@@ -1059,7 +1059,7 @@ jobs:
   # own colour nobody reads - issues the cancel. The kill-cluster jobs still run
   # (they complete during the cancellation grace, unchanged). It polls, because a
   # job cannot `needs:` a sibling that is still running; it exits on its own once
-  # every e2e leg it has seen running has finished, so a green run is not held up.
+  # every e2e leg has an answer, run or skipped, so a green run is not held up.
   abort-on-fail:
     # The selftest too, like the legs it watches: started with the clusters and
     # no leg ever coming, it would poll for its whole timeout.
@@ -1078,7 +1078,6 @@ jobs:
         run: |
           run="${{ github.run_id }}"; repo="${{ github.repository }}"
           corr="$run-${{ github.run_attempt }}-"
-          seen=0
           while :; do
             # The clusters first. They run as runs of their own (<family>-for-
             # <corr>), started before anything else, so a cluster that fails
@@ -1104,10 +1103,21 @@ jobs:
               gh run cancel "$run" --repo "$repo" || true
               exit 0
             fi
+            # Done once every leg listed has an answer. A leg whose Test or
+            # client build failed never runs: it is listed as skipped, under
+            # its caller's name, and never as pending, so waiting to have seen
+            # one pending first kept this watch polling for its whole timeout
+            # after a red Test. Nothing listed yet means the legs are still to
+            # be created, not finished.
+            total=$(printf '%s' "$legs" | jq 'length')
             pending=$(printf '%s' "$legs" | jq '[.[] | select(.conclusion==null)] | length')
-            [ "${pending:-0}" -gt 0 ] && seen=1
-            if [ "$seen" -eq 1 ] && [ "${pending:-0}" -eq 0 ]; then
-              echo "all e2e legs finished, none failed"
+            if [ "${total:-0}" -gt 0 ] && [ "${pending:-0}" -eq 0 ]; then
+              ran=$(printf '%s' "$legs" | jq '[.[] | select(.conclusion!="skipped")] | length')
+              if [ "${ran:-0}" -eq 0 ]; then
+                echo "the e2e legs did not run (a job they need did not pass): nothing to watch"
+              else
+                echo "all e2e legs finished, none failed"
+              fi
               exit 0
             fi
             sleep 15

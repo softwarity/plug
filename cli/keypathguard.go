@@ -34,10 +34,33 @@ func keyPathError(path string) error {
 	if err != nil {
 		return nil // absent is the caller's problem to report, not a privilege question
 	}
-	if why := keyPathRefusal(abs, fi.Mode(), systemRootsForKeyGuard()); why != "" {
+	roots := systemRootsForKeyGuard()
+	for i, r := range roots {
+		if r != "" {
+			roots[i] = realPath(r)
+		}
+	}
+	if why := keyPathRefusal(realPath(abs), fi.Mode(), roots); why != "" {
 		return refuse("refusing to read %s as a key: %s", abs, why)
 	}
 	return nil
+}
+
+// realPath is a path as the file it opens, which is what the key guards
+// compare. As text, one file has many names on Windows: a short 8.3 name for
+// each component (C:\PROGRA~1, C:\Users\RUNNER~1) and any directory junction a
+// user may create without privilege. A guard reading the text refused a key
+// named in short form inside its owner's own profile, and let through a path
+// that a junction in that profile sends into another one or into the system
+// tree. Resolved, every name of the file is its one long, real path.
+//
+// A path that does not resolve (absent, unreadable) is kept as written: the
+// guards then decide on its text, as before, and the read that follows fails.
+func realPath(abs string) string {
+	if r, err := filepath.EvalSymlinks(abs); err == nil {
+		return r
+	}
+	return abs
 }
 
 // keyPathRefusal is the decision behind that guard, kept here without a build tag
