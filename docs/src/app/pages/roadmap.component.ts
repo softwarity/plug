@@ -43,9 +43,10 @@ import { MatIconModule } from '@angular/material/icon';
       still hold: <code>port-forward</code> already gives the zero-exposed port gated by API-server
       RBAC that it would have bought, and plug behaves the same way whichever backend provisions the
       name - a transport existing in one family alone would trade that for a second code path to carry
-      forever. Where the <a routerLink="/security">no-auth trade-off</a> has to go away, the answer is
-      the <a routerLink="/meerkat">gateway</a> hosting the tunnel, which covers every family instead
-      of one.
+      forever. Where an <a routerLink="/security">open agent</a> is not enough, the answer is
+      <a routerLink="/security" fragment="admission">admission by approval</a> or the
+      <a routerLink="/meerkat">gateway</a> hosting the tunnel, both of which cover every family
+      instead of one.
     </p>
 
     <h3>UDP by name</h3>
@@ -59,27 +60,19 @@ import { MatIconModule } from '@angular/material/icon';
       honest: datagrams then ride a reliable, ordered stream (with head-of-line blocking), which fits
       DNS-over-UDP, StatsD, syslog and request/response UDP, but not real-time media. QUIC and HTTP/3
       (UDP-based) would stop being silently dropped - though most clients already fall back to TCP.
-      Landing first, on its own: cluster UDP that is dropped today fails <em>silently</em> (it looks
-      like a hang) - plug will <strong>log</strong> it instead, so it fails loud.
+      Already in: cluster UDP that cannot be carried is <strong>logged</strong> rather than dropped
+      silently, so it fails loud instead of looking like a hang.
     </p>
 
-    <h3>The end of the dedicated agent</h3>
-    <p>
-      <strong>The Meerkat integration itself is done</strong>, and it is on this page only to say
-      so. <a href="https://softwarity.github.io/meerkat/" target="_blank" rel="noopener">Meerkat</a>
-      is a companion gateway whose Enterprise edition integrates plug and gives sessions an
-      <strong>identity</strong>: a developer deposits their own public key through the gateway, it
-      is tied to their name, and who is plugged into what stops being anonymous. plug publishes the
-      hosted CLI flavour that goes with it, signed beside the standalone one. See
-      <a routerLink="/meerkat">Meerkat</a> for the model.
-    </p>
-    <p>
-      What is still ahead is narrower, and it is the interesting half: the gateway hosting the
-      tunnel <em>endpoint</em> itself, turned on and off dynamically, so a cluster needs no
-      dedicated plug agent at all - dev tooling that rides infrastructure you already run, with the
-      gateway's own authentication in front. Nothing changes for the CLI: the install and
-      versioning contract already exists (see below) and the gateway exposes the same surface.
-    </p>
+    <div class="callout">
+      <strong>Shipped already: the end of the dedicated agent.</strong> In
+      <a routerLink="/security">hosted mode</a> the agent runs inside a gateway such as
+      <a href="https://softwarity.github.io/meerkat/" target="_blank" rel="noopener">Meerkat</a>, so the
+      cluster needs no plug agent of its own, and the gateway's authentication stands in front: a
+      developer deposits their own public key, it is tied to their name, and who is plugged into
+      what stops being anonymous. The CLI is the same, served by the gateway in its hosted flavour.
+      See <a routerLink="/meerkat">Meerkat</a> for the model.
+    </div>
 
     <div class="callout">
       <strong>Shipped already:</strong> installing the CLI from the cluster and per-cluster version
@@ -138,7 +131,11 @@ import { MatIconModule } from '@angular/material/icon';
         <tr><td>CLI on Linux, macOS and Windows, amd64 <em>and</em> arm64 - Windows natively, no WSL2</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
         <tr><td><code>plug status</code> and verbs to act on a running session, out of band (never a keystroke: your command owns stdin)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
         <tr><td><a routerLink="/meerkat">Meerkat</a> integration: named session identities, per-developer keys, the hosted CLI flavour</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
-        <tr><td>The gateway hosting the tunnel endpoint, replacing the dedicated agent</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
+        <tr><td>The gateway hosting the tunnel endpoint, replacing the dedicated agent</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
+        <tr><td><a routerLink="/security" fragment="admission">Admission by approval</a>: only the keys a member accepted get in (<code>members</code> / <code>requests</code> / <code>accept</code> / <code>revoke</code>)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
+        <tr><td>Agent images signed with cosign, keyless, and built with no shell in them</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
+        <tr><td>Agent on OpenShift and OKD as published (default restricted SCC), live mounts included</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
+        <tr><td><a routerLink="/mcp"><code>plug mcp</code></a>: what plug knows, served to an AI coding agent</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
         <tr><td>IPv6 fake-pool + v6-literal tunnelling (overlays are IPv4 today)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
         <tr><td>UDP by name - framed datagram relay over the tunnel (TCP-only today)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
         <tr><td>Native protocol e2e on every OS (8 protocols × 4 languages, by name over a mesh)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
