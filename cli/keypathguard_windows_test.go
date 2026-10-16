@@ -22,10 +22,7 @@ import (
 // a marker the account owns, or a skip where the profile cannot be told.
 func ownedDir(t *testing.T) (dir, marker string) {
 	t.Helper()
-	dir, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	dir = realPath(t.TempDir())
 	marker = filepath.Join(dir, "marker")
 	if err := os.WriteFile(marker, nil, 0o600); err != nil {
 		t.Fatal(err)
@@ -96,6 +93,9 @@ func TestAJunctionInTheProfileDoesNotCarryAKeyOutOfIt(t *testing.T) {
 		}
 	})
 	key := filepath.Join(link, "win.ini")
+	if got, want := realPath(key), realPath(filepath.Join(windir, "win.ini")); !strings.EqualFold(got, want) {
+		t.Errorf("realPath(%s) = %s, want the file the junction leads to, %s", key, got, want)
+	}
 	if err := keyOwnerError(key, marker); err == nil {
 		t.Errorf("%s, a file outside the account's profile, was accepted because its path starts inside it", key)
 	}
