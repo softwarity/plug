@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.26.3
+
 ### A Windows profile key is checked on the very file that is read
 
 On Windows, plug's service opens a profile key once, checks that file (where
