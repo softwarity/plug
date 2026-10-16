@@ -143,7 +143,15 @@ func TestATunnelOpensWithTheClientsKeyAndOutlivesItThroughTheGrace(t *testing.T)
 		return reach()
 	})
 	key := net.JoinHostPort(host, port)
-	keyFile := filepath.Join(t.TempDir(), "id_ed25519")
+	// The key sits in the account's profile, as a profile key does. Resolved,
+	// because a Windows runner names its temp directory in 8.3 form
+	// (C:\Users\RUNNER~1\...), which the guard on whose key it is
+	// (keyOwnerError) compares as text against the profile's long name.
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyFile := filepath.Join(dir, "id_ed25519")
 	if err := os.WriteFile(keyFile, []byte("not read: the dial is the test's"), 0o600); err != nil {
 		t.Fatal(err)
 	}
