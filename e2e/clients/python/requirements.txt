@@ -1,9 +1,9 @@
 requests==2.34.2
-psycopg2-binary==2.9.12
+psycopg2-binary==2.9.13
 redis==8.0.1
-pymongo==4.17.0
+pymongo==4.19.0
 pika==1.4.1
 paho-mqtt==2.1.0
-grpcio==1.81.1
-grpcio-health-checking==1.81.1
+grpcio==1.84.0
+grpcio-health-checking==1.84.0
 websocket-client==1.8.0
