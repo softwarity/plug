@@ -204,10 +204,10 @@ func (o *macDNSOverride) dict() string {
 	return "d.init\nd.add ServerAddresses * " + o.dnsIP + "\nd.add SearchDomains * " + searchSuffix + "\n"
 }
 
-// holdsOurs reports whether the dict at key is exactly plug's: our resolver
-// and nothing else. Anything else means configd re-derived it under us.
-func (o *macDNSOverride) holdsOurs(key string) (servers []string, ok bool) {
-	_, cur, _ := readDNSDict(key)
+// holdsOurs reports whether a dict, as scutil showed it, is exactly plug's: our
+// resolver and nothing else. Anything else means configd re-derived it under us.
+func (o *macDNSOverride) holdsOurs(shown string) (servers []string, ok bool) {
+	_, cur, _ := parseDNSDict(shown)
 	return cur, len(cur) == 1 && cur[0] == o.dnsIP
 }
 
@@ -411,7 +411,10 @@ func (o *macDNSOverride) moveTo(svc string) {
 // resolution consumes never changed, so rewrite the input without touching the
 // resolver.
 func (o *macDNSOverride) reassert() (input, effective bool) {
-	if cur, ok := o.holdsOurs(o.dnsKey); !ok {
+	// Everything this tick reads from the store, in one scutil: it runs every
+	// three seconds for as long as the daemon lives.
+	shown := scutilBatch("show "+o.dnsKey, "show "+globalDNSKey, "show "+o.setupKey, listDNSKeysCmd)
+	if cur, ok := o.holdsOurs(shown[0]); !ok {
 		// moveTo catches a VPN, which brings its own service. This catches what
 		// it cannot: the primary service is STABLE across a Wi-Fi change (one
 		// service per hardware port, whatever the SSID), so joining another
@@ -428,12 +431,12 @@ func (o *macDNSOverride) reassert() (input, effective bool) {
 	// with it, and neither moveTo nor the block above sees that: the primary
 	// service does not change and its dict does not either. Re-read the scopes
 	// every tick; setScoped is cheap and the table is small.
-	o.up.setScoped(scopedResolvers(o.dnsIP))
-	if _, ok := o.holdsOurs(globalDNSKey); !ok {
+	o.up.setScoped(scopedResolversIn(parseDNSKeys(shown[3]), o.dnsIP))
+	if _, ok := o.holdsOurs(shown[1]); !ok {
 		_ = scutilSet(globalDNSKey, o.dict())
 		effective = true
 	}
-	if cur, ok := o.holdsOurs(o.setupKey); !ok {
+	if cur, ok := o.holdsOurs(shown[2]); !ok {
 		// Manually configured DNS wins over the DHCP/VPN ones, so when the user
 		// retypes them mid-session those are the real upstreams.
 		o.follow(cur, "the manually configured nameservers changed")
@@ -547,9 +550,22 @@ func poisonedByPlug(servers []string) bool {
 // which is why this lists the pattern rather than a known key. A service whose
 // ServerAddresses are plug's own is skipped: that is the one we overwrote.
 func scopedResolvers(own string) []scopedUpstream {
+	return scopedResolversIn(parseDNSKeys(scutilBatch(listDNSKeysCmd)[0]), own)
+}
+
+// scopedResolversIn is scopedResolvers over keys already listed, shown in one
+// scutil.
+func scopedResolversIn(keys []string, own string) []scopedUpstream {
+	if len(keys) == 0 {
+		return nil
+	}
+	cmds := make([]string, len(keys))
+	for i, k := range keys {
+		cmds[i] = "show " + k
+	}
 	var scopes []scopedUpstream
-	for _, key := range listDNSKeys() {
-		servers, domains := readScopedDict(key)
+	for _, shown := range scutilBatch(cmds...) {
+		servers, domains := parseScopedDict(shown)
 		real := systemServers(servers, own)
 		if len(real) == 0 {
 			continue

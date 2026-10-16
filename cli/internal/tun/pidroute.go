@@ -59,16 +59,18 @@ type pidRouter struct {
 // pidCache remembers the CLUSTER a process belongs to, so the ancestry is climbed
 // once per process instead of once per connection.
 //
-// Why it is worth having, measured rather than assumed: each hop costs two forks
-// (`ps -o lstart=` and `ps -o ppid=`), about 16ms each on a real Mac, and a
-// shell → plug → app chain is three hops. A database pool opening ten connections
-// paid that five-fork walk ten times for an answer that had not changed.
+// Why it is worth having, measured rather than assumed: each hop cost two forks
+// of ps on a Mac, about 16ms each, before both answers were read from the kernel,
+// and a shell → plug → app chain is three hops. A database pool opening ten
+// connections paid that five-fork walk ten times for an answer that had not
+// changed. Windows still pays for each hop: its parent comes from a toolhelp
+// snapshot of every process on the machine.
 //
 // What it must NOT remember is the recycled-PID check. A PID reused by an
 // unrelated process is the exact thing walkToCluster refuses on, and caching a
 // route past it would send someone's traffic into another cluster - the one
 // failure this design will not accept. So the START STAMP is re-read on every
-// flow (one fork, not five) and the entry is only trusted when it matches.
+// flow (one lookup, not five) and the entry is only trusted when it matches.
 //
 // Refusals are not cached either: the launcher registry is written by a client
 // that may not have registered yet when its first flow lands, and remembering
@@ -85,7 +87,7 @@ type cachedRoute struct {
 
 // pidCacheMax bounds the map. Processes come and go, and a daemon that runs for
 // weeks must not accumulate one entry per PID ever seen. Cleared wholesale rather
-// than evicted one by one: a re-walk costs five forks and happens once per live
+// than evicted one by one: a re-walk costs five lookups and happens once per live
 // process, which is cheaper than tracking recency.
 const pidCacheMax = 1024
 
@@ -124,7 +126,7 @@ func (r pidRouter) route(f flow) (string, bool) {
 	}
 	// The stamp is read on EVERY flow, and it is the only thing that is. It is
 	// what tells a remembered answer from a PID that now names a stranger, and it
-	// costs one fork where the walk costs five.
+	// costs one lookup where the walk costs five.
 	start, ok := r.startOf(pid)
 	if !ok {
 		return "", false // no stamp, no route: in doubt, refuse

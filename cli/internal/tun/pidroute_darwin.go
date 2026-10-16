@@ -3,7 +3,6 @@
 package tun
 
 import (
-	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -12,51 +11,44 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// procStart returns pid's start time as Unix seconds, via `ps -o lstart=`.
+// procStart returns pid's start time in the unit `ps -o lstart=` gave it, read
+// from the kernel (kern.proc.pid) instead of a fork of ps.
 //
-// NOT moved to kern.proc.pid alongside uidOf, and the reason is persistence
-// rather than cost. The kernel's P_starttime is the true epoch; this parse reads
-// a LOCAL time as if it were UTC, so the two differ by the machine's offset,
-// measured at exactly 7200s here on all 1104 processes. That has never mattered,
-// for the reason below: only comparability feeds the ancestry walk. But this
-// value is also WRITTEN DOWN, in the .start sidecar beside a client marker, and
-// read back by whatever build is running later. Switching the unit would make
-// every marker written by an older plug look like a different process to a newer
-// one - the cluster would read as unheld, and the one-cluster-one-account rule
-// would quietly stop applying to sessions that were already open across the
-// upgrade. A fork saved on the multicluster path is not worth a security check
-// that lapses while people update. Only comparability feeds the ancestry walk, not the unit, so a
-// coarse second granularity is enough to catch a recycled PID, and two processes
-// born in the same second compare equal (<=), never a false "younger parent".
-// LANG/LC pinned to C so we parse the fixed English date form regardless of locale.
+// THE UNIT IS ps's, ON PURPOSE. ps prints the start in LOCAL time, and plug used
+// to parse that as if it were UTC, so its stamp is the true epoch plus the
+// machine's offset at that moment (7200s here in summer). That never mattered for
+// the ancestry walk, which only compares stamps. But the value is also WRITTEN
+// DOWN, in the .start sidecar beside a client marker, and read back by whatever
+// build runs later: a different unit would make every marker written by an older
+// plug look like another process to this one, the cluster would read as unheld,
+// and the one-cluster-one-account rule would stop applying to sessions already
+// open across the upgrade. So the kernel's epoch gets the offset ps would have
+// added, taken at the start instant as localtime(3) does, which gives the same
+// number to the second (TestProcStartIsWhatPsSaid).
+//
+// What the fork cost: about 16ms, paid on EVERY multicluster flow (the stamp is
+// the one thing the walk re-reads each time, see pidRouter.route) and on every
+// registry check the stamp cache does not cover. Two processes born in the same
+// second still compare equal (<=), never a false "younger parent".
 func procStart(pid int) (int64, bool) {
-	cmd := exec.Command(HelperPath("ps"), "-o", "lstart=", "-p", strconv.Itoa(pid))
-	cmd.Env = append(os.Environ(), "LANG=C", "LC_ALL=C")
-	out, err := cmd.Output()
-	if err != nil {
+	kp, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
+	if err != nil || kp == nil || int(kp.Proc.P_pid) != pid {
 		return 0, false
 	}
-	t, err := time.Parse("Mon Jan _2 15:04:05 2006", strings.TrimSpace(string(out)))
-	if err != nil {
-		return 0, false
-	}
-	return t.Unix(), true
+	sec := kp.Proc.P_starttime.Sec
+	_, offset := time.Unix(sec, 0).Zone()
+	return sec + int64(offset), true
 }
 
-// ppidOf returns pid's parent via `ps -o ppid=`. Cgo-free on purpose: the
-// datapath builds with CGO_ENABLED=0, so we avoid libproc. The parent walk is a
-// few hops and its verdict is remembered per PROCESS (pidCache), so the exec
-// cost is paid once per client, not once per connection.
+// ppidOf returns pid's parent from the kernel (kern.proc.pid), cgo-free like
+// uidOf: the datapath builds with CGO_ENABLED=0, which rules out libproc but
+// not sysctl. It used to fork `ps -o ppid=`, a fork per hop of the walk.
 func ppidOf(pid int) (int, bool) {
-	out, err := exec.Command(HelperPath("ps"), "-o", "ppid=", "-p", strconv.Itoa(pid)).Output()
-	if err != nil {
+	kp, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
+	if err != nil || kp == nil || int(kp.Proc.P_pid) != pid {
 		return 0, false
 	}
-	ppid, err := strconv.Atoi(strings.TrimSpace(string(out)))
-	if err != nil {
-		return 0, false
-	}
-	return ppid, true
+	return int(kp.Eproc.Ppid), true
 }
 
 // pidForFlow maps a flow to the PID owning its socket, via `netstat -anv`

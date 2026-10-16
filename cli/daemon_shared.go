@@ -181,6 +181,12 @@ var (
 	dialOut = make(chan dialOutcome, 32)
 )
 
+// dialClusterTunnel is dialTunnel, replaceable by a test: reconcile is the loop
+// that decides which tunnels the daemon holds, and its rules (one dial in flight
+// per cluster, a refusal taken at its word, a tunnel held through its grace) are
+// worth checking against an agent that answers on cue.
+var dialClusterTunnel = dialTunnel
+
 // reconcileOnce opens a tunnel for each active cluster missing one and closes
 // tunnels whose cluster no longer has a live client. Each open/close flips the
 // cluster's ready marker so `plug -p X <cmd>` can wait for its own tunnel.
@@ -253,7 +259,7 @@ func reconcile(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transport, 
 		}
 		cfg := config{host: host, port: port, key: keyFile}
 		if wait {
-			tr, err := dialTunnel(cfg)
+			tr, err := dialClusterTunnel(cfg)
 			applyDial(ct, tunnels, dialOutcome{key: key, tr: tr, err: err})
 			continue
 		}
@@ -264,7 +270,7 @@ func reconcile(ct *tun.ClusterTransports, tunnels map[string]*tunnel.Transport, 
 		// forty-five copies of the same failing dial.
 		k := key
 		dials.begin(k, func() {
-			tr, err := dialTunnel(cfg)
+			tr, err := dialClusterTunnel(cfg)
 			dialOut <- dialOutcome{key: k, tr: tr, err: err}
 		})
 	}

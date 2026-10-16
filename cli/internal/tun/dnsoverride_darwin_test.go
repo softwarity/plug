@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -22,6 +23,7 @@ import (
 type dynStore struct {
 	shown map[string]string // key -> scutil show output
 	seq   []string          // every write, in order
+	calls int               // scutil runs, reads included
 }
 
 func newDynStore() *dynStore { return &dynStore{shown: map[string]string{}} }
@@ -61,17 +63,33 @@ func (s *dynStore) install(t *testing.T) {
 	t.Helper()
 	savedScutil, savedSet, savedRemove := scutil, scutilSet, scutilRemove
 	t.Cleanup(func() { scutil, scutilSet, scutilRemove = savedScutil, savedSet, savedRemove })
+	// Read scripts, one command or a batch: a show prints the key, d.show the
+	// dictionary being built, which a read script only ever builds to separate
+	// two outputs (scutilBatch), and a list the services' DNS keys, the one
+	// pattern plug lists.
 	scutil = func(script string) (string, error) {
-		switch {
-		case strings.HasPrefix(script, "show "):
-			key := strings.TrimSpace(strings.TrimPrefix(strings.SplitN(script, "\n", 2)[0], "show "))
-			if out, ok := s.shown[key]; ok {
-				return out, nil
+		s.calls++
+		var out strings.Builder
+		for _, line := range strings.Split(script, "\n") {
+			cmd, arg, _ := strings.Cut(strings.TrimSpace(line), " ")
+			switch cmd {
+			case "list":
+				for i, k := range s.keys() {
+					if strings.HasPrefix(k, "State:/Network/Service/") && strings.HasSuffix(k, "/DNS") {
+						out.WriteString("  subKey [" + strconv.Itoa(i) + "] = " + k + "\n")
+					}
+				}
+			case "show":
+				if shown, ok := s.shown[arg]; ok {
+					out.WriteString(shown)
+				} else {
+					out.WriteString("  No such key\n")
+				}
+			case "d.show":
+				out.WriteString("<dictionary> {\n  " + batchSeparator + "\n}\n")
 			}
-			return "No such key", nil
-		default: // list: no scoped resolvers on this machine
-			return "", nil
 		}
+		return out.String(), nil
 	}
 	scutilSet = func(key, build string) error {
 		s.seq = append(s.seq, "set "+key)
@@ -222,5 +240,73 @@ func TestALeftoverOnTheNewPrimaryIsDroppedNotRestored(t *testing.T) {
 	}
 	if got := st.servers("State:/Network/Service/X/DNS"); len(got) != 1 || got[0] != "10.0.0.1" {
 		t.Errorf("X holds %v after restore, want its own 10.0.0.1", got)
+	}
+}
+
+// The watchdog reads the store every three seconds for as long as the daemon
+// lives: its three keys and every service's resolver, a VPN's scoped one
+// included. In one scutil for the keys and one for the resolvers, whatever the
+// number of services, where a fork per key made six to eight a tick.
+func TestAWatchdogTickReadsTheStoreInTwoRuns(t *testing.T) {
+	dir := t.TempDir()
+	savedResolv, savedResolver := resolvConf, resolverPath
+	t.Cleanup(func() { resolvConf, resolverPath = savedResolv, savedResolver })
+	resolvConf = filepath.Join(dir, "resolv.conf")
+	resolverPath = filepath.Join(dir, "resolver", searchSuffix)
+	write(t, resolvConf, "nameserver 10.0.0.1\n")
+
+	const dnsIP = "198.18.0.53"
+	st := newDynStore()
+	st.shown["State:/Network/Service/X/DNS"] = dict("ServerAddresses = 10.0.0.1")
+	st.shown["State:/Network/Global/DNS"] = dict("ServerAddresses = 10.0.0.1")
+	st.shown["State:/Network/Service/V1/DNS"] = dict("ServerAddresses = 10.8.0.1", "SupplementalMatchDomains = corp.example")
+	st.shown["State:/Network/Service/V2/DNS"] = dict("ServerAddresses = 10.9.0.1", "SupplementalMatchDomains = lab.example")
+	st.install(t)
+	up := newUpstream(nil)
+	o := newMacDNSOverride("X", dnsIP, up, logfn(func(string, ...any) {}))
+	o.apply()
+
+	st.calls = 0
+	if input, effective := o.reassert(); input || effective {
+		t.Fatalf("reassert after apply reported input=%v effective=%v: nothing moved", input, effective)
+	}
+	if st.calls != 2 {
+		t.Errorf("a tick ran scutil %d times, want 2", st.calls)
+	}
+	// And what it read in those two is what it used: both VPNs' domains go to
+	// their own resolvers.
+	up.mu.RLock()
+	scoped := up.scoped
+	up.mu.RUnlock()
+	for domain, want := range map[string]string{"corp.example": "10.8.0.1:53", "lab.example": "10.9.0.1:53"} {
+		got := ""
+		for _, sc := range scoped {
+			if sc.domain == domain {
+				got = strings.Join(sc.addrs, ",")
+			}
+		}
+		if got != want {
+			t.Errorf("%s is forwarded to %q, want %s", domain, got, want)
+		}
+	}
+}
+
+// scutilBatch is only as good as its split: each command's output must be what
+// that command printed run on its own. Checked against the machine's scutil,
+// which answers reads without root.
+func TestABatchReadsWhatEachCommandReadsAlone(t *testing.T) {
+	cmds := []string{"show State:/Network/Global/IPv4", "show State:/Network/Plug/NoSuchKey", listDNSKeysCmd, "show State:/Network/Global/DNS"}
+	got := scutilBatch(cmds...)
+	for i, c := range cmds {
+		alone, err := scutil(c + "\nquit\n")
+		if err != nil {
+			t.Fatalf("%s: %v", c, err)
+		}
+		if strings.TrimSpace(got[i]) != strings.TrimSpace(alone) {
+			t.Errorf("%s in a batch printed\n%s\nalone\n%s", c, got[i], alone)
+		}
+	}
+	if !strings.Contains(got[1], "No such key") {
+		t.Errorf("a missing key in a batch printed %q", got[1])
 	}
 }

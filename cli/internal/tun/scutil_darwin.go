@@ -43,6 +43,52 @@ var scutilRemove = func(key string) error {
 	return err
 }
 
+// batchSeparator is the line scutilBatch puts between two commands' output: a
+// dictionary of its own, built and shown inside the same script (d.init, d.add,
+// d.show). No key of the store prints it, since it is never written to one.
+const batchSeparator = "PlugBatchSeparator : 1"
+
+// scutilBatch runs read commands ("show <key>", "list <pattern>") in ONE scutil
+// and returns each one's output, in order. The DNS watchdog reads a handful of
+// keys every three seconds for as long as the daemon lives, and a fork per key
+// was six to eight forks a tick; batched, a tick costs two. On failure every
+// output is empty, which each parser reads exactly as it read a failed scutil
+// of its own: no such key.
+func scutilBatch(cmds ...string) []string {
+	outs := make([]string, len(cmds))
+	var script strings.Builder
+	for _, c := range cmds {
+		script.WriteString(c + "\nd.init\nd.add " + strings.ReplaceAll(batchSeparator, " : ", " ") + "\nd.show\n")
+	}
+	script.WriteString("quit\n")
+	out, err := scutil(script.String())
+	if err != nil {
+		return outs
+	}
+	// The separator prints as "<dictionary> {", its line, "}": the opening line
+	// is already in the chunk when the separator is seen, and the closing one
+	// follows it.
+	var chunks []string
+	var cur []string
+	lines := strings.Split(out, "\n")
+	for i := 0; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) != batchSeparator {
+			cur = append(cur, lines[i])
+			continue
+		}
+		if n := len(cur); n > 0 && strings.HasPrefix(strings.TrimSpace(cur[n-1]), "<dictionary>") {
+			cur = cur[:n-1]
+		}
+		chunks = append(chunks, strings.Join(cur, "\n"))
+		cur = nil
+		i++ // the separator's closing brace
+	}
+	if len(chunks) != len(cmds) {
+		return outs // not the shape asked for: trust none of it
+	}
+	return chunks
+}
+
 // primaryService returns the id of the primary network service (the one whose
 // DNS resolves bare names) from the dynamic store.
 func primaryService() (string, error) {
@@ -63,11 +109,20 @@ func primaryService() (string, error) {
 // readDNSDict reads the DNS dict at key and returns (a) a scutil script that
 // rebuilds it verbatim (d.init + d.add lines) for restore, and (b) its
 // ServerAddresses, plug's upstream for dotted names. Both are empty if the key
-// is absent. It parses scutil's show output: scalars ("Key : value") and arrays
-// ("Key : <array> { N : value ... }").
+// is absent.
 func readDNSDict(key string) (restore string, servers, search []string) {
 	out, err := scutil("show " + key + "\nquit\n")
-	if err != nil || strings.Contains(out, "No such key") {
+	if err != nil {
+		return "", nil, nil
+	}
+	return parseDNSDict(out)
+}
+
+// parseDNSDict is readDNSDict's reading of scutil's show output, for a key
+// shown on its own or in a batch: scalars ("Key : value") and arrays
+// ("Key : <array> { N : value ... }").
+func parseDNSDict(out string) (restore string, servers, search []string) {
+	if strings.TrimSpace(out) == "" || strings.Contains(out, "No such key") {
 		return "", nil, nil
 	}
 	var b strings.Builder
@@ -113,13 +168,13 @@ func readDNSDict(key string) (restore string, servers, search []string) {
 	return b.String(), servers, search
 }
 
-// readScopedDict returns a DNS dict's servers and its SupplementalMatchDomains.
+// parseScopedDict returns a DNS dict's servers and its SupplementalMatchDomains.
 // A dict with no match domains is an ordinary resolver and yields none, which is
 // what keeps the primary service - and its plain SearchDomains, which are a
 // different thing - out of the scoped table.
-func readScopedDict(key string) (servers, domains []string) {
-	out, err := scutil("show " + key + "\nquit\n")
-	if err != nil || strings.Contains(out, "No such key") {
+// It reads scutil's show output for the key, as scutilBatch returns it.
+func parseScopedDict(out string) (servers, domains []string) {
+	if strings.Contains(out, "No such key") {
 		return nil, nil
 	}
 	var curKey string
@@ -147,13 +202,12 @@ func readScopedDict(key string) (servers, domains []string) {
 	return servers, domains
 }
 
-// listDNSKeys returns every State:/Network/Service/<id>/DNS key the store holds,
-// which is where each service, a VPN's included, publishes its resolver.
-func listDNSKeys() []string {
-	out, err := scutil("list State:/Network/Service/.*/DNS\nquit\n")
-	if err != nil {
-		return nil
-	}
+// listDNSKeysCmd lists every State:/Network/Service/<id>/DNS key the store
+// holds, which is where each service, a VPN's included, publishes its resolver.
+const listDNSKeysCmd = "list State:/Network/Service/.*/DNS"
+
+// parseDNSKeys reads the keys out of listDNSKeysCmd's output.
+func parseDNSKeys(out string) []string {
 	var keys []string
 	for _, line := range strings.Split(out, "\n") {
 		if _, key, ok := strings.Cut(line, "= "); ok {

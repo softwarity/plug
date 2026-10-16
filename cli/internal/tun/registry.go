@@ -392,9 +392,11 @@ const ClusterHeldRefusal = "error: cluster %s is in use by another account on TH
 // takes the opposite side of that trade twice.
 //
 // A "yes" is remembered for stampVerdictTTL, keyed on the marker AND the stamp
-// it carried. On macOS procStart is a fork of ps, about 16ms, and the daemon's
+// it carried. On macOS procStart was a fork of ps, about 16ms, and the daemon's
 // reconcile loop reads ActiveClusters three times a second: unremembered, three
-// clients cost it a seventh of a core to re-learn what it knew a moment ago. A
+// clients cost it a seventh of a core to re-learn what it knew a moment ago. It
+// reads the kernel now; the memory stays for Windows, where the stamp opens a
+// handle on the process. A
 // "no" is never remembered, since the caller reaps the marker on it; a marker
 // rewritten with a new stamp has a new key and is asked afresh.
 func markerStillItsProcess(dir string, pid int) bool {

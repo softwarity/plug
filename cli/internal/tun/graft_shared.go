@@ -72,3 +72,14 @@ func MarkDaemonStopping() { _ = os.WriteFile(stoppingPath(), nil, 0o644) }
 func ClearDaemonStopping() { _ = os.Remove(stoppingPath()) }
 
 func DaemonStopping() bool { _, err := os.Stat(stoppingPath()); return err == nil }
+
+// UseStateDir points this package's machine state (the client registry, the
+// ready and error markers, the pins) at dir, and returns what puts it back. It
+// is for the daemon's tests in package main: reconcile reads the registry
+// through this package, and against the real one it would find whatever
+// sessions the machine running the tests has open.
+func UseStateDir(dir string) (restore func()) {
+	old := graftDir
+	graftDir = dir
+	return func() { graftDir = old }
+}

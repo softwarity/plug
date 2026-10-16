@@ -6,7 +6,11 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"os/exec"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 )
 
 // TestPidForFlowSelf proves the macOS connect-time lookup against a real
@@ -135,5 +139,56 @@ func TestUidOfAgreesWithTheSystem(t *testing.T) {
 	// between the SYN and the lookup.
 	if _, ok := uidOf(spawnAndKill(t)); ok {
 		t.Error("uidOf named an owner for a process that had exited")
+	}
+}
+
+// procStart and ppidOf ask the kernel now instead of forking ps, and the start
+// stamp is WRITTEN DOWN in the registry (the .start sidecar), read back by
+// whatever build runs later: it must be the number ps gave, to the second, on
+// every process, or a marker written before the upgrade reads as another
+// process after it. Checked against ps itself, over the whole machine.
+func TestProcStartIsWhatPsSaid(t *testing.T) {
+	cmd := exec.Command("ps", "-axo", "pid=,ppid=,lstart=")
+	cmd.Env = append(os.Environ(), "LANG=C", "LC_ALL=C")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 7 {
+			continue
+		}
+		pid, _ := strconv.Atoi(f[0])
+		ppid, _ := strconv.Atoi(f[1])
+		want, err := time.Parse("Mon Jan _2 15:04:05 2006", strings.Join(f[2:], " "))
+		if err != nil {
+			t.Fatalf("ps printed a start this test cannot read: %q", line)
+		}
+		start, ok := procStart(pid)
+		if !ok {
+			continue // ended since ps listed it
+		}
+		if start != want.Unix() {
+			t.Errorf("pid %d: procStart = %d, ps said %d (%s)", pid, start, want.Unix(), strings.Join(f[2:], " "))
+		}
+		if got, ok := ppidOf(pid); ok && got != ppid {
+			t.Errorf("pid %d: ppidOf = %d, ps said %d", pid, got, ppid)
+		}
+		checked++
+	}
+	if checked < 10 {
+		t.Fatalf("only %d processes compared", checked)
+	}
+	// No answer for a pid that cannot exist, nor for one that has ended: the
+	// walk reads silence as "in doubt, refuse".
+	for _, pid := range []int{1 << 30, spawnAndKill(t)} {
+		if _, ok := procStart(pid); ok {
+			t.Errorf("procStart answered for pid %d, which is not running", pid)
+		}
+		if _, ok := ppidOf(pid); ok {
+			t.Errorf("ppidOf answered for pid %d, which is not running", pid)
+		}
 	}
 }

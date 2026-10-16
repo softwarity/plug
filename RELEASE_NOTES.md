@@ -2,6 +2,20 @@
 
 ## NEXT RELEASE
 
+### Faster connections with several clusters on macOS
+
+With two clusters or more open on a Mac, each new connection is attributed to
+its cluster without launching a single helper process: plug asks the kernel
+which process opened it and where that process comes from. A connection pool
+opening dozens of connections at once gets them in a fraction of the time.
+
+### A lighter watch over the Mac's DNS settings
+
+While a session runs, plug keeps an eye on the Mac's DNS settings so a network
+change cannot take cluster names away. It now reads them all in two calls
+every few seconds instead of up to eight, which is less work for the machine
+over a long session.
+
 ---
 
 ## 2.26.1
