@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.26.2
+
 ### Faster connections with several clusters on macOS
 
 With two clusters or more open on a Mac, each new connection is attributed to
