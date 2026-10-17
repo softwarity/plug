@@ -143,13 +143,14 @@ import { CtaComponent } from '../cta/cta.component';
           <tr><th scope="row">Borrow ANOTHER workload's environment</th><td class="win">✓ <code>--env-of &lt;name&gt;</code> - a pure client (<code>-c</code>) run with a service's own credentials, or a <code>-s</code> served with the variables of the service it talks to, without parking it</td><td>only the <code>--target</code> you intercept</td><td>only the service you intercept</td></tr>
           <tr><th scope="row">Its mounted secret/config FILES (a CA, a keystore)</th><td class="win">✓ <strong>no FUSE</strong>: the files are read through the agent's existing exec/API and materialised for the session (or mounted at their exact path under <code>--dockerrun</code>); the variables that name them are repointed. Kubernetes and Compose secrets, Swarm configs</td><td>fs mirroring, live - needs its syscall layer in-process</td><td>volume mounts, live - via <strong>sshfs / FUSE</strong> (macFUSE, WinFSP)</td></tr>
           <tr><th scope="row">Its data VOLUMES / PVCs, live</th><td class="win">✓ <strong>by default, nothing to install</strong>: every volume of the workload a <code>-s</code> takes over (or <code>--env-of</code> names) is mounted on your machine read-write, and the variables naming it are repointed - the process finds its data and knows nothing (<code>--no-mount</code> to opt out, <code>--mount</code> for an exact path). Mounted with the SMB client the OS already has, on all three OSes; the agent runs a helper beside the workload, tied to the session like the name</td><td>✓ file calls hooked in your process and relayed into the pod one by one (the runtime has to be hookable)</td><td>✓ <code>--mount</code>, through sshfs - a FUSE runtime and sshfs to install first</td></tr>
-          <tr><th scope="row">Several devs on one shared service</th><td>one name, one session</td><td class="win">header / queue split</td><td class="win">header / path</td></tr>
+          <tr><th scope="row">Several devs on one shared service</th><td>one name, one session</td><td class="win">header / queue split, with the paid Team plan</td><td class="win">header / path</td></tr>
           <tr><th scope="row">Who gets in</th><td class="win">✓ <strong>by approval</strong>: deploy the agent with <code>PLUG_ADMISSION=invite</code> and only the keys a member accepted get in, each one revocable (<code>plug revoke</code>), with <strong>no account to create in the cluster</strong> (<a routerLink="/security" fragment="admission">how</a>). Open by default, for a trusted dev network</td><td>whoever holds a kubeconfig the cluster issued</td><td>whoever holds a kubeconfig the cluster issued</td></tr>
           <tr><th scope="row">What each person may do</th><td>every member, everything plug does; per-person identities and rights with <a routerLink="/meerkat">Meerkat</a></td><td class="win">kubeconfig RBAC</td><td class="win">kubeconfig RBAC</td></tr>
           <tr><th scope="row">IDE extensions</th><td>none, CLI only - there is no target to pick, so nothing for a panel to show</td><td class="win">VS Code · JetBrains</td><td>JetBrains</td></tr>
           <tr><th scope="row">For an AI coding agent</th><td class="win">✓ <a routerLink="/mcp"><code>plug mcp</code></a>, an MCP server over stdio: the clusters this machine knows, <code>doctor</code> check by check, a workload's environment, whether a name exists, as tools with structured answers</td><td>the agent drives the CLI like a developer would; no MCP documented</td><td>nothing documented</td></tr>
           <tr><th scope="row">Mechanism</th><td>userspace TUN over SSH</td><td>syscall layer in your process</td><td>in-cluster traffic-manager</td></tr>
           <tr><th scope="row">Behind it</th><td>softwarity, the team behind <a routerLink="/meerkat">Meerkat</a></td><td>MetalBear</td><td>Ambassador Labs, now a CNCF project</td></tr>
+          <tr><th scope="row">Price</th><td class="win">free, every feature, no paid tier</td><td>free for one developer; a cluster shared by several needs the paid Team plan, per seat</td><td class="win">free</td></tr>
           <tr><th scope="row">License</th><td>FSL-1.1-Apache-2.0</td><td>MIT</td><td>Apache-2.0</td></tr>
         </tbody>
       </table>
@@ -181,7 +182,7 @@ import { CtaComponent } from '../cta/cta.component';
       the agent when it is left open - but not what each member may do once in (see the
       <a routerLink="/security">security model</a>, and <a routerLink="/meerkat">Meerkat</a> for
       named identities and their rights). Both split one shared service between several developers by routing on a
-      header or a path. And both are older, with IDE extensions and a larger community.
+      header or a path (with mirrord, on its paid Team plan). And both are older, with IDE extensions and a larger community.
     </p>
 
     <app-cta link="/getting-started">Set it up</app-cta>
