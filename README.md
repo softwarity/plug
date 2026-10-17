@@ -61,7 +61,9 @@ services:
 
 The socket line is **required** on Docker, Compose and Swarm: it is how the
 agent creates your `-s` name. It is root on the host, so mount it only on a
-cluster you trust - the trust plug's no-auth transport already assumes.
+cluster you trust. Left as is, the agent lets in whoever reaches its port; to let
+in only the developers a member accepts, set `PLUG_ADMISSION: invite` on it (see
+[Security](#security)).
 Kubernetes needs no socket: the bundled manifest grants a namespace-scoped RBAC
 role instead - see [below](#the-name-in-the-cluster).
 
@@ -162,8 +164,8 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock   # required: the agent creates your -s name
 ```
 
-The Docker socket is root on the host - mount it only on a cluster you trust
-(the same trust plug's no-auth transport already assumes). plug verifies the
+The Docker socket is root on the host - mount it only on a cluster you trust.
+plug verifies the
 full path at startup so a missing name fails loud, and the port closes with the
 session.
 
@@ -338,10 +340,21 @@ service reached by name is always fine.
 
 ## Security
 
-There is deliberately no authentication: anyone who can reach the agent's port
-gets network access to the cluster it is attached to. Deploy the agent only on
-clusters you trust, and never expose its port on an untrusted network. The full
-model is in the [documentation](https://softwarity.github.io/plug/#/security).
+Who may open a session on a cluster is decided in one of three ways:
+
+- **Open**, the default: whoever reaches the agent's port gets in. It fits a dev
+  cluster on a network you trust, where a colleague is at work a minute after the
+  install, with no key to hand out and no account to create.
+- **By approval** (`PLUG_ADMISSION=invite`): only the keys a member accepted get
+  in, the first key to connect being the first member. A stranger who reaches the
+  port gets a request in a queue, and nothing else.
+- **Hosted**, with [Meerkat](https://softwarity.github.io/plug/#/meerkat): the
+  people a gateway knows, each under their own name and with their own rights.
+
+Whatever the mode, never expose the agent's port on a public network, and deploy
+it only on a dev cluster: once in, a session reaches what the agent reaches. The
+full model, and how to move from one mode to another, is in the
+[documentation](https://softwarity.github.io/plug/#/security).
 
 The CLI binaries a release publishes are signed, and plug verifies that signature
 before running the core with privilege: the agent tells plug which bytes to run,

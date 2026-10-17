@@ -71,6 +71,13 @@ function guessOs(): Os {
       <a routerLink="/swarm">Swarm</a> for the standalone variant, or
       <a routerLink="/kubernetes">Kubernetes</a> for the cluster.
     </p>
+    <p>
+      Left as is, the agent lets in whoever reaches its port: the right default on a network you
+      trust. To let in only the developers a member accepts, uncomment
+      <code>PLUG_ADMISSION: invite</code> (on Compose, with the members volume). The three ways a
+      cluster decides who gets in, and how to move between them, are in the
+      <a routerLink="/security">Security model</a>.
+    </p>
 
     <h3>2. Install the CLI, on each dev machine</h3>
     <p>

@@ -16,11 +16,12 @@ import { CodeComponent } from '../code/code.component';
 
     <h3>Who is plugged in, by name</h3>
     <p>
-      On its own, plug authenticates with a key. Through Meerkat, a developer holding the
+      On its own, plug lets in whoever reaches the agent, or, by approval, the keys its members
+      accepted. Through Meerkat, a developer holding the
       <code>dev</code> ability deposits their <strong>own public key</strong>, which is tied to
       their name and known to the agent. They then authenticate on the agent's port, download the
-      CLI and open sessions as themselves - every session attributed to a person rather than to a
-      shared secret.
+      CLI and open sessions as themselves - every session attributed to a person the gateway
+      knows, with the rights it gives them.
     </p>
     <p>
       That changes what the cluster can tell you. A plugged service is already a shared state:
