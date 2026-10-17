@@ -57,7 +57,7 @@ import { RouterLink } from '@angular/router';
       <code>q</code>, nodemon reads <code>rs</code>, a REPL reads everything. Any key plug kept for
       itself would be taken from that program. Another terminal is where to ask instead:
       <code>plug mounts</code> lists what the live sessions have mounted, <code>plug doctor</code>
-      checks what they rely on.
+      lists them and checks each name they serve answers.
     </p>
   `,
 })

@@ -11,7 +11,9 @@ import { CodeComponent } from '../code/code.component';
     <p>
       First reflex, always: <code>plug doctor</code>. It checks everything plug touches and prints
       the remedy next to each finding - and can open a pre-filled (redacted) GitHub issue if you
-      want to report one. See <a routerLink="/cli">the CLI reference</a>.
+      want to report one. It also lists the sessions running on this machine that serve a name,
+      with the command and the PID of each, and whether each name answers right now: through the
+      cluster, and on your machine. See <a routerLink="/cli">the CLI reference</a>.
     </p>
     <app-code lang="bash">plug doctor</app-code>
 
@@ -36,7 +38,7 @@ import { CodeComponent } from '../code/code.component';
       <code>docker service ps plug-sp-&lt;name&gt;</code> or <code>kubectl get svc &lt;name&gt;</code>.
       A signpost stuck in <em>Preparing</em>, a task restarting in a loop, or another workload
       holding the name all look like this. The session keeps running, so a name that comes up late
-      still works.
+      still works, and <code>plug doctor</code>, from another terminal, says when it does.
     </p>
     <p>
       One cause hides better than the others: if the cluster is driven by a continuous-deployment

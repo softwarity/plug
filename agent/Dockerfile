@@ -22,18 +22,29 @@ ARG FLAVOUR=
 # so emulating the target here would only make the compiler run under QEMU.
 # That is what lets one job build both architectures at release time, where
 # the final stage runs nothing that has to be emulated.
+#
+# TARGETARCH is declared where the agent needs it, not here: a build-arg in
+# scope is part of every later RUN's cache key, so declared above the CLI loop
+# it made that loop one per TARGET. A two-platform build then compiled the six
+# identical binaries twice, side by side on the same cores (216s each, at
+# release). Out of its scope, both platforms share the one run.
+#
+# The Go build cache is a cache mount, so the second image of a release (the
+# hosted flavour, same sources, another version string) compiles nothing again
+# and only links. It lands in no layer; a fresh builder starts it empty.
 FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
 ARG VERSION
 ARG GIT_REV
 ARG FLAVOUR
-ARG TARGETARCH
 # plug is a single self-contained Go binary — its data path is the userspace TUN
 # (gVisor netstack + wireguard-go device), no C hook or seccomp supervisor to
 # cross-build anymore.
 WORKDIR /src
 COPY cli/ ./cli/
 WORKDIR /src/cli
-RUN mkdir -p /out/bin && \
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    mkdir -p /out/bin && \
     if [ -n "${GIT_REV}" ]; then V="${VERSION}+${GIT_REV}"; else V="${VERSION}"; fi && \
     if [ -n "${FLAVOUR}" ]; then V="${V}-${FLAVOUR}"; fi && \
     for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do \
@@ -92,6 +103,8 @@ RUN for i in 1 2 3; do apk add --no-cache curl unzip && break; \
 # the names the agent serves them by, each .sig beside its file, so the final
 # stage copies them in one glob whether or not a key was mounted.
 RUN --mount=type=secret,id=release_key \
+    --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
     if [ -s /run/secrets/release_key ]; then \
       go run ./cmd/plug-sign /run/secrets/release_key /out/bin "$(cat /out/VERSION)" \
         /out/wintun-amd64.dll /out/wintun-arm64.dll; \
@@ -115,7 +128,10 @@ COPY agent/*.go agent/go.mod agent/go.sum agent/install-unix.sh /src/agent/
 COPY agent/cmd/ /src/agent/cmd/
 # ./cmd/plug-agent, not "." - the package is importable now (Meerkat links it
 # into its own binary), so the main lives in a cmd of its own.
-RUN CGO_ENABLED=0 GOARCH=$TARGETARCH go build -C /src/agent -trimpath -ldflags "-s -w" -o /out/plug-agent ./cmd/plug-agent
+ARG TARGETARCH
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    CGO_ENABLED=0 GOARCH=$TARGETARCH go build -C /src/agent -trimpath -ldflags "-s -w" -o /out/plug-agent ./cmd/plug-agent
 
 # Everything the image holds beyond its base, laid out HERE with its modes: the
 # final stage has no shell, so no mkdir or chmod can run there, and a COPY

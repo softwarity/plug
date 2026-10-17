@@ -47,8 +47,10 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
       <tr>
         <td><code>plug doctor [-p profile] [--fix]</code></td>
         <td>
-          health-check everything plug touches, remedy next to each finding; <code>--fix</code>
-          applies the safe repairs; offers a pre-filled (redacted) GitHub issue
+          health-check everything plug touches, remedy next to each finding; lists the live
+          sessions of this machine that serve a name, under their profile, and checks each name
+          answers end to end, from the cluster to your process; <code>--fix</code> applies the
+          safe repairs; offers a pre-filled (redacted) GitHub issue
         </td>
         <td><a routerLink="/getting-started">Getting started</a></td>
       </tr>
