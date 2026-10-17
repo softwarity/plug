@@ -2,9 +2,11 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // sandboxHome points plugDir() at a temp directory. UserHomeDir reads $HOME on
@@ -22,7 +24,7 @@ func sandboxHome(t *testing.T) {
 func TestMarkServedThenHolderNamesThisProcess(t *testing.T) {
 	sandboxHome(t)
 
-	forget := markServed("orders-svc", "40001", []string{"-s", "orders-svc:3000:PORT", "nest", "start", "--watch"})
+	forget := markServed("orders-svc", "40001", []string{"-s", "orders-svc:3000:PORT", "nest", "start", "--watch"}, servedAt{})
 	h := servedHolder("orders-svc")
 	if h == nil {
 		t.Fatal("servedHolder found nothing right after markServed")
@@ -57,11 +59,40 @@ func TestMarkServedThenHolderNamesThisProcess(t *testing.T) {
 	}
 }
 
+// A re-arm moves the name to a new agent port. The record has to follow, or
+// the next session asking for the name is no longer offered to stop this one;
+// and it keeps its time, which is when the session started, not when it
+// reconnected.
+func TestARearmMovesTheRecordToTheNewPortAndKeepsItsStart(t *testing.T) {
+	sandboxHome(t)
+
+	forget := markServed("orders-svc", "40001", []string{"nest", "start"}, servedAt{})
+	defer forget()
+	path := filepath.Join(servedDir(), "orders-svc")
+	started := time.Now().Add(-90 * time.Minute).Truncate(time.Second)
+	if err := os.Chtimes(path, started, started); err != nil {
+		t.Fatal(err)
+	}
+
+	remarkServed("orders-svc", "40777", []string{"nest", "start"}, servedAt{})
+
+	h := servedHolder("orders-svc")
+	if h == nil {
+		t.Fatal("the record is gone after the re-arm")
+	}
+	if !holderIsOurs(h, "name orders-svc is held by another live session (agent port 40777)") {
+		t.Errorf("record port = %q after the re-arm, want 40777: the holder is no longer recognised", h.port)
+	}
+	if fi, err := os.Stat(path); err != nil || !fi.ModTime().Equal(started) {
+		t.Errorf("the record's time is %v after the re-arm, want the session's start %v", fi.ModTime(), started)
+	}
+}
+
 // markServed must never be able to stop a session from starting.
 func TestMarkServedSurvivesAnUnwritableHome(t *testing.T) {
 	t.Setenv("HOME", "/nonexistent/plug-test/nowhere")
 	t.Setenv("USERPROFILE", "/nonexistent/plug-test/nowhere")
-	forget := markServed("orders-svc", "40001", []string{"-s", "orders-svc:3000:PORT", "true"})
+	forget := markServed("orders-svc", "40001", []string{"-s", "orders-svc:3000:PORT", "true"}, servedAt{})
 	if forget == nil {
 		t.Fatal("markServed returned a nil cleanup")
 	}

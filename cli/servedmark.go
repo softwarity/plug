@@ -35,11 +35,27 @@ type servedRecord struct {
 	dir  string
 	cmd  string
 	age  time.Duration
+	servedAt
 }
+
+// servedAt is where a session serves its name: the cluster it dialed, the
+// profile it came from, and each cluster port with the local one it lands on.
+// It is what lets plug doctor put a live session under its profile and check
+// the name end to end, from the cluster to the process. A record written by an
+// older core has none of it, and doctor then lists the session unchecked.
+type servedAt struct {
+	cluster string // host:port of the agent, as the session dialed it
+	profile string // empty for a session started with --host alone
+	ports   []servedPort
+}
+
+// servedPort is one mapping of the name: what callers in the cluster dial, and
+// what the session relays it to on this machine (127.0.0.1, as relayLocal does).
+type servedPort struct{ cluster, local string }
 
 // markServed records this process as the one serving name on agentPort, and
 // returns the cleanup that forgets it.
-func markServed(name, agentPort string, cmdArgs []string) func() {
+func markServed(name, agentPort string, cmdArgs []string, at servedAt) func() {
 	path := filepath.Join(servedDir(), name) // name is a validated DNS label
 	guardUserPath(path)
 	if ensurePlugDir() != nil || os.MkdirAll(servedDir(), 0o700) != nil {
@@ -48,6 +64,13 @@ func markServed(name, agentPort string, cmdArgs []string) func() {
 	cwd, _ := os.Getwd()
 	body := fmt.Sprintf("pid = %d\nport = %s\ndir = %s\ncmd = %s\n",
 		os.Getpid(), agentPort, cwd, redactSecrets(strings.Join(cmdArgs, " ")))
+	if at.cluster != "" {
+		pairs := make([]string, 0, len(at.ports))
+		for _, sp := range at.ports {
+			pairs = append(pairs, sp.cluster+":"+sp.local)
+		}
+		body += fmt.Sprintf("cluster = %s\nprofile = %s\nports = %s\n", at.cluster, at.profile, strings.Join(pairs, ","))
+	}
 	if os.WriteFile(path, []byte(body), 0o600) != nil {
 		return func() {}
 	}
@@ -55,6 +78,23 @@ func markServed(name, agentPort string, cmdArgs []string) func() {
 	chownToUser(servedDir())
 	chownToUser(path)
 	return func() { _ = os.Remove(path) }
+}
+
+// remarkServed rewrites a live session's record after a re-arm gave its name a
+// new agent port. The port is the record's identity (holderIsOurs, and what
+// the agent's refusal names), so a record left on the old one stops being
+// recognised as the holder: the next session asking for the name would be told
+// "somebody else" instead of being offered to stop it. The file's time is the
+// session's start, which doctor shows, so it is put back: a reconnect is not a
+// new session. The cleanup markServed returned at provisioning removes the same
+// file, so the one it returns here is not needed.
+func remarkServed(name, agentPort string, cmdArgs []string, at servedAt) {
+	path := filepath.Join(servedDir(), name)
+	fi, err := os.Stat(path)
+	markServed(name, agentPort, cmdArgs, at)
+	if err == nil {
+		_ = os.Chtimes(path, fi.ModTime(), fi.ModTime())
+	}
 }
 
 // The command line is there for a human to recognise the session, and a
@@ -98,6 +138,12 @@ func servedHolder(name string) *servedRecord {
 			r.dir = v
 		case "cmd":
 			r.cmd = v
+		case "cluster":
+			r.cluster = v
+		case "profile":
+			r.profile = v
+		case "ports":
+			r.ports = parseServedPorts(v)
 		}
 	}
 	if r.pid <= 0 || !processAlive(r.pid) {
@@ -107,6 +153,32 @@ func servedHolder(name string) *servedRecord {
 		r.age = time.Since(fi.ModTime())
 	}
 	return r
+}
+
+// parseServedPorts reads "8080:3000,25:2525" back. A pair that does not read as
+// two ports is dropped rather than guessed at: it would only be probed wrong.
+func parseServedPorts(v string) []servedPort {
+	var out []servedPort
+	for _, pair := range strings.Split(v, ",") {
+		c, l, ok := strings.Cut(strings.TrimSpace(pair), ":")
+		if !ok || !allDigits(c) || !allDigits(l) {
+			continue
+		}
+		out = append(out, servedPort{cluster: c, local: l})
+	}
+	return out
+}
+
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // describe renders a record for someone deciding whether to stop it.

@@ -155,7 +155,7 @@ func refusedUnlessStopped(signalled *[]int) func(string) (string, error) {
 // the PID is theirs. Then the name is asked for again.
 func TestStartExposesStopsAHolderThatIsOurs(t *testing.T) {
 	sandboxHome(t)
-	forget := markServed("web", "40777", []string{"-s", "web:80:3000", "old"})
+	forget := markServed("web", "40777", []string{"-s", "web:80:3000", "old"}, servedAt{})
 	defer forget()
 	signalled := withHolderSeams(t, true, nil)
 	f := newFakeSession(refusedUnlessStopped(signalled))
@@ -179,7 +179,7 @@ func TestStartExposesStopsAHolderThatIsOurs(t *testing.T) {
 // reused, and on macOS the signal would go out as root.
 func TestStartExposesNeverSignalsAHolderOfAnotherAccount(t *testing.T) {
 	sandboxHome(t)
-	forget := markServed("web", "40777", []string{"-s", "web:80:3000", "old"})
+	forget := markServed("web", "40777", []string{"-s", "web:80:3000", "old"}, servedAt{})
 	defer forget()
 	signalled := withHolderSeams(t, true, errors.New("PID 4242 belongs to uid 501, not to you"))
 	f := newFakeSession(refusedUnlessStopped(signalled))
@@ -206,7 +206,7 @@ func TestStartExposesNeverSignalsAHolderOfAnotherAccount(t *testing.T) {
 // nothing is signalled, and the refusal names what this machine knows.
 func TestStartExposesDoesNotOfferToStopARecordOnAnotherPort(t *testing.T) {
 	sandboxHome(t)
-	forget := markServed("web", "40001", []string{"-s", "web:80:3000", "old"})
+	forget := markServed("web", "40001", []string{"-s", "web:80:3000", "old"}, servedAt{})
 	defer forget()
 	signalled := withHolderSeams(t, true, nil)
 	askToStop = func(*servedRecord) bool {

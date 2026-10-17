@@ -160,10 +160,18 @@ type vpnRig struct {
 	close        func()       // drop the address/adapter, undo everything
 	// scope declares scopeDomain as served by resolverAddr WITHOUT touching the
 	// machine's ordinary resolvers - what a corporate client actually pushes.
-	// nil where the OS has no such thing (Linux: resolv.conf knows no scopes),
-	// and the probe says so and skips that part rather than pretending.
+	// nil where the OS has no such thing (Linux without systemd-resolved:
+	// resolv.conf knows no scopes), and the probe says so and skips that part
+	// rather than pretending.
 	scope   func() error
 	unscope func() error
+	// scopeBehindStub: the scope is applied by the resolver plug forwards to,
+	// not by plug. On Linux the machine's resolver is systemd-resolved's stub,
+	// which routes a domain to its link's servers by itself; plug forwards every
+	// dotted name to the stub and keeps no scoped table of its own. The proof is
+	// then the answer and the query the scope's resolver saw, with plug still
+	// forwarding to the stub, since there is no table of plug's to read.
+	scopeBehindStub bool
 	// scopeWhileUp: the scope must be declared while the VPN is still announced.
 	// On Windows the only faithful way to withdraw the fake VPN is to drop its
 	// adapter, and the scope's resolver lives on that adapter; withdraw it first
@@ -355,7 +363,18 @@ func (p *vpnProbe) probeScope() error {
 		}
 		return p.rig.scopeWhileUp || !p.following()
 	}
+	if p.rig.scopeBehindStub {
+		scoped = func() bool {
+			return !p.following() && resolveThroughPlug(p.dnsIP, scopeName, 2*time.Second) == scopeIP
+		}
+	}
 	if err := holdUntil(30*time.Second, p.rig.scope, scoped); err != nil {
+		if p.rig.scopeBehindStub {
+			return fmt.Errorf("vpn probe: the fake VPN declared *.%s on its link to systemd-resolved, but %s "+
+				"does not resolve through plug, forwarding to %v (the scope's resolver was asked %d times) - "+
+				"the stub plug forwards to did not apply the scope (%v)",
+				scopeDomain, scopeName, p.up.all(), p.resolver.asked.Load()-askedBefore, err)
+		}
 		return fmt.Errorf("vpn probe: the fake VPN declared *.%s as its own, but plug routes %s to %v "+
 			"with ordinary servers %v - the scope was not read (%v)", scopeDomain, scopeName, p.up.serversFor(scopeName), p.up.all(), err)
 	}
@@ -377,6 +396,12 @@ func (p *vpnProbe) probeScope() error {
 		u.mu.RLock()
 		defer u.mu.RUnlock()
 		return pickScoped(scopeName, u.scoped, nil) == nil
+	}
+	if p.rig.scopeBehindStub {
+		// Behind the stub there is no table to read: the scope is gone when
+		// the name no longer resolves, the ordinary servers knowing nothing
+		// of it.
+		unscoped = func() bool { return resolveThroughPlug(p.dnsIP, scopeName, 2*time.Second) == "" }
 	}
 	if err := holdUntil(30*time.Second, p.rig.unscope, unscoped); err != nil {
 		return fmt.Errorf("vpn probe: the scope went away but plug still routes %s to %v (%v)", scopeName, p.up.serversFor(scopeName), err)

@@ -70,6 +70,15 @@ if $sudo env PLUG_SELFTEST_VPN="${PLUG_SELFTEST_VPN:-1}" "./plug$ext" selftest 2
 else
   result=FAIL; mark="❌ (see log)"
 fi
+# The scoped half of the VPN probe skips itself, honestly, on a machine with no
+# domain-scoped resolvers to declare (Linux without systemd-resolved). Every CI
+# runner has them, so in CI a skip is a lost proof, not a pass: the VPN's own
+# names keeping resolving is the half a real corporate client found broken.
+if [ "$result" = PASS ] && [ -n "${GITHUB_ACTIONS:-}" ] && [ "${PLUG_SELFTEST_VPN:-1}" = 1 ] &&
+  ! grep -q "the scoped name works" out.txt; then
+  echo "selftest: the VPN probe did not run its scoped half on this runner, which has scoped resolvers"
+  result=FAIL; mark="❌ (the VPN probe skipped its scoped half)"
+fi
 
 mkdir -p plat
 printf '%s' "$result" > "plat/selftest-$label.txt"

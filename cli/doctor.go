@@ -239,6 +239,9 @@ func doctorLocal(add func(check)) {
 
 	// Sessions currently registered (the graft/registry view).
 	doctorSessions(add)
+	// Sessions serving a name that no profile accounts for; the others are
+	// listed, and probed, under their profile.
+	doctorServedElsewhere(add)
 
 	// Live mounts left behind by a session that died (mount.go).
 	doctorMounts(add)
@@ -311,6 +314,19 @@ func doctorProfile(name string, add func(check)) {
 	}
 	host, port := pcfg.host, pcfg.port
 	cfg := pcfg
+	// The live sessions serving a name on this cluster come last, probed through
+	// the tunnel opened below when there is one, and listed without it when
+	// there is not: whichever return ends the checks, this runs, and only then
+	// is the tunnel closed.
+	var probe *tunnel.Transport
+	defer func() {
+		if probe != nil {
+			doctorServed(name, net.JoinHostPort(host, port), probe, add)
+			probe.Close()
+			return
+		}
+		doctorServed(name, net.JoinHostPort(host, port), nil, add)
+	}()
 	ver, err := agentVersion(cfg)
 	if err != nil {
 		add(check{area: name, name: "agent", status: stFail,
@@ -335,7 +351,7 @@ func doctorProfile(name string, add func(check)) {
 			detail: err.Error(), remedy: "the agent image may be too old — redeploy softwarity/plug"})
 		return
 	}
-	defer tr.Close()
+	probe = tr
 
 	if out, err := tr.Exec("info"); err == nil && strings.HasPrefix(out, "version=") {
 		backend, grant, execGrant, sliceGrant, doubled := "none", "", "", "", ""

@@ -323,6 +323,16 @@ type exposeSession struct {
 	unmark []func()
 }
 
+// servedAt is what the record says about where this session serves group's
+// name, for plug doctor to find it under its profile and check it end to end.
+func (s *exposeSession) servedAt(group []exposedMapping) servedAt {
+	at := servedAt{cluster: net.JoinHostPort(s.cfg.host, s.cfg.port), profile: s.cfg.profile}
+	for _, g := range group {
+		at.ports = append(at.ports, servedPort{cluster: g.Spec().ClusterPort, local: g.Spec().LocalPort})
+	}
+	return at
+}
+
 // drop releases every name provisioned so far and forgets their records.
 func (s *exposeSession) drop() {
 	for _, f := range s.unmark {
@@ -441,7 +451,7 @@ func (s *exposeSession) provision(name string) error {
 	// Provisioned: register for cleanup BEFORE the check, so a failure
 	// later still tears the name down.
 	s.dynamic = append(s.dynamic, name)
-	s.unmark = append(s.unmark, markServed(name, group[0].AgentPort(), os.Args[1:]))
+	s.unmark = append(s.unmark, markServed(name, group[0].AgentPort(), os.Args[1:], s.servedAt(group)))
 	if parked {
 		info("took over %s — the deployed workload is parked for this session (restored on exit)", name)
 		if split {
@@ -560,6 +570,7 @@ func (s *exposeSession) armRearm(group []exposedMapping) {
 				info("WARNING %s: agent refused to re-provision after reconnect: %s", name, strings.TrimSpace(strings.TrimPrefix(m, "error:")))
 				continue
 			}
+			remarkServed(name, group[0].AgentPort(), os.Args[1:], s.servedAt(group))
 			// Same race as at startup, and worse to get wrong here: the verb
 			// above just re-created the signpost, so a single early probe
 			// would time out and report the name dead while it was merely

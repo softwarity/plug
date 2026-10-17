@@ -2,6 +2,22 @@
 
 ## NEXT RELEASE
 
+### Your sessions, and whether each name answers, in plug doctor
+
+`plug doctor` now lists the sessions running on this machine that serve a
+name, under the profile of their cluster: the command, its PID and since when.
+For each name it checks, right now, both halves of the path: that the name
+answers in the cluster, and that your process listens on the port it was
+given. A name that no longer leads to your session, or a command that has not
+opened its port, is a finding with its remedy, like any other; `plug mcp`
+gives the same lines to an AI agent.
+
+### A session keeps being recognised after a reconnect
+
+When a session reconnects, the name it serves moves to a new port on the agent,
+and its record on your machine now follows. Starting the same name again still
+offers to stop that session, and doctor still shows when it really started.
+
 ---
 
 ## 2.26.3
