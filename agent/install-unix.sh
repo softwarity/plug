@@ -43,14 +43,21 @@ decode() { base64 -d 2>/dev/null || base64 -D; }
 # is written fresh under our uid.
 rm -f "$dest/plug" 2>/dev/null || true
 case "$os-$arch" in
-  linux-amd64)  emit_linux_amd64  > "$dest/plug" ;;
-  linux-arm64)  emit_linux_arm64  > "$dest/plug" ;;
-  darwin-amd64) emit_darwin_amd64 > "$dest/plug" ;;
-  darwin-arm64) emit_darwin_arm64 > "$dest/plug" ;;
+  linux-amd64)  emit_linux_amd64  > "$dest/plug"; _sig=${sig_linux_amd64:-} ;;
+  linux-arm64)  emit_linux_arm64  > "$dest/plug"; _sig=${sig_linux_arm64:-} ;;
+  darwin-amd64) emit_darwin_amd64 > "$dest/plug"; _sig=${sig_darwin_amd64:-} ;;
+  darwin-arm64) emit_darwin_arm64 > "$dest/plug"; _sig=${sig_darwin_arm64:-} ;;
   *) echo "plug: unsupported platform $os-$arch (on Windows, use Git Bash: ssh get@<host> install-windows | bash -s -- <host> <port>)" >&2; exit 1 ;;
 esac
 chmod +x "$dest/plug"
-echo "plug: installed to $dest/plug"
+# The release signature, checked before anything below grants privilege: the
+# binary just written verifies its own bytes against the key built into plug
+# (see cli/verify_release.go for what that proves, and what it cannot).
+if ! "$dest/plug" verify-release "$dest/plug" "$os-$arch" "$_sig"; then
+  rm -f "$dest/plug"
+  exit 1
+fi
+echo "plug: installed to $dest/plug (release signature checked)"
 # Grant the privilege plug needs (TUN device + routes, per-launch mount ns, bind
 # :53) ONCE, so day-to-day `plug <command>` runs with no sudo. sudo prompts on
 # /dev/tty even through `| sh`. Linux = file capabilities; macOS has none, so it's

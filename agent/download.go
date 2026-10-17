@@ -24,6 +24,7 @@ package agent
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	_ "embed"
 	"encoding/base64"
@@ -57,6 +58,10 @@ const binariesMarker = "# @@ the emit_<os>_<arch> functions, one per binary, go 
 
 // The binaries `install` embeds, in the order the installer lists them.
 var unixBinaries = []string{"linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64"}
+
+// A release signature as plug-sign writes it: base64, so it can sit between
+// single quotes in the installer.
+var sigRe = regexp.MustCompile(`^[A-Za-z0-9+/]+={0,2}$`)
 
 // The rule plug applies to every profile name (cli/profiles_cmd.go).
 var profileNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
@@ -140,6 +145,13 @@ func serveDownload(original, keyInstruction, dir string, stdout, stderr io.Write
 				return 1
 			}
 			out.WriteString("B64\n}\n")
+			// Its release signature beside it, which the installer has the
+			// written binary check before granting it privilege (plug
+			// verify-release). Absent, or not plain base64, and the variable is
+			// not written: the installer then refuses an unsigned binary.
+			if sig, err := os.ReadFile(f + ".sig"); err == nil && sigRe.Match(bytes.TrimRight(sig, "\n")) {
+				fmt.Fprintf(out, "sig_%s='%s'\n", strings.Replace(b, "-", "_", 1), bytes.TrimRight(sig, "\n"))
+			}
 		}
 		out.WriteString(tail)
 		return 0

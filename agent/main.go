@@ -864,6 +864,11 @@ func takeNameLease(name, port string) {
 // of sight of the sixth, and one losing its "(%s)" would break that offer on one
 // backend and leave the other five working. The file already keeps its labels
 // this way (parkedContainersLabel and its neighbours).
+// ownersUnknownRefusal is a serve that could not list who already answers to
+// the name: refused, because serving blind would share it with a real owner.
+const ownersUnknownRefusal = "error: cannot tell whether %q is already served here: the Docker API did not list it (%v). " +
+	"plug will not serve the name blind, it would share it with a real service. Retry once the daemon answers"
+
 const nameHeldRefusal = "error: %q is already exposed by another live session (%s) - one -s per name at a time"
 
 // heldBy describes the session holding a name, for a refusal message. The agent
@@ -1443,7 +1448,12 @@ func agentAmongOwners(owners []owner, self selfInfo) *owner {
 // by that name from the agent's networks, so it owns nothing there and must
 // not be parked for it. The same scope keeps env-of, files-of and mount-volume
 // (dockerNameCandidates) from reaching any container on the daemon by name.
-func nameOwners(name string, nets []string) []owner {
+//
+// An error is the daemon not answering the list, and it is returned rather
+// than read as "nobody": serving on that reading put a real owner and the
+// signpost in DNS round-robin, a name answering one request in two with
+// nothing said. The serve refuses instead (see docker.go).
+func nameOwners(name string, nets []string) ([]owner, error) {
 	mine := map[string]bool{}
 	for _, n := range nets {
 		mine[n] = true
@@ -1457,10 +1467,7 @@ func nameOwners(name string, nets []string) []owner {
 		} `json:"NetworkSettings"`
 	}
 	if _, err := dockerAPI("GET", "/containers/json", nil, &list); err != nil {
-		// Cannot tell: the name is served as if nobody owned it. A real owner
-		// is then not parked but shares the name in DNS round-robin, which the
-		// session notices as a name that answers one request in two.
-		return nil
+		return nil, err
 	}
 	var owners []owner
 	for _, c := range list {
@@ -1506,7 +1513,7 @@ func nameOwners(name string, nets []string) []owner {
 			})
 		}
 	}
-	return owners
+	return owners, nil
 }
 
 // swarmOwner describes the NON-signpost Swarm service that owns a name — the

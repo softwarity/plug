@@ -178,3 +178,28 @@ func TestSwarmServeRefusesToParkTheAgentsOwnService(t *testing.T) {
 		}
 	}
 }
+
+// The Swarm twin: a manager that does not list its services cannot say which
+// one owns the name, and the serve refuses before creating or scaling anything.
+func TestSwarmServeRefusesWhenTheServicesCannotBeListed(t *testing.T) {
+	fe := newFakeEngine(t)
+	self := swarmAgent(t, fe)
+	fe.addService("shop_web", nil, 2, map[string][]string{"shop_net": {"web"}})
+	liveSessions(t)
+	fe.refuseWith(func(method, path string) (int, string) {
+		if method == "GET" && path == "/services" {
+			return 500, "the manager lost its quorum"
+		}
+		return 0, ""
+	})
+
+	said := verbReply(t, func() { swarmServe("web", []portPair{{cluster: "80", agent: "41017"}}, self) })
+	if !strings.HasPrefix(said, "error:") || !strings.Contains(said, "will not serve the name blind") {
+		t.Fatalf("serving with no service list answered %q, want the refusal", said)
+	}
+	for _, l := range fe.requests() {
+		if strings.HasPrefix(l, "POST /services/create") || strings.Contains(l, "/update") {
+			t.Errorf("the refusal must come before anything is created or scaled, saw %q", l)
+		}
+	}
+}

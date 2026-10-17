@@ -80,16 +80,32 @@ func uninstall(args []string) {
 	// 3. every plug binary we can locate
 	removeBinaries(home, plugDir)
 
-	// 4. profiles / config
+	// 4. profiles / config. Said as it went: a tree that could not be removed
+	// (a file root left there, a mount still under it) is named, rather than
+	// announced as gone while it is still on disk.
+	complete := true
 	if purge {
-		os.RemoveAll(plugDir)
-		info("removed all config in %s", plugDir)
+		if err := os.RemoveAll(plugDir); err != nil {
+			complete = false
+			info("could not remove all of %s (%v): remove what is left by hand", plugDir, err)
+		} else {
+			info("removed all config in %s", plugDir)
+		}
 	} else {
-		os.RemoveAll(filepath.Join(plugDir, "versions"))
-		info("kept your profiles in %s (cache cleared)", plugDir)
+		if err := os.RemoveAll(filepath.Join(plugDir, "versions")); err != nil {
+			complete = false
+			info("kept your profiles in %s, but could not clear its cache (%v): remove %s by hand",
+				plugDir, err, filepath.Join(plugDir, "versions"))
+		} else {
+			info("kept your profiles in %s (cache cleared)", plugDir)
+		}
 	}
 
-	info("plug uninstalled.")
+	if complete {
+		info("plug uninstalled.")
+	} else {
+		info("plug uninstalled, except what is named above.")
+	}
 }
 
 // cleanupLegacyDaemon removes the retired root daemon and its files — but only

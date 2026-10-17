@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -182,7 +183,7 @@ func TestDownloadAnswersAsTheScriptDid(t *testing.T) {
 		for _, cmd := range commands {
 			for _, key := range []string{"", sentence} {
 				want := runReference(t, sh, script, cmd, key)
-				if got := runDownload(cmd, key, dir); got != want {
+				if got := withoutSignatures(runDownload(cmd, key, dir)); got != want {
 					t.Errorf("VERSION %q, command %q, key %q:\n%s", version, cmd, key, diffAnswers(want, got))
 				}
 			}
@@ -206,12 +207,23 @@ func TestDownloadSaysTheKeySentenceAsTheScriptDid(t *testing.T) {
 	for _, cmd := range []string{"install canopy", "install-windows canopy"} {
 		for _, key := range keys {
 			want := runReference(t, sh, script, cmd, key)
-			if got := runDownload(cmd, key, dir); got != want {
+			if got := withoutSignatures(runDownload(cmd, key, dir)); got != want {
 				t.Errorf("command %q, key %q:\n%s", cmd, key, diffAnswers(want, got))
 			}
 		}
 	}
 }
+
+// withoutSignatures takes out of an installer the one thing the script never
+// emitted: the sig_<os>_<arch> line after each binary, which the installer
+// checks before granting privilege. Everything around it is still held to the
+// script byte for byte; TestTheInstallerCarriesEachSignature holds the lines.
+func withoutSignatures(a downloadAnswer) downloadAnswer {
+	a.stdout = signatureLineRe.ReplaceAllString(a.stdout, "")
+	return a
+}
+
+var signatureLineRe = regexp.MustCompile(`(?m)^sig_[a-z0-9]+_[a-z0-9]+='[A-Za-z0-9+/=]*'\n`)
 
 func diffAnswers(want, got downloadAnswer) string {
 	var b strings.Builder
@@ -287,6 +299,30 @@ func TestTheInstallerCarriesTheBinariesWhole(t *testing.T) {
 	}
 	if strings.Contains(got.stdout, binariesMarker) {
 		t.Fatal("the marker where the binaries go was emitted")
+	}
+}
+
+// Each binary the installer carries has its release signature beside it, as
+// the agent holds it, and a binary the agent holds no signature for has none:
+// the installer then refuses it rather than grant it privilege.
+func TestTheInstallerCarriesEachSignature(t *testing.T) {
+	dir := fakeDownloadDir(t, "2.24.0")
+	got := runDownload("install", "", dir)
+	if got.code != 0 {
+		t.Fatalf("install: exit %d, %q", got.code, got.stderr)
+	}
+	lines := signatureLineRe.FindAllString(got.stdout, -1)
+	if len(lines) != 1 || lines[0] != "sig_linux_amd64='c2lnbmF0dXJlLWxpbnV4'\n" {
+		t.Fatalf("the installer carries %q, want linux-amd64's signature alone", lines)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bin", "plug-linux-arm64.sig"), []byte("x' ; rm -rf ~ ; '\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := runDownload("install", "", dir); strings.Contains(got.stdout, "\nsig_linux_arm64=") {
+		t.Fatal("a signature that is not base64 was written into the installer")
+	}
+	if !strings.Contains(unixInstaller, `verify-release "$dest/plug" "$os-$arch" "$_sig"`) {
+		t.Fatal("the installer no longer checks the binary before granting it privilege")
 	}
 }
 

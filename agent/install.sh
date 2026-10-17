@@ -64,7 +64,14 @@ ssh "${SSH_OPTS[@]}" "get@$HOST" "windows-$ARCH" > "$DIR/plug.exe"
 sz=$(wc -c < "$DIR/plug.exe" | tr -d ' ')
 [ "${sz:-0}" -gt 1000000 ] || die "plug.exe download failed ($sz bytes)"
 [ "$(head -c2 "$DIR/plug.exe")" = "MZ" ] || die "plug.exe is not a Windows executable (bad PE header)"
-info "installed to $DIR/plug.exe"
+# The release signature, checked before the service below runs it as SYSTEM:
+# the agent's digest verb answers it, and the plug.exe just written verifies
+# its own bytes against the key built into plug (cli/verify_release.go says
+# what that proves, and what it cannot). sigof prints nothing when the agent
+# has no signature, and verify-release then refuses.
+sigof() { ssh "${SSH_OPTS[@]}" "get@$HOST" digest "$1" 2>/dev/null | tr -d '\r' | sed -n 's/^sig=//p' || true; }
+"$DIR/plug.exe" verify-release "$DIR/plug.exe" "windows-$ARCH" "$(sigof "windows-$ARCH")" || { rm -f "$DIR/plug.exe"; exit 1; }
+info "installed to $DIR/plug.exe (release signature checked)"
 
 # 2. wintun.dll — from the AGENT (baked into the image), not wintun.net: no runtime
 #    dependency on an external host, and no more intermittent fetch. WinTUN loads it
@@ -79,7 +86,8 @@ _wv=wintun
 ssh "${SSH_OPTS[@]}" "get@$HOST" "$_wv" > "$DIR/wintun.dll"
 [ "$(wc -c < "$DIR/wintun.dll" | tr -d ' ')" -gt 100000 ] || \
   die "wintun.dll download failed (asked '$_wv'; an agent older than windows-arm64 support does not serve it)"
-info "installed wintun.dll"
+"$DIR/plug.exe" verify-release "$DIR/wintun.dll" "wintun-$ARCH" "$(sigof "$_wv")" || { rm -f "$DIR/wintun.dll"; exit 1; }
+info "installed wintun.dll (release signature checked)"
 
 # 3. Profile, named after the host or as given (a second cluster adds a second
 #    profile).

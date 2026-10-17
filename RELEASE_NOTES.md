@@ -2,6 +2,27 @@
 
 ## NEXT RELEASE
 
+### The installer checks the release signature before granting privilege
+
+`ssh get@<host> install | sh`, and its Git Bash twin on Windows, now check
+that the plug they just wrote, and the WinTUN driver beside it on Windows,
+carry the plug release signature before setcap, the setuid helper or the
+SYSTEM service gives them privilege. An image built without the release key,
+or bytes altered on the way, stop the install with a message saying which,
+and nothing privileged is left behind. Updates and every core fetch already
+checked this; now the first install does too.
+
+### A name is served only once plug can see who already answers to it
+
+When the Docker daemon, or the Swarm manager, does not answer the list of
+what runs on the cluster, `-s` says so and asks you to retry, rather than
+serve a name a real service may already answer to.
+
+### plug uninstall names what it could not remove
+
+A file it could not delete under `~/.plug` is named with what to do, and the
+last line says the uninstall is complete only when it is.
+
 ---
 
 ## 2.27.0

@@ -97,7 +97,10 @@ func swarmControlProbe() (bool, error) {
 // or nil. GET /services lists the WHOLE cluster from a manager, so it also
 // catches a real service whose tasks run on other nodes (which nameOwners'
 // container scan cannot see). Serving on top would shadow it in DNS.
-func swarmNameOwner(name string, self selfInfo) *swarmOwner {
+//
+// An error is the manager not answering the list, returned for the reason
+// nameOwners returns its own: "nobody" read from silence shadows a real owner.
+func swarmNameOwner(name string, self selfInfo) (*swarmOwner, error) {
 	// Scope to networks WE are on: a service on an overlay we don't share doesn't
 	// resolve for our workloads, so serving `name` on our overlay would not shadow
 	// it (the container path already scopes this way). `mine` holds our overlays'
@@ -137,9 +140,7 @@ func swarmNameOwner(name string, self selfInfo) *swarmOwner {
 		} `json:"Spec"`
 	}
 	if _, err := dockerAPI("GET", "/services", nil, &list); err != nil {
-		// Cannot tell: the name is served as if no service owned it, and a real
-		// owner then shares it in DNS rather than being parked (see nameOwners).
-		return nil
+		return nil, err
 	}
 	for _, s := range list {
 		if s.Spec.Labels[signpostLabel] == "1" {
@@ -178,10 +179,10 @@ func swarmNameOwner(name string, self selfInfo) *swarmOwner {
 				global:   s.Spec.Mode.Global != nil,
 				viaAlias: viaAlias,
 				isAgent:  swarmOwnerIsAgent(s.ID, s.Spec.Name, self),
-			}
+			}, nil
 		}
 	}
-	return nil
+	return nil, nil
 }
 
 // swarmOwnerIsAgent reports whether the service owning a name is the agent's
@@ -200,7 +201,7 @@ func swarmOwnerIsAgent(id, name string, self selfInfo) bool {
 // (env-of, files-of, the mounts): the agent is never one, so a name that only
 // the agent answers to finds nothing rather than the agent's own spec.
 func swarmWorkloadOwner(name string, self selfInfo) *swarmOwner {
-	own := swarmNameOwner(name, self)
+	own, _ := swarmNameOwner(name, self) // read verbs: an unanswered list finds nothing, and the verb says so
 	if own != nil && own.isAgent {
 		return nil
 	}
@@ -291,7 +292,10 @@ func swarmServe(name string, pairs []portPair, self selfInfo) {
 	}
 	// A real service with this name (anywhere in the cluster) must keep it: the
 	// container-scan nameOwners can't see Swarm services, so check them explicitly.
-	own := swarmNameOwner(name, self)
+	own, err := swarmNameOwner(name, self)
+	if err != nil {
+		answer(ownersUnknownRefusal, name, err)
+	}
 	if own != nil {
 		// The agent's own service: scaling it to zero would stop the task
 		// holding the session AND every task that could ever restore it.

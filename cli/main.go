@@ -234,6 +234,8 @@ func main() {
 		return
 	case "selftest":
 		os.Exit(runSelfTest())
+	case verifyReleaseVerb:
+		os.Exit(verifyRelease(args[1:]))
 	}
 	launcherRun(args)
 }

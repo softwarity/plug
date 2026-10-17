@@ -246,3 +246,31 @@ func TestDockerUnserveRestoresThenRemoves(t *testing.T) {
 		t.Error("the workload must be back and the signpost gone")
 	}
 }
+
+// A daemon that does not list its containers cannot say who already answers
+// to the name, and the serve refuses rather than read silence as "nobody":
+// that reading put the signpost beside the real workload in DNS, the name
+// answering one request in two. Nothing is created and nothing is stopped.
+func TestContainerServeRefusesWhenTheOwnersCannotBeListed(t *testing.T) {
+	fe := newFakeEngine(t)
+	self := composeAgent(fe)
+	liveSessions(t)
+	web := fe.addContainer("shop-web-1", true, nil, map[string][]string{"shop_default": {"web"}})
+	fe.refuseWith(func(method, path string) (int, string) {
+		if method == "GET" && path == "/containers/json" {
+			return 500, "the daemon is restarting"
+		}
+		return 0, ""
+	})
+
+	said := verbReply(t, func() { containerServe("web", []portPair{{cluster: "80", agent: "41017"}}, self) })
+	if !strings.HasPrefix(said, "error:") || !strings.Contains(said, "will not serve the name blind") {
+		t.Fatalf("serving with no container list answered %q, want the refusal", said)
+	}
+	if !fe.container(web.ID).Running {
+		t.Fatal("the workload was stopped")
+	}
+	if fe.container(signpostName("web")) != nil {
+		t.Error("a signpost was created")
+	}
+}

@@ -419,7 +419,10 @@ func containerServe(name string, pairs []portPair, self selfInfo) {
 	if err := restoreContainerParked(name); err != nil {
 		answer("error: restoring what the previous %s session parked: %v", name, err)
 	}
-	owners := nameOwners(name, nets)
+	owners, err := nameOwners(name, nets)
+	if err != nil {
+		answer(ownersUnknownRefusal, name, err)
+	}
 	// The agent answering to the name itself (its container name, or an alias
 	// such as its Compose service name) is the one owner a takeover must never
 	// park: stopping it stops the forward the session relies on, and the

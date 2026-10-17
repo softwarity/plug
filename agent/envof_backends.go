@@ -162,7 +162,10 @@ func dockerNameCandidates(name string, self selfInfo) []string {
 			}
 		}
 	}
-	for _, o := range nameOwners(name, self.attachableNets()) {
+	// A daemon that cannot list its containers leaves only the receipt: these
+	// verbs read, so finding less is said by the verb that finds nothing.
+	owners, _ := nameOwners(name, self.attachableNets())
+	for _, o := range owners {
 		if ownerIsAgent(o, self) {
 			continue
 		}
