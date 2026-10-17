@@ -1,146 +1,64 @@
 import { Component } from '@angular/core';
 import { RouterLink } from '@angular/router';
-import { MatIconModule } from '@angular/material/icon';
 
 @Component({
   selector: 'app-roadmap',
-  imports: [RouterLink, MatIconModule],
-  styles: [
-    `
-      .status-icon {
-        font-size: 18px;
-        width: 18px;
-        height: 18px;
-        vertical-align: middle;
-        margin-right: 3px;
-      }
-      .status-icon.ok {
-        color: var(--accent-green);
-      }
-      .status-icon.soon {
-        color: var(--accent-yellow);
-      }
-    `,
-  ],
+  imports: [RouterLink],
   template: `
     <h2>Roadmap</h2>
-
-    <div class="callout">
-      <strong>How we got here.</strong> plug went through a few data paths - sshuttle, then userspace
-      proxies with an injected <code>connect()</code>/DNS hook - before settling on today's
-      <strong>userspace TUN</strong>. Answering DNS in-stack and capturing at the IP layer is what
-      finally made it work under a corporate VPN <em>and</em> cover every runtime (Go and gRPC
-      included) with no per-service config, while keeping several clusters isolated. See
-      <a routerLink="/under-the-hood">Under the hood</a>.
-    </div>
-
-    <h3>Kubernetes transport</h3>
     <p>
-      The agent already runs on Kubernetes (a <a routerLink="/kubernetes">manifest</a> with a NodePort, or
-      <code>kubectl port-forward</code> for an RBAC-gated tunnel with no exposed port). Nothing
-      Kubernetes-only is planned beyond that, and it is a decision rather than an omission. A
-      <code>kubectl exec</code> transport was considered twice and dropped twice, for two reasons that
-      still hold: <code>port-forward</code> already gives the zero-exposed port gated by API-server
-      RBAC that it would have bought, and plug behaves the same way whichever backend provisions the
-      name - a transport existing in one family alone would trade that for a second code path to carry
-      forever. Where an <a routerLink="/security">open agent</a> is not enough, the answer is
-      <a routerLink="/security" fragment="admission">admission by approval</a> or the
-      <a routerLink="/meerkat">gateway</a> hosting the tunnel, both of which cover every family
-      instead of one.
+      What is coming, and what is left out on purpose. What plug does today is in the rest of this
+      documentation.
     </p>
 
-    <h3>UDP by name</h3>
+    <h3>Coming</h3>
+
+    <h4>UDP by name</h4>
     <p>
-      The tunnel carries <strong>TCP only</strong> - SSH's <code>direct-tcpip</code> is stream-only,
-      so UDP to a cluster service is not forwarded today (DNS is the exception, answered in-stack;
-      see <a routerLink="/under-the-hood">Under the hood</a>). Planned: a <strong>datagram relay</strong>.
-      The agent gains a small <code>udp-relay</code> helper - invoked over SSH exactly like the
-      <code>-s</code> provisioning - while plug frames datagrams over a channel and pumps them both
-      ways, reusing the same by-name lookup and per-cluster attribution as TCP. The trade-off is
-      honest: datagrams then ride a reliable, ordered stream (with head-of-line blocking), which fits
-      DNS-over-UDP, StatsD, syslog and request/response UDP, but not real-time media. QUIC and HTTP/3
-      (UDP-based) would stop being silently dropped - though most clients already fall back to TCP.
-      Already in: cluster UDP that cannot be carried is <strong>logged</strong> rather than dropped
-      silently, so it fails loud instead of looking like a hang.
+      A cluster service reached over UDP, by its name, the way TCP is today: a DNS server of the
+      cluster, StatsD, syslog, any request and response protocol. Until then, UDP to the cluster is
+      not carried, and plug says so in its log rather than letting it look like a hang. Most
+      clients of QUIC and HTTP/3 already fall back to TCP. Real-time media is not the aim: the
+      datagrams will ride the tunnel in order, which suits requests and answers, not a video call.
     </p>
 
-    <div class="callout">
-      <strong>Shipped already: the end of the dedicated agent.</strong> In
-      <a routerLink="/security">hosted mode</a> the agent runs inside a gateway such as
-      <a href="https://softwarity.github.io/meerkat/" target="_blank" rel="noopener">Meerkat</a>, so the
-      cluster needs no plug agent of its own, and the gateway's authentication stands in front: a
-      developer deposits their own public key, it is tied to their name, and who is plugged into
-      what stops being anonymous. The CLI is the same, served by the gateway in its hosted flavour.
-      See <a routerLink="/meerkat">Meerkat</a> for the model.
-    </div>
-
-    <div class="callout">
-      <strong>Shipped already:</strong> installing the CLI from the cluster and per-cluster version
-      matching were on this roadmap - they now work over the agent's SSH port. The passwordless
-      <code>get</code> user serves an installer (<code>ssh get&#64;host install | sh</code>), and the
-      <a routerLink="/profiles">launcher</a> runs each cluster's exact version. No GitHub access
-      required, no extra port, no HTTP server.
-    </div>
-
-    <div class="callout">
-      <strong>No Homebrew tap, by design.</strong> plug is distributed <em>from the cluster</em> -
-      the agent image is the single source of the CLI (<code>ssh get&#64;host install | sh</code>).
-      A separate package channel (brew, apt…) would be a second source to keep in sync, so it is a
-      deliberate non-goal.
-    </div>
-
-    <h3>Talking to a running session</h3>
+    <h4>IPv6 addresses written in the code</h4>
     <p>
-      A session prints what it does and otherwise stays out of the way, which leaves two questions
-      unanswered while it runs: <em>is my name actually reachable right now</em>, and <em>what is
-      that other session of mine still holding</em>. Planned: a separate command -
-      <code>plug status</code> - listing the sessions alive on this machine, the names they serve
-      and the state of each path, plus verbs to act on one (stop it, re-provision its name) from
-      any terminal.
-    </p>
-    <p>
-      <strong>Deliberately not keystrokes in the running session.</strong> Your command owns
-      <code>stdin</code>: Vite reads <code>r</code>, <code>u</code> and <code>q</code>, nodemon
-      reads <code>rs</code>, a REPL reads everything. Any key plug claimed would be a key stolen
-      from the program it launched, and there is no key that is free across every runtime someone
-      might run under it. An out-of-band command has none of that problem, works from a terminal
-      you still have, and - unlike a keystroke - reaches the session whose terminal you closed.
+      A service reached by its name already works, whatever its address. An IPv6 address written
+      as is in a program or a config will be carried too.
     </p>
 
-    <h3>Status</h3>
-    <table>
-      <thead>
-        <tr><th scope="col">Item</th><th scope="col">State</th></tr>
-      </thead>
-      <tbody>
-        <tr><td>Userspace-TUN data path (covers every runtime incl. Go &amp; gRPC)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
-        <tr><td>Split-horizon routing (single-label → cluster, FQDN/localhost → direct)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
-        <tr><td>Self-healing transport (SSH keepalive + transparent reconnect) + host-key pinning</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
-        <tr><td>Install from cluster + launcher (per-cluster versions) + one-privilege install (setcap / setuid / service)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
-        <tr><td>Profiles: wizard, <code>ls</code> / <code>rm</code> / <code>rn</code> / <code>test</code></td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
-        <tr><td>macOS DNS at the IP layer (works under a corporate VPN) + persistent per-cluster daemon</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
-        <tr><td>Forwarding follows the machine's resolvers when a VPN comes up or drops, or the network changes (<code>plug doctor</code> reports where lookups go)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
-        <tr><td>Kubernetes manifest (NodePort / <code>kubectl port-forward</code>)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
-        <tr><td>Windows no-admin SYSTEM service + multicluster (PID-at-connect)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
-        <tr><td>Multicluster on Linux (per-launch mount namespaces)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
-        <tr><td>Multicluster on macOS (same PID-at-connect design)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
-        <tr><td>Reverse direction: serve a local port to the cluster under a cluster name (<code>-s</code>), name provisioned dynamically (docker-sock / k8s-RBAC)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
-        <tr><td>Takeover (default): a deployed service owning a <code>-s</code> name is parked for the session and restored on exit</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
-        <tr><td>Run an <strong>unmodified container</strong> as a member of the cluster (<code>--dockerrun</code>): no Dockerfile change, no image to rebuild</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
-        <tr><td>The workload's <strong>volumes and PVCs mounted live</strong> on your machine, read-write, by default on a takeover - nothing to install (the OS's own SMB client, a helper the agent runs beside the workload)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
-        <tr><td>CLI on Linux, macOS and Windows, amd64 <em>and</em> arm64 - Windows natively, no WSL2</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
-        <tr><td><code>plug status</code> and verbs to act on a running session, out of band (never a keystroke: your command owns stdin)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
-        <tr><td><a routerLink="/meerkat">Meerkat</a> integration: named session identities, per-developer keys, the hosted CLI flavour</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
-        <tr><td>The gateway hosting the tunnel endpoint, replacing the dedicated agent</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
-        <tr><td><a routerLink="/security" fragment="admission">Admission by approval</a>: only the keys a member accepted get in (<code>members</code> / <code>requests</code> / <code>accept</code> / <code>revoke</code>)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
-        <tr><td>Agent images signed with cosign, keyless, and built with no shell in them</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
-        <tr><td>Agent on OpenShift and OKD as published (default restricted SCC), live mounts included</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
-        <tr><td><a routerLink="/mcp"><code>plug mcp</code></a>: what plug knows, served to an AI coding agent</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
-        <tr><td>IPv6 fake-pool + v6-literal tunnelling (overlays are IPv4 today)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
-        <tr><td>UDP by name - framed datagram relay over the tunnel (TCP-only today)</td><td><mat-icon class="status-icon soon">schedule</mat-icon> planned</td></tr>
-        <tr><td>Native protocol e2e on every OS (8 protocols × 4 languages, by name over a mesh)</td><td><mat-icon class="status-icon ok">check_circle</mat-icon> shipped</td></tr>
-      </tbody>
-    </table>
+    <h4>Opening a session from an AI agent</h4>
+    <p>
+      <a routerLink="/mcp"><code>plug mcp</code></a> tells an AI coding agent what plug knows. Opening
+      and closing a session from it is still being designed: a session is a process that lives
+      while the agent works, and it deserves its own shape.
+    </p>
+
+    <h3>Left out on purpose</h3>
+
+    <h4>A Kubernetes-only way in</h4>
+    <p>
+      plug behaves the same on Docker, Compose, Swarm, Kubernetes and OpenShift, and stays that
+      way: a feature that exists on one of them only is a second way of working to learn. On
+      Kubernetes, <code>kubectl port-forward</code> already reaches the agent with no exposed port,
+      each developer's kubeconfig gating it (<a routerLink="/security">security model</a>).
+    </p>
+
+    <h4>Homebrew, apt and other package channels</h4>
+    <p>
+      plug installs from the cluster, and runs the version each cluster serves. A package channel
+      would be a second source, with versions that drift from the clusters'.
+    </p>
+
+    <h4>Keystrokes in a running session</h4>
+    <p>
+      The command plug runs owns the keyboard: Vite reads <code>r</code>, <code>u</code> and
+      <code>q</code>, nodemon reads <code>rs</code>, a REPL reads everything. Any key plug kept for
+      itself would be taken from that program. Another terminal is where to ask instead:
+      <code>plug mounts</code> lists what the live sessions have mounted, <code>plug doctor</code>
+      checks what they rely on.
+    </p>
   `,
 })
 export class RoadmapComponent {}

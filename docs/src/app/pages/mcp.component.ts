@@ -101,8 +101,8 @@ import { CodeComponent } from '../code/code.component';
 
     <h3>Not yet</h3>
     <p>
-      Opening a session from a tool (<code>serve</code> / <code>unserve</code>) is not in this
-      version: a session is a process that lives, and it deserves its own shape. See the
+      Opening a session from a tool (<code>serve</code> / <code>unserve</code>) is not offered
+      yet: a session is a process that lives, and it deserves its own shape. See the
       <a routerLink="/roadmap">roadmap</a>.
     </p>
   `,

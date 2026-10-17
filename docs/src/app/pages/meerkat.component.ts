@@ -81,7 +81,7 @@ softwarity/plug:&lt;version&gt;-hosted    # for a gateway that embeds the agent<
       This page is a summary and will grow. See
       <a href="https://softwarity.github.io/meerkat/" target="_blank" rel="noopener">the Meerkat
       documentation</a> for the gateway itself, and the <a routerLink="/roadmap">Roadmap</a> for
-      what is shipped and what is still ahead.
+      what is still ahead.
     </p>
   `,
 })
