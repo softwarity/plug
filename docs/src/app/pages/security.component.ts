@@ -261,7 +261,9 @@ ssh -p 2222 get@&lt;host&gt; cat /etc/shadow                  # ignored</app-cod
       The same command verifies every tag, <code>-hosted</code> included. What is signed is the
       digest of the manifest list and of each per-architecture image, so a node verifies what it
       actually runs. The CLI binaries inside are signed too, with plug's release key: a launcher
-      checks that signature before it runs a core it downloaded from the agent.
+      checks that signature before it runs a core it downloaded from the agent, an update before
+      it replaces plug, and the installer before it grants plug its privilege (the WinTUN driver
+      included, on Windows). A binary that does not carry it is not installed.
     </p>
 
     <h3>The rules</h3>
