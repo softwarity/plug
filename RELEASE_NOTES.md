@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.27.0
+
 ### Your sessions, and whether each name answers, in plug doctor
 
 `plug doctor` now lists the sessions running on this machine that serve a
