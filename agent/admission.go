@@ -282,6 +282,15 @@ func (h *inviteHost) Verify(key ssh.PublicKey) (string, bool) {
 	return m.Name, true
 }
 
+// isMember reports whether fp is still a member, with no stamp: the question a
+// connection asks once it can be found by a revoke (see handle).
+func (h *inviteHost) isMember(fp string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.fresh()
+	return h.r.member(fp) != nil
+}
+
 func (h *inviteHost) Served(NameEvent) {}
 func (h *inviteHost) Unserved(string)  {}
 

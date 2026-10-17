@@ -18,6 +18,11 @@ When a session reconnects, the name it serves moves to a new port on the agent,
 and its record on your machine now follows. Starting the same name again still
 offers to stop that session, and doctor still shows when it really started.
 
+### Revoking a member ends every one of their sessions
+
+On an agent that admits by approval, a revoke now also ends a session the
+member was opening at that very moment: it is closed as soon as it is in.
+
 ---
 
 ## 2.26.3

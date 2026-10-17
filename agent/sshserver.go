@@ -489,6 +489,14 @@ func (s *sshServer) handle(nc net.Conn, releaseSlot func()) {
 	defer s.track(conn)()
 
 	user := conn.Permissions.Extensions["user"]
+	// A revoke ends the connections it can find, and this one could not be
+	// found until track above: a member revoked between its handshake and that
+	// line would keep a session the revoke meant to end. Asked again now that
+	// it is tracked, so a revoke either finds it or is seen here.
+	if ih, admits := s.host.(*inviteHost); admits && user == tunnelUser && !ih.isMember(conn.Permissions.Extensions["fp"]) {
+		s.note("ssh: %s was revoked while it connected - closed", conn.Permissions.Extensions["fp"])
+		return
+	}
 	// Who the Host says this key belongs to, empty when the key authenticates
 	// the SOFTWARE rather than a person (see Host.Verify). It rides into the
 	// verbs as PLUG_WHO and into every name event.
