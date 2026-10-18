@@ -3,12 +3,15 @@ import {
   Component,
   ElementRef,
   OnInit,
+  PLATFORM_ID,
   computed,
   effect,
+  inject,
   input,
   signal,
   viewChild,
 } from '@angular/core';
+import { isPlatformBrowser } from '@angular/common';
 import { MatIconModule } from '@angular/material/icon';
 import { Prism } from '../prism';
 
@@ -340,7 +343,12 @@ export class FileComponent implements OnInit {
     pre.style.overflowY = 'auto';
   }
 
+  private readonly browser = isPlatformBrowser(inject(PLATFORM_ID));
+
   ngOnInit(): void {
+    // Fetched by the reader's browser: the build that renders the pages ahead
+    // of time has no server to fetch it from.
+    if (!this.browser) return;
     fetch(new URL(this.src(), document.baseURI))
       .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((t) => {
