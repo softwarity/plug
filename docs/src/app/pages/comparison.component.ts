@@ -102,91 +102,70 @@ import { CtaComponent } from '../cta/cta.component';
   ],
   template: `
     <h2>How plug compares</h2>
-
     <p>
       <a href="https://metalbear.com/mirrord/" target="_blank" rel="noopener">mirrord</a> and
-      <a href="https://telepresence.io/" target="_blank" rel="noopener">Telepresence</a> are the
-      well-known <strong>Kubernetes-native</strong> tools for running local code against a remote
-      cluster. plug goes further, with the developer's experience first: the same behaviour on
-      Docker, Compose, Swarm, Kubernetes <em>and</em> OpenShift, nothing to install or keep up to
-      date on a
-      developer's machine, and a closer integration on many points, from the workload's
-      environment and secret files to its volumes, live.
+      <a href="https://telepresence.io/" target="_blank" rel="noopener">Telepresence</a> are two
+      established tools for running local code against a remote <strong>Kubernetes</strong>
+      cluster. The table below sets them beside plug, row by row. What it says about them comes from
+      their public documentation, read in October 2026; both move quickly, so check a row that
+      matters to you against their current docs.
     </p>
     <p>
-      One difference shapes the others: <strong>plug needs no existing service to mirror or
-      intercept</strong>. <code>plug -s my-api:8080:3000 npm run start:dev</code> puts the name
-      <code>my-api</code> in the cluster for the session, and the cluster reaches your process by
-      it, whether a <code>my-api</code> was deployed or not. When one is, plug takes its place and
-      gives it back on exit.
+      One difference shapes several rows. To receive traffic from the cluster, mirrord and
+      Telepresence attach to a workload that is already deployed. plug publishes a name instead:
+      <code>plug -s my-api:8080:3000 npm run start:dev</code> puts <code>my-api</code> in the
+      cluster for the session, whether a <code>my-api</code> was deployed or not. When one is, plug
+      sets it aside and restores it on exit.
     </p>
-
     <div class="cmp">
       <table>
         <thead>
           <tr><th scope="col"><span class="sr-only">Criterion</span></th><th scope="col">plug</th><th scope="col">mirrord</th><th scope="col">Telepresence</th></tr>
         </thead>
         <tbody>
-          <tr><th scope="row">Cluster targets</th><td class="win">Docker · Compose · Swarm · Kubernetes · OpenShift / OKD</td><td>Kubernetes</td><td>Kubernetes / OpenShift</td></tr>
+          <tr><th scope="row">Cluster targets</th><td class="win">Docker Compose · Swarm · Kubernetes · OpenShift / OKD</td><td>Kubernetes (OpenShift after SCC changes, per its FAQ)</td><td>Kubernetes · OpenShift</td></tr>
           <tr><th scope="row">Your machine</th><td class="win">Linux - amd64, arm64<br />macOS - amd64, arm64<br />Windows - amd64, arm64</td><td>Linux - amd64, arm64<br />macOS - amd64, arm64<br />Windows - amd64</td><td class="win">Linux - amd64, arm64<br />macOS - amd64, arm64<br />Windows - amd64, arm64</td></tr>
-          <tr><th scope="row">What a developer needs</th><td class="win">the cluster's address - plug installs itself from it</td><td>a kubeconfig with rights on the cluster</td><td>a kubeconfig with rights on the cluster</td></tr>
-          <tr><th scope="row">What you point it at</th><td class="win">a name - which need not exist in the cluster yet, and can still take over one that does</td><td>an existing workload, named with <code>--target</code></td><td>an existing service, to intercept</td></tr>
-          <tr><th scope="row">Setup, your machine</th><td class="win">one ssh command, served by the cluster - always the version the agent runs</td><td>brew / curl / choco</td><td>package or installer</td></tr>
-          <tr><th scope="row">Staying up to date</th><td class="win">the launcher follows the version its cluster's agent serves, per cluster: a session on an updated cluster downloads that core once and runs it; <code>plug update</code> moves the agent, <code>update=notify|auto</code> says or does it for you</td><td>reinstall the CLI (brew / curl); the operator is upgraded separately</td><td>reinstall the CLI (brew / package); the traffic-manager is upgraded separately, by Helm</td></tr>
-          <tr><th scope="row">Several clusters on several versions</th><td class="win">one launcher, one cached core per version - each profile runs what its agent serves, nothing to pick</td><td>one CLI version at a time</td><td>one CLI version at a time</td></tr>
-          <tr><th scope="row">Setup, cluster side</th><td>one agent container</td><td class="win">none</td><td>traffic-manager</td></tr>
+          <tr><th scope="row">What a developer needs</th><td class="win">the cluster's address: plug installs itself from it</td><td>a kubeconfig with rights to start its agent pod, or the Operator (paid plans)</td><td>a kubeconfig; little or no RBAC once an administrator installed the traffic-manager</td></tr>
+          <tr><th scope="row">To receive cluster traffic</th><td class="win">a name, which need not exist in the cluster, and can take over one that does</td><td>an existing workload, named with <code>--target</code> (targetless mode: outgoing traffic only)</td><td>an existing workload, attached with <code>replace</code>, <code>intercept</code> or <code>wiretap</code></td></tr>
+          <tr><th scope="row">Setup, your machine</th><td>one ssh command, served by the cluster, at the version its agent runs</td><td>brew, curl, choco or an MSI</td><td>a package, an installer or brew</td></tr>
+          <tr><th scope="row">Staying up to date</th><td>the launcher runs the version each cluster's agent serves, one cached core per version; <code>plug update</code> moves the agent</td><td>reinstall the CLI; the Operator, where used, is upgraded separately</td><td>reinstall the CLI; the traffic-manager is upgraded separately, with Helm</td></tr>
+          <tr><th scope="row">Setup, cluster side</th><td>one agent container</td><td class="win">none: an agent pod per session (the Operator on paid plans)</td><td>the traffic-manager, installed once</td></tr>
           <tr><th scope="row">Reach cluster services by name</th><td>✓</td><td>✓</td><td>✓</td></tr>
-          <tr><th scope="row">Be reachable by a cluster name</th><td class="win">✓ <code>-s name:8080:3000</code> - the name is deployed for the session, no existing service needed</td><td>by stealing or mirroring an existing pod's traffic</td><td>by intercepting an existing service</td></tr>
-          <tr><th scope="row">Any runtime, no code change</th><td>✓ (IP layer)</td><td>✓</td><td>✓</td></tr>
+          <tr><th scope="row">Be reachable by a cluster name</th><td class="win">✓ <code>-s name:8080:3000</code>: the name is created for the session, no existing service needed</td><td>by stealing or mirroring an existing workload's traffic</td><td>by replacing or intercepting an existing workload</td></tr>
+          <tr><th scope="row">Runtimes</th><td class="win">any, unchanged (IP layer)</td><td>programs linked against libc, and Go; not statically linked binaries</td><td class="win">any, unchanged (network level)</td></tr>
           <tr><th scope="row">Run a container as a member</th><td>✓ <code>--dockerrun</code></td><td>✓ <code>mirrord container</code></td><td>✓ <code>--docker-run</code></td></tr>
-          <tr><th scope="row">Inherit the workload's environment</th><td class="win">✓ by default on a takeover, secrets as the pod has them; the <strong>cluster's value wins</strong> over an inherited one (behaves as in the cluster), and <code>--no-env</code> keeps yours instead - whole OR key by key (<code>--no-env DB_URL,API_KEY</code>)</td><td>✓ by default, from the target pod</td><td>✓ on intercept, or <code>--env-file</code></td></tr>
-          <tr><th scope="row">Borrow ANOTHER workload's environment</th><td class="win">✓ <code>--env-of &lt;name&gt;</code> - a pure client (<code>-c</code>) run with a service's own credentials, or a <code>-s</code> served with the variables of the service it talks to, without parking it</td><td>only the <code>--target</code> you intercept</td><td>only the service you intercept</td></tr>
-          <tr><th scope="row">Its mounted secret/config FILES (a CA, a keystore)</th><td class="win">✓ <strong>no FUSE</strong>: the files are read through the agent's existing exec/API and materialised for the session (or mounted at their exact path under <code>--dockerrun</code>); the variables that name them are repointed. Kubernetes and Compose secrets, Swarm configs</td><td>fs mirroring, live - needs its syscall layer in-process</td><td>volume mounts, live - via <strong>sshfs / FUSE</strong> (macFUSE, WinFSP)</td></tr>
-          <tr><th scope="row">Its data VOLUMES / PVCs, live</th><td class="win">✓ <strong>by default, nothing to install</strong>: every volume of the workload a <code>-s</code> takes over (or <code>--env-of</code> names) is mounted on your machine read-write, and the variables naming it are repointed - the process finds its data and knows nothing (<code>--no-mount</code> to opt out, <code>--mount</code> for an exact path). Mounted with the SMB client the OS already has, on all three OSes; the agent runs a helper beside the workload, tied to the session like the name</td><td>✓ file calls hooked in your process and relayed into the pod one by one (the runtime has to be hookable)</td><td>✓ <code>--mount</code>, through sshfs - a FUSE runtime and sshfs to install first</td></tr>
-          <tr><th scope="row">Several developers on one cluster</th><td class="win">✓ each with their own sessions, at the same time. A name already served is refused, and the refusal says where it is held from</td><td>✓ with the paid Team plan; the free version is for one developer</td><td class="win">✓</td></tr>
-          <tr><th scope="row">Two developers on the SAME service at once</th><td>one holder per name: the next one is refused and told by whom</td><td class="win">split per request on a header (HTTP) or a message attribute (queues): the header has to be set at the entry point and passed on by every service in between; paid Team plan</td><td class="win">split per request on a header or a path (HTTP): the header has to be set at the entry point and passed on by every service in between</td></tr>
-          <tr><th scope="row">Who gets in</th><td class="win">✓ <strong>by approval</strong>: deploy the agent with <code>PLUG_ADMISSION=invite</code> and only the keys a member accepted get in, each one revocable (<code>plug revoke</code>), with <strong>no account to create in the cluster</strong> (<a routerLink="/security" fragment="admission">how</a>). Open by default, for a trusted dev network</td><td>whoever holds a kubeconfig the cluster issued</td><td>whoever holds a kubeconfig the cluster issued</td></tr>
-          <tr><th scope="row">What each person may do</th><td>every member, everything plug does; per-person identities and rights with <a routerLink="/meerkat">Meerkat</a></td><td class="win">kubeconfig RBAC</td><td class="win">kubeconfig RBAC</td></tr>
-          <tr><th scope="row">IDE extensions</th><td>none, CLI only - there is no target to pick, so nothing for a panel to show</td><td class="win">VS Code · JetBrains</td><td>JetBrains</td></tr>
-          <tr><th scope="row">For an AI coding agent</th><td class="win">✓ <a routerLink="/mcp"><code>plug mcp</code></a>, an MCP server over stdio: the clusters this machine knows, <code>doctor</code> check by check, a workload's environment, whether a name exists, as tools with structured answers</td><td>the agent drives the CLI like a developer would; no MCP documented</td><td>nothing documented</td></tr>
-          <tr><th scope="row">Mechanism</th><td>userspace TUN over SSH</td><td>syscall layer in your process</td><td>in-cluster traffic-manager</td></tr>
-          <tr><th scope="row">Behind it</th><td>softwarity, the team behind <a routerLink="/meerkat">Meerkat</a></td><td>MetalBear</td><td>Ambassador Labs, now a CNCF project</td></tr>
-          <tr><th scope="row">Price</th><td class="win">free, every feature, no paid tier</td><td>free for one developer; a cluster shared by several needs the paid Team plan, per seat</td><td class="win">free</td></tr>
+          <tr><th scope="row">Inherit the workload's environment</th><td>✓ by default on a takeover; the cluster's value wins over an inherited one, and <code>--no-env</code> keeps yours, whole or key by key</td><td>✓ by default, from the target</td><td>✓ on any attach</td></tr>
+          <tr><th scope="row">Borrow another workload's environment</th><td class="win">✓ <code>--env-of &lt;name&gt;</code>, without parking it</td><td>only the <code>--target</code></td><td class="win">✓ <code>telepresence ingest &lt;workload&gt;</code>, traffic untouched</td></tr>
+          <tr><th scope="row">Its mounted secret and config files</th><td>✓ read through the agent and written for the session, the variables that name them repointed; Kubernetes and Compose secrets, Swarm configs</td><td>✓ file calls relayed into the pod by its in-process layer; remote reads by default, read-write configured per path</td><td>✓ volume mounts through sshfs: FUSE-T on macOS, WinFsp and SSHFS-Win on Windows; none in Docker mode</td></tr>
+          <tr><th scope="row">Its data volumes, live</th><td class="win">✓ by default on a takeover, read-write, with the SMB client the OS already has; nothing to install</td><td>✓ through its in-process file layer</td><td>✓ mounted by default, through sshfs (FUSE-T or WinFsp to install)</td></tr>
+          <tr><th scope="row">Several developers on one cluster</th><td class="win">✓ each with their own sessions. A name already served is refused, and the refusal says where it is held from</td><td>✓ on the paid Team plan; the free version is for one developer</td><td class="win">✓</td></tr>
+          <tr><th scope="row">Two developers on the same service at once</th><td>one holder per name: the next one is refused</td><td class="win">split per request on HTTP headers, path or method, or a queue message attribute; concurrent use on the paid Team plan</td><td class="win">split per request on a header or a path (HTTP)</td></tr>
+          <tr><th scope="row">Who gets in</th><td>open by default; by approval with <code>PLUG_ADMISSION=invite</code>, each key accepted by a member and revocable, no account in the cluster (<a routerLink="/security" fragment="admission">how</a>)</td><td>whoever holds a kubeconfig the cluster issued</td><td>whoever the cluster lets reach its traffic-manager</td></tr>
+          <tr><th scope="row">What each person may do</th><td>every member, everything plug does; per-person rights through a gateway such as <a routerLink="/meerkat">Meerkat</a></td><td class="win">Kubernetes RBAC; Operator policies on paid plans</td><td class="win">Kubernetes RBAC</td></tr>
+          <tr><th scope="row">IDE extensions</th><td>none, CLI only</td><td class="win">VS Code · JetBrains</td><td>JetBrains (a JetBrains plugin)</td></tr>
+          <tr><th scope="row">For an AI coding agent</th><td><a routerLink="/mcp"><code>plug mcp</code></a>: the clusters a machine knows, <code>doctor</code>, a workload's environment, DNS lookups</td><td><code>mirrord mcp</code>, plus agent skills</td><td><code>telepresence mcp</code></td></tr>
+          <tr><th scope="row">Mechanism</th><td>userspace TUN over SSH, an agent in the cluster</td><td>libc and syscall hooks loaded into your process, an agent pod in the cluster</td><td>a virtual network interface on your machine, a traffic-manager and traffic-agents in the cluster</td></tr>
+          <tr><th scope="row">Behind it</th><td>Softwarity</td><td>MetalBear</td><td>a CNCF Sandbox project, created by Ambassador Labs</td></tr>
+          <tr><th scope="row">Price</th><td class="win">free, every feature</td><td>free for one developer; the Team plan, per seat, for a shared cluster</td><td class="win">free</td></tr>
           <tr><th scope="row">License</th><td>FSL-1.1-Apache-2.0</td><td>MIT</td><td>Apache-2.0</td></tr>
         </tbody>
       </table>
     </div>
-
-    <p class="cmp-legend">Green marks whichever tool is ahead on the fact stated in that row - including when it is not plug, and both of them when two are ahead of the third. Rows where all three are level are left plain.</p>
-
+    <p class="cmp-legend">Green marks whichever tool is ahead on the fact stated in that row, whichever it is, and every one of them when several are. Rows where all three are level are left plain.</p>
     <p class="note">
-      <strong>Why plug:</strong> it behaves the same whichever backend provisions the name, and a
-      developer needs nothing but the cluster's address - no Kubernetes tooling, no account in the
-      cluster. The setup lives once in the cluster instead of on every desk, which is also why it
-      works where a kubeconfig does not exist at all: Docker, Compose, Swarm. And it can still
-      choose who comes in: by approval, a newcomer asks once and a member lets them in.
+      <strong>Where plug differs:</strong> a developer needs the cluster's address and nothing else:
+      no kubeconfig, no Kubernetes tooling, no account in the cluster. That is also why it works
+      where there is no kubeconfig at all: Docker Compose and Swarm. And the name it serves does not
+      have to exist yet: the service you are writing, deployed nowhere, is reachable from the rest
+      of the stack by its future name.
     </p>
-
     <p class="note">
-      <strong>And there is nothing to point at.</strong> Both of the others work by substitution:
-      you name an existing workload and they stand in its place, which is why they need a target and
-      a dialog to pick it. plug ADDS a member to the cluster, so you declare a name and that is the
-      whole of it - a name that <em>does not have to exist yet</em>. The service you are writing
-      right now, which is deployed nowhere, is reachable from the rest of the stack by its future
-      name. And when a deployed workload does own that name, plug parks it for the session and puts
-      it back on the way out.
+      <strong>Where they are ahead:</strong> both rest on Kubernetes RBAC, which says per person
+      what each one may do; plug decides who gets in, not what each member may do once in (see the
+      <a routerLink="/security">security model</a>). Both split one shared service between several
+      developers request by request, provided the header is set where the request enters and every
+      service in between passes it on. And both have IDE extensions.
     </p>
-
-    <p class="note">
-      <strong>Where they are ahead:</strong> both rest on your kubeconfig and its RBAC, which says
-      per person what each one may do. plug decides who gets in - by approval, or whoever reaches
-      the agent when it is left open - but not what each member may do once in (see the
-      <a routerLink="/security">security model</a>, and <a routerLink="/meerkat">Meerkat</a> for
-      named identities and their rights). Both split one shared service between several developers, request by request, on a header
-      or a path (with mirrord, on its paid Team plan), provided the header is set where the
-      request enters and every service in between passes it on. And both are older, with IDE extensions and a larger community.
-    </p>
-
     <app-cta link="/getting-started">Set it up</app-cta>
   `,
 })

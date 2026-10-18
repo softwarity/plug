@@ -7,7 +7,7 @@ import { FileComponent } from '../file/file.component';
   selector: 'app-agent-swarm',
   imports: [CodeComponent, RouterLink, FileComponent],
   template: `
-    <h2>Swarm</h2>
+    <h2>Docker, Compose and Swarm</h2>
 
     <p>
       The agent is deliberately boring: a small image holding one static Go binary and no shell at

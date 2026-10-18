@@ -1,9 +1,10 @@
 import { Component } from '@angular/core';
 import { RouterLink } from '@angular/router';
+import { CodeComponent } from '../code/code.component';
 
 @Component({
   selector: 'app-how-it-works',
-  imports: [RouterLink],
+  imports: [CodeComponent, RouterLink],
   styles: [
     `
       .diagram {
@@ -129,6 +130,26 @@ import { RouterLink } from '@angular/router';
       the agent notices and puts things back within the minute. And a connection that drops, a
       laptop that sleeps, a VPN that reconnects, an agent that restarts, is re-established without
       restarting your command.
+    </p>
+
+    <h3>Names that are not the cluster's</h3>
+    <p>
+      A name the cluster does not know is forwarded to the nameservers your machine already used,
+      read from the system (<code>scutil</code> on macOS, the former <code>resolv.conf</code> on
+      Linux, the adapter table on Windows) and ranked the way the OS ranks its interfaces, so a
+      corporate VPN's resolver comes first. plug follows them through the session: a VPN connected
+      or dropped, another network joined. <code>plug doctor</code> shows where lookups go now:
+    </p>
+    <app-code lang="text">✓ dns forwarding   forwarding dotted names to 10.8.0.1:53, 192.168.1.1:53</app-code>
+    <p>
+      With none found, plug falls back to a public resolver and says so: public names keep working,
+      internal ones do not resolve, and those lookups leave your network.
+    </p>
+
+    <h3>What it does not carry</h3>
+    <p>
+      TCP to a name. UDP, QUIC and ping are not carried (most clients fall back to TCP), and neither
+      is a hard-coded IPv6 literal; a service reached by its name is always fine.
     </p>
 
     <h3>Several clusters at once</h3>

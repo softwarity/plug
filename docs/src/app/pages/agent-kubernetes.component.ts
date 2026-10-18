@@ -7,7 +7,7 @@ import { FileComponent } from '../file/file.component';
   selector: 'app-agent-kubernetes',
   imports: [CodeComponent, RouterLink, FileComponent],
   template: `
-    <h2>Kubernetes</h2>
+    <h2>Kubernetes and OpenShift</h2>
 
     <p>
       The <a routerLink="/swarm">same agent image</a> runs on Kubernetes - a small pod
@@ -55,7 +55,7 @@ import { FileComponent } from '../file/file.component';
       </tbody>
     </table>
 
-    <h3>OpenShift and OKD</h3>
+    <h3 id="openshift">OpenShift and OKD</h3>
     <p>
       The same manifest and the same Role, admitted by the default <code>restricted-v2</code> SCC
       with nothing to grant: the agent runs as the uid the cluster picks from the namespace's

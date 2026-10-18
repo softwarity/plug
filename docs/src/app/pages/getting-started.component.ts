@@ -68,8 +68,8 @@ function guessOs(): Os {
       <strong>refuses to start</strong> rather than fail on your first <code>-s</code>. It is root on
       the host, so mount it only on a cluster you trust. Kubernetes needs no socket - a Services-only
       RBAC role instead, and the same rule applies. See
-      <a routerLink="/swarm">Swarm</a> for the standalone variant, or
-      <a routerLink="/kubernetes">Kubernetes</a> for the cluster.
+      <a routerLink="/install">Install</a> for every platform: Compose, Swarm, Kubernetes,
+      OpenShift, or one agent for several stacks.
     </p>
     <p>
       Left as is, the agent lets in whoever reaches its port: the right default on a network you
