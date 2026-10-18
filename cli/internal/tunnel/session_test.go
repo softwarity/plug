@@ -8,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -23,10 +24,12 @@ type sessionAgent struct {
 
 	mu     sync.Mutex
 	hellos []string          // session ids presented, in order
+	modes  []string          // what each accepted hello said the run does
 	byes   int               // goodbyes heard
 	live   []*ssh.ServerConn // connections still open
 	refuse string            // when set, a hello is refused with this reason
 	silent bool              // an agent that does not know sessions
+	short  bool              // an agent that reads only ID and Version, as 2.29.0 does
 	told   chan struct{}     // closed once the client acknowledged a notice
 }
 
@@ -79,9 +82,25 @@ func (a *sessionAgent) serve(c net.Conn, cfg *ssh.ServerConfig) {
 		a.mu.Lock()
 		switch {
 		case r.Type == helloRequest && !a.silent:
-			var p struct{ ID, Version string }
-			_ = ssh.Unmarshal(r.Payload, &p)
+			var p struct {
+				ID, Version    string
+				Serves, Docker bool
+			}
+			var err error
+			if a.short {
+				var q struct{ ID, Version string }
+				err = ssh.Unmarshal(r.Payload, &q)
+				p.ID, p.Version = q.ID, q.Version
+			} else {
+				err = ssh.Unmarshal(r.Payload, &p)
+			}
+			if err != nil {
+				a.mu.Unlock()
+				_ = r.Reply(false, nil)
+				continue
+			}
 			a.hellos = append(a.hellos, p.ID)
+			a.modes = append(a.modes, fmt.Sprintf("serves=%v docker=%v", p.Serves, p.Docker))
 			if a.refuse != "" {
 				reason := a.refuse
 				a.mu.Unlock()
@@ -133,8 +152,13 @@ func (a *sessionAgent) snapshot() ([]string, int) {
 
 func dialRun(t *testing.T, a *sessionAgent, id string) *Transport {
 	t.Helper()
+	return dialAs(t, a, Session{ID: id, Version: "1.2.3"})
+}
+
+func dialAs(t *testing.T, a *sessionAgent, s Session) *Transport {
+	t.Helper()
 	host, port, _ := net.SplitHostPort(a.addr)
-	tr, err := DialSession(host, port, "plug", [][]byte{clientKeyPEM(t)}, "", nil, Session{ID: id, Version: "1.2.3"})
+	tr, err := DialSession(host, port, "plug", [][]byte{clientKeyPEM(t)}, "", nil, s)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -169,6 +193,26 @@ func TestATransportPresentsItsRunAndSaysGoodbye(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("closing the transport did not say goodbye")
+}
+
+// The run says what it does; an agent that reads only the ID and the version
+// still gets the session, without that.
+func TestARunSaysWhatItDoes(t *testing.T) {
+	for _, short := range []bool{false, true} {
+		a := newSessionAgent(t)
+		a.short = short
+		dialAs(t, a, Session{ID: "0123456789abcdef", Version: "1.2.3", Serves: true, Docker: true})
+		a.mu.Lock()
+		hellos, modes := a.hellos, a.modes
+		a.mu.Unlock()
+		want := "serves=true docker=true"
+		if short {
+			want = "serves=false docker=false"
+		}
+		if len(hellos) != 1 || hellos[0] != "0123456789abcdef" || modes[0] != want {
+			t.Errorf("short=%v: the agent took %v, %v", short, hellos, modes)
+		}
+	}
 }
 
 // Told the session is closed, the transport tells its holder in the agent's

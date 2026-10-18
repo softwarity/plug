@@ -2,6 +2,14 @@
 
 ## NEXT RELEASE
 
+### A gateway sees what each plug run does
+
+The session a run presents now says whether it serves names (`-s`) or only
+reaches the cluster (`-c`), and whether it holds a `--dockerrun` container's
+network. A gateway lists that beside the session from the moment the run
+connects, before a `-s` has served its first name (`SessionEvent.Serves`,
+`SessionEvent.Docker`).
+
 ---
 
 ## 2.29.0

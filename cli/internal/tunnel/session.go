@@ -41,6 +41,8 @@ const helloTimeout = 10 * time.Second
 type Session struct {
 	ID      string // the same on every connection of the run
 	Version string // plug's version, which the gateway lists beside the session
+	Serves  bool   // the run serves names (-s), not only reaches the cluster (-c)
+	Docker  bool   // the run holds a container's network (--dockerrun)
 }
 
 // ClosedError is the agent ending this session on purpose, with its reason. It
@@ -129,6 +131,11 @@ func filterRequests(in <-chan *ssh.Request, handle func(*ssh.Request) bool) <-ch
 // hello presents the session on a fresh client. It returns the reason when the
 // agent refuses it as closed; an agent that does not know sessions answers
 // false with nothing, which is not a refusal.
+//
+// An agent of 2.29.0 knows sessions but reads only the ID and the version, and
+// answers a longer hello as one it cannot read: false with nothing. That answer
+// gets the short hello once more, so the run stays a session there, unsaid what
+// it does.
 func hello(cl *ssh.Client, s Session, timeout time.Duration) (closed string, err error) {
 	type answer struct {
 		ok      bool
@@ -137,7 +144,13 @@ func hello(cl *ssh.Client, s Session, timeout time.Duration) (closed string, err
 	}
 	res := make(chan answer, 1)
 	go func() {
-		ok, payload, err := cl.SendRequest(helloRequest, true, ssh.Marshal(struct{ ID, Version string }{s.ID, s.Version}))
+		ok, payload, err := cl.SendRequest(helloRequest, true, ssh.Marshal(struct {
+			ID, Version    string
+			Serves, Docker bool
+		}{s.ID, s.Version, s.Serves, s.Docker}))
+		if err == nil && !ok && len(payload) == 0 {
+			ok, payload, err = cl.SendRequest(helloRequest, true, ssh.Marshal(struct{ ID, Version string }{s.ID, s.Version}))
+		}
 		res <- answer{ok, payload, err}
 	}()
 	select {

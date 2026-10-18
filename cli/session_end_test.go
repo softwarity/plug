@@ -60,9 +60,28 @@ func TestARunTheClusterEndedExitsWithItsOwnStatus(t *testing.T) {
 
 // Every connection of a run presents the same id; a run never borrows another's.
 func TestEachRunHasItsOwnSession(t *testing.T) {
-	a, b := newRunSession(), newRunSession()
+	a, b := newRunSession(config{}), newRunSession(config{})
 	if len(a.ID) != 16 || a.ID == b.ID || a.Version != version {
 		t.Errorf("sessions %+v and %+v", a, b)
+	}
+}
+
+// The session says what the run does: a -c reaches the cluster, a -s serves
+// names too, and the core in a --dockerrun sidecar holds a container.
+func TestARunSaysWhatItDoes(t *testing.T) {
+	if s := newRunSession(config{}); s.Serves || s.Docker {
+		t.Errorf("a -c on this machine said %+v", s)
+	}
+	if s := newRunSession(config{exposes: []tunnel.ExposeSpec{{}}}); !s.Serves || s.Docker {
+		t.Errorf("a -s on this machine said %+v", s)
+	}
+	t.Setenv("PLUG_CORE_SIDECAR", "1")
+	if s := newRunSession(coreConfigFromEnv()); s.Serves || !s.Docker {
+		t.Errorf("a -c in a sidecar said %+v", s)
+	}
+	args := strings.Join(sidecarArgs(config{host: "h", port: "2222"}, "", []string{"-c"}, "amd64", "n", "img", testOwner), " ")
+	if !strings.Contains(args, "-e PLUG_CORE_SIDECAR=1") {
+		t.Errorf("the sidecar's core is not told it holds a container: %s", args)
 	}
 }
 

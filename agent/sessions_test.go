@@ -170,6 +170,45 @@ func TestARunIsOneSessionAcrossItsConnections(t *testing.T) {
 // A connection that drops without a goodbye is a network until proven
 // otherwise: the session waits for it, carries on when it comes back, and
 // reads as dropped only when it does not.
+// A run says what it does, serving names or only reaching the cluster, and
+// whether it holds a container's network; the host has it with the session. A
+// plug too old to say leaves it zero, and one newer than the agent, saying
+// more, is still a session.
+func TestARunSaysWhatItDoes(t *testing.T) {
+	key, pub := newTestKey(t)
+	addr, h, _ := sessionServer(t, map[string]string{ssh.FingerprintSHA256(pub): "alice"})
+	type newer struct {
+		ID, Version            string
+		Serves, Docker, Future bool
+		More                   string
+	}
+	for i, c := range []struct {
+		name           string
+		hello          func(id string) any
+		serves, docker bool
+	}{
+		{"a -s in a container", func(id string) any { return helloPayload{ID: id, Version: "9.9.9", Serves: true, Docker: true} }, true, true},
+		{"a -c", func(id string) any { return helloPayload{ID: id, Version: "9.9.9"} }, false, false},
+		{"a plug that predates the fields", func(id string) any { return struct{ ID, Version string }{id, "2.29.0"} }, false, false},
+		{"a plug newer than the agent", func(id string) any { return newer{id, "99.0.0", true, false, true, "x"} }, true, false},
+	} {
+		id := strings.Repeat("0", 15) + string(rune('a'+i))
+		rc, _ := connect(t, addr, key, "")
+		ok, _, err := rc.cl.SendRequest(sessionHelloRequest, true, ssh.Marshal(c.hello(id)))
+		if err != nil || !ok {
+			t.Errorf("%s: not a session (ok=%v err=%v)", c.name, ok, err)
+			rc.cl.Close()
+			continue
+		}
+		e := waitEvent(t, h.opened, c.name+" opening")
+		if e.ID != id || e.Serves != c.serves || e.Docker != c.docker {
+			t.Errorf("%s: opened %+v", c.name, e)
+		}
+		rc.bye()
+		waitEvent(t, h.closed, c.name+" ending")
+	}
+}
+
 func TestASessionWaitsForItsClientToComeBack(t *testing.T) {
 	key, pub := newTestKey(t)
 	addr, h, _ := sessionServer(t, map[string]string{ssh.FingerprintSHA256(pub): "alice"})

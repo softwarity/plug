@@ -25,13 +25,20 @@ import (
 // EX_NOPERM, so a script can tell it from the command's own failure.
 const exitSessionClosed = 77
 
-// newRunSession is the identity of this run, the same on all its connections.
-func newRunSession() tunnel.Session {
+// newRunSession is the identity of this run, the same on all its connections,
+// and what it does: a run with names to serve is a -s, one without a -c; either
+// may hold a --dockerrun container's network.
+func newRunSession(cfg config) tunnel.Session {
 	b := make([]byte, 8)
 	if _, err := rand.Read(b); err != nil {
 		return tunnel.Session{}
 	}
-	return tunnel.Session{ID: hex.EncodeToString(b), Version: version}
+	return tunnel.Session{
+		ID:      hex.EncodeToString(b),
+		Version: version,
+		Serves:  len(cfg.exposes) > 0,
+		Docker:  cfg.sidecar,
+	}
 }
 
 var (

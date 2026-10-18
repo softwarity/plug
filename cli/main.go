@@ -59,6 +59,9 @@ type config struct {
 	// opens (session_end.go). Zero outside a run: the shared datapath daemon,
 	// the one-shot commands.
 	session tunnel.Session
+	// sidecar: this core holds a --dockerrun container's network, started in
+	// the sidecar with PLUG_CORE_SIDECAR=1. The session says so to the gateway.
+	sidecar bool
 }
 
 // authKeys is what plug offers the agent, in order: this profile's personal key
@@ -308,6 +311,7 @@ func coreConfigFromEnv() config {
 		updateMode: os.Getenv("PLUG_CORE_UPDATE"),
 		key:        os.Getenv("PLUG_CORE_KEY"),
 		profile:    os.Getenv("PLUG_CORE_PROFILE"),
+		sidecar:    os.Getenv("PLUG_CORE_SIDECAR") == "1",
 	}
 	if cfg.port == "" {
 		cfg.port = defaultPort
@@ -331,7 +335,7 @@ func runCore(cfg config, cmdArgs []string) {
 	// exec'd into this process and is gone. Detached on purpose — the session
 	// never waits on it, and what it learns is for the NEXT launch.
 	go backgroundUpdateCheck(cfg)
-	cfg.session = newRunSession()
+	cfg.session = newRunSession(cfg)
 	os.Exit(finishRun(cfg, coreRun(cfg, args)))
 }
 

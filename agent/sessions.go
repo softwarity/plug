@@ -37,8 +37,9 @@ import (
 // domain the SSH spec reserves for local extensions: an agent that does not
 // know them answers false, which every client reads as "no session here".
 const (
-	// client -> agent, right after the handshake: {ID, Version}. A refusal that
-	// carries a reason means the session was closed: the client stops.
+	// client -> agent, right after the handshake: {ID, Version, Serves, Docker},
+	// later fields optional both ways (decodeHello). A refusal that carries a
+	// reason means the session was closed: the client stops.
 	sessionHelloRequest = "plug-session@softwarity.io"
 	// client -> agent, as a connection is closed on purpose: the difference
 	// between a Ctrl-C and a crash, which the TCP close alone does not tell.
@@ -106,6 +107,8 @@ type SessionEvent struct {
 	Key     string    // the key's SHA256 fingerprint, as `plug pubkey` and OpenSSH print it
 	From    string    // the address the first connection came from
 	Version string    // the client's plug version, as it said it
+	Serves  bool      // the run serves names (-s), not only reaches the cluster (-c)
+	Docker  bool      // the run holds a container's network (--dockerrun)
 	Since   time.Time // when the first connection presented the session
 	Ended   time.Time
 	End     SessionEnd
@@ -226,11 +229,35 @@ type session struct {
 
 var sessionIDRe = regexp.MustCompile(`^[0-9a-f]{16,64}$`)
 
-// helloPayload is what a client presents, and what a closed session's refusal
-// carries back in its place.
+// helloPayload is what a client presents. A plug that predates a field sends
+// without it, which leaves it zero; a later plug may send fields this agent does
+// not know, and they are ignored (decodeHello).
 type helloPayload struct {
 	ID      string
 	Version string
+	Serves  bool
+	Docker  bool
+}
+
+// decodeHello reads a hello field by field, each part tolerating what follows
+// it: a client newer than the agent is a session, not a refusal.
+func decodeHello(b []byte) (helloPayload, error) {
+	var head struct {
+		ID, Version string
+		Rest        []byte `ssh:"rest"`
+	}
+	if err := ssh.Unmarshal(b, &head); err != nil {
+		return helloPayload{}, err
+	}
+	p := helloPayload{ID: head.ID, Version: head.Version}
+	var what struct {
+		Serves, Docker bool
+		Rest           []byte `ssh:"rest"`
+	}
+	if len(head.Rest) > 0 && ssh.Unmarshal(head.Rest, &what) == nil {
+		p.Serves, p.Docker = what.Serves, what.Docker
+	}
+	return p, nil
 }
 
 type closedPayload struct {
@@ -261,8 +288,8 @@ func oneLine(s string, n int) string {
 // when it is the first. The answer is the reply: true, or false with the reason
 // the session was closed, after which the connection is cut.
 func (s *sshServer) hello(conn *ssh.ServerConn, st *connState, r *ssh.Request) {
-	var p helloPayload
-	if err := ssh.Unmarshal(r.Payload, &p); err != nil || !sessionIDRe.MatchString(p.ID) {
+	p, err := decodeHello(r.Payload)
+	if err != nil || !sessionIDRe.MatchString(p.ID) {
 		_ = r.Reply(false, nil)
 		return
 	}
@@ -299,6 +326,8 @@ func (s *sshServer) hello(conn *ssh.ServerConn, st *connState, r *ssh.Request) {
 			Key:     st.key,
 			From:    st.from,
 			Version: oneLine(p.Version, 64),
+			Serves:  p.Serves,
+			Docker:  p.Docker,
 			Since:   time.Now(),
 		}}
 		if s.sessions == nil {

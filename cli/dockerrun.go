@@ -485,6 +485,7 @@ func sidecarArgs(cfg config, network string, plugFlags []string, arch, name, ima
 		"--security-opt", "apparmor:unconfined",
 		"--device", "/dev/net/tun:/dev/net/tun",
 		"-e", "PLUG_CORE=1",
+		"-e", "PLUG_CORE_SIDECAR=1", // the session says it holds a container
 		"-e", "PLUG_CORE_HOST="+cfg.host,
 		"-e", "PLUG_CORE_PORT="+cfg.port,
 	)
