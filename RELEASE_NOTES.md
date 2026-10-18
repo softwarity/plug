@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.29.0
+
 ### When the cluster ends your session, plug says who and why
 
 A session ended on purpose, a gateway's administrator closing it, your key
