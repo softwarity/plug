@@ -60,6 +60,8 @@ import { CtaComponent } from '../cta/cta.component';
       <li><a routerLink="/use-cases" fragment="debug">The bug only the cluster shows</a></li>
       <li><a routerLink="/use-cases" fragment="front">A front end on the laptop, the back end in the cluster</a></li>
       <li><a routerLink="/use-cases" fragment="review">QA tries the feature before the pull request</a></li>
+      <li><a routerLink="/use-cases" fragment="pair">Front end and back end, one feature</a></li>
+      <li><a routerLink="/use-cases" fragment="agents">Several AI agents, one feature</a></li>
       <li><a routerLink="/use-cases" fragment="data">The real data, in your own tools</a></li>
       <li><a routerLink="/use-cases" fragment="two-clusters">Staging and pre-production, side by side</a></li>
       <li><a routerLink="/use-cases" fragment="ai">An AI agent that knows the cluster</a></li>
@@ -197,6 +199,86 @@ plug -p demo -s orders:8080:3000 npm run start:dev</app-code>
     <p class="without">
       <strong>Without plug:</strong> a build and a deployment to the test platform for every round
       of remarks, or a preview environment per branch to build and keep running.
+    </p>
+
+    <!-- ===================================================================== -->
+    <h3 id="pair">Front end and back end, one feature</h3>
+    <p>
+      Alice writes the screen, Bob the endpoint behind it, each on a branch of their own and a
+      machine of their own. They meet in the dev cluster. Bob serves the back end from his branch,
+      in watch mode:
+    </p>
+    <app-code lang="bash">plug -p demo -s api:8080:3000 npm run start:dev</app-code>
+    <p>
+      Alice serves the front end from hers. Her dev server proxies <code>/api</code> to
+      <code>http://api:8080</code>, the address it has in the cluster, which is now Bob's process:
+    </p>
+    <app-code lang="bash">plug -p demo -s web:80:4200 npm start</app-code>
+    <p>
+      Alice needs <code>GET /orders/:id/lines</code>. She says so; Bob writes it and saves, his
+      process reloads, and Alice's next call reaches it. A field missing, a status code to change:
+      the same round, in seconds, while Bob's code reads the cluster's real database. When the
+      screen works, QA opens it on the platform
+      (<a routerLink="/use-cases" fragment="review">as above</a>), and each opens a pull request.
+    </p>
+    <div class="diagram">
+      <img src="assets/usecase-pair.svg" width="900" height="360" loading="lazy" alt="Alice runs web on her machine and Bob runs api on his, both under plug; Alice's dev server calls api:8080, the agent carries the call to Bob's branch, and Bob's api reads the cluster's database." />
+    </div>
+    <ul>
+      <li>
+        Neither machine reaches the other: both tunnels are opened outbound, to the cluster.
+        Alice and Bob can be on two networks, two VPNs, two countries.
+      </li>
+      <li>
+        <strong>The whole cluster gets Bob's <code>api</code></strong> for the session, Alice
+        and everyone else. On a cluster shared beyond the two, say so in the team's channel, or let
+        <a routerLink="/use-cases" fragment="meerkat">Meerkat</a> show it.
+      </li>
+      <li>
+        Alice only consuming, not showing the screen to anyone? <code>-c</code> instead of
+        <code>-s web:80:4200</code>: her dev server still reaches Bob's <code>api</code>.
+      </li>
+    </ul>
+    <p class="without">
+      <strong>Without plug:</strong> a mock of the endpoint until Bob's branch is deployed, then a
+      deployment of Bob's branch for every change Alice asks for, or both of them running the whole
+      stack on their machines.
+    </p>
+
+    <!-- ===================================================================== -->
+    <h3 id="agents">Several AI agents, one feature</h3>
+    <p>
+      The same collaboration, with coding agents doing the writing: one on the back end, one on the
+      front end, each in its own worktree, on one machine or on several. plug does not make the
+      agents talk to each other; it gives them what Alice and Bob had, <strong>one cluster to meet
+      in</strong>, where each one's process is the real service for the others. The back-end agent
+      runs its server under plug, on a port plug picks so that two agents on one machine do not
+      collide:
+    </p>
+    <app-code lang="bash">plug -p demo -s api:8080:PORT npm run start:dev -- --port=&#123;PORT&#125;</app-code>
+    <p>and the front-end agent runs its dev server, which reaches that <code>api</code>:</p>
+    <app-code lang="bash">plug -p demo -c npm run dev</app-code>
+    <p>
+      Each agent tests against the other's code as it is written, with the cluster's data, and
+      through <a routerLink="/use-cases" fragment="ai">plug's MCP server</a> each one reads
+      <code>doctor</code>, the environment a deployed service runs with, or whether a name exists,
+      instead of guessing.
+    </p>
+    <ul>
+      <li>
+        <strong>One name, one process.</strong> Two agents cannot both serve <code>api</code>: give
+        each the names that are its part of the feature, and let the others consume them.
+      </li>
+      <li>
+        Every agent's run is a session of its own. Through
+        <a routerLink="/use-cases" fragment="meerkat">Meerkat</a>, a session is attributed to the
+        key of the machine it ran on: several agents on one machine read as several sessions of
+        the same person.
+      </li>
+    </ul>
+    <p class="without">
+      <strong>Without plug:</strong> each agent works against mocks of what the others write, and
+      the pieces meet for the first time after the pull requests are merged.
     </p>
 
     <!-- ===================================================================== -->
