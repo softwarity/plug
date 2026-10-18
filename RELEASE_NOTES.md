@@ -7,6 +7,11 @@
 `plug --help` and the agent's startup hint now link to
 https://plug.softwarity.dev, the documentation's own domain.
 
+### `plug accept` and `plug revoke` take any key from Git Bash
+
+A key that starts with `+` or `/`, as one in thirty-two do, is accepted or
+revoked from Git Bash as from any other shell, copied as plug printed it.
+
 ---
 
 ## 2.30.0

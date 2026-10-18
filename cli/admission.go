@@ -325,7 +325,7 @@ func cmdAccept(args []string) {
 	if len(rest) != 1 {
 		fatal("usage: plug -p <profile> accept <key>   (the key the newcomer's plug printed)")
 	}
-	acceptKey(&cfg, rest[0])
+	acceptKey(&cfg, keyArg(&cfg, rest[0], "requests", "request"))
 }
 
 func acceptKey(cfg *config, key string) {
@@ -344,7 +344,73 @@ func cmdRevoke(args []string) {
 	if len(rest) != 1 {
 		fatal("usage: plug -p <profile> revoke <key>   (the key 'plug -p %s members' shows)", clusterName(cfg))
 	}
-	revokeKey(&cfg, rest[0])
+	revokeKey(&cfg, keyArg(&cfg, rest[0], "members", "member"))
+}
+
+// keyArg is the key a person typed, as the agent must receive it. Git Bash
+// rewrites an argument it takes for a POSIX path before plug.exe sees it: a
+// key printed as +/Blct9xqTYw arrives as +C:/Program Files/Git/Blct9xqTYw, and
+// the agent, reading three words, answered with its usage line. A fingerprint
+// is base64 and has no drive letter, no colon and no space, so a key with any
+// of them was rewritten, and the key is the one tail of that path that names
+// a key the agent lists (verb, rows of kind).
+func keyArg(cfg *config, arg, verb, kind string) string {
+	if isKeyShape(arg) {
+		return arg
+	}
+	var fps []string
+	for _, r := range parseRows(askAgent(cfg, verb), kind) {
+		fps = append(fps, r.fp)
+	}
+	if key, ok := unrewrittenKey(arg, fps); ok {
+		return key
+	}
+	fatal("%q is not a key. Git Bash rewrites an argument that starts like a path: run the command again with MSYS_NO_PATHCONV=1 in front of it", arg)
+	return ""
+}
+
+// isKeyShape: SHA256: optional, then base64 only.
+func isKeyShape(s string) bool {
+	s = strings.TrimPrefix(s, "SHA256:")
+	for _, c := range s {
+		if !(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '+' || c == '/') {
+			return false
+		}
+	}
+	return s != ""
+}
+
+// unrewrittenKey undoes Git Bash's rewrite of a key against the fingerprints
+// it could name. The rewrite keeps the leading + it skipped, then puts the
+// install directory where the first / was. Where that directory ends is not
+// known, so each tail after a separator is tried, and the longest that names
+// exactly one fingerprint is the key: a shorter tail that also matches is a
+// piece of the key, never another key.
+func unrewrittenKey(arg string, fps []string) (string, bool) {
+	lead := len(arg) - len(strings.TrimLeft(arg, "+"))
+	path := strings.ReplaceAll(arg[lead:], `\`, "/")
+	if len(path) < 3 || path[1] != ':' || path[2] != '/' {
+		return "", false
+	}
+	for i := 2; i < len(path); i++ {
+		if path[i] != '/' {
+			continue
+		}
+		key := arg[:lead] + path[i:]
+		if !isKeyShape(key) || len(key) < 12 {
+			continue
+		}
+		n := 0
+		for _, fp := range fps {
+			if strings.HasPrefix(strings.TrimPrefix(fp, "SHA256:"), key) {
+				n++
+			}
+		}
+		if n == 1 {
+			return key, true
+		}
+	}
+	return "", false
 }
 
 func revokeKey(cfg *config, key string) {

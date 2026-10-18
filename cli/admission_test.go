@@ -323,3 +323,37 @@ func TestTheSessionsTunnelMakesTheKeyItIsAskedFor(t *testing.T) {
 		t.Fatal("the session did not give the profile its key")
 	}
 }
+
+// Git Bash rewrites a key that starts like a path before plug.exe sees it. The
+// key is still the one the person meant: the tail of the rewritten path that
+// names one key the agent lists.
+func TestAKeyGitBashRewroteIsStillTheKey(t *testing.T) {
+	fps := []string{
+		"SHA256:+/Blct9xqTYwIQKB3qzJ8lbB0x",
+		"SHA256:/a9/Kq2LmZx81PQrst0uvwxy",
+		"SHA256:Blct9xqTYwAAAAAAAAAAAAAAA",
+	}
+	cases := []struct{ arg, want string }{
+		{"+C:/Program Files/Git/Blct9xqTYw", "+/Blct9xqTYw"},
+		{`+C:\Program Files\Git\Blct9xqTYw`, "+/Blct9xqTYw"},
+		{"C:/Program Files/Git/a9/Kq2LmZx8", "/a9/Kq2LmZx8"},
+		{"D:/tools/git/a9/Kq2LmZx81PQ", "/a9/Kq2LmZx81PQ"},
+	}
+	for _, c := range cases {
+		if isKeyShape(c.arg) {
+			t.Errorf("%q reads as a key, so it would be sent rewritten", c.arg)
+		}
+		got, ok := unrewrittenKey(c.arg, fps)
+		if !ok || got != c.want {
+			t.Errorf("unrewrittenKey(%q) = %q, %v, want %q", c.arg, got, ok, c.want)
+		}
+	}
+	for _, key := range []string{"+/Blct9xqTYw", "SHA256:Blct9xqTYwAAA", "/a9/Kq2LmZx8"} {
+		if !isKeyShape(key) {
+			t.Errorf("%q is a key as typed and must be sent as it is", key)
+		}
+	}
+	if got, ok := unrewrittenKey("C:/Program Files/Git/nothing9here", fps); ok {
+		t.Errorf("a path naming no listed key gave %q", got)
+	}
+}
