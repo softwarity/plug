@@ -36,6 +36,29 @@ import { CodeComponent } from '../code/code.component';
   ],
   template: `
     <h2>Security model</h2>
+    <div class="callout warn">
+      <strong>At a glance.</strong>
+      <ul>
+        <li>
+          By default the agent authenticates no person: whoever reaches its port gets in. Admission
+          by approval, or a gateway, changes that (below).
+        </li>
+        <li>
+          A session reaches what the agent reaches: the networks it is attached to, and for any
+          workload there, its environment, secret files, volumes and name.
+        </li>
+        <li>
+          On Docker, Compose and Swarm the agent needs the Docker socket, which is root on the host.
+          Kubernetes and OpenShift use a namespace-scoped Role.
+        </li>
+        <li>
+          The CLI is installed over SSH from the agent, without checking its host key; plug pins
+          the key afterwards and verifies the signature of every binary before granting privilege.
+        </li>
+      </ul>
+      Use it on dev or staging clusters you trust. Never expose the agent's port on a public
+      network, and keep it away from production workloads.
+    </div>
     <p>
       Who may open a session on a cluster is decided in one of three ways. Pick the one that fits
       who can reach the agent.

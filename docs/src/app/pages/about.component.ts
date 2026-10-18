@@ -155,9 +155,17 @@ import { MatIconModule } from '@angular/material/icon';
     </div>
 
     <div class="callout">
-      <strong>Two pieces.</strong> A tiny <a routerLink="/swarm">agent container</a> (one static Go
+      <strong>Two pieces.</strong> A tiny <a routerLink="/install">agent container</a> (one static Go
       binary, no shell) deployed once on the cluster - and a single static <code>plug</code> binary on each dev
-      machine. Set up once per cluster; after that, day-to-day runs need no sudo or admin.
+      machine. Set up once per cluster; after that, day-to-day runs need no sudo or admin. The
+      agent runs on Docker Compose, Docker Swarm, Kubernetes and OpenShift
+      (<a routerLink="/coverage">what is proven where</a>).
+    </div>
+    <div class="callout warn">
+      <strong>Before you deploy it.</strong> By default the agent lets in whoever reaches its port,
+      and a session reaches what the agent reaches. On Docker, Compose and Swarm it needs the
+      Docker socket, which is root on the host. Use it on dev or staging clusters you trust; the
+      <a routerLink="/security">security model</a> says how to narrow who gets in.
     </div>
 
     <h3>What you get</h3>
@@ -196,12 +204,10 @@ import { MatIconModule } from '@angular/material/icon';
 
     <h3>How plug compares</h3>
     <p>
-      plug isn't the only way to run local code against a remote cluster:
       <a href="https://metalbear.com/mirrord/" target="_blank" rel="noopener">mirrord</a> and
-      <a href="https://telepresence.io/" target="_blank" rel="noopener">Telepresence</a> are the
-      well-known Kubernetes-native tools. plug goes further, with the developer's experience
-      first: it works the same on Docker, Compose, Swarm, Kubernetes <em>and</em> OpenShift, from Linux,
-      macOS and Windows, and integrates more closely on many points.
+      <a href="https://telepresence.io/" target="_blank" rel="noopener">Telepresence</a> also run
+      local code against a remote cluster, on Kubernetes. plug works the same on Docker Compose,
+      Swarm, Kubernetes and OpenShift, and needs no kubeconfig on a developer's machine.
       <a routerLink="/comparison">Side by side, including where they are ahead</a>.
     </p>
 

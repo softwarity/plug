@@ -21,6 +21,12 @@ export const routes: Routes = [
     loadComponent: () => import('./pages/getting-started.component').then((m) => m.GettingStartedComponent),
   },
   {
+    path: 'install',
+    title: 'plug - Install',
+    data: { description: 'Install the plug agent on Docker Compose, Docker Swarm, Kubernetes or OpenShift, and the CLI on Linux, macOS or Windows from that agent.' },
+    loadComponent: () => import('./pages/install.component').then((m) => m.InstallComponent),
+  },
+  {
     path: 'use-cases',
     title: 'plug - Use cases',
     data: { description: 'Scenarios where plug fits: debugging against a real cluster, a front end on the laptop, QA trying a branch before its pull request, two developers or AI agents on one feature.' },

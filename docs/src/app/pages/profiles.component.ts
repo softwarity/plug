@@ -136,6 +136,30 @@ plug versions        # launcher + every cached cluster version</app-code>
       already on the newest release, plug says so immediately instead of rolling the workload to
       find out.
     </p>
+
+    <h3>Being told a version is there</h3>
+    <p>
+      Once a day, in the background, a session checks whether the registry carries a release the
+      cluster's agent does not, and says so the next time you run plug. What happens then is the
+      profile's policy:
+    </p>
+    <app-code lang="bash">plug config -p neo                  # show that cluster's policy
+plug config -p neo update=notify    # default: tell you, and offer to apply
+plug config -p local update=auto    # apply it, on a cluster you govern
+plug config -p shared update=none   # never look, on one you do not</app-code>
+    <p>
+      The policy belongs to the <strong>profile</strong>, not to the machine, because applying an
+      update rolls the cluster's agent, which every session on that cluster shares: you may govern
+      your own cluster and have no say over a shared one. <code>notify</code> asks only on a real
+      terminal, defaults to no and gives up after a few seconds; a script or a CI job sees the
+      message and never a question. A running command keeps the version it started with; the new
+      one is used at the next launch.
+    </p>
+    <p>
+      A deployment on a moving tag (<code>latest</code>, a branch) is compared by digest, since its
+      name never changes. When the registry is out of reach from your machine (a proxy, a VPN that
+      splits routes), plug asks the cluster, which reaches it.
+    </p>
   `,
 })
 export class ProfilesComponent {}
