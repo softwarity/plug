@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.31.0
+
 ### The documentation at its own address
 
 `plug --help` and the agent's startup hint now link to
