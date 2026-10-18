@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.30.0
+
 ### A gateway sees what each plug run does
 
 The session a run presents now says whether it serves names (`-s`) or only
