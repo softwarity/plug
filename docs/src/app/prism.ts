@@ -10,10 +10,13 @@
 //   typescript - the default `lang` of <app-code>
 //   markup, kotlin, toml, makefile - the build-tool recipes (markup, for a
 //          pom.xml, is in the core)
+//   go, docker - the Integration page: embedding the agent, carrying the client
 //   text - not a grammar: an unknown language leaves the block unhighlighted,
 //          which is what the console transcripts want
 import Prism from 'prismjs';
 import 'prismjs/components/prism-bash';
+import 'prismjs/components/prism-docker';
+import 'prismjs/components/prism-go';
 import 'prismjs/components/prism-json';
 import 'prismjs/components/prism-kotlin';
 import 'prismjs/components/prism-makefile';

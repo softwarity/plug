@@ -62,6 +62,7 @@ export class AppComponent {
     { path: '/mcp', label: 'MCP for AI agents', icon: 'smart_toy' },
     { path: '/security', label: 'Security model', icon: 'shield' },
     { path: '/meerkat', label: 'Meerkat', icon: 'shield_person', logo: 'meerkat' },
+    { path: '/integration', label: 'Integration', icon: 'extension' },
     { path: '/troubleshooting', label: 'Troubleshooting', icon: 'troubleshoot' },
     { path: '/continuous-deployment', label: 'CD & GitOps', icon: 'autorenew' },
     { path: '/coverage', label: 'Coverage matrix', icon: 'table_chart' },

@@ -67,7 +67,8 @@ softwarity/plug:&lt;version&gt;-hosted    # for a gateway that embeds the agent<
       The hosted flavour carries key enrolment and leaves updates to the gateway, which owns the
       version it serves. Everything else - the <a routerLink="/cli">CLI</a>, the
       <a routerLink="/how-it-works">data path</a>, the <a routerLink="/security">security model</a>
-      - is the same plug, so nothing you learn here has to be relearned there.
+      - is the same plug, so nothing you learn here has to be relearned there. How a gateway
+      embeds the agent is on the <a routerLink="/integration">Integration</a> page.
     </p>
     <p>
       Installing it ends with the one step a gateway requires: the machine's own key. The install

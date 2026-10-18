@@ -91,6 +91,11 @@ export const routes: Routes = [
     loadComponent: () => import('./pages/meerkat.component').then((m) => m.MeerkatComponent),
   },
   {
+    path: 'integration',
+    title: 'plug - Integration',
+    loadComponent: () => import('./pages/integration.component').then((m) => m.IntegrationComponent),
+  },
+  {
     path: 'roadmap',
     title: 'plug - Roadmap',
     loadComponent: () => import('./pages/roadmap.component').then((m) => m.RoadmapComponent),
