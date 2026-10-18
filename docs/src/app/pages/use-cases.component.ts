@@ -249,11 +249,10 @@ plug -p demo -s orders:8080:3000 npm run start:dev</app-code>
     <h3 id="agents">Several AI agents, one feature</h3>
     <p>
       The same collaboration, with coding agents doing the writing: one on the back end, one on the
-      front end, each in its own worktree, on one machine or on several. plug does not make the
-      agents talk to each other; it gives them what Alice and Bob had, <strong>one cluster to meet
-      in</strong>, where each one's process is the real service for the others. The back-end agent
-      runs its server under plug, on a port plug picks so that two agents on one machine do not
-      collide:
+      front end, each in its own worktree, on one machine or on several. Each one
+      <strong>shares its work on the platform</strong> the moment it runs: its process is the real
+      service for the others, and for whoever opens the platform. The back-end agent runs its
+      server under plug, on a port plug picks so that two agents on one machine do not collide:
     </p>
     <app-code lang="bash">plug -p demo -s api:8080:PORT npm run start:dev -- --port=&#123;PORT&#125;</app-code>
     <p>and the front-end agent runs its dev server, which reaches that <code>api</code>:</p>
@@ -266,14 +265,13 @@ plug -p demo -s orders:8080:3000 npm run start:dev</app-code>
     </p>
     <ul>
       <li>
-        <strong>One name, one process.</strong> Two agents cannot both serve <code>api</code>: give
-        each the names that are its part of the feature, and let the others consume them.
+        <strong>Each agent its own services.</strong> A name is served by one process at a time:
+        give each agent the services that are its part of the feature, and the others use them.
       </li>
       <li>
-        Every agent's run is a session of its own. Through
-        <a routerLink="/use-cases" fragment="meerkat">Meerkat</a>, a session is attributed to the
-        key of the machine it ran on: several agents on one machine read as several sessions of
-        the same person.
+        With <a routerLink="/use-cases" fragment="meerkat">Meerkat</a>, each agent's run shows as
+        a session of its own, with the services it serves, under the name of the developer whose
+        machine runs it.
       </li>
     </ul>
     <p class="without">
