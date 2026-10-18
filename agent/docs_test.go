@@ -13,10 +13,10 @@ func TestDocURL(t *testing.T) {
 		anchor []string
 		want   string
 	}{
-		{"home", docHome, nil, "https://softwarity.github.io/plug/"},
-		{"a page", "kubernetes", nil, "https://softwarity.github.io/plug/#/kubernetes"},
-		{"a dashed page", "continuous-deployment", nil, "https://softwarity.github.io/plug/#/continuous-deployment"},
-		{"a section", "kubernetes", []string{"names"}, "https://softwarity.github.io/plug/#/kubernetes#names"},
+		{"home", docHome, nil, "https://plug.softwarity.dev/"},
+		{"a page", "kubernetes", nil, "https://plug.softwarity.dev/kubernetes/"},
+		{"a dashed page", "continuous-deployment", nil, "https://plug.softwarity.dev/continuous-deployment/"},
+		{"a section", "kubernetes", []string{"names"}, "https://plug.softwarity.dev/kubernetes/#names"},
 	}
 	for _, c := range cases {
 		if got := docURL(c.page, c.anchor...); got != c.want {
@@ -31,7 +31,7 @@ func TestNoHardCodedDocLinks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read package dir: %v", err)
 	}
-	const host = "softwarity.github.io"
+	const host = "plug.softwarity.dev"
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() || !strings.HasSuffix(name, ".go") || name == "docs.go" || name == "docs_test.go" {

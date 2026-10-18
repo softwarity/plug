@@ -2,6 +2,11 @@
 
 ## NEXT RELEASE
 
+### The documentation at its own address
+
+`plug --help` and the agent's startup hint now link to
+https://plug.softwarity.dev, the documentation's own domain.
+
 ---
 
 ## 2.30.0

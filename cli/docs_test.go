@@ -14,11 +14,11 @@ func TestDocURL(t *testing.T) {
 		anchor []string
 		want   string
 	}{
-		{"home", docHome, nil, "https://softwarity.github.io/plug/"},
-		{"a page", docKubernetes, nil, "https://softwarity.github.io/plug/#/kubernetes"},
-		{"the CD page", docContinuousDeployment, nil, "https://softwarity.github.io/plug/#/continuous-deployment"},
-		{"a section", docKubernetes, []string{"names"}, "https://softwarity.github.io/plug/#/kubernetes#names"},
-		{"empty anchor is no anchor", docSwarm, []string{""}, "https://softwarity.github.io/plug/#/swarm"},
+		{"home", docHome, nil, "https://plug.softwarity.dev/"},
+		{"a page", docKubernetes, nil, "https://plug.softwarity.dev/kubernetes/"},
+		{"the CD page", docContinuousDeployment, nil, "https://plug.softwarity.dev/continuous-deployment/"},
+		{"a section", docKubernetes, []string{"names"}, "https://plug.softwarity.dev/kubernetes/#names"},
+		{"empty anchor is no anchor", docSwarm, []string{""}, "https://plug.softwarity.dev/swarm/"},
 	}
 	for _, c := range cases {
 		if got := docURL(c.page, c.anchor...); got != c.want {
@@ -35,7 +35,7 @@ func TestNoHardCodedDocLinks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read package dir: %v", err)
 	}
-	const host = "softwarity.github.io"
+	const host = "plug.softwarity.dev"
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() || !strings.HasSuffix(name, ".go") || name == "docs.go" || name == "docs_test.go" {
@@ -73,10 +73,10 @@ func TestDocPagesAreRealRoutes(t *testing.T) {
 	}
 }
 
-// The site routes on the hash (app.config.ts: withHashLocation), so an address
-// without "#/" is not one it serves - GitHub Pages 404s, the SPA fallback boots,
-// and the router lands on the home page because there is no fragment to read.
-// Silent, and wrong for every link in every message.
+// The link's shape must follow the site's routing: on the hash
+// (app.config.ts: withHashLocation) a page is only reached through "#/"; on the
+// path, "#/" is the old form main.ts rewrites for links already printed, not
+// one to keep printing.
 func TestDocURLMatchesHowTheSiteRoutes(t *testing.T) {
 	cfg := filepath.Join("..", "docs", "src", "app", "app.config.ts")
 	b, err := os.ReadFile(cfg)

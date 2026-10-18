@@ -1,7 +1,7 @@
 # Releasing plug
 
 Notes for whoever cuts a release. The user-facing documentation is the
-[site](https://softwarity.github.io/plug/); this file is the part that only a
+[site](https://plug.softwarity.dev/); this file is the part that only a
 maintainer needs, and that would otherwise live in somebody's memory.
 
 ## Cutting a release: approve the green run

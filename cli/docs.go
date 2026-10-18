@@ -7,9 +7,9 @@ import "strings"
 // builds its link from here, and docs_test.go refuses a hard-coded one anywhere
 // else in the package.
 //
-// The trailing slash belongs to the base: the site is published under a path
-// (/plug/), not at the root of its host.
-const docsBase = "https://softwarity.github.io/plug/"
+// The trailing slash belongs to the base: the site is published at the root of
+// its own domain.
+const docsBase = "https://plug.softwarity.dev/"
 
 // The pages, named after what the reader is looking for rather than after the
 // component that happens to render them today. Values are the router paths in
@@ -32,21 +32,16 @@ const (
 
 // docURL renders the link to a page, optionally to a section within it.
 //
-// Deep links work because the deploy copies index.html to 404.html — Pages has
-// no file at /plug/kubernetes and would otherwise serve its own 404. If that
-// step ever disappears, every link built here silently stops resolving, which
-// is why it is called out in .github/workflows/deploy-doc.yml.
+// Every page is rendered at build time as <page>/index.html, so the address
+// that answers directly is /kubernetes/: without the slash, Pages answers with
+// a redirect to it. The slash also makes the link the page's canonical URL.
 func docURL(page string, anchor ...string) string {
 	var b strings.Builder
 	b.WriteString(docsBase)
 	if page != "" {
-		// The site routes on the HASH (provideRouter(..., withHashLocation())),
-		// so /plug/kubernetes is not an address it serves: it 404s, and the SPA
-		// fallback lands the reader on the home page instead of the section.
-		// The address that resolves is /plug/#/kubernetes.
-		b.WriteString("#/")
+		b.WriteString(page)
+		b.WriteString("/")
 	}
-	b.WriteString(page)
 	if len(anchor) > 0 && anchor[0] != "" {
 		b.WriteString("#")
 		b.WriteString(anchor[0])
