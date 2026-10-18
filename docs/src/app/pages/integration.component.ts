@@ -65,12 +65,6 @@ const pin = `v=<version>
 commit=$(git ls-remote https://github.com/softwarity/plug.git "refs/tags/v$v^{}" "refs/tags/v$v" | head -1 | cut -f1)
 go get "github.com/softwarity/plug/agent@$commit"`;
 
-const podIP = `env:
-  - name: PLUG_POD_IP
-    valueFrom:
-      fieldRef:
-        fieldPath: status.podIP`;
-
 const control = `// The page that lists live sessions opens on this, then follows the events.
 open := ctl.Sessions()
 
@@ -194,7 +188,11 @@ ctl.CloseKey(fingerprint, "your key was removed from this gateway")`;
       its pod's address, so a served name points at the replica that holds the session and any
       replica can tell a live session from a dead one:
     </p>
-    <app-code lang="yaml">{{ podIP }}</app-code>
+    <app-code lang="yaml">env:
+  - name: PLUG_POD_IP
+    valueFrom:
+      fieldRef:
+        fieldPath: status.podIP</app-code>
     <p>
       Without it the agent works the address out from the route to the API server, and says so in
       its log when it cannot.
@@ -262,6 +260,5 @@ export class IntegrationComponent {
   protected readonly start = start;
   protected readonly dockerfile = dockerfile;
   protected readonly pin = pin;
-  protected readonly podIP = podIP;
   protected readonly control = control;
 }
