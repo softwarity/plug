@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://plug.softwarity.dev/sitemap.xml

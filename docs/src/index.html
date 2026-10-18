@@ -5,6 +5,10 @@
   <title>plug - your local process, inside the cluster · Documentation</title>
   <base href="/">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Only the site's own scripts run: none is inline, none comes from another
+       origin. Written here rather than generated (Angular's autoCsp), which the
+       build cannot combine with rendering the pages ahead of time. -->
+  <meta http-equiv="Content-Security-Policy" content="script-src 'self'; object-src 'none'; base-uri 'self';">
   <meta name="description" content="plug - run a local process as if it were inside your Docker Swarm cluster: cluster DNS and services reachable, zero app config. Documentation.">
 
   <!-- Open Graph / Facebook / LinkedIn. The image is the static card every

@@ -1,7 +1,9 @@
-import { Component, CUSTOM_ELEMENTS_SCHEMA, ElementRef, inject, viewChild } from '@angular/core';
+import { Component, CUSTOM_ELEMENTS_SCHEMA, ElementRef, inject, PLATFORM_ID, viewChild } from '@angular/core';
+import { isPlatformBrowser } from '@angular/common';
 import { NavigationEnd, Router, RouterOutlet, RouterLink, RouterLinkActive } from '@angular/router';
 import { filter } from 'rxjs/operators';
 import { MatIconModule, MatIconRegistry } from '@angular/material/icon';
+import { PageMeta } from './page-meta';
 
 interface DocLink {
   path: string;
@@ -30,6 +32,10 @@ export class AppComponent {
     const router = inject(Router);
     // Use Material Symbols (loaded in index.html) as the default glyph set for every <mat-icon>.
     iconRegistry.setDefaultFontSetClass('material-symbols-outlined');
+    inject(PageMeta).start();
+    // Focus and scrolling belong to a reader's browser, not to the build that
+    // renders the pages ahead of time.
+    if (!isPlatformBrowser(inject(PLATFORM_ID))) return;
 
     // Move focus into the page after every navigation, and scroll it to the top.
     //

@@ -18,7 +18,7 @@
             "polyfills": [],
             "tsConfig": "tsconfig.app.json",
             "inlineStyleLanguage": "scss",
-            "assets": ["src/assets"],
+            "assets": ["src/assets", { "glob": "*", "input": "src/root", "output": "/" }],
             "styles": ["src/styles.scss"],
             "scripts": [],
             "allowedCommonJsDependencies": [
@@ -28,9 +28,8 @@
               "prismjs/components/prism-typescript",
               "prismjs/components/prism-yaml"
             ],
-            "security": {
-              "autoCsp": true
-            }
+            "server": "src/main.server.ts",
+            "outputMode": "static"
           },
           "configurations": {
             "production": {
@@ -41,7 +40,12 @@
                   "maximumError": "1.5mb"
                 }
               ],
-              "outputHashing": "all"
+              "outputHashing": "all",
+              "optimization": {
+                "scripts": true,
+                "styles": { "minify": true, "inlineCritical": false },
+                "fonts": true
+              }
             },
             "development": {
               "optimization": false,

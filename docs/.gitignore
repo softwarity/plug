@@ -7,6 +7,8 @@
 /src/assets/plug-stack.yml
 /src/assets/plug-k8s.yaml
 /src/assets/plug-service.yml
+# generated at build by scripts/gen-sitemap.mjs (the pages of app.routes.ts)
+/src/root/sitemap.xml
 *.log
 .DS_Store
 /.frames
