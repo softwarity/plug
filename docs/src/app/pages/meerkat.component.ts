@@ -27,26 +27,28 @@ import { CodeComponent } from '../code/code.component';
       That changes what the cluster can tell you. A plugged service is already a shared state:
       whoever enters the cluster uses the services as they currently are, and someone's laptop may
       well be answering for one of them. Meerkat does not create that situation - it makes it
-      <strong>visible and attributed</strong>: which service is plugged, by whom, since when. A bug
-      report can then be stamped with the exact composition of the cluster at the moment of the
-      test, rather than with a guess.
+      <strong>visible and attributed</strong>: which service is plugged, and by whom. Everyone
+      signing in to the application is told before it opens, and a strip says it again on every
+      page, live. A bug report can then say which code answered, rather than guess.
     </p>
 
-    <h3>Where plugging is allowed at all</h3>
+    <h3>Who may plug at all</h3>
     <p>
-      Consumption of that state is indiscriminate - there is no role for the reader, because
-      everyone reads the same cluster. The control is on its <strong>production</strong>, at two
-      levels:
+      Consumption of that state is indiscriminate: there is no role for the reader, because
+      everyone reads the same cluster. The control is on who may <strong>produce</strong> it, and
+      the gateway decides it the same way on every installation, a production one included:
     </p>
     <ul>
       <li>
-        <strong>Per environment.</strong> The gateway exposes the tunnel endpoint, or it does not:
-        yes on dev, no on production. The prohibition is an <em>absence</em>, which is the strongest
-        form it can take - nothing to bypass, nothing to audit.
+        <strong>Per installation, two switches, two owners.</strong> The application's
+        administrator turns on developer mode; the infrastructure administrator opens the developer
+        tunnel, which ships closed. The tunnel runs only when both are on, and while it is closed a
+        developer is not even offered a key to deposit.
       </li>
       <li>
         <strong>Per person.</strong> The <code>dev</code> ability is what lets someone deposit a key
-        and plug at all.
+        and plug at all. Removing the key, the ability or either switch closes the door at the next
+        connection: nothing was issued that would outlive it.
       </li>
     </ul>
     <p>

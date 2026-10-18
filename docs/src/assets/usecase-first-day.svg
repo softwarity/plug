@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="900" height="360" viewBox="0 0 900 360" xmlns="http://www.w3.org/2000/svg" role="img" font-family="-apple-system, Segoe UI, Roboto, sans-serif">
+  <title>A first morning with plug, on a cluster that admits its members by approval</title>
+  <desc>Three steps. At 9:00 you install plug from the cluster's agent, and the installer registers your request and prints the accept command to hand a member. At 9:02 the tech lead runs that accept command. At 9:05 you clone the service and run it with plug: your local orders talks through the tunnel to the team's cluster, users, payments, postgres and kafka included.</desc>
+  <defs>
+    <marker id="fd-p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#a371f7" /></marker>
+  </defs>
+  <rect x="2" y="2" width="896" height="356" rx="16" fill="#0d1117" stroke="#30363d" stroke-width="1.5" />
+
+  <!-- Step 1: you install. -->
+  <circle cx="44" cy="40" r="12" fill="#161b22" stroke="#a371f7" />
+  <text x="44" y="44.5" text-anchor="middle" font-size="12" fill="#a371f7" font-weight="700">1</text>
+  <text x="64" y="44.5" font-size="13" fill="#e6edf3" font-weight="600">9:00 · you install plug</text>
+  <rect x="24" y="62" width="268" height="238" rx="12" fill="#161b22" stroke="#30363d" />
+  <rect x="36" y="74" width="244" height="160" rx="8" fill="#0d1117" stroke="#30363d" />
+  <g font-family="ui-monospace, Menlo, monospace" font-size="9.5">
+    <text x="46" y="94" fill="#e6edf3">$ ssh … get@10.0.4.20 \</text>
+    <text x="46" y="108" fill="#e6edf3">    install demo | sh</text>
+    <text x="46" y="128" fill="#8b949e">plug: demo admits its members</text>
+    <text x="46" y="142" fill="#8b949e">  by approval. Your request is</text>
+    <text x="46" y="156" fill="#8b949e">  registered. Ask a member to run:</text>
+    <text x="46" y="174" fill="#3fb950">  plug -p demo accept 9kcQ2m7xT4bW</text>
+    <text x="46" y="194" fill="#8b949e">  Members: alice, bob</text>
+  </g>
+  <text x="158" y="258" text-anchor="middle" font-size="11" fill="#c9d1d9">one line, straight from the cluster:</text>
+  <text x="158" y="274" text-anchor="middle" font-size="11" fill="#c9d1d9">no package, no account, no key to ask for</text>
+
+  <path d="M296 180 H322" stroke="#a371f7" stroke-width="1.6" fill="none" marker-end="url(#fd-p)" />
+
+  <!-- Step 2: a member accepts. -->
+  <circle cx="338" cy="40" r="12" fill="#161b22" stroke="#a371f7" />
+  <text x="338" y="44.5" text-anchor="middle" font-size="12" fill="#a371f7" font-weight="700">2</text>
+  <text x="358" y="44.5" font-size="13" fill="#e6edf3" font-weight="600">9:02 · the tech lead lets you in</text>
+  <rect x="326" y="62" width="248" height="238" rx="12" fill="#161b22" stroke="#30363d" />
+  <rect x="338" y="74" width="224" height="60" rx="8" fill="#0d1117" stroke="#30363d" />
+  <text x="348" y="108" font-family="ui-monospace, Menlo, monospace" font-size="9.5" fill="#e6edf3">$ plug -p demo accept 9kcQ2m7xT4bW</text>
+  <text x="450" y="176" text-anchor="middle" font-size="11" fill="#c9d1d9">from their own machine,</text>
+  <text x="450" y="192" text-anchor="middle" font-size="11" fill="#c9d1d9">wherever they are</text>
+  <text x="450" y="226" text-anchor="middle" font-size="11" fill="#8b949e">12 characters of your key's fingerprint:</text>
+  <text x="450" y="242" text-anchor="middle" font-size="11" fill="#8b949e">too many for another key to forge</text>
+
+  <path d="M578 180 H604" stroke="#a371f7" stroke-width="1.6" fill="none" marker-end="url(#fd-p)" />
+
+  <!-- Step 3: you work against the team's cluster. -->
+  <circle cx="626" cy="40" r="12" fill="#161b22" stroke="#a371f7" />
+  <text x="626" y="44.5" text-anchor="middle" font-size="12" fill="#a371f7" font-weight="700">3</text>
+  <text x="646" y="44.5" font-size="13" fill="#e6edf3" font-weight="600">9:05 · you work</text>
+  <rect x="608" y="62" width="268" height="238" rx="12" fill="#161b22" stroke="#30363d" />
+  <rect x="620" y="74" width="244" height="64" rx="8" fill="#0d1117" stroke="#30363d" />
+  <g font-family="ui-monospace, Menlo, monospace" font-size="9.5" fill="#e6edf3">
+    <text x="630" y="94">$ git clone …/orders.git</text>
+    <text x="630" y="110">$ plug -p demo -s orders:8080:3000 \</text>
+    <text x="630" y="124">    npm run start:dev</text>
+  </g>
+  <rect x="620" y="156" width="96" height="58" rx="8" fill="#21262d" stroke="#30363d" />
+  <text x="668" y="180" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#e6edf3" font-weight="600">orders</text>
+  <text x="668" y="198" text-anchor="middle" font-size="9" fill="#8b949e">your laptop</text>
+  <path d="M716 185 H760" stroke="#a371f7" stroke-width="1.6" stroke-dasharray="5 3" fill="none" marker-start="url(#fd-p)" marker-end="url(#fd-p)" />
+  <rect x="764" y="150" width="100" height="134" rx="8" fill="#0e141b" stroke="#30363d" />
+  <text x="814" y="166" text-anchor="middle" font-size="8.5" letter-spacing="1.2" fill="#8b949e" font-weight="700">THE CLUSTER</text>
+  <g font-family="ui-monospace, Menlo, monospace" font-size="10" fill="#e6edf3" text-anchor="middle">
+    <text x="814" y="188">users</text>
+    <text x="814" y="208">payments</text>
+    <text x="814" y="228">postgres</text>
+    <text x="814" y="248">kafka</text>
+    <text x="814" y="270" font-size="8.5" fill="#8b949e">…</text>
+  </g>
+  <text x="684" y="262" text-anchor="middle" font-size="10" fill="#8b949e">the team's services,</text>
+  <text x="684" y="276" text-anchor="middle" font-size="10" fill="#8b949e">this morning's data</text>
+
+  <text x="450" y="334" text-anchor="middle" font-size="12" fill="#c9d1d9">No cluster to rebuild on the laptop, no seed data to keep alive: five minutes from the address to the first request.</text>
+</svg>

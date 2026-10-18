@@ -17,6 +17,11 @@ export const routes: Routes = [
     loadComponent: () => import('./pages/getting-started.component').then((m) => m.GettingStartedComponent),
   },
   {
+    path: 'use-cases',
+    title: 'plug - Use cases',
+    loadComponent: () => import('./pages/use-cases.component').then((m) => m.UseCasesComponent),
+  },
+  {
     path: 'cli',
     title: 'plug - CLI reference',
     loadComponent: () => import('./pages/cli.component').then((m) => m.CliComponent),

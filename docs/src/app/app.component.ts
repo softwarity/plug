@@ -51,6 +51,7 @@ export class AppComponent {
     { path: '/', label: 'About', icon: 'sync_alt' },
     { path: '/comparison', label: 'Compared to others', icon: 'compare_arrows' },
     { path: '/getting-started', label: 'Getting started', icon: 'rocket_launch' },
+    { path: '/use-cases', label: 'Use cases', icon: 'lightbulb' },
     { path: '/cli', label: 'CLI reference', icon: 'terminal' },
     { path: '/build-tools', label: 'From your build tool', icon: 'integration_instructions' },
     { path: '/how-it-works', label: 'How it works', icon: 'account_tree' },

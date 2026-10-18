@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="900" height="420" viewBox="0 0 900 420" xmlns="http://www.w3.org/2000/svg" role="img" font-family="-apple-system, Segoe UI, Roboto, sans-serif">
+  <title>Debugging orders in place: the cluster calls your machine, your machine calls the cluster</title>
+  <desc>Inside the cluster, the deployed orders is parked for the session. web still calls orders by its name; the plug agent carries that call through the SSH tunnel to your machine, where orders runs under your debugger, with the environment and secrets of the deployed orders and its volume mounted. Your orders calls payments and postgres by their names, through the agent.</desc>
+  <defs>
+    <marker id="to-g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#3fb950" /></marker>
+    <marker id="to-b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#58a6ff" /></marker>
+  </defs>
+  <rect x="2" y="2" width="896" height="416" rx="16" fill="#0d1117" stroke="#30363d" stroke-width="1.5" />
+
+  <!-- The cluster. -->
+  <rect x="24" y="30" width="540" height="320" rx="12" fill="#0e141b" stroke="#30363d" />
+  <text x="46" y="58" font-size="12" letter-spacing="2" fill="#8b949e" font-weight="700">THE CLUSTER</text>
+
+  <rect x="56" y="86" width="124" height="46" rx="8" fill="#21262d" stroke="#30363d" />
+  <text x="118" y="106" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#e6edf3" font-weight="600">web</text>
+  <text x="118" y="122" text-anchor="middle" font-size="8.5" fill="#8b949e">calls orders:8080</text>
+
+  <g opacity="0.55">
+    <rect x="56" y="196" width="124" height="46" rx="8" fill="#161b22" stroke="#30363d" stroke-dasharray="4 3" />
+    <text x="118" y="216" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#8b949e" font-weight="600">orders</text>
+    <text x="118" y="232" text-anchor="middle" font-size="8.5" fill="#6e7681">deployed · restored on exit</text>
+  </g>
+  <rect x="134" y="188" width="42" height="15" rx="7.5" fill="#0d1117" stroke="#d29922" stroke-width="0.8" />
+  <text x="155" y="198.5" text-anchor="middle" font-size="8.5" fill="#d29922">parked</text>
+
+  <rect x="400" y="120" width="130" height="110" rx="8" fill="#161b22" stroke="#a371f7" stroke-width="1.4" />
+  <text x="465" y="168" text-anchor="middle" font-size="13" fill="#e6edf3" font-weight="600">plug</text>
+  <text x="465" y="186" text-anchor="middle" font-size="11" fill="#8b949e">agent</text>
+
+  <rect x="214" y="282" width="124" height="44" rx="8" fill="#21262d" stroke="#30363d" />
+  <text x="276" y="309" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#e6edf3" font-weight="600">payments</text>
+  <ellipse cx="436" cy="286" rx="40" ry="9" fill="#161b22" stroke="#30363d" />
+  <path d="M396 286 V320 a40 9 0 0 0 80 0 V286" fill="#161b22" stroke="#30363d" />
+  <ellipse cx="436" cy="286" rx="40" ry="9" fill="#161b22" stroke="#30363d" />
+  <text x="436" y="312" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#e6edf3" font-weight="600">postgres</text>
+
+  <!-- web -> the name orders -> the agent. -->
+  <path d="M180 109 C280 109 320 150 396 156" stroke="#3fb950" stroke-width="1.8" fill="none" marker-end="url(#to-g)" />
+  <text x="300" y="104" text-anchor="middle" font-size="9.5" fill="#3fb950">orders now answers here</text>
+  <!-- your orders -> payments and postgres, through the agent. -->
+  <path d="M440 232 C420 262 340 262 300 278" stroke="#58a6ff" stroke-width="1.6" fill="none" marker-end="url(#to-b)" />
+  <path d="M470 232 C470 252 448 262 440 272" stroke="#58a6ff" stroke-width="1.6" fill="none" marker-end="url(#to-b)" />
+
+  <!-- The tunnel. -->
+  <rect x="530" y="160" width="132" height="34" rx="6" fill="#0d1117" stroke="#a371f7" stroke-width="1.1" stroke-dasharray="6 4" />
+  <text x="596" y="152" text-anchor="middle" font-size="9.5" fill="#a371f7">SSH tunnel</text>
+  <path d="M534 171 H656" stroke="#3fb950" stroke-width="1.8" fill="none" marker-end="url(#to-g)" />
+  <path d="M656 184 H534" stroke="#58a6ff" stroke-width="1.6" fill="none" marker-end="url(#to-b)" />
+
+  <!-- Your machine. -->
+  <rect x="662" y="30" width="214" height="320" rx="12" fill="#161b22" stroke="#30363d" />
+  <text x="680" y="58" font-size="11" letter-spacing="1.5" fill="#8b949e" font-weight="700">YOUR MACHINE</text>
+  <rect x="680" y="76" width="178" height="30" rx="6" fill="#0d1117" stroke="#30363d" />
+  <circle cx="696" cy="91" r="5" fill="#f85149" />
+  <text x="708" y="95" font-size="10" fill="#c9d1d9">IDE · breakpoint hit, line 42</text>
+  <rect x="680" y="126" width="178" height="96" rx="8" fill="#21262d" stroke="#30363d" />
+  <text x="769" y="160" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="15" fill="#e6edf3" font-weight="600">orders</text>
+  <text x="769" y="180" text-anchor="middle" font-size="10" fill="#8b949e">your branch, npm run start:debug</text>
+  <text x="769" y="206" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="9" fill="#3fb950">plug -s orders:8080:3000</text>
+  <rect x="680" y="240" width="178" height="26" rx="13" fill="#0d1117" stroke="#a371f7" stroke-width="0.9" />
+  <text x="769" y="257" text-anchor="middle" font-size="10" fill="#c9d1d9">its environment, secrets included</text>
+  <rect x="680" y="274" width="178" height="26" rx="13" fill="#0d1117" stroke="#a371f7" stroke-width="0.9" />
+  <text x="769" y="291" text-anchor="middle" font-size="10" fill="#c9d1d9">its volume, mounted read-write</text>
+  <text x="769" y="326" text-anchor="middle" font-size="9.5" fill="#8b949e">Ctrl-C: orders is deployed again</text>
+
+  <!-- Legend. -->
+  <path d="M40 380 H70" stroke="#3fb950" stroke-width="1.8" marker-end="url(#to-g)" />
+  <text x="78" y="384" font-size="11" fill="#c9d1d9">whatever calls orders in the cluster lands on your process</text>
+  <path d="M480 380 H510" stroke="#58a6ff" stroke-width="1.6" marker-end="url(#to-b)" />
+  <text x="518" y="384" font-size="11" fill="#c9d1d9">your process calls the others by their names</text>
+</svg>
