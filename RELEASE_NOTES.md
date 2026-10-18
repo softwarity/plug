@@ -12,6 +12,12 @@ https://plug.softwarity.dev, the documentation's own domain.
 A key that starts with `+` or `/`, as one in thirty-two do, is accepted or
 revoked from Git Bash as from any other shell, copied as plug printed it.
 
+### A cut session is noticed at once
+
+When the agent ends a connection, a flow opening at that very moment now
+fails over to a new connection immediately, and learns why the session was
+cut, instead of waiting out its ten-second open timeout.
+
 ---
 
 ## 2.30.0

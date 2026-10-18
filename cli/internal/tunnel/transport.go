@@ -569,6 +569,36 @@ func (t *Transport) DialContext(ctx context.Context, network, addr string) (net.
 	return channelDial(ctx, cl2, addr)
 }
 
+// errClientGone: the connection a channel open was waiting on has ended.
+var errClientGone = errors.New("ssh: connection closed while opening a channel")
+
+// gone holds, per client, a channel closed once its connection has ended.
+var gone sync.Map // *ssh.Client -> chan struct{}
+
+// goneOf is closed once cl's connection has ended: one watcher per client,
+// shared by every dial on it, and forgotten with the client.
+//
+// x/crypto's mux fails the opens in flight when the connection ends, but an
+// open that registers its channel just after that sweep, and writes before
+// the socket is closed, waits for an answer that never comes. The agent
+// cutting a session lands a flow's open in that window often enough, and the
+// open then sat out the caller's whole timeout instead of reconnecting and
+// learning why it was cut.
+func goneOf(cl *ssh.Client) <-chan struct{} {
+	if ch, ok := gone.Load(cl); ok {
+		return ch.(chan struct{})
+	}
+	ch, loaded := gone.LoadOrStore(cl, make(chan struct{}))
+	if !loaded {
+		go func() {
+			_ = cl.Wait()
+			close(ch.(chan struct{}))
+			gone.Delete(cl)
+		}()
+	}
+	return ch.(chan struct{})
+}
+
 // channelDial opens the direct-tcpip channel, with ctx bounding the open so a
 // half-dead tunnel fails fast instead of blocking on kernel TCP timeouts.
 func channelDial(ctx context.Context, cl *ssh.Client, addr string) (net.Conn, error) {
@@ -593,6 +623,14 @@ func channelDial(ctx context.Context, cl *ssh.Client, addr string) (net.Conn, er
 			}
 		}()
 		return nil, ctx.Err()
+	case <-goneOf(cl):
+		// The open may still be answered by the sweep: reap it either way.
+		go func() {
+			if r := <-ch; r.conn != nil {
+				r.conn.Close()
+			}
+		}()
+		return nil, errClientGone
 	case r := <-ch:
 		return r.conn, r.err
 	}

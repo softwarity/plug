@@ -284,3 +284,32 @@ func TestAnAgentWithoutSessionsLetsTheRunIn(t *testing.T) {
 		t.Fatal("an agent without sessions read as having closed one")
 	}
 }
+
+// A dial must not outlive the connection it waits on: once the agent cuts it,
+// goneOf says so, and an open caught in x/crypto's window gives up then rather
+// than at the caller's timeout.
+func TestAnOpenLearnsItsConnectionEnded(t *testing.T) {
+	a := newSessionAgent(t)
+	tr := dialRun(t, a, "0123456789abcdef")
+	cl := tr.current()
+	if cl == nil {
+		t.Fatal("no client after the dial")
+	}
+	select {
+	case <-goneOf(cl):
+		t.Fatal("a live connection read as ended")
+	default:
+	}
+	a.mu.Lock()
+	live := a.live
+	a.live = nil
+	a.mu.Unlock()
+	for _, sc := range live {
+		sc.Close()
+	}
+	select {
+	case <-goneOf(cl):
+	case <-time.After(5 * time.Second):
+		t.Fatal("the connection ended and goneOf never said so")
+	}
+}
