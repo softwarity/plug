@@ -121,7 +121,7 @@ import { MatIconModule } from '@angular/material/icon';
 
         <picture> is the way in. The deploy pipeline already renders a still
         frame of the same diagram (deploy-doc.yml: .frames/f180.png ->
-        media/about-diagram-hero.png, served at /plug/media/), so a reader who
+        media/about-diagram-hero.png, served at /media/), so a reader who
         asked for less motion gets that one image and never downloads the
         animated file. width/height are the SVG's own 900x511, so the caption
         and everything below stop jumping while it loads.

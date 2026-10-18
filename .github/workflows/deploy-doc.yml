@@ -76,17 +76,20 @@ jobs:
           npm run lint
           npm test
 
+      # The site is served at the root of its own domain (plug.softwarity.dev,
+      # the repository's Pages custom domain), so its base is /. Built for
+      # /plug/, the page loaded and every script under it answered 404.
       - name: Build doc-site for GitHub Pages
         working-directory: docs
-        run: npm run build -- --base-href /plug/
+        run: npm run build -- --base-href /
 
       # A safety net, and nothing more. This site is routed on the HASH
       # (app.config.ts: withHashLocation), so its real addresses are
-      # /plug/#/kubernetes, and those have always worked: Pages serves index.html
-      # at /plug/ and the router reads the fragment. There was never a broken
+      # /#/kubernetes, and those have always worked: Pages serves index.html
+      # at / and the router reads the fragment. There was never a broken
       # deep link to fix - that reading was mine, from testing the wrong URL.
       #
-      # What this does cover is someone arriving at /plug/kubernetes: a
+      # What this does cover is someone arriving at /kubernetes: a
       # hand-typed address, or a link written by whoever assumed path routing
       # (which is how this step came to exist). Without it Pages returns its own
       # 404; with it the app boots and the reader lands on the home page. Better,
@@ -114,7 +117,7 @@ jobs:
             'docs/scripts/render-diagram.mjs', '.github/workflows/deploy-doc.yml') }}
 
       # The social media kit (mp4 / gif / hero png) is DERIVED from the animated
-      # SVG — rendered here and served by Pages under /plug/media/, never
+      # SVG — rendered here and served by Pages under /media/, never
       # committed (binaries would bloat the git history on every re-render).
       # Playwright seeks the SMIL loop frame by frame; ffmpeg assembles (not on
       # the runner image any more — installed here).

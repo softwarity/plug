@@ -1,7 +1,7 @@
 // Renders the animated About diagram (SMIL SVG) into video-ready frames, by
 // SEEKING the animation frame by frame (svg.setCurrentTime) - deterministic,
 // not a screen capture. The deploy-doc workflow runs it on every Pages deploy
-// and publishes the results under /plug/media/ (mp4, gif, hero png) - the
+// and publishes the results under /media/ (mp4, gif, hero png) - the
 // media are never committed. To run it locally without installing anything,
 // use the official Playwright image, with ffmpeg in a second throwaway
 // container:
