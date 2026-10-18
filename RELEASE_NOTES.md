@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.28.0
+
 ### The installer checks the release signature before granting privilege
 
 `ssh get@<host> install | sh`, and its Git Bash twin on Windows, now check
