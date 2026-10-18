@@ -55,6 +55,10 @@ type config struct {
 	// Windows recorded for that client's marker. Empty where the account reads
 	// its own key, or where its owner could not be told.
 	keyOwner string
+	// session is the run this process is, presented on every connection it
+	// opens (session_end.go). Zero outside a run: the shared datapath daemon,
+	// the one-shot commands.
+	session tunnel.Session
 }
 
 // authKeys is what plug offers the agent, in order: this profile's personal key
@@ -327,7 +331,8 @@ func runCore(cfg config, cmdArgs []string) {
 	// exec'd into this process and is gone. Detached on purpose — the session
 	// never waits on it, and what it learns is for the NEXT launch.
 	go backgroundUpdateCheck(cfg)
-	os.Exit(coreRun(cfg, args))
+	cfg.session = newRunSession()
+	os.Exit(finishRun(cfg, coreRun(cfg, args)))
 }
 
 func coreMain() {

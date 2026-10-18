@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/softwarity/plug/cli/internal/tun"
 )
 
 // userPath is $PATH exactly as the human set it, captured before securePath
@@ -127,6 +129,17 @@ func runChildEnv(cmdArgs []string, env []string) int {
 		info("cannot start %q: %v", cmdArgs[0], err)
 		return 127
 	}
+	// The agent ending the session stops the command as a SIGTERM would
+	// (session_end.go).
+	exited, stop := make(chan struct{}), tun.StopRequested()
+	defer close(exited)
+	go func() {
+		select {
+		case <-stop:
+			tun.Terminate(child.Process)
+		case <-exited:
+		}
+	}()
 	go func() {
 		for s := range sigs {
 			// A terminal Ctrl-C is delivered by the kernel to the WHOLE

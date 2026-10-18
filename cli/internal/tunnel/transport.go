@@ -90,6 +90,13 @@ type Transport struct {
 	// refused is the agent's refusal of this machine's keys on a RE-connection
 	// (a member revoked, a key withdrawn), the *AuthFailure. See Refused.
 	refused atomic.Pointer[AuthFailure]
+
+	// session is the run this transport presents to the agent on every
+	// connection, closedBy the agent ending it, onClosed who to tell (under
+	// mu). See session.go.
+	session  Session
+	closedBy atomic.Pointer[ClosedError]
+	onClosed []func(error)
 }
 
 // Refused reports that the agent refused this machine's keys when the
@@ -101,6 +108,11 @@ type Transport struct {
 func (t *Transport) Refused() error {
 	if af := t.refused.Load(); af != nil {
 		return af
+	}
+	// The agent ending the connection on purpose (a key withdrawn, told before
+	// the refusal could be) is as final, and said in the agent's own words.
+	if ce := t.closedBy.Load(); ce != nil {
+		return ce
 	}
 	return nil
 }
@@ -122,10 +134,17 @@ func (t *Transport) Welcomed() bool {
 // verified on every later connect; pass "" to skip pinning. logf (may be nil)
 // receives reconnect/keepalive notices.
 func Dial(host, port, user string, keys [][]byte, knownHostsPath string, logf Logf) (*Transport, error) {
+	return DialSession(host, port, user, keys, knownHostsPath, logf, Session{})
+}
+
+// DialSession is Dial for a connection that belongs to a run: every connection
+// it makes, the first and each reconnect, presents s to the agent (session.go).
+func DialSession(host, port, user string, keys [][]byte, knownHostsPath string, logf Logf, s Session) (*Transport, error) {
 	t := &Transport{
 		host: host, port: port, user: user, keys: keys,
 		knownHosts: knownHostsPath, logf: logf,
-		done: make(chan struct{}),
+		done:    make(chan struct{}),
+		session: s,
 	}
 	if _, err := t.reconnectFrom(nil); err != nil {
 		return nil, err
@@ -159,6 +178,12 @@ func (t *Transport) note(format string, a ...any) {
 // package is involved - to ask its version and to fetch the core - and those
 // dials had the same hole. One bounded dial, used by all three.
 func DialSSH(addr string, cfg *ssh.ClientConfig, timeout time.Duration) (*ssh.Client, error) {
+	return dialSSHWith(addr, cfg, timeout, nil)
+}
+
+// dialSSHWith is DialSSH with the agent's global requests handed to handle
+// first (session.go); nil leaves them all to x/crypto.
+func dialSSHWith(addr string, cfg *ssh.ClientConfig, timeout time.Duration, handle func(*ssh.Request) bool) (*ssh.Client, error) {
 	conn, err := net.DialTimeout("tcp", addr, timeout)
 	if err != nil {
 		return nil, err
@@ -175,6 +200,9 @@ func DialSSH(addr string, cfg *ssh.ClientConfig, timeout time.Duration) (*ssh.Cl
 	if err := conn.SetDeadline(time.Time{}); err != nil {
 		_ = sc.Close()
 		return nil, err
+	}
+	if handle != nil {
+		reqs = filterRequests(reqs, handle)
 	}
 	return ssh.NewClient(sc, chans, reqs), nil
 }
@@ -207,12 +235,23 @@ func (t *Transport) dial() (*ssh.Client, error) {
 		HostKeyCallback: tofuHostKey(t.knownHosts, addr, t.note),
 		Timeout:         dialTimeout,
 	}
-	client, err := DialSSH(addr, cfg, dialTimeout)
+	client, err := dialSSHWith(addr, cfg, dialTimeout, t.serverRequest)
 	if err != nil {
 		if isAuthFailure(err) {
 			return nil, &AuthFailure{Addr: addr, Err: err, Offered: fingerprints(signers), Admission: adm.said()}
 		}
 		return nil, fmt.Errorf("ssh to %s: %w", addr, err)
+	}
+	if t.session.ID != "" {
+		closed, herr := hello(client, t.session, helloTimeout)
+		switch {
+		case closed != "":
+			client.Close()
+			return nil, &ClosedError{Addr: addr, Reason: closed}
+		case herr != nil:
+			client.Close()
+			return nil, fmt.Errorf("ssh to %s: %w", addr, herr)
+		}
 	}
 	if said := adm.said(); said != "" {
 		t.admission.Store(said)
@@ -361,6 +400,11 @@ func (t *Transport) reconnectCtx(ctx context.Context, stale *ssh.Client) (*ssh.C
 		t.mu.Unlock()
 		return nil, errClosed
 	}
+	// Ended by the agent: final, whoever asks (session.go).
+	if ce := t.closedBy.Load(); ce != nil {
+		t.mu.Unlock()
+		return nil, ce
+	}
 	if t.client != nil && t.client != stale {
 		cl := t.client
 		t.mu.Unlock()
@@ -387,9 +431,17 @@ func (t *Transport) reconnectCtx(ctx context.Context, stale *ssh.Client) (*ssh.C
 // result under the mutex and wake everyone waiting on it.
 func (t *Transport) runDial(a *dialAttempt, stale *ssh.Client) {
 	nc, err := t.dial()
+	var ce *ClosedError
+	if errors.As(err, &ce) {
+		// Refused as closed: the notice this connection missed. Recorded
+		// outside t.mu, which markClosed takes.
+		ce = t.markClosed(ce.Reason)
+		err = ce
+	}
 	t.mu.Lock()
 	t.dialing = nil
 	switch {
+	case ce != nil:
 	case err != nil:
 		// Refused, not unreachable: said once, and kept for whoever holds this
 		// transport. Retrying is harmless (it is how a key accepted again comes
@@ -475,6 +527,9 @@ func (t *Transport) DialContext(ctx context.Context, network, addr string) (net.
 	if network != "tcp" && network != "tcp4" && network != "tcp6" {
 		return nil, fmt.Errorf("tunnel: unsupported network %q", network)
 	}
+	if ce := t.closedBy.Load(); ce != nil {
+		return nil, ce
+	}
 	cl := t.current()
 	if cl == nil {
 		var err error
@@ -505,6 +560,9 @@ func (t *Transport) DialContext(ctx context.Context, network, addr string) (net.
 	if rerr != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
+		}
+		if ce := t.closedBy.Load(); ce != nil {
+			return nil, ce // the reason the connection went, not its symptom
 		}
 		return nil, err // surface the original open error
 	}
@@ -616,6 +674,9 @@ func (t *Transport) keepaliveOn(tick <-chan time.Time, ping func(*ssh.Client) bo
 			// outage. Then re-dial fresh.
 			t.dropDead(cl)
 			if _, rerr := t.reconnectFrom(nil); rerr != nil {
+				if t.SessionClosed() != nil {
+					return // ended by the agent: nothing left to keep alive
+				}
 				t.note("keepalive: agent unreachable (%v)", rerr)
 			}
 		}
@@ -689,6 +750,9 @@ func (t *Transport) ExecAll(cmd string) (string, error) {
 }
 
 func (t *Transport) execRaw(cmd string) (string, error) {
+	if ce := t.closedBy.Load(); ce != nil {
+		return "", ce
+	}
 	cl := t.current()
 	if cl == nil {
 		var err error
@@ -730,6 +794,9 @@ func (t *Transport) Close() error {
 	close(t.done)
 	t.mu.Unlock()
 	if cl != nil {
+		if t.session.ID != "" && t.closedBy.Load() == nil {
+			sayBye(cl)
+		}
 		return cl.Close()
 	}
 	return nil

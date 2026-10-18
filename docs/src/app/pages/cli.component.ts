@@ -23,6 +23,12 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
       Details in <a routerLink="/getting-started">Getting started</a>; mechanics in
       <a routerLink="/how-it-works">How it works</a>.
     </p>
+    <p>
+      plug exits with your command's status. One exception: when the cluster ends the session on
+      purpose (a gateway's administrator closing it, your key withdrawn, your membership revoked),
+      plug stops your command as Ctrl-C would, says who ended it and why, does not reconnect, and
+      exits with <code>77</code>.
+    </p>
 
     <h3>Commands</h3>
     <table>

@@ -90,7 +90,7 @@ import { CodeComponent } from '../code/code.component';
           <dt>Why</dt>
           <dd>
             Rights are given and withdrawn per person, and every session carries a name: which
-            service is plugged, by whom, since when.
+            service is plugged, and by whom.
           </dd>
           <dt>For</dt>
           <dd>A cluster several teams share, or where every session must be attributed.</dd>
@@ -180,7 +180,8 @@ plug pubkey -p my-app</app-code>
         takes the first 12 characters of the newcomer's fingerprint, too many to forge a second key
         that starts the same. <code>plug -p demo members</code> lists the members and revokes the
         ones picked (<code>plug -p demo revoke &lt;key&gt;</code> in a script). A revoked member's
-        open sessions end at once. The last member cannot be revoked: the next key would become the
+        open sessions end at once: their plug stops the command and says who revoked them, rather
+        than reconnecting into a refusal. The last member cannot be revoked: the next key would become the
         first.</li>
       <li><strong>Members are equal.</strong> Every member can accept and revoke. Telling who may
         invite from who may only use is a matter of identity, which is what hosted brings.</li>

@@ -22,6 +22,15 @@ func waitChild(child *exec.Cmd) (int, error) {
 	if err := child.Start(); err != nil {
 		return 127, err
 	}
+	exited, stop := make(chan struct{}), StopRequested()
+	defer close(exited)
+	go func() {
+		select {
+		case <-stop:
+			Terminate(child.Process)
+		case <-exited:
+		}
+	}()
 	go func() {
 		for s := range sigs {
 			// Ctrl-C (SIGINT) is group-delivered: the child already has it;

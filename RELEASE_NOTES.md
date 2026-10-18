@@ -2,6 +2,23 @@
 
 ## NEXT RELEASE
 
+### When the cluster ends your session, plug says who and why
+
+A session ended on purpose, a gateway's administrator closing it, your key
+withdrawn, or your membership revoked on an agent that admits by approval,
+now stops your command the way Ctrl-C does and ends on one line saying who
+ended it and why: `demo closed this session: revoked by alice`. plug does not
+reconnect into a refusal, exits with status 77 so a script can tell it from
+your command's own failure, and what the session had parked is back at once.
+
+### A gateway sees each plug run as one session, and can end it
+
+An agent embedded in a gateway now reports every run as one session, all its
+connections together: who, with which key, from where, with which plug
+version, since when, and how it ended. Each name it serves carries its
+session. The gateway lists the open sessions and ends one, or all of a key's,
+in words the developer reads (`Control`, `SessionHost`).
+
 ---
 
 ## 2.28.0

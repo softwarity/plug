@@ -95,12 +95,19 @@ func (s *sshServer) announce(fwd *forwardSet, who, command, reply string) {
 		}
 		name, ports := f[1], clusterPorts(f[2])
 		fwd.hold(name, ports)
+		sessionID := ""
+		if fwd.st != nil {
+			s.mu.Lock()
+			sessionID = fwd.st.session
+			s.mu.Unlock()
+		}
 		ev := NameEvent{
-			Name:   name,
-			Who:    who,
-			Ports:  ports,
-			Parked: containsWord(fields[1:], "parked"),
-			Since:  time.Now(),
+			Name:    name,
+			Session: sessionID,
+			Who:     who,
+			Ports:   ports,
+			Parked:  containsWord(fields[1:], "parked"),
+			Since:   time.Now(),
 		}
 		s.post(func() { s.host.Served(ev) })
 	case "unserve-name":

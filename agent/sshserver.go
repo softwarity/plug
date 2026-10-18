@@ -125,7 +125,19 @@ type sshServer struct {
 	// disconnect, which for a gateway restarting means waiting on someone who
 	// left a session open and went to lunch.
 	mu    sync.Mutex
-	conns map[*ssh.ServerConn]struct{}
+	conns map[*ssh.ServerConn]*connState
+
+	// The sessions those connections present, the ids closed recently, and
+	// whether the agent is stopping (a session it ends is not a client's
+	// doing). See sessions.go. Under mu.
+	sessions map[string]*session
+	tombs    map[string]tombstone
+	stopping bool
+	// linger is sessionLinger, shortened by the tests.
+	linger time.Duration
+	// sweep restores what closed sessions parked (sweepSerialised); nil in
+	// the tests, which have no orchestrator.
+	sweep func()
 
 	// Delivery of Served/Unserved to the Host: one goroutine, started on the
 	// first event, so callbacks keep their order and a slow Host backs up its
@@ -135,12 +147,12 @@ type sshServer struct {
 }
 
 // track registers a live connection, returning the function that forgets it.
-func (s *sshServer) track(c *ssh.ServerConn) func() {
+func (s *sshServer) track(c *ssh.ServerConn, st *connState) func() {
 	s.mu.Lock()
 	if s.conns == nil {
-		s.conns = map[*ssh.ServerConn]struct{}{}
+		s.conns = map[*ssh.ServerConn]*connState{}
 	}
-	s.conns[c] = struct{}{}
+	s.conns[c] = st
 	s.mu.Unlock()
 	return func() {
 		s.mu.Lock()
@@ -154,6 +166,7 @@ func (s *sshServer) track(c *ssh.ServerConn) func() {
 // no reason to leave.
 func (s *sshServer) CloseConnections() {
 	s.mu.Lock()
+	s.stopping = true
 	live := make([]*ssh.ServerConn, 0, len(s.conns))
 	for c := range s.conns {
 		live = append(live, c)
@@ -305,19 +318,15 @@ func (s *sshServer) admission(h *inviteHost, key ssh.PublicKey) func(ssh.ConnMet
 }
 
 // endSessionsOf closes every connection a key authenticated: a revoked member
-// stops at once, not at their next reconnect.
-func (s *sshServer) endSessionsOf(fp string) {
-	s.mu.Lock()
-	var gone []*ssh.ServerConn
-	for c := range s.conns {
-		if c.Permissions != nil && c.Permissions.Extensions["fp"] == fp {
-			gone = append(gone, c)
+// stops at once, not at their next reconnect, and is told why rather than left
+// to reconnect into a refusal (sessions.go).
+func (s *sshServer) endSessionsOf(fp, reason string) {
+	s.closeWhere(func(st *connState, sess *session) bool {
+		if sess != nil {
+			return sess.ev.Key == fp
 		}
-	}
-	s.mu.Unlock()
-	for _, c := range gone {
-		_ = c.Close()
-	}
+		return st != nil && st.key == fp
+	}, reason)
 }
 
 // Serve accepts until ln is closed, then waits for live connections to finish.
@@ -486,15 +495,44 @@ func (s *sshServer) handle(nc net.Conn, releaseSlot func()) {
 	// session, and a long download is exactly that.
 	_ = nc.SetDeadline(time.Time{})
 	defer conn.Close()
-	defer s.track(conn)()
+	from, _ := splitAddr(conn.RemoteAddr())
+	st := &connState{
+		key:  conn.Permissions.Extensions["fp"],
+		who:  conn.Permissions.Extensions["who"],
+		from: from,
+	}
+	defer s.track(conn, st)()
+	// Last of all, once the forwards are closed and the names withdrawn below:
+	// the session this connection was the last of ends, and when the host
+	// closed it, what it parked is restored now. Deferred first so it runs
+	// after those.
+	reqsDone := make(chan struct{})
+	defer func() {
+		// The goodbye travels as a global request, read on its own goroutine:
+		// a client that says it and closes at once must not race this teardown
+		// into reading the end as a drop. That goroutine ends once the
+		// connection's last request has been read.
+		select {
+		case <-reqsDone:
+		case <-time.After(time.Second):
+		}
+		s.leave(st)
+		s.mu.Lock()
+		closed := st.closed != ""
+		s.mu.Unlock()
+		if closed {
+			s.restoreAfterClose()
+		}
+	}()
 
 	user := conn.Permissions.Extensions["user"]
 	// A revoke ends the connections it can find, and this one could not be
 	// found until track above: a member revoked between its handshake and that
 	// line would keep a session the revoke meant to end. Asked again now that
 	// it is tracked, so a revoke either finds it or is seen here.
-	if ih, admits := s.host.(*inviteHost); admits && user == tunnelUser && !ih.isMember(conn.Permissions.Extensions["fp"]) {
-		s.note("ssh: %s was revoked while it connected - closed", conn.Permissions.Extensions["fp"])
+	if ih, admits := s.host.(*inviteHost); admits && user == tunnelUser && !ih.isMember(st.key) {
+		s.note("ssh: %s was revoked while it connected - closed", st.key)
+		s.tellClosed(conn, revokedReason(""))
 		return
 	}
 	// Who the Host says this key belongs to, empty when the key authenticates
@@ -512,14 +550,18 @@ func (s *sshServer) handle(nc net.Conn, releaseSlot func()) {
 	// closed when it ends, or a crashed session leaves a port bound and the next
 	// one cannot re-arm the name. sshd freed them by owning the process; here it
 	// is explicit.
-	fwd := &forwardSet{conn: conn, srv: s}
+	fwd := &forwardSet{conn: conn, srv: s, st: st}
 	defer fwd.closeAll()
 	// Same event, said to the Host: whatever this connection was serving, it is
 	// not serving it any more. Deferred beside closeAll because it is the same
 	// fact about the same failure modes.
 	defer s.withdrawAll(fwd)
 
-	go func() { defer s.absorb("global requests", nil)(); s.globalRequests(reqs, user, fwd) }()
+	go func() {
+		defer close(reqsDone)
+		defer s.absorb("global requests", nil)()
+		s.globalRequests(conn, st, reqs, user, fwd)
+	}()
 
 	// The anonymous account's two ceilings (see maxGetSessions): sessions open on this
 	// connection, and the agent-wide slot it takes with its first session and
@@ -618,10 +660,23 @@ func (s *sshServer) directTCPIP(nch ssh.NewChannel) {
 const dialBudget = 8 * time.Second
 
 // globalRequests handles what arrives outside any channel: the remote forwards
-// that `-s` is built on.
-func (s *sshServer) globalRequests(reqs <-chan *ssh.Request, user string, fwd *forwardSet) {
+// that `-s` is built on, and the session a connection presents (sessions.go).
+func (s *sshServer) globalRequests(conn *ssh.ServerConn, st *connState, reqs <-chan *ssh.Request, user string, fwd *forwardSet) {
 	for r := range reqs {
 		switch r.Type {
+		case sessionHelloRequest:
+			if user != tunnelUser {
+				_ = r.Reply(false, nil)
+				continue
+			}
+			s.hello(conn, st, r)
+		case sessionByeRequest:
+			s.mu.Lock()
+			st.bye = true
+			s.mu.Unlock()
+			if r.WantReply {
+				_ = r.Reply(true, nil)
+			}
 		case "tcpip-forward":
 			if user != tunnelUser {
 				if r.WantReply {
@@ -664,6 +719,7 @@ func (s *sshServer) globalRequests(reqs <-chan *ssh.Request, user string, fwd *f
 type forwardSet struct {
 	conn *ssh.ServerConn
 	srv  *sshServer
+	st   *connState // the session a name event carries
 
 	// The names this connection serves, so its teardown withdraws exactly
 	// those. A name outlives the session that served it in every failure mode
@@ -865,7 +921,7 @@ func (s *sshServer) runForced(ch ssh.Channel, user, who string, fwd *forwardSet,
 			}
 			sendExit(ch, 0)
 			if revoked != "" {
-				s.endSessionsOf(revoked)
+				s.endSessionsOf(revoked, revokedReason(who))
 			}
 			return
 		}
@@ -945,6 +1001,12 @@ func (s *sshServer) runForced(ch ssh.Channel, user, who string, fwd *forwardSet,
 		s.announce(fwd, who, original, tail.lastLine())
 	}
 	sendExit(ch, code)
+}
+
+// revokedReason is what a revoked member's plug prints: by whom, when the
+// revoke says.
+func revokedReason(by string) string {
+	return "your key is no longer a member: revoked by " + firstNonEmpty(by, "a member")
 }
 
 // splitAddr yields host and port, tolerating an address that carries neither.

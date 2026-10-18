@@ -244,6 +244,8 @@ func (e *Exposed) rearm(dead *ssh.Client) (net.Listener, *ssh.Client, error) {
 			err = lerr
 		} else if errors.Is(err, errClosed) {
 			return nil, nil, err // session ending
+		} else if ce := (*ClosedError)(nil); errors.As(err, &ce) {
+			return nil, nil, err // ended by the agent: never coming back
 		}
 		// else: transient dial failure (network still down) — keep trying.
 		if attempt%12 == 0 { // one note a minute, not one every 5s

@@ -65,7 +65,7 @@ func dialTunnel(cfg config) (*tunnel.Transport, error) {
 	if err != nil {
 		return nil, err
 	}
-	tr, err := tunnel.Dial(cfg.host, cfg.port, sshUser, keys, knownHosts, info)
+	tr, err := tunnel.DialSession(cfg.host, cfg.port, sshUser, keys, knownHosts, info, cfg.session)
 	// An agent that admits by approval refused the key built into plug: give
 	// the profile its own and present that one (adoptOwnKey). Once, and only
 	// where the profile is known.
@@ -73,10 +73,13 @@ func dialTunnel(cfg config) (*tunnel.Transport, error) {
 		if keys, err = cfg.authKeysErr(); err != nil {
 			return nil, err
 		}
-		tr, err = tunnel.Dial(cfg.host, cfg.port, sshUser, keys, knownHosts, info)
+		tr, err = tunnel.DialSession(cfg.host, cfg.port, sshUser, keys, knownHosts, info, cfg.session)
 	}
 	if err == nil {
 		welcome(cfg, tr)
+		if cfg.session.ID != "" {
+			watchSessionEnd(cfg, tr)
+		}
 	}
 	// The host key is pinned into knownHosts on first connect. Off localhost the
 	// dialer may be the setuid daemon (euid 0), which would leave the pin file
@@ -356,7 +359,12 @@ func (s *exposeSession) drop() {
 			mine = " " + g[0].AgentPort()
 		}
 		out, err := s.tr.Exec("unserve-name " + name + mine)
+		var ended *tunnel.ClosedError
 		switch {
+		case errors.As(err, &ended):
+			// The cluster ended the session and restores what it parked
+			// itself: there is nothing left to release from here.
+			info("%s: released by the cluster, which restores what this session parked", name)
 		case out == "ok reassigned":
 			info("%s went to another session while this one was running — left alone, "+
 				"it belongs to that session now.", name)

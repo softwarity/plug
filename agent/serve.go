@@ -30,6 +30,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -129,6 +130,12 @@ type Config struct {
 	// "and ". No quote, backslash or line break, 200 characters at most, or it
 	// is not said. "" says to give the key to whoever operates the cluster.
 	KeyInstruction string
+
+	// Control, when set, is how the host lists the sessions open on this agent
+	// and ends one (CloseSession) or all of a key's (CloseKey), the developer
+	// told why. Make it with NewControl. A Host that also implements
+	// SessionHost hears every session open and close.
+	Control *Control
 }
 
 // Start serves until ctx is cancelled or the listener fails.
@@ -227,7 +234,10 @@ func Start(ctx context.Context, cfg Config) error {
 		},
 		noDownloadAccount: cfg.NoDownloadAccount,
 		installEnv:        []string{keyInstructionEnv + "=" + cfg.KeyInstruction},
+		sweep:             sweepSerialised,
 	}
+	cfg.Control.attach(srv)
+	defer cfg.Control.attach(nil)
 
 	ln, err := net.Listen("tcp", cfg.Addr)
 	if err != nil {
@@ -279,7 +289,19 @@ func sweepPeriodically(ctx context.Context, logf func(string, ...any)) {
 	defer t.Stop()
 	// NOT gc: that also clears the name leases, which is right once at boot and
 	// wrong every minute after - see gc.
-	sweepOn(ctx, t.C, logf, sweepOrchestrators)
+	sweepOn(ctx, t.C, logf, sweepSerialised)
+}
+
+// sweepMu makes sweepSerialised one sweep at a time.
+var sweepMu sync.Mutex
+
+// sweepSerialised is sweepOrchestrators, one at a time: the periodic pass and
+// the one a closed session triggers (sessions.go) would otherwise meet on the
+// same parked workload.
+func sweepSerialised() {
+	sweepMu.Lock()
+	defer sweepMu.Unlock()
+	sweepOrchestrators()
 }
 
 // sweepOn is the loop with its clock and its sweep handed in, so the shape can

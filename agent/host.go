@@ -58,11 +58,14 @@ type Host interface {
 
 // NameEvent is what the host learns when a name changes hands.
 type NameEvent struct {
-	Name   string    // the cluster name being served
-	Who    string    // the client key's identity; empty when unauthenticated
-	Ports  []string  // the cluster-side ports
-	Parked bool      // whether a deployed workload was set aside for it
-	Since  time.Time // when it started being served
+	Name string // the cluster name being served
+	// Session is the id of the run serving it (SessionEvent.ID), empty for a
+	// client that presents none.
+	Session string
+	Who     string    // the client key's identity; empty when unauthenticated
+	Ports   []string  // the cluster-side ports
+	Parked  bool      // whether a deployed workload was set aside for it
+	Since   time.Time // when it started being served
 }
 
 // standaloneHost is plug without a gateway: one key from the image, an identity

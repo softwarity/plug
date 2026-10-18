@@ -44,6 +44,14 @@ func coreRun(cfg config, cmdArgs []string) int {
 		}
 	}
 	waitClusterReady(key)
+	// The daemon's tunnel is shared and belongs to no run: this one holds its
+	// own connection, which is its session on the agent (session_end.go).
+	stopSession, err := holdSession(cfg)
+	if err != nil {
+		info("connect: %v", err)
+		return 1
+	}
+	defer stopSession()
 	// The reverse direction is per-session, not per-cluster: it rides its own
 	// transport in THIS process, not the shared daemon — Ctrl-C closes the port.
 	// Volumes first: the environment projection in startExposes repoints
