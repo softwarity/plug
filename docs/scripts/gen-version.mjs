@@ -71,6 +71,7 @@ embed(deployDir, 'plug-stack.yml');
 embed(deployDir, 'plug-k8s.yaml', (t) =>
   t.replace(/imagePullPolicy: Always.*$/m, 'imagePullPolicy: IfNotPresent # pinned tag'),
 );
-// The "add this to your existing stack" snippet shown on Getting started AND
-// Swarm: one source, so the two pages can never drift apart.
+// The "add this to your existing stack" snippet shown on Getting started,
+// Install and Docker, Compose and Swarm: one source, so the pages can never
+// drift apart.
 embed(snippetsDir, 'plug-service.yml');

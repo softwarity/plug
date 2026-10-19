@@ -83,17 +83,12 @@ jobs:
         working-directory: docs
         run: npm run build -- --base-href /
 
-      # A safety net, and nothing more. This site is routed on the HASH
-      # (app.config.ts: withHashLocation), so its real addresses are
-      # /#/kubernetes, and those have always worked: Pages serves index.html
-      # at / and the router reads the fragment. There was never a broken
-      # deep link to fix - that reading was mine, from testing the wrong URL.
-      #
-      # What this does cover is someone arriving at /kubernetes: a
-      # hand-typed address, or a link written by whoever assumed path routing
-      # (which is how this step came to exist). Without it Pages returns its own
-      # 404; with it the app boots and the reader lands on the home page. Better,
-      # though still not the section asked for - only a hash link goes there.
+      # A safety net for an address the site has no page for. Every route is
+      # rendered at build time into a folder of its own (/kubernetes/index.html),
+      # so a real page never reaches this file. An unknown one does: Pages
+      # answers it with 404.html and a 404 status, which here is the home page,
+      # and the router's '**' route moves the address there. Without it the
+      # reader gets Pages' own 404 page, with no way back into the site.
       - name: Land stray path-style URLs on the site (SPA fallback)
         working-directory: docs
         run: cp dist/doc-site/browser/index.html dist/doc-site/browser/404.html
