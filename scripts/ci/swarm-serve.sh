@@ -77,4 +77,7 @@ if [ -z "$ok" ]; then
   exit 1
 fi
 
+# The agents as the site's downloads deploy them, for the published cell.
+bash "$root/scripts/ci/published-agents.sh" swarm
+
 bash "$root/scripts/ci/idle-until-caller-done.sh"

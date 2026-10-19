@@ -236,6 +236,10 @@ jobs:
       - name: "Multi-port: one name, three cluster ports"
         shell: bash
         run: bash scripts/ci/e2e-matrix.sh multiport "$A" "$B" 2222
+      - name: "Published files: the agent the site's downloads deploy reaches and is reached"
+        if: success() && inputs.full
+        shell: bash
+        run: bash scripts/ci/e2e-matrix.sh published "$A" "$B" 2222
       - name: "Resilience: agent restarted mid-session (self-heal, boot-gc, re-park)"
         if: success() && inputs.full
         shell: bash

@@ -34,7 +34,7 @@ CHAIN = [
     ("dockerrun", True), ("keymount", True), ("outage", True),
     ("exposevar", False), ("gateway", False), ("collision", False),
     ("lease", False), ("sameport", False), ("multiport", False),
-    ("resilience", True), ("admission", True),
+    ("published", True), ("resilience", True), ("admission", True),
     ("update", True), ("updatetag", True), ("updatenotify", True),
     ("compat", True), ("updatejump", True),
 ]

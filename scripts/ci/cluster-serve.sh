@@ -47,4 +47,7 @@ $compose up -d --build --wait \
   vol-linux vol-mac vol-win
 $compose ps
 
+# The agent as the site's download deploys it, for the published cell.
+bash "$root/scripts/ci/published-agents.sh" compose
+
 bash "$root/scripts/ci/idle-until-caller-done.sh"

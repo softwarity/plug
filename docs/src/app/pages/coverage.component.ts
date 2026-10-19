@@ -265,6 +265,7 @@ export class CoverageComponent {
       flat: true,
       rows: [
         { feat: 'Docker Compose / Swarm', st: 'ok', note: 'agent image joins the stack network - both in CI (Swarm: a real single-node swarm, the agent as a Swarm service on a non-attachable overlay)' },
+        { feat: 'The downloads, as published', st: 'ok', note: 'the snippet (Compose and Swarm) and <code>deploy/plug-stack.yml</code> (Swarm) deployed as a reader deploys them, image and port aside: a session reaches the app by name and the app reaches the name it serves, on every push. The served copies are checked as pinned before the site is published' },
         { feat: 'Kubernetes - NodePort', st: 'ok', note: '<code>deploy/plug-k8s.yaml</code> applied as published (kind) - the CI legs install and run through it on every push' },
         { feat: 'Kubernetes - kubectl port-forward', st: 'ok', note: 'zero exposed port, API-server RBAC - the k8s cluster job answers the agent contract through a live port-forward on every push' },
         { feat: 'Cross-namespace', st: 'ok', note: 'via FQDN <code>svc.othernamespace</code>' },

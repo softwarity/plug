@@ -1,0 +1,17 @@
+# The application an agent deployed from a PUBLISHED file sits beside, for the
+# "published" e2e cell (scripts/ci/e2e/published.sh, deployed by
+# scripts/ci/published-agents.sh): one workload, the prober, that a session
+# reaches by name (-c) and that fetches a name the session serves (-s).
+#
+# Also on app_net, the external network deploy/plug-stack.yml lists, so the
+# standalone agent has the same workload to reach. build: is for Compose, which
+# builds the prober under the image name Swarm then finds on the node.
+services:
+  pub-prober:
+    image: plug-e2e/prober:e2e
+    build: { context: ., dockerfile: services/prober/Dockerfile }
+    networks: [default, app_net]
+
+networks:
+  app_net:
+    external: true

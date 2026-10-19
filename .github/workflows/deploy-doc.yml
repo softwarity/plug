@@ -7,6 +7,9 @@ on:
       - main
     paths:
       - 'docs/**'
+      # The site embeds deploy/plug-k8s.yaml and deploy/plug-stack.yml as
+      # downloads: an edit there is an edit to what the site serves.
+      - 'deploy/**'
       - '.github/workflows/deploy-doc.yml'
   # A release changes no docs/** file, so redeploy on it too: that is what repins
   # the image tag inside the manifests the site serves, so the snippet a reader
@@ -82,6 +85,12 @@ jobs:
       - name: Build doc-site for GitHub Pages
         working-directory: docs
         run: npm run build -- --base-href /
+
+      # The downloads, as served: the copies the build pinned to the release.
+      # A file that does not validate, or that still names :latest, is not
+      # published (scripts/ci/check-served-deploy-files.sh).
+      - name: The deployment files the site serves must validate
+        run: bash scripts/ci/check-served-deploy-files.sh docs/dist/doc-site/browser/assets
 
       # A safety net for an address the site has no page for. Every route is
       # rendered at build time into a folder of its own (/kubernetes/index.html),
