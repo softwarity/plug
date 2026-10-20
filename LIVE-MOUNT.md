@@ -3,8 +3,9 @@
 The design and the working notes of the live mount, kept so that a problem
 found later has its base: what was decided and why, how the pieces talk, what
 was proven and how, where to look when something is off. The user-facing
-description lives in the README, the CLI reference and the release notes;
-this file is the one behind them.
+description lives on the site (the CLI reference, Under the hood, Coverage,
+the Kubernetes agent page) and in the release notes; this file is the one
+behind them.
 
 ## What it does
 
@@ -21,18 +22,18 @@ is the explicit form, at the exact path, for a process that hard-codes one.
 ## The architecture, and the decisions behind it
 
 ```
-process ─ OS's own SMB client ─ 127.0.0.1:<port> (plug's forward) ─ tunnel ─ agent ─ helper (Samba, the volume at /mnt/vol)
+process ─ OS's own SMB client ─ 127.0.0.1:<port> (plug's forward) ─ tunnel ─ agent ─ helper (SMB server, the volume at /mnt/vol)
 ```
 
 - **The helper is the agent's image** (`plug-agent mount-serve`, `agent/mountserve.go`),
   started beside the workload with the volume mounted: a container on the
-  agent's network (Docker), a service on the overlay pinned to the volume's
-  node (Swarm), a pod pinned to the workload's node (Kubernetes). It runs
-  Samba for one share behind one throwaway credential. Mounting the PVC is
-  what the workload does - normal, not a defect. No second image: Samba is
-  in the agent image (`agent/Dockerfile`, the one `apk add` of the final
-  stage, retried), +80 MB, pulled once with the agent, nothing on demand and
-  nothing more to mirror in a private registry.
+  agent's network (Docker), a service on the overlay placed on the node of
+  the workload's last task (Swarm), a pod pinned to the workload's node
+  (Kubernetes). It serves one share behind one throwaway credential, with
+  the SMB server compiled into plug-agent (github.com/softwarity/smbserver):
+  no package in the image, no second process, no second image to pull or to
+  mirror in a private registry. Mounting the PVC is what the workload does -
+  normal, not a defect.
 - **The client installs nothing.** It reaches the helper through the tunnel
   it already has - a `direct-tcpip` channel, what plug does for every cluster
   service - behind a local forward (`mountForward` in `cli/mount.go`), and
@@ -55,9 +56,8 @@ process ─ OS's own SMB client ─ 127.0.0.1:<port> (plug's forward) ─ tunnel
   Removed with the container.
 - **Why SMB, why not FUSE, why not NFS.** FUSE means a runtime to install on
   the workstation (fuse-t or macFUSE on macOS, WinFsp on Windows). NFS has
-  no first-class client on Windows. SMB is native on all three, and Samba is
-  *the* SMB server. The only SMB2 server written in Go is AGPL and has no
-  authentication, so it is Samba in the image, as a separate process.
+  no first-class client on Windows. SMB is native on all three, and the
+  server side is plug's own, in the agent binary.
 - **The credential is minted by the client**, not the agent, so a
   re-provision after a reconnect (a new liveness port, a new helper) keeps
   the OS's own SMB reconnection authenticating: the forward is retargeted at
@@ -78,6 +78,9 @@ Agent (`agent/mount.go`, `agent/mountserve.go`):
   mounts only.
 - `mount-volume <name> <volume-or-path> <agent-port> <password>` - starts the
   helper, answers `mounted host=<name> port=445 share=vol user=plug`. The
+  client is told 445; the helper listens on 1445, which needs no privilege:
+  a Service maps one to the other on Kubernetes, the agent does when it dials
+  on Docker and Swarm (`mountDialPort`). The
   helper's name carries (workload, volume, session port): one per session,
   so two developers may mount one volume, and a re-provision is a new helper
   beside the old one.
@@ -87,18 +90,25 @@ Agent (`agent/mount.go`, `agent/mountserve.go`):
   (scheduling constraints not satisfied on 2 nodes)", "ImagePullBackOff",
   "exited, exit code 1"): what the client's progress line shows while it
   waits, and the error when the helper never answers.
-- The helper carries `plug.mount=1`, `plug.mount.of`, `plug.mount.volume`
-  and the session owner (`plug.session.owner`, a label on Docker/Swarm, an
+- The helper carries `plug.mount=1`, `plug.mount.of`, `plug.mount.volume`,
+  `plug.mount.owner` (the agent that created it; on Kubernetes also
+  `plug.mount.helper`, the selector of its Service) and the session owner (`plug.session.owner`, a label on Docker/Swarm, an
   annotation on Kubernetes since a label cannot hold `host:port`).
   `sweepMountHelpers` runs with every sweep (boot gc and every minute) and
   removes a helper whose session no longer answers.
-- `mount-serve` (the helper's process): writes `smb.conf` (SMB2+, no NetBIOS,
-  `fruit` for macOS), the account's NT hash straight into the smbpasswd file
-  (no smbpasswd binary), serves as the volume owner's uid (`force user`) so
-  what the developer writes is what the workload reads back, runs `smbd` as a
-  child and relays the stop signal.
+- `mount-serve` (the helper's process): serves `/mnt/vol` in process, with
+  everything from its environment (the credential, or its file when Swarm
+  mounts it as a secret; the share; `PLUG_SMB_ALLOW`, the addresses the agent
+  connects from), nothing on disk. It runs without privilege under the
+  workload's uid and gid, which the agent reads on the workload's process
+  (`helperIDs`), so what the developer writes is what the workload reads
+  back, and a restricted admission (OpenShift's SCC, Pod Security) lets the
+  pod in. Started as root, it becomes the owner of the volume's root instead
+  (`serveIdentity`).
 - RBAC (`deploy/plug-k8s.yaml`): `pods` create/delete, `persistentvolumeclaims`
-  get (to refuse a ReadWriteOncePod claim with the reason).
+  get (to refuse a ReadWriteOncePod claim with the reason), and the
+  `services` create/delete already granted for the Service in front of the
+  helper.
 
 Client (`cli/mount.go`, `cli/mount_{darwin,linux,windows}.go`):
 - `startMounts(cfg)` runs BEFORE `startExposes` at the three launch sites, so
@@ -124,7 +134,7 @@ Client (`cli/mount.go`, `cli/mount_{darwin,linux,windows}.go`):
 - Teardown: unmount, close the forward, `unmount-volume`, forget the record,
   remove the session directory once nothing is mounted under it.
 - Records (`~/.plug/mounts/`, `key = value` files like served names): pid,
-  path, spec, local address. `sweepOrphanMounts` runs before any mount and
+  path, spec, local address, cluster, and whether the mount was automatic. `sweepOrphanMounts` runs before any mount and
   unmounts what a dead session left; `plug doctor` reports it ("live
   mounts"), `--fix` unmounts.
 - macOS: `mount_smbfs -N //user:pass@127.0.0.1:port/share path` as the user
@@ -136,8 +146,8 @@ Client (`cli/mount.go`, `cli/mount_{darwin,linux,windows}.go`):
   the session it had just recovered. `umount`, then `diskutil unmount` as a
   fallback (diskarbitrationd has its own identity). After mounting, plug
   probes the mountpoint once and, on EPERM, names TCC (see below).
-- Linux: `unix.Mount("//127.0.0.1/vol", path, "cifs", 0, "ip=…,port=…,user=…,pass=…,vers=3.0,uid=…,gid=…,file_mode=0664,dir_mode=0775,noperm,nobrl")`,
-  lazy detach on a busy unmount.
+- Linux: `unix.Mount("//<host>/vol", path, "cifs", 0, "ip=…,port=…,user=…,pass=…,uid=…,gid=…,file_mode=0664,dir_mode=0775,noperm,nobrl")`,
+  no `vers=` (the dialect is negotiated), lazy detach on a busy unmount.
 
 The wire: `--mount` and `--no-mount` cross the launcher→core exec raw, like
 `-s` and `--no-env`, and are stripped back by `stripLeadingAll`. An agent
@@ -169,15 +179,16 @@ version to upgrade to.
   (`-c --env-of vol-<os>`, `$VOL_DIR` repointed) and explicit (`--mount`),
   each reading the workload's seed through the mount and writing a file the
   workload then serves over http, fetched by name through plug; the path
-  unmounted after. Windows asserts that the session runs without the
-  automatic mount and that `--mount` is refused.
+  unmounted after. On Windows the automatic mount lands on a drive letter,
+  the explicit one is `--mount vol-win:/data:Y:`, and `net use` must show
+  no plug share once the session is over.
 
 ## Where to look when something is off
 
 - `plug doctor`: "live mounts" says what a dead session left; `--fix`
   unmounts. The helper: `docker ps --filter label=plug.mount=1` /
-  `docker service ls` / `kubectl get pods -l plug.mount=1`; its log is smbd's
-  (`docker logs`, `kubectl logs`).
+  `docker service ls` / `kubectl get pods -l plug.mount=1`; its log is the
+  helper's own, `plug-agent mount-serve` (`docker logs`, `kubectl logs`).
 - "Operation not permitted" on every file of a mount that succeeded, on
   macOS: TCC. Since Catalina a process only touches a NETWORK VOLUME if the
   app it runs under has the permission (System Settings > Privacy & Security
@@ -187,7 +198,7 @@ version to upgrade to.
 - The mount dies a few seconds after a reconnect, on macOS: the nsmb.conf
   section is missing (`~/Library/Preferences/nsmb.conf`, `[127.0.0.1]`,
   `mc_on=no`); the kernel log says `smb2_mc_update_main_channel`.
-- The helper never answers on 445: its log. A Swarm helper Pending: the
+- The helper never answers: its log (it listens on 1445). A Swarm helper Pending: the
   volume is on another node than the one it was placed on (best-effort from
   the last task's node). A Kubernetes helper Pending: the claim is
   ReadWriteOncePod (refused with the reason when the RBAC lets plug read the
@@ -203,12 +214,12 @@ sensitive one.
 - Windows: an explicit `--mount` at a DIRECTORY needs the symlink privilege
   (Developer Mode or elevation); a drive letter needs nothing. The redirector's
   own reconnection after a tunnel blip is Windows' to do (not exercised).
-- SQLite/GeoPackage files over SMB: range locks are weaker than local ones;
-  flat files are fine.
+- SQLite/GeoPackage files over SMB: range locks are weaker than local ones,
+  and the Linux and `--dockerrun` mounts pass `nobrl`, so none are taken at
+  all; flat files are fine. plug does not warn about it.
 - Swarm on several nodes: the helper follows the node of the workload's last
   task (what Swarm itself would give the workload); a service that never ran
   has no node to follow. A helper that cannot be placed says so through
   mount-status ("no suitable node …") rather than timing out mute.
-- The agent image is +80 MB for Samba.
 - Throughput and per-operation latency are those of SMB over an SSH tunnel:
   fine for a development session, not a data pipeline.

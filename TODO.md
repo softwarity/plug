@@ -1,159 +1,118 @@
 # plug - TODO / plan de travail
 
-_État : 5 septembre 2026 - **2.14.0 publiée**. L'historique des livraisons vit
+_État : 20 octobre 2026, **2.31.0 publiée**. L'historique des livraisons vit
 dans `RELEASE_NOTES.md` et la roadmap publique dans
 `docs/src/app/pages/roadmap.component.ts` ; ce fichier ne garde que ce qui est
-**ouvert** et le contexte qui ne tient pas ailleurs. Les 55 items terminés et la
-section « Acquis » ont été retirés le 05/09 : ils racontaient une seconde fois, et
-moins bien, ce que les notes de version tiennent à jour._
+**ouvert**, vérifié contre le code à cette date. La liste des cellules e2e est
+`scripts/ci/check-e2e-cells.sh` (31 aujourd'hui), pas ce fichier._
 
-## 📋 Contexte CI
+## 🟡 Défauts connus, petits
 
-CI par push, 3 OS × **3 familles de clusters** (Compose, Swarm mono-nœud,
-Kubernetes/kind - 9 jambes amd64, plus une jambe Compose **arm64** depuis le
-07/08, 6 clusters). Les trois familles exécutent le **même bloc de cellules** (24
-aujourd'hui) et `scripts/ci/check-e2e-cells.sh` (ex `check-common-block.sh`) fait échouer le build à la
-moindre dérive : c'est lui la liste à jour, pas ce fichier. **Un seul build
-d'image** (`sha-<court>`, immuable), consommé tel quel par les jambes ; il n'est
-**promu** sous des noms qu'une fois tout vert - branche → `:<branche>`, branche
-par défaut → `+ :latest`, tag `vx.y.z` posé sur HEAD → `+ :x.y.z, :x.y, :x`. Ce
-qui est publié est donc, au digest près, ce qui a été testé. **Un seul build de
-clients e2e** aussi (`build-clients`), et les clusters **tirent l'image du
-registre** au lieu de se la faire livrer en artefact.
+- [ ] **`DaemonAlive` dit « aucun daemon » quand il ne peut pas lire le lock**
+      (`cli/internal/tun/graft_darwin.go`) : tout échec d'`OpenFile` rend
+      `false`, `permission denied` compris. Un binaire sans setuid (build
+      local, copie dans `/tmp`) croit qu'aucun daemon ne tourne, en démarre un
+      second qui échoue contre le premier, et l'utilisateur lit « cannot start
+      the plug daemon ». Correctif : distinguer « lock libre » de « lock
+      illisible » et dire, sans privilège, qu'un daemon tourne et que ce
+      binaire n'a pas le setuid pour le rejoindre. La sonde Windows (SCM) a la
+      même forme : un échec d'accès rend aussi `false`.
+- [ ] **Live mount, deux manques** : (1) SQLite/GeoPackage sur SMB : les
+      verrous de plage sont faibles, et les montages Linux et `--dockerrun`
+      passent `nobrl` (aucun verrou) ; plug n'avertit pas. (2) Le refus TCC
+      « Volumes réseau » de macOS est nommé juste après le montage
+      (`cli/mount_darwin.go`), pas par `plug doctor`.
 
-## 🟢 Projection des fichiers montés (secrets/configMap) - en cours
+## 🟡 Observé une fois, inexpliqué
 
-Suite de la projection d'env (2.16). Un cert (ou tout secret monté en FICHIER,
-pas en variable) n'est pas projeté aujourd'hui : `env-of` ne lit que les valeurs
-d'env. Décidé avec François le 26/09. Matérialisation one-shot au démarrage de
-session (le contenu ne bouge pas pendant une session), via l'`exec` que l'agent a
-déjà, sans nouveau droit RBAC.
+À regarder si ça revient ; aucune récidive dans les runs en échec depuis.
 
-- [x] **Prérequis - transport multi-ligne** (verbe `env-ofz`, NUL-délimité) :
-      fait, `3198c96`. Un fichier / une valeur PEM peut désormais transiter.
-- [x] **Agent k8s** : verbe `files-of <name>` → pod derrière le sélecteur parké,
-      `volumeMounts` de volumes secret/configMap/projected, exclusion du mount SA,
-      `exec tar`, base64(tar). Fait.
-- [x] **Client - process local (`-s` / `-c --env-of`), option B** : dé-tar +
-      réécriture des variables de chemin. Fait.
-- [x] **Client - `--dockerrun`** : `-v tmp/<path>:<path>:ro` (chemins exacts) +
-      `-e` de l'env projeté sur le `docker run` interne. Fait.
-- [x] **Docker/Compose** : lecture du `/run/secrets` du conteneur parké (arrêté)
-      via l'API archive - vérifié : l'archive lit un secret bind-monté sur un
-      conteneur arrêté. `rerootTar` remet les membres sur leur chemin absolu.
-- [x] **Swarm - configs** : lues via l'API (`config inspect` rend la donnée),
-      tar construit côté agent (`tarFromFiles`).
-- [x] **Swarm - SECRETS montés en fichier** : lus **au park** (swarmStashSecrets)
-      par **`docker exec tar` DANS la tâche vivante** avant le scale-down - un
-      secret Swarm est un tmpfs, invisible à l'API archive (qui lit la couche),
-      d'où l'exec. Mis en réserve sur disque par nom, fusionné aux configs par
-      files-of, nettoyé à la restauration. Limites : (1) swarm multi-nœuds, la
-      tâche peut être sur un autre nœud que l'agent (best-effort) ; (2) l'image
-      de la tâche doit avoir `tar` (distroless → rien, comme le `cat` de l'env).
-      e2e : le tko Swarm est en busybox et monte un secret + un config, la
-      cellule asserte le secret.
-- [x] **Tests en face** : purs (rerootTar, tarFromFiles, projectableMounts,
-      option B, flags dockerrun, untar clamp) + cellule e2e ×3 familles (secret
-      k8s / secret Compose / config Swarm montés au même chemin, lus par un
-      process local). MàJ coverage + comparatif faites.
-- [x] **Montage VIVANT des volumes / PVC, automatique par défaut** (branche
-      `feat/live-mount`, 27/09). Un takeover (`-s`) et `--env-of` montent TOUS
-      les volumes de données du workload sans rien savoir (verbe `volumes-of`),
-      sous le temp de session à leur chemin cluster, variables réécrites
-      (option B, comme les fichiers secrets) ; `--no-mount[=/a,/b]` ; `--mount`
-      = forme explicite au chemin exact. **Architecture retenue, différente
-      du plan du 26/09** : ni FUSE ni SFTP. Le helper (l'image agent, Samba, le
-      volume monté) sert le volume en **SMB** ; le client le monte **avec le
-      client SMB intégré de l'OS** (`mount_smbfs` sans privilège sur macOS,
-      `mount(2)` cifs sur Linux, sans `cifs-utils`) à travers un forward local
-      sur le tunnel. **Rien à installer côté poste**, pas de seconde image (Samba
-      dans l'image agent, +80 Mo, la seule `apk add` du stage final, avec retry).
-      Le pur Go SMB n'existe qu'en AGPL sans auth : écarté.
-      **Validé en local contre un vrai agent Docker** (`cli/mount_e2e_test.go`,
-      `PLUG_MOUNT_E2E=host:port`) : montage/démontage, **kill -9** → le run
-      suivant démonte, le sweep de l'agent réape le helper seul en < 1 min (D4,
-      D6) ; **redémarrage de l'agent** sous un montage tenu → helper
-      re-provisionné même clé, montage intact (D3, après avoir coupé le
-      multichannel SMB sur la loopback, `nsmb.conf` scopé) ; **Linux/cifs avec
-      lecture/écriture réelles** dans un conteneur privilégié (pas de TCC).
-      `doctor` : check « live mounts » + `--fix`. RBAC k8s : pods create/delete,
-      pvc get.
-      **Reste** : (1) **Windows** : le redirecteur SMB veut le 445 d'une adresse
-      dédiée (alias loopback ou IP TUN de plug) - `--mount` le dit ; (2)
-      `--mount` avec `--dockerrun` (monter sur l'hôte puis `-v`) ; (3) Swarm et
-      k8s **non exercés en vrai** (code écrit sur le modèle du signpost ; k8s
-      helper épinglé sur le nœud du workload, RWOP refusé) ; (4) le EPERM
-      macOS sur un montage réussi = **TCC « Volumes réseau »** de l'app
-      responsable du shell (vu sous Zed), à nommer dans doctor ; (5)
-      SQLite/GeoPackage sur SMB : avertir (D7).
+- [ ] **`TestADialThatHangsHoldsNeitherTheOtherClusterNorASecondDial`** (17/10,
+      `Test (macos-latest)`, run 39045322501) : « the cluster was dialled again
+      after its tunnel came up (2 dials) ». 200 passages sur 200 en local. Un
+      tunnel installé puis jugé mort au tick suivant, ou un tick qui lit la
+      carte avant l'installation.
+- [ ] **`TestPidForLocalPortSelf`** (18/10, Ubuntu, run 39134301017) : la
+      recherche dans la table des sockets de `/proc` n'a rien répondu pour le
+      port du test lui-même, alors que le test la tient pour garantie sur un
+      runner. C'est le mécanisme d'attribution des flux sous Linux.
+- [ ] **Une session qui démarre sans jamais lancer la commande** (06/09, premier
+      run du soak) : processus vivant (16 Mo, 6 threads, contre 30 Mo et 13
+      pour une session saine), boucle jamais exécutée, la signature d'un
+      launcher qui n'a pas monté son datapath. Le soak échoue désormais à 20 s
+      si aucun tour n'est sorti et garde le stderr de plug en artefact.
 
-## 🔴 Sécurité - suivi en privé
+## 🟡 Hors CI
 
-- [ ] **Contexte de l'avis** - suivi en PRIVÉ
-      (avis de sécurité GitHub, brouillon), pas ici : ce dépôt est public, et
-      décrire par le menu un défaut non corrigé revient à en publier le mode
-      d'emploi. Ce qui peut se dire sans rien donner : l'**empreinte servie par
-      l'agent** sur le canal SSH déjà authentifié, vérifiée avant exécution, est
-      **livrée en 2.7.2** ; ce qui reste est le durcissement résiduel, dont la
-      forme demande un arbitrage (le coût n'est pas le même selon l'OS). La
-      signature de binaires, elle, **est livrée** : `cli/release_sig.go` porte
-      l'ancre compilée, `cli/cmd/plug-sign` produit les signatures et la clé
-      privée ne quitte pas le workflow de release (ligne corrigée le 06/09, elle
-      la disait encore à faire). Le
-      détail, l'impact et la reproduction vivent dans l'avis. À publier dans les
-      notes de version **une fois le correctif livré** - c'est là qu'un défaut
-      se raconte, pas avant.
+- [ ] **Détection du portail captif sur Linux** : darwin et Windows ont leur
+      collecteur (`cli/captive_darwin.go`, `cli/captive_windows.go`), Linux non
+      (`captive_other.go` rend `known: false`, doctor se tait). `resolv.conf`
+      ne suffit pas : il faut distinguer ce que DHCP a offert de ce qui est
+      configuré (`nmcli dev show`, `resolvectl status` ou le bail dhclient
+      selon la distro), et le remède doit nommer les deux sens, comme sur
+      darwin.
+- [ ] **Windows sous VPN d'entreprise** : non prouvé sur un vrai client (macOS
+      l'est avec GlobalProtect). Couvert en CI par le selftest « fake VPN »
+      (×3 OS), et la NRPT est lue (`scopedResolversNRPT`). Reste hors CI : le
+      split-tunnel, la MTU/fragmentation, et les clients qui interceptent le
+      DNS en `127.0.0.1` (`pickUpstreamsTraced` écarte l'adaptateur loopback
+      logiciel, pas une adresse 127.0.0.1 posée sur un adaptateur réel). Un
+      poste Windows avec un vrai client VPN, puis un banc d'une demi-heure.
+- [ ] **Linux sous VPN d'entreprise : ni prouvé ni écarté**. Le risque est plus
+      faible (le split DNS passe par systemd-resolved, prouvé par le selftest),
+      mais aucun banc n'existe.
+- [ ] **Le soak couvre la durée, pas la charge** (`.github/workflows/soak.yml`,
+      4 h chaque lundi contre l'image publiée, trafic léger) : restent les gros
+      transferts (une fuite proportionnelle au volume lui échapperait) et le
+      sleep/wake, qui ne se teste pas sur un runner.
+- [ ] **Couverture arm64 : 17 cellules sur 31, OPTIONNEL**. La jambe arm64
+      tourne avec `full: false`. Ce que les cellules absentes exercent (park,
+      restore, takeover, compat launcher/core, montage) est de l'orchestration
+      au-dessus de l'API Docker, le même code Go ; ce qui dépend du processeur
+      (netstack gVisor, TUN, checksums, atomiques) est couvert. Les noms
+      `flaky`, `res-tko`, `res-agent`, `prev-agent`, `adm-agent` sont déclarés
+      côté cluster sans variante arm. À rouvrir si un bug propre à arm
+      apparaît, ou avec une deuxième jambe arm (Swarm ou k8s).
+- [ ] **Le build d'image reste sur le chemin critique** : un build amd64 lent
+      (18 min 30 mesurées une fois, contre 2 min 30) laisse les clusters sans
+      rien à tirer. Rien à faire tant que c'est exceptionnel ; `why_no_cluster`
+      le nommera.
 
-## 🟡 Ce qui reste hors CI (le banc → CI est bouclé)
-- [ ] **Le flake `resilience` - instrumenté le 07/08, pas encore diagnostiqué** : la cellule crashe l'agent par conception ; quand la restauration traîne, elle entraîne `update` et `update_tag` dans sa chute (« 2225 never came back ») - trois cellules rouges pour une cause unique. Ça a coûté la première publication de la 2.10.0. **Ce n'est pas un problème de délai** : `wait_agent` attend déjà 40 × 3 s et la boucle de restore 45 s ; allonger un timeout serait la troisième tentative du même geste. Les deux messages lus ensemble (`connection reset by peer` sur le service, puis le nom absent) désignent l'**agent** qui n'est pas revenu de son redémarrage - et c'est lui qui restaure le service parqué, via boot-gc. D'où `/agent-state` sur le service `chaos` (état du conteneur + 25 dernières lignes, `agent_state()` côté script) : à la prochaine occurrence, on lira au lieu de deviner.
-      **Sauf qu'on n'a jamais rien lu, et on sait enfin pourquoi** (18/09) : le watchdog de cellule avait un budget FIXE de 12 min alors que `resilience` est la 15e cellule sur 22 et démarre vers la 20e minute d'un job qui en a 25 ou 30. Son alarme sonnait après la mort du job, et un job tué par timeout emporte son log - trois occurrences, trois fois `log not found`. Le budget est maintenant borné par ce qui reste du job (`PLUG_JOB_MINUTES`, tenu en phase avec `timeout-minutes` par l'entrée `minutes` de `_e2e.yml`), donc une cellule tardive prend une alarme courte qui sonne pendant que le job vit encore. À la prochaine occurrence, il y aura un log.
-- [ ] **`updatenotify` a floké une fois (07/09), cause inconnue** : sur `e2e-compose (ubuntu)`, la seconde session n'a rien annoncé alors que la première avait tourné et que la cellule a elle-même vérifié, après coup, que le runner pouvait lister les tags du registre - donc ni « registre injoignable » ni « N-1 trop vieux », les deux causes qui l'avaient déjà coulée et qui sont gardées depuis. Le même run relancé est passé. À noter : le core qui fait la vérification y est celui du cluster N-1, pas celui de la branche, donc un échec ici accuse un binaire déjà publié. Une seule occurrence. **Durci le 07/09 plutôt que laissé en observation** : la cellule attend maintenant (30 s max) que le verdict apparaisse dans `~/.plug/update-<hash>` avant de lancer la session 2, et dit laquelle des deux moitiés a manqué - « session 1 n'a rien enregistré » n'est pas le même défaut que « session 2 n'a rien annoncé ». Si ça se répète, le message dira laquelle chercher.
-- [ ] **`TestADialThatHangsHoldsNeitherTheOtherClusterNorASecondDial` a floké une fois (17/10), cause inconnue** : sur `Test (macos-latest)` du run 39045322501, « the cluster was dialled again after its tunnel came up (2 dials) » : le cluster lent est redialé juste après l'installation de son tunnel. 200 passages sur 200 en local. À regarder si ça revient : un tunnel installé puis jugé mort au tick suivant, ou un tick qui lit la carte avant l'installation.
-- [x] **Résolveurs scopés d'un VPN : prouvés sur les trois OS** (17/10) : macOS lit `SupplementalMatchDomains`, Windows la NRPT (`scopedResolversNRPT`), les deux prouvés par le selftest fake-VPN. Linux n'a pas de table à lire : plug relaie vers le stub systemd-resolved (`127.0.0.53`), qui applique lui-même les domaines `~` d'un lien. Le selftest le prouve désormais (lien dummy `plugvpn0`, `resolvectl dns/domain`, puis `revert`), et en CI l'absence de « the scoped name works » est un échec. Vert sur le selftest Ubuntu du run 39025390413. Sans systemd-resolved, `resolv.conf` ne connaît aucun domaine scopé : le système n'a pas de split DNS lui-même, plug fait comme lui.
-- [ ] **Détection du portail captif : Linux et Windows** (18/09) : la règle est partagée et testée sur les trois OS (`cli/captive.go`), le collecteur n'existe que sur darwin (`route -n get default` + `ipconfig getpacket` + `scutil` via `tun.SystemResolvers`). Ailleurs `captiveCollect` renvoie `known: false` et doctor se tait, ce qui est le bon silence. Reste à écrire la moitié qui récolte : sur Linux `resolv.conf` ne suffit pas (il faut distinguer ce que DHCP a offert de ce qui est configuré, donc NetworkManager `nmcli dev show`, `resolvectl status`, ou le bail dhclient selon la distro) ; sur Windows `Get-DnsClientServerAddress` et `Get-NetIPConfiguration` donnent les deux. Le remède diffère aussi (`nmcli`/`resolvectl` contre `Set-DnsClientServerAddress`), et il doit nommer les DEUX sens comme sur darwin.
-- [ ] **`DaemonAlive` dit « aucun daemon » quand il ne peut pas lire le lock** (22/09) : sur macOS, `DaemonAlive` ouvre `/var/run/plug/<hash>.lock` en écriture (`root:daemon 644`) et rend `false` sur `permission denied`, comme si le lock était libre. Un binaire lancé sans setuid (un build local, un `plug` copié dans `/tmp` où macOS refuse le setuid) croit qu'aucun daemon ne tourne, en démarre un second, qui échoue contre le premier, et l'utilisateur lit « cannot start the plug daemon » suivi d'une ligne de log sans rapport. Reproduit en test : `uid=501 OpenFile -> permission denied ; DaemonAlive=false` avec un daemon vivant. Correctif : distinguer « lock libre » de « lock illisible » (ouvrir en lecture seule pour le `flock` test, ou rendre un troisième état) et, sans privilège, dire « un daemon tourne et ce binaire n'a pas le setuid pour le rejoindre » plutôt que d'en lancer un autre. Petit, et il a coûté une demi-heure de test à la 2.16.
-- [ ] **Couverture arm64 : 11 cellules sur 22 - OPTIONNEL, et le pourquoi compte** (07/08). Les noms de cellules dérivent de `$leg` depuis le 07/08 ; restent CINQ noms qui ne peuvent pas suivre parce qu'ils sont **déclarés côté cluster** : `flaky`, `tko`, `res-tko`, `res-agent`, `prev-agent`. Les faire dériver demande d'ajouter les variantes `-linuxarm` dans les trois manifestes (`e2e/compose.cluster.yml`, `swarm.cluster.yml`, `k8s.cluster.yaml`) avec des ports distincts, puis de remplacer les `case "$(uname -s)"` qui restent dans `e2e-matrix.sh` (un grep les donne ; pas de numéros de ligne ici, ils bougent à chaque cellule ajoutée).
-      **Pas fait, délibérément** : ce que ces cinq cellules exercent (park/restore, takeover, compat launcher/core) est de l'orchestration côté agent au-dessus de l'API Docker - le même code Go, indifférent à l'architecture. Ce qui, lui, dépend vraiment du processeur - netstack gVisor, TUN userspace, checksums, atomiques - est déjà couvert sur arm par la matrice de protocoles et le multicluster. La dette initiale (« arm64 publié, jamais exercé ») est payée : l'artefact n'est plus publié à l'aveugle. **À rouvrir si** un bug spécifique arm apparaît, ou le jour où une deuxième jambe arm (swarm ou k8s) est ajoutée - là le coût marginal devient faible et la question change.
-- [ ] **Windows sous VPN d'entreprise** : non prouvé sur un vrai client corpo (macOS OK avec GlobalProtect). Il faut un poste Windows avec un vrai client VPN - la box 192.168.2.17 ferait l'affaire si on y installe le client ; banc ~30 min ensuite. **Ce qui est désormais couvert en CI** (cellule « fake VPN » du selftest, ×3 OS) : une interface de plus portant un résolveur qui connaît un nom que rien d'autre ne connaît, annoncée par la porte que plug lit sur cet OS (2ᵉ adaptateur WinTUN + métrique sur Windows, `resolv.conf` sur Linux, dict DNS du service primaire sur macOS) → plug doit le suivre, résoudre le nom témoin à travers son stub, puis revenir quand le VPN disparaît. **Ce qui reste hors CI** : le split-tunnel (le trafic vers l'IP interne doit emprunter le tunnel), le NRPT / DNS conditionnel Windows, la MTU/fragmentation, et les clients qui interceptent le DNS en `127.0.0.1` (écartés par `pickUpstreams` sur Windows - à confronter à un vrai client corpo).
-- [ ] **Linux sous VPN d'entreprise : ni prouvé ni écarté** (17/08) : la ligne ci-dessus ne nomme que Windows, macOS ayant son banc GlobalProtect. Linux n'a ni l'un ni l'autre. Le risque y est plus faible - son mécanisme se résume à `resolv.conf`, là où Windows a le NRPT, les métriques d'interface et le filtre loopback - mais autant l'écrire que de le laisser en creux.
-- [ ] **Le build d'image reste sur le chemin critique** (17/08) : le tag `sha-<court>-amd64` a sorti le *merge* de la file d'attente, pas la dépendance à l'image elle-même. Un build amd64 lent - 18 min 30 mesurées une fois, contre 2 min 30 d'habitude - laisse encore les clusters sans rien à tirer et perd le run. Rien à corriger tant que ça reste exceptionnel ; à rouvrir si ça se répète, et `why_no_cluster` le nommera.
-- [ ] **Une session qui démarre sans jamais lancer la commande - vu UNE fois (06/09), inexpliqué** : au tout premier run du soak, `plug --host <ip> --port 22 -c sh -c '<boucle curl>'` a vécu ses 12 minutes sans exécuter la commande une seule fois - `traffic.log` vide, ni code HTTP ni `ERR`, donc la boucle n'a pas tourné. Le processus était bien vivant (RSS 16 Mo, 6 threads, contre 30 Mo et 13 threads pour une session saine mesurée juste après) : la signature d'un launcher qui n'a pas monté son datapath. Écartés par lecture du code : le parsing (le premier argument non-option termine les options, le `-c` de `sh -c` voyage avec la commande) et la bufferisation (`child.Stdout` est hérité, pas relayé). Le run suivant, même commande, même dispositif, a tourné normalement : **intermittent**. Le soak échoue désormais à 20 s si aucun tour n'est sorti et imprime le stderr de plug, qui est aussi collecté en artefact - à la prochaine occurrence on lira au lieu de deviner.
-- [ ] **Sessions longues & charge - le soak couvre la DURÉE, pas la charge** (06/09) : `scripts/ci/soak.sh` + `.github/workflows/soak.yml` tiennent une session 4 h chaque lundi contre l'image PUBLIÉE, avec un trafic léger (une requête toutes les 2 s, qui re-résout le nom à chaque tour), et assèrent une tendance sur RSS / descripteurs / threads de tout l'arbre plutôt qu'un seuil. 4 h et non 6 : un job GitHub plafonne à 6 h et un job qui meurt sur son timeout perd son log, donc ses chiffres. **Restent ouverts** : les gros transferts (le soak ne pousse que des requêtes courtes, une fuite proportionnelle au VOLUME lui échapperait) et le sleep/wake, qui ne se teste pas sur un runner et reste un banc local assisté.
+## 🟢 MCP : `serve` / `unserve` et `explain_failure`
 
-## 🟢 MCP : `serve` / `unserve` et `explain_failure` - RESTE (22/09)
-
-`plug mcp` existe (2.16.0) avec `list_profiles`, `doctor`, `env_of`, `resolve_name`,
-`agent_info`. Ce qui manque : `serve` (ouvrir une session depuis l'agent IA, avec ce
-que la commande recevra) et `unserve` ; une session est un processus qui vit, il faut
-décider qui le tient (le serveur MCP ? un daemon ?) et comment l'agent en lit l'état.
-Et `explain_failure` : la dernière session, sa raison, ce qui suppose que plug garde une
-trace structurée de ses fins de session, ce qu'il ne fait pas encore.
+`plug mcp` a `list_profiles`, `doctor`, `env_of`, `resolve_name`, `agent_info`
+(`cli/mcp.go`). Manquent `serve` (ouvrir une session depuis l'agent IA) et
+`unserve` : une session est un processus qui vit, il faut décider qui le tient
+(le serveur MCP ? un daemon ?) et comment l'agent en lit l'état. Et
+`explain_failure` : la dernière session et sa raison, ce qui suppose une trace
+structurée des fins de session, que plug ne garde pas encore.
 
 ## 🟣 UDP par nom (relais de datagrammes) - REPORTÉ (décision 18/07)
-La motivation « HTTP/3 » ne tient pas : le relais passerait par le tunnel TCP →
-QUIC-over-TCP est pathologique (HOL blocking, tout l'intérêt de QUIC perdu) et
-les clients h3 retombent en h2 proprement ; en intra-cluster personne ne parle
-h3. Le drop-loud (livré) rend le manque visible et diagnostiqué. À rouvrir si
-un cas DNS-vers-CoreDNS / StatsD / syslog réel mord. Plan conservé :
-Le tunnel ne porte que du TCP (SSH `direct-tcpip` = stream-only). Le client capte
-**déjà** l'UDP (protocole enregistré, `gonet.NewUDPConn` utilisé pour le DNS) et
-le droppait en silence hors DNS. Plan :
-- [ ] **Client** : remplacer le drop par un forwarder UDP - `tab.lookup` → nom, `df(srcPort)` → cluster (réutilise l'attribution TCP), ouvrir un canal vers l'agent, **framing longueur-préfixée** des datagrammes.
-- [ ] **Agent** : sous-commande `plug-agent udp-relay <name> <port>` (invoquée en session SSH comme `serve-name`) → résout via le resolver cluster, `net.DialUDP`, relaie les datagrammes framés dans les deux sens.
-- [ ] **Cycle de vie** : flux synthétique par `(srcport, dst)` + **idle-timeout** pour reaper canal + relais (UDP sans-connexion).
-- [ ] **Négo de version** : vieil agent → « udp-relay not found » → dégrader proprement en drop-loud (comme serve-name).
-- [ ] **e2e ×3 OS** : DNS-sur-UDP vers un CoreDNS + un echo UDP (type StatsD) ; MàJ coverage (ligne UDP `✕` → `!`/`✓`) + roadmap.
 
-Limite assumée : datagrammes → stream fiable/ordonné (HOL blocking, latence). OK
-pour DNS / StatsD / syslog / requête-réponse ; pas pour média temps-réel. QUIC =
-UDP → porté mais QUIC-over-TCP est pathologique (les clients retombent en TCP de
-toute façon).
+Aujourd'hui l'UDP hors DNS vers un nom de plug est jeté avec un log
+(« plug tunnels TCP only », `cli/internal/tun/netstack.go`). La motivation
+HTTP/3 ne tient pas : par un tunnel TCP, QUIC-over-TCP est pathologique et les
+clients h3 retombent en h2. À rouvrir si un cas DNS vers CoreDNS, StatsD ou
+syslog réel mord. Plan conservé :
 
-## 🔵 Transport & intégration (statut public : `roadmap.component.ts`)
-- [x] **OpenShift : deux lignes du manifeste, et rien d'autre** (10/09, fait) : Telepresence annonce « Kubernetes / OpenShift », plug non, et l'écart tient à la SCC `restricted-v2` appliquée par défaut là-bas - UID arbitraire imposé dans la plage du namespace, ports privilégiés interdits, capabilities retirées. Or `deploy/plug-k8s.yaml` fait exactement les deux choses qu'elle refuse : l'agent démarre **en root** et écoute sur le **port 22**. Tel quel il ne démarre pas, sauf à faire accorder `anyuid` au ServiceAccount, ce qu'un administrateur sérieux refuse. **Fait** : le manifeste tourne sous `restricted-v2` sans rien accorder, prouvé à chaque run par le job « OpenShift (MicroShift, restricted-v2) », et la page Kubernetes a sa section OpenShift et OKD.
-      **Les deux raisons écrites dans le manifeste ne tiennent plus sur k8s** : le port est déjà paramétrable (`plug-agent serve --addr`) et le NodePort mappe déjà 32222 → 22, donc écouter sur 2222 dans le pod ne change rien au contrat client ; et le token du ServiceAccount est lisible par tous dans le pod, c'est le socket Docker (Swarm) qui demandait root, et il n'existe pas là-bas. Donc : port haut + `runAsNonRoot`.
-      **Et ça se teste sans monter d'OpenShift.** Un CRC en CI demanderait une VM lourde, de la virtualisation imbriquée, ~15 min de démarrage et surtout un *pull secret* Red Hat vivant en permanence dans les secrets du dépôt, pour une jambe de plus. Or ce qui bloque plug n'est pas OpenShift, c'est la **contrainte** : non-root, pas de port privilégié, capabilities retirées. Kubernetes standard sait l'imposer avec les Pod Security Standards en profil `restricted`, et kind le fait nativement : un label sur le namespace (`pod-security.kubernetes.io/enforce: restricted`) et le manifeste passe ou casse, dans la jambe k8s qui existe déjà. Bonus : ça couvre tous les clusters d'entreprise qui appliquent PSS, pas seulement OpenShift. Ce que ça ne couvre pas, et qui se simule en une ligne, c'est l'UID arbitraire d'OpenShift : ajouter un `runAsUser: 1000670000` au manifeste de test. Une vérification finale sur un CRC local (il tourne sur mac arm64) reste souhaitable avant d'écrire « OpenShift » dans le comparatif, mais elle confirmerait plutôt qu'elle ne découvrirait.
-- [ ] **IPv6** : fake-pool v6 + tunneling des littéraux v6 (fakes IPv4 aujourd'hui ; service par nom déjà OK).
-- [x] **Gateway hôte du tunnel** : la gateway déjà déployée héberge l'endpoint et l'active dynamiquement - son auth devant. Fin de l'agent dédié. C'est **le mécanisme du « plug autorisé ici ou pas »** (dev : oui, prod : non - l'interdiction est une *absence*) et le point 4 des « implications côté plug » de la note de conception Meerkat (retirée du dépôt le 05/09, sa conception ayant vieilli) - qui figeait la conception d'ensemble et les quatre autres chantiers qu'elle induit : auth par clé par dev, attribution nominative des sessions, API d'état (« qui plugge quoi depuis quand »), et plus tard le signpost-proxy L7. **Fait** : l'agent est un paquet importable (`agent/`), Meerkat l'embarque et sert l'image `-hosted` (keygen/pubkey, sessions attribuées par personne) ; le signpost-proxy L7 reste hors de ce chantier.
+- [ ] **Client** : remplacer le drop par un forwarder UDP (nom par
+      `tab.lookup`, cluster par l'attribution TCP), un canal vers l'agent,
+      datagrammes préfixés par leur longueur.
+- [ ] **Agent** : `plug-agent udp-relay <name> <port>` en session SSH (comme
+      `serve-name`), résolution par le resolver du cluster, `net.DialUDP`,
+      relais dans les deux sens.
+- [ ] **Cycle de vie** : un flux par `(srcport, dst)` et un idle-timeout qui
+      ferme canal et relais.
+- [ ] **Négociation** : un vieil agent répond « udp-relay not found », on
+      retombe sur le drop avec log.
+- [ ] **e2e ×3 OS** : DNS sur UDP vers un CoreDNS et un echo UDP ; coverage et
+      roadmap mises à jour.
 
-## ⚪ Dettes / plus tard
+Limite assumée : des datagrammes sur un flux fiable et ordonné. Bon pour DNS,
+StatsD, syslog, requête-réponse ; pas pour du média temps réel.
+
+## 🔵 IPv6
+
+- [ ] Fake pool v6 et tunneling des littéraux v6 : les fakes sont IPv4
+      (198.18/15), les AAAA répondent NODATA, un paquet v6 égaré est jeté.
+      Le service par nom marche déjà.

@@ -16,6 +16,10 @@ gh api -X POST repos/softwarity/plug/actions/runs/<run-id>/pending_deployments \
   -f 'environment_ids[]=<env-id>' -f state=approved -f comment=minor
 ```
 
+`<env-id>` is the `release` environment's id:
+`gh api repos/softwarity/plug/environments --jq '.environments[] | select(.name=="release") | .id'`.
+The job takes about ten minutes, and its summary names the images and the tag.
+
 The bump rides in the approval's comment: empty is a patch, `minor` or `major`
 say so. Approving releases the build that run tested: the two images are
 rebuilt from that commit with the version compiled in, published under
@@ -29,32 +33,45 @@ Not approving costs nothing: the next push to `main` cancels the waiting run.
 A run whose commit says `[skip release]` offers no release. Release notes
 pushed with `[skip ci]` after the run do not block it: the job accepts a
 `main` that moved by `RELEASE_NOTES.md` alone and takes the notes from there.
+Any other difference, code pushed without a pipeline, makes it refuse: start a
+new run on `main` and approve that one.
+
+The tag lands on the notes commit, one step after the commit that was tested,
+which is the one the images' `revision` label names. The compiled sources are
+the same.
 
 ### What the environment needs (once, in the repository settings)
 
 Settings > Environments > New environment, named exactly `release`:
 
 - Deployment protection rules: **Required reviewers**, the maintainer(s) who
-  may release. Without a reviewer the job's first step stops with "nobody
+  may release, with **Prevent self-review** left unchecked (the reviewer is
+  also the one who pushed, by design) and no wait timer. Without a reviewer the job's first step stops with "nobody
   approved this release": GitHub creates an unprotected environment the first
   time a job names one, and an unprotected one would release every push.
 - Deployment branches: `main` only.
 - Environment variable `RELEASE_APP_ID` and environment secret
   `RELEASE_APP_PRIVATE_KEY`: a GitHub App installed on this repository with
   Contents read and write, the same App the other Softwarity repositories
-  release with. The job mints a one-hour token from it to push the version
+  release with. The App needs no webhook and no other permission. It must be
+  installed on `meerkat` too: once the release exists, the job tells Meerkat
+  with a `repository_dispatch` (a token for that repository, Contents write).
+  That step never fails the release, so an App missing there goes unnoticed
+  until Meerkat's daily run catches up. The job mints a one-hour token from it to push the version
   commit and the tag and to create the Release. Keeping the key on the
   environment is the point: it reaches the approved job and no other.
 
-`DOCKERHUB_USERNAME`, `DOCKERHUB_RW` and `PLUG_RELEASE_KEY` stay repository
-secrets; the CI builds need them before any approval. Nothing is published to
+`PLUG_RELEASE_KEY` stays a repository secret, and `DOCKERHUB_USERNAME` and
+`DOCKERHUB_RW` organization secrets: the CI builds need them before any
+approval. Nothing is published to
 GitHub Packages, so no packages permission is involved.
 
 One more environment is involved, `github-pages`: the documentation site
 redeploys on `release: published`, a run whose ref is the TAG, so that
 environment must allow tags `v*` as well as `main` (Settings > Environments >
 github-pages > Deployment branches and tags). Without the tag rule the deploy
-is refused and the site keeps showing the previous version, since the version
+is refused ("Tag "vX.Y.Z" is not allowed to deploy to github-pages") and the
+site keeps showing the previous version, since the version
 commit itself is pushed with `[skip ci]` and starts no deploy.
 
 ## The release signing key
@@ -150,7 +167,8 @@ condition and it clears by itself.
 
 ## Re-running a red CI
 
-Use `gh run rerun <id>`, never `gh run rerun --failed`.
+Start a new run, `gh workflow run ci.yml --ref main -R softwarity/plug`, so the
+red one keeps its history. Never `gh run rerun --failed`.
 
 The e2e legs reach clusters dispatched by a separate job, under names carrying
 the run ATTEMPT. `--failed` re-runs only what failed, that dispatch job is not
@@ -167,3 +185,5 @@ once; the same words are in ci.yml beside the line that builds the name.
   the `release` environment: the GitHub App the release job writes the
   repository with (version commit, tag, GitHub Release). They exist only for
   the approved job.
+- `TAILSCALE_CLIENT_ID` / `TAILSCALE_CLIENT_SECRET`: the OAuth client the clusters
+  and the e2e legs join the CI tailnet with (`tag:ci`).

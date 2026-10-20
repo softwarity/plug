@@ -22,7 +22,8 @@ import (
 // TCC: since Catalina a process only touches a NETWORK VOLUME if the app it
 // runs under has that permission (System Settings > Privacy & Security >
 // Files and Folders > Network Volumes). Terminal asks once; an app that never
-// asked gets EPERM. Seen from a shell under an editor; doctor names it.
+// asked gets EPERM. Seen from a shell under an editor; plug names it right
+// after mounting (doctor does not).
 
 func mountSMBShare(t mountTarget, path string) (string, error) {
 	if err := ensureMountpoint(path); err != nil {
