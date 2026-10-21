@@ -41,7 +41,7 @@ services:
       retries: 30
 
   mongo:
-    image: mongo:8
+    image: mongo:7 # not 8 on the runners' kernel: e2e/images.txt
     networks: [internal]
     healthcheck:
       test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]

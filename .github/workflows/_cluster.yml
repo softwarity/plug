@@ -150,7 +150,7 @@ jobs:
       # k8s-serve.sh loads them into kind.
       #
       # The key is the list and the month: a new list, or a new month, pulls
-      # once and saves, so a moving tag (mongo:8) is refreshed, not frozen. The
+      # once and saves, so a moving tag (mongo:7) is refreshed, not frozen. The
       # six clusters of that first run all miss and all pull; the first to
       # finish saves, the others' save is a no-op.
       - name: Key the fixtures' image cache
