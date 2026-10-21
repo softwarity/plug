@@ -77,7 +77,7 @@ func TestDockerRefusalsAreTranslated(t *testing.T) {
 			"--network"},
 		{"a published port",
 			"docker: Error response from daemon: conflicting options: port publishing and the container type network mode",
-			"port"},
+			"-s <name>:<port>:<port>"},
 	} {
 		if got := explainDockerRefusal(c.stderr); !strings.Contains(got, c.mustSay) {
 			t.Errorf("%s: plug added nothing useful to docker's %q, said %q", c.what, c.stderr, got)
@@ -255,6 +255,29 @@ func TestTheSidecarCarriesWhatTheDatapathNeeds(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("the sidecar is missing %q:\n  %s", want, got)
 		}
+	}
+}
+
+// A profile for a cluster on this machine names it localhost, and inside the
+// sidecar localhost is the sidecar: a k3d cluster tried from the machine it
+// runs on was refused with "connection refused" until the sidecar was pointed
+// at the docker host.
+func TestALoopbackProfileIsDialledThroughTheDockerHost(t *testing.T) {
+	for _, host := range []string{"localhost", "127.0.0.1", "127.0.1.1", "::1"} {
+		got := strings.Join(sidecarArgs(config{host: host, port: "22222"}, "", []string{"-c"}, "amd64", "n", "img", testOwner), " ")
+		for _, want := range []string{
+			"-e PLUG_CORE_HOST=host.docker.internal",
+			"--add-host host.docker.internal:host-gateway",
+			"-e PLUG_CORE_PORT=22222",
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("profile host %s: the sidecar is missing %q:\n  %s", host, want, got)
+			}
+		}
+	}
+	got := strings.Join(sidecarArgs(config{host: "h.example", port: "2222"}, "", []string{"-c"}, "amd64", "n", "img", testOwner), " ")
+	if !strings.Contains(got, "-e PLUG_CORE_HOST=h.example") || strings.Contains(got, "--add-host") {
+		t.Errorf("a remote host must reach the sidecar as the profile has it, and nothing added:\n  %s", got)
 	}
 }
 

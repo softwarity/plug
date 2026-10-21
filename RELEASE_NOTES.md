@@ -2,6 +2,12 @@
 
 ## NEXT RELEASE
 
+### `--dockerrun` reaches a cluster running on your own machine
+
+A profile that names `localhost`, as one does for a k3d or kind cluster on
+the workstation, now works with `--dockerrun`: the container that holds the
+tunnel reaches the agent through the docker host.
+
 ---
 
 ## 2.31.0

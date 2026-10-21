@@ -246,7 +246,9 @@ func explainDockerRefusal(stderr string) string {
 	case strings.Contains(stderr, "conflicting options") && strings.Contains(stderr, "network"):
 		return "your `docker run` sets its own --network or publishes a port with -p, and the container\n" +
 			"      shares the network of the sidecar that holds the tunnel, so neither can be set on it.\n" +
-			"      A published port belongs on the sidecar; --dockerrun does not move it there yet."
+			"      The container is a member of the cluster: serve it with -s <name>:<port>:<port> and the\n" +
+			"      cluster reaches it by that name, a browser through the cluster's gateway, with the\n" +
+			"      identity and roles it sets. A port published on this machine would bypass it."
 	}
 	return ""
 }
@@ -361,8 +363,33 @@ func startDockerSidecar(cfg config, network string, plugFlags []string) (string,
 	}
 	logs, _ := dockerCommand("logs", "--tail", "20", name).CombinedOutput()
 	stop()
-	return "", nil, fmt.Errorf("the sidecar never reported a tunnel to %s:%s. It said:\n%s",
-		cfg.host, cfg.port, strings.TrimSpace(string(logs)))
+	target, hint := cfg.host, ""
+	if h := sidecarAgentHost(cfg.host); h != cfg.host {
+		target = fmt.Sprintf("%s (%s from inside the container)", cfg.host, h)
+		hint = fmt.Sprintf("\n      The profile names this machine, which the container reaches through the\n"+
+			"      docker host gateway: the agent's port %s must be published on an address\n"+
+			"      containers reach, not on 127.0.0.1 alone", cfg.port)
+	}
+	return "", nil, fmt.Errorf("the sidecar never reported a tunnel to %s:%s. It said:\n%s%s",
+		target, cfg.port, strings.TrimSpace(string(logs)), hint)
+}
+
+// dockerHostGateway is the name a container reaches the docker host by. Docker
+// Desktop defines it; on Linux the sidecar is given it (--add-host
+// host-gateway, the address of the host on the default bridge).
+const dockerHostGateway = "host.docker.internal"
+
+// sidecarAgentHost is where the sidecar dials the agent. A profile written on
+// this machine for a cluster ON this machine (k3d, kind, Docker Desktop's
+// Kubernetes, an agent published on the host) names it localhost, and inside
+// the container localhost is the container itself. The host the profile means
+// is the docker host, so that is the name the sidecar gets. Any other host
+// goes through as the profile has it.
+func sidecarAgentHost(host string) string {
+	if isLoopback(host) {
+		return dockerHostGateway
+	}
+	return host
 }
 
 // The labels a sidecar carries, so that whose it is can be asked of the docker
@@ -486,9 +513,14 @@ func sidecarArgs(cfg config, network string, plugFlags []string, arch, name, ima
 		"--device", "/dev/net/tun:/dev/net/tun",
 		"-e", "PLUG_CORE=1",
 		"-e", "PLUG_CORE_SIDECAR=1", // the session says it holds a container
-		"-e", "PLUG_CORE_HOST="+cfg.host,
+		"-e", "PLUG_CORE_HOST="+sidecarAgentHost(cfg.host),
 		"-e", "PLUG_CORE_PORT="+cfg.port,
 	)
+	if isLoopback(cfg.host) {
+		// One shape on every OS: Docker Desktop already has the name, and
+		// host-gateway gives it the same address there.
+		args = append(args, "--add-host", dockerHostGateway+":host-gateway")
+	}
 	if network != "" {
 		args = append(args, "--network", network)
 	}
