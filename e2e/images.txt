@@ -7,10 +7,11 @@
 # cache key, and the key also turns over each month, so a moving tag
 # (mongo:7, rabbitmq:4) is refreshed rather than frozen.
 #
-# mongo:7, not 8: MongoDB 8 refuses to start on Linux 6.19 and newer, the
-# runners' kernel since October 2026 (its TCMalloc breaks the kernel's rseq
-# ABI, SERVER-121912, no fixed release). The e2e only needs a server that
-# speaks the wire protocol; move to 8 again once it starts on the runners.
+# mongo:7, not 8: kernels 6.19 to 7.0.13 changed rseq, which MongoDB 8's
+# TCMalloc relies on, and MongoDB 8 refuses to start there (SERVER-121912,
+# SERVER-125742). The runners have been on 6.19 since October 2026. The fix
+# is the kernel's, 7.0.14 and later; move back to 8 once the runners have it.
+# The e2e only needs a server that speaks the wire protocol.
 #
 # Not here: softwarity/plug's own images (this commit's, pulled by the
 # workflow; the previous release, resolved at run time).
