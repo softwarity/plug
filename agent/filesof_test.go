@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -48,7 +49,7 @@ func TestProjectableMountsKeepsAppProjectedVolume(t *testing.T) {
 
 // The reply is JSON the client can read: the paths, and the tar base64'd.
 func TestFilesReplyJSONRoundTrips(t *testing.T) {
-	s := filesReplyJSON([]string{"/certificates"}, []byte("TARBYTES"))
+	s := filesReplyJSON([]string{"/certificates"}, []byte("TARBYTES"), nil)
 	var r filesReply
 	if err := json.Unmarshal([]byte(s), &r); err != nil {
 		t.Fatal(err)
@@ -63,7 +64,7 @@ func TestFilesReplyJSONRoundTrips(t *testing.T) {
 	// No files: paths is an empty array (not null), tar empty - the client reads
 	// that as nothing to materialise.
 	var empty filesReply
-	json.Unmarshal([]byte(filesReplyJSON(nil, nil)), &empty)
+	json.Unmarshal([]byte(filesReplyJSON(nil, nil, nil)), &empty)
 	if empty.Paths == nil || len(empty.Paths) != 0 || empty.Tar != "" {
 		t.Fatalf("empty reply = %+v", empty)
 	}
@@ -158,4 +159,134 @@ func TestSwarmSecretStashUnderStateDirAndClearedAtBoot(t *testing.T) {
 	}
 	// Nothing to clear is not an error either.
 	clearSwarmSecretStashes()
+}
+
+// fakeRun answers ls and cat from a script: argv joined by spaces to stdout,
+// or to the error the command fails with. Anything unscripted fails, so a
+// command the reader should never have sent shows up as a note.
+func fakeRun(out map[string]string, fail map[string]string) execFunc {
+	return func(argv ...string) ([]byte, error) {
+		cmd := strings.Join(argv, " ")
+		if why, ok := fail[cmd]; ok {
+			return nil, execFailure{why}
+		}
+		if o, ok := out[cmd]; ok {
+			return []byte(o), nil
+		}
+		return nil, execFailure{"unscripted: " + cmd}
+	}
+}
+
+// The kubelet's atomic-writer layout reads as plain files: the ..data link and
+// the dated directory are skipped, each key is read through its link, a
+// subdirectory (an item path with a slash) is walked, a subPath mount is the
+// one file it is, and an empty key is a file all the same. A file that cannot
+// be read, and a mount whose image has no ls (distroless), are each named with
+// the command's own reason; the mount that gave nothing is not reported read.
+func TestReadMountedFilesReadsTheKubeletLayoutWithLsAndCat(t *testing.T) {
+	run := fakeRun(map[string]string{
+		"ls -1ApL /etc/tls":            "..2026_10_23_10_07_20.1111153391/\n..data/\nca.crt\nempty\nsub/\ntls.key\n",
+		"ls -1ApL /etc/tls/sub":        "nested.conf\n",
+		"ls -1ApL /etc/app.conf":       "/etc/app.conf\n",
+		"cat /etc/tls/ca.crt":          "PEM",
+		"cat /etc/tls/empty":           "",
+		"cat /etc/tls/sub/nested.conf": "k=v",
+		"cat /etc/app.conf":            "app",
+	}, map[string]string{
+		"cat /etc/tls/tls.key": "cat: /etc/tls/tls.key: Permission denied",
+		"ls -1ApL /etc/ca":     "exec: executable file not found in $PATH",
+	})
+	files, read, notes := readMountedFiles(run, []string{"/etc/tls", "/etc/app.conf", "/etc/ca"})
+	want := map[string]string{"/etc/tls/ca.crt": "PEM", "/etc/tls/empty": "", "/etc/tls/sub/nested.conf": "k=v", "/etc/app.conf": "app"}
+	if len(files) != len(want) {
+		t.Errorf("files = %v, want %v", files, want)
+	}
+	for p, body := range want {
+		if got, ok := files[p]; !ok || string(got) != body {
+			t.Errorf("%s = %q (present %v), want %q", p, got, ok, body)
+		}
+	}
+	if !reflect.DeepEqual(read, []string{"/etc/tls", "/etc/app.conf"}) {
+		t.Errorf("read = %v, want the two mounts that gave files", read)
+	}
+	wantNotes := []string{
+		"/etc/ca: not read (exec: executable file not found in $PATH)",
+		"/etc/tls/tls.key: not read (cat: /etc/tls/tls.key: Permission denied)",
+	}
+	if !reflect.DeepEqual(notes, wantNotes) {
+		t.Errorf("notes = %q\nwant %q", notes, wantNotes)
+	}
+}
+
+// files-of on Kubernetes, end to end over the exec subresource: the pod's
+// secret mount comes back as a tar of its files, and the ServiceAccount mount
+// is never listed. The same pod with an image whose ls fails gives no files,
+// no mount reported read, and a note that says why.
+func TestK8sFilesOfReadsTheMountsThroughExec(t *testing.T) {
+	seed := func(fa *fakeAPIServer) {
+		fa.add("services", k8sObject("Service", "api", nil, nil, map[string]any{"selector": map[string]string{"app": "api"}}))
+		pod := k8sObject("Pod", "api-0", map[string]string{"app": "api"}, nil, map[string]any{
+			"volumes": []map[string]any{
+				{"name": "ca", "secret": map[string]any{"secretName": "ca"}},
+				{"name": "kube-api-access", "projected": map[string]any{"sources": []any{}}},
+			},
+			"containers": []map[string]any{{"name": "api", "volumeMounts": []map[string]any{
+				{"name": "ca", "mountPath": "/etc/ca"},
+				{"name": "kube-api-access", "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount"},
+			}}},
+		})
+		pod["status"] = map[string]any{"phase": "Running"}
+		fa.add("pods", pod)
+	}
+
+	fa := newFakeAPIServer(t, testNS, testPodIP)
+	seed(fa)
+	fa.execAnswers("ls -1ApL /etc/ca", "..data/\nca.crt\n")
+	fa.execAnswers("cat /etc/ca/ca.crt", "-----BEGIN CERTIFICATE-----\n")
+	paths, tb, notes := k8sFilesOf(testNS, "api")
+	if !reflect.DeepEqual(paths, []string{"/etc/ca"}) || len(notes) != 0 {
+		t.Fatalf("paths = %v notes = %q, want /etc/ca and nothing to say", paths, notes)
+	}
+	tr := tar.NewReader(bytes.NewReader(tb))
+	h, err := tr.Next()
+	if err != nil || h.Name != "etc/ca/ca.crt" {
+		t.Fatalf("first member = %v, %v; want etc/ca/ca.crt", h, err)
+	}
+	if body, _ := io.ReadAll(tr); string(body) != "-----BEGIN CERTIFICATE-----\n" {
+		t.Fatalf("ca.crt = %q", body)
+	}
+	if _, err := tr.Next(); err != io.EOF {
+		t.Fatalf("a second member, the ..data link or the token: %v", err)
+	}
+
+	fa = newFakeAPIServer(t, testNS, testPodIP)
+	seed(fa)
+	fa.execFails("ls -1ApL /etc/ca", "", "ls: /etc/ca: Cannot stat: Function not implemented")
+	paths, tb, notes = k8sFilesOf(testNS, "api")
+	if paths != nil || tb != nil {
+		t.Fatalf("paths = %v, tar of %d bytes: a mount that gave nothing is not read", paths, len(tb))
+	}
+	if !reflect.DeepEqual(notes, []string{"/etc/ca: not read (ls: /etc/ca: Cannot stat: Function not implemented)"}) {
+		t.Fatalf("notes = %q", notes)
+	}
+}
+
+// What a failed command wrote is not its answer, and an empty output from one
+// that succeeded is (an empty file read with cat); k8sExec, for the readers
+// that need something, still refuses an empty one.
+func TestK8sExecTellsAFailedCommandFromAnEmptyOne(t *testing.T) {
+	fa := newFakeAPIServer(t, testNS, testPodIP)
+	seedK8sWorkload(fa, nil, nil)
+	fa.execFails("tar -c -f - /etc/tls", string(make([]byte, 1024)), "tar: /etc/tls: Cannot stat: Function not implemented")
+	fa.execAnswers("cat /etc/empty", "")
+	if out, _, err := k8sExecOutput(testNS, "db-0", "db", "tar", "-c", "-f", "-", "/etc/tls"); err == nil || out != nil ||
+		!strings.Contains(err.Error(), "Function not implemented") {
+		t.Fatalf("a failed tar: out of %d bytes, err %v", len(out), err)
+	}
+	if out, _, err := k8sExecOutput(testNS, "db-0", "db", "cat", "/etc/empty"); err != nil || len(out) != 0 {
+		t.Fatalf("an empty file: out %q, err %v", out, err)
+	}
+	if _, _, err := k8sExec(testNS, "db-0", "db", "cat", "/etc/empty"); err == nil {
+		t.Fatal("k8sExec took an empty output for an answer")
+	}
 }

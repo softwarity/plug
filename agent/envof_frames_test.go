@@ -3,6 +3,7 @@ package agent
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"testing"
 )
 
@@ -72,5 +73,33 @@ func TestChannelThreeFailureBecomesTheError(t *testing.T) {
 	out, err = readChannelFrames(bufio.NewReader(bytes.NewReader(succeeding)), 1)
 	if err != nil || string(out) != "A=1\x00" {
 		t.Fatalf("out=%q err=%v", out, err)
+	}
+}
+
+// A command that writes and then FAILS is a failure, whatever it wrote: a tar
+// that cannot stat a single path still writes a valid, empty archive, and that
+// archive was taken for the files. The command's stderr is the message.
+func TestChannelThreeFailureWinsOverWhatTheCommandWrote(t *testing.T) {
+	frame := func(op byte, payload []byte) []byte {
+		b := []byte{0x80 | op}
+		if len(payload) < 126 {
+			b = append(b, byte(len(payload)))
+		} else {
+			b = append(b, 126, byte(len(payload)>>8), byte(len(payload)))
+		}
+		return append(b, payload...)
+	}
+	stream := bytes.Join([][]byte{
+		frame(0x2, append([]byte{1}, make([]byte, 1024)...)), // end-of-archive blocks
+		frame(0x2, append([]byte{2}, []byte("tar: /etc/tls: Cannot stat: Function not implemented\ntar: Exiting with failure status due to previous errors\n")...)),
+		frame(0x2, append([]byte{3}, []byte(`{"status":"Failure","message":"command terminated with non-zero exit code","reason":"NonZeroExitCode"}`)...)),
+	}, nil) // and no close frame: the verdict holds without it
+	_, err := readChannelFrames(bufio.NewReader(bytes.NewReader(stream)), 1)
+	var failed execFailure
+	if !errors.As(err, &failed) {
+		t.Fatalf("err = %v, want the command's failure", err)
+	}
+	if want := "tar: /etc/tls: Cannot stat: Function not implemented; tar: Exiting with failure status due to previous errors"; err.Error() != want {
+		t.Fatalf("err = %q, want the command's stderr %q", err, want)
 	}
 }

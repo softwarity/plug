@@ -5,11 +5,13 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -17,25 +19,28 @@ import (
 // has MOUNTED, the companion of env-of for what does not live in a variable: a
 // CA bundle, a keystore, a config file. The agent reads them where they are,
 // with the same exec it uses for the environment (no `get secrets`), and streams
-// them as a tar. The client materialises them locally and points the process at
-// them. One-shot at session start, because a mounted secret does not change
-// under a running pod; a LIVE mount (a PVC's data) is a separate, opt-in idea.
+// them as a tar it builds itself. The client materialises them locally and
+// points the process at them. One-shot at session start, because a mounted
+// secret does not change under a running pod; a LIVE mount (a PVC's data) is a
+// separate, opt-in idea.
 //
-// The reply is JSON: the absolute mount paths (so the client can repoint the
-// variables that name them) and the tar, base64'd so it rides the same text
-// protocol as every other verb, the "error:" convention and the version
-// negotiation intact. An agent that does not know the verb answers "unknown
-// command" and the client simply materialises nothing.
+// The reply is JSON: the absolute mount paths that were read (so the client can
+// repoint the variables that name them), the tar, base64'd so it rides the same
+// text protocol as every other verb, the "error:" convention and the version
+// negotiation intact, and a note for each mount, or file, that could not be
+// read, which the client prints. An agent that does not know the verb answers
+// "unknown command" and the client simply materialises nothing.
 type filesReply struct {
 	Paths []string `json:"paths"`
-	Tar   string   `json:"tar"` // base64 of `tar cf -` over Paths, empty when there is nothing
+	Tar   string   `json:"tar"` // base64 of a tar of Paths, empty when there is nothing
+	Notes []string `json:"notes,omitempty"`
 }
 
-func filesReplyJSON(paths []string, tar []byte) string {
+func filesReplyJSON(paths []string, tar []byte, notes []string) string {
 	if paths == nil {
 		paths = []string{}
 	}
-	b, _ := json.Marshal(filesReply{Paths: paths, Tar: base64.StdEncoding.EncodeToString(tar)})
+	b, _ := json.Marshal(filesReply{Paths: paths, Tar: base64.StdEncoding.EncodeToString(tar), Notes: notes})
 	return string(b)
 }
 
@@ -86,23 +91,106 @@ func isServiceAccountMount(path string) bool {
 }
 
 // doFilesOf answers the mounted secret/configMap files of the workload behind
-// <name>. Kubernetes only for now (Docker/Swarm is a later slice); anything it
-// cannot read answers an empty set, which the client materialises as nothing -
-// the env-of note already told the operator why (no exec, distroless, no pod).
+// <name>. Anything it cannot reach (no pod, no exec) answers an empty set, which
+// the client materialises as nothing - the env-of note already told the
+// operator why; a mount it reaches and cannot read is named in a note.
 func doFilesOf(cmd []string) {
 	if len(cmd) != 2 || !nameRe.MatchString(cmd[1]) {
 		answer("error: usage: files-of <name>")
 	}
 	name := cmd[1]
-	var paths []string
+	var paths, notes []string
 	var tarball []byte
 	switch {
 	case k8sAvailable():
-		paths, tarball = k8sFilesOf(k8sNamespace(), name)
+		paths, tarball, notes = k8sFilesOf(k8sNamespace(), name)
 	case dockerAvailable():
 		paths, tarball = dockerFilesOf(name)
 	}
-	answer("%s", filesReplyJSON(paths, tarball))
+	answer("%s", filesReplyJSON(paths, tarball, notes))
+}
+
+// execFunc runs argv in the workload's container and returns its stdout, or
+// why it could not: the one thing readMountedFiles needs from a backend.
+type execFunc func(argv ...string) ([]byte, error)
+
+// readMountedFiles reads every file under each mount with the two commands an
+// image is likeliest to carry: `ls` to list a directory, `cat` to read a file.
+// Not the image's tar: it is a third tool to depend on, and one that breaks on
+// its own (an amd64 image's GNU tar 1.35 answers ENOSYS to every stat under an
+// x86 emulator, then still writes a valid, empty archive).
+//
+// `ls -L` follows links, so the kubelet's atomic-writer layout reads as plain
+// files: a mounted key is a link to ..data/<key>, ..data a link to a dated
+// directory, and the ..-prefixed entries, which no key may start with, are
+// skipped. `cat` follows the key's link to its content. A subPath mount is a
+// file, which `ls` answers with its own path. Directories (an item whose path
+// has a slash) are walked, to a bound a link loop cannot pass.
+//
+// It returns the files by absolute path, the mounts that gave at least one,
+// and a note for each mount or file that could not be read, with the command's
+// own reason (distroless: no ls, no cat).
+func readMountedFiles(run execFunc, mounts []string) (files map[string][]byte, read, notes []string) {
+	type entry struct{ mount, path string }
+	var todo []entry
+	var list func(mount, dir string, depth int)
+	list = func(mount, dir string, depth int) {
+		out, err := run("ls", "-1ApL", dir)
+		if err != nil {
+			notes = append(notes, fmt.Sprintf("%s: not read (%v)", dir, err))
+			return
+		}
+		names := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+		if len(names) == 1 && names[0] == dir {
+			todo = append(todo, entry{mount, dir}) // a file mounted on its own
+			return
+		}
+		for _, n := range names {
+			switch {
+			case n == "" || strings.HasPrefix(n, ".."):
+			case strings.HasSuffix(n, "/"):
+				if depth < 8 {
+					list(mount, path.Join(dir, n), depth+1)
+				}
+			default:
+				todo = append(todo, entry{mount, path.Join(dir, n)})
+			}
+		}
+	}
+	for _, m := range mounts {
+		list(m, m, 0)
+	}
+	// One exec per file, eight at a time: a mount is a handful of keys, and a
+	// ConfigMap of fifty costs well under a second this way.
+	contents := make([][]byte, len(todo))
+	errs := make([]error, len(todo))
+	sem := make(chan struct{}, 8)
+	var wg sync.WaitGroup
+	for i, e := range todo {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer func() { <-sem; wg.Done() }()
+			contents[i], errs[i] = run("cat", e.path)
+		}()
+	}
+	wg.Wait()
+	files = map[string][]byte{}
+	gave := map[string]bool{}
+	for i, e := range todo {
+		if errs[i] != nil {
+			notes = append(notes, fmt.Sprintf("%s: not read (%v)", e.path, errs[i]))
+			continue
+		}
+		files[e.path] = contents[i]
+		gave[e.mount] = true
+	}
+	for _, m := range mounts {
+		if gave[m] {
+			read = append(read, m)
+		}
+	}
+	return files, read, notes
 }
 
 // secretsMount is where both Compose (its `secrets:`) and Swarm mount a secret,
@@ -240,14 +328,14 @@ func swarmSecretStash(name string) string {
 // reads its secrets live again.
 func clearSwarmSecretStashes() { _ = os.RemoveAll(swarmSecretStashDir) }
 
-// swarmReadSecrets tars /run/secrets from a RUNNING task of the service and
-// returns it. A Swarm secret is a tmpfs mount, invisible to the archive API
-// (which reads the layer), so it is read from INSIDE the task; -C / makes the
-// members "run/secrets/..." - absolute minus the leading slash, the shape the
-// client's untar expects, so no reroot. Best-effort: no running task reachable
-// from this node (a multi-node swarm may schedule it elsewhere), no /run/secrets,
-// or no `tar` in the image (distroless) yields nothing, and files-of falls back
-// to the configs - the same limit as env's `cat` on a distroless image.
+// swarmReadSecrets reads /run/secrets from a RUNNING task of the service and
+// returns it as a tar. A Swarm secret is a tmpfs mount, invisible to the
+// archive API (which reads the layer), so it is read from INSIDE the task, with
+// `ls` and `cat` (readMountedFiles). Best-effort: no running task reachable
+// from this node (a multi-node swarm may schedule it elsewhere), no
+// /run/secrets (a service with none, the common case), or no `ls`/`cat` in the
+// image (distroless) yields nothing, and files-of falls back to the configs -
+// the same limit as env's `cat` on a distroless image.
 func swarmReadSecrets(service string) []byte {
 	// Patience, because of WHEN this runs: at park, and a park often follows
 	// a restore by seconds (the e2e's back-to-back takeovers; a developer's
@@ -295,8 +383,9 @@ func swarmReadSecretsOnce(service string) (tarball []byte, sawRunning bool) {
 			continue
 		}
 		sawRunning = true
-		if tb, err := dockerExec(id, []string{"tar", "-c", "-C", "/", strings.TrimPrefix(secretsMount, "/")}); err == nil && len(tb) > 0 {
-			return tb, true
+		run := func(argv ...string) ([]byte, error) { return dockerExec(id, argv) }
+		if files, _, _ := readMountedFiles(run, []string{secretsMount}); len(files) > 0 {
+			return tarFromFiles(files), true
 		}
 	}
 	return nil, sawRunning
@@ -387,39 +476,38 @@ func tarFromFiles(files map[string][]byte) []byte {
 }
 
 // k8sFilesOf finds the running pod behind the parked Service, selects its
-// projectable mounts, and tars them out of the container. It returns the paths
-// and the tar; on any miss it returns an empty set rather than an error, since
-// files are a best-effort addition to the environment, never the thing that
-// fails a session.
-func k8sFilesOf(ns, name string) ([]string, []byte) {
+// projectable mounts, and reads them out of the container (readMountedFiles).
+// It returns the mounts read, the tar, and a note per mount or file it could
+// not read; finding no pod is an empty set rather than an error, since files
+// are a best-effort addition to the environment, never the thing that fails a
+// session.
+func k8sFilesOf(ns, name string) ([]string, []byte, []string) {
 	sel, _, err := k8sWorkloadSelector(ns, name)
 	if err != nil || len(sel) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	pods, _, err := k8sPodsSelected(ns, sel)
 	if err != nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	for _, p := range pods {
 		if p.Status.Phase != "Running" || len(p.Spec.Containers) == 0 {
 			continue
 		}
-		paths := projectableMounts(p.Spec.Volumes, p.Spec.Containers[0].VolumeMounts)
-		if len(paths) == 0 {
-			return nil, nil
+		c := p.Spec.Containers[0]
+		mounts := projectableMounts(p.Spec.Volumes, c.VolumeMounts)
+		if len(mounts) == 0 {
+			return nil, nil, nil
 		}
-		// -h DEREFERENCES symlinks: a Secret (and a projected ConfigMap) is
-		// mounted through the kubelet's atomic-writer, so /run/plug-test/ca is a
-		// symlink into a ..data/ directory, not a regular file. Without -h tar
-		// stored the link, the client's untar skipped it (a link is the one
-		// member that could escape the temp dir), and the file never landed - the
-		// projection looked done and the value pointed at nothing. -h makes the
-		// leaf a regular file with its content.
-		tar, _, err := k8sExec(ns, p.Metadata.Name, p.Spec.Containers[0].Name, append([]string{"tar", "-c", "-h", "-f", "-"}, paths...)...)
-		if err != nil {
-			return nil, nil // no exec, or no tar (distroless): env-of already noted it
+		run := func(argv ...string) ([]byte, error) {
+			out, _, err := k8sExecOutput(ns, p.Metadata.Name, c.Name, argv...)
+			return out, err
 		}
-		return paths, tar
+		files, read, notes := readMountedFiles(run, mounts)
+		if len(files) == 0 {
+			return nil, nil, notes
+		}
+		return read, tarFromFiles(files), notes
 	}
-	return nil, nil
+	return nil, nil, nil
 }

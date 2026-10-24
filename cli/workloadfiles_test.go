@@ -15,35 +15,48 @@ import (
 
 // The end the fix turns on: a variable that names a mounted path is repointed at
 // the local copy, so NODE_EXTRA_CA_CERTS resolves without writing the host's
-// real /certificates. A variable that does not name a mount is left untouched.
+// real /certificates. A variable that does not name a mount is left untouched,
+// and one that names a file that was NOT brought over keeps the pod's path and
+// is said: repointed, it would name a file that does not exist either.
 func TestLocalizeFileEnvRepointsMountPaths(t *testing.T) {
 	vars := []string{
 		"NODE_EXTRA_CA_CERTS=/certificates/ca.crt",
 		"PGSSLROOTCERT=/certificates/ca.crt",
 		"PORT=8080",
 		"CERT_DIR=/certificates",
+		"TLS_KEY=/certificates/tls.key",
 	}
 	// The local paths are OS-native (a Windows dev machine gets backslashes),
 	// so the expectations are built with filepath.Join, not hard-coded slashes.
-	dir := filepath.Join(string(filepath.Separator)+"tmp", "plug-files-x")
-	got := localizeFileEnv(vars, []string{"/certificates"}, dir)
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "certificates"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "certificates", "ca.crt"), []byte("PEM"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, missing := localizeFileEnv(vars, []string{"/certificates"}, dir)
 	want := []string{
 		"NODE_EXTRA_CA_CERTS=" + filepath.Join(dir, "/certificates/ca.crt"),
 		"PGSSLROOTCERT=" + filepath.Join(dir, "/certificates/ca.crt"),
 		"PORT=8080",
 		"CERT_DIR=" + filepath.Join(dir, "/certificates"),
+		"TLS_KEY=/certificates/tls.key",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v\nwant %v", got, want)
 	}
+	if !reflect.DeepEqual(missing, []string{"TLS_KEY"}) {
+		t.Fatalf("missing = %v, want the variable whose file is not there", missing)
+	}
 	// A prefix that is not a path boundary must NOT match (/certificates-backup
 	// is not under /certificates): the value is left exactly as it was.
-	got = localizeFileEnv([]string{"X=/certificates-backup/x"}, []string{"/certificates"}, dir)
+	got, _ = localizeFileEnv([]string{"X=/certificates-backup/x"}, []string{"/certificates"}, dir)
 	if got[0] != "X=/certificates-backup/x" {
 		t.Fatalf("a non-boundary prefix must not be rewritten, got %v", got)
 	}
 	// No dir (files unavailable) leaves everything as it was.
-	if got := localizeFileEnv(vars, []string{"/certificates"}, ""); !reflect.DeepEqual(got, vars) {
+	if got, _ := localizeFileEnv(vars, []string{"/certificates"}, ""); !reflect.DeepEqual(got, vars) {
 		t.Fatalf("no dir must be a no-op, got %v", got)
 	}
 }
@@ -160,7 +173,7 @@ func TestFetchWorkloadFilesExtractsUnderTheSessionDirectory(t *testing.T) {
 		}
 	}
 	// The variables that name the mount path now resolve here.
-	vars := localizeFileEnv([]string{"CA_FILE=/etc/secret/ca.pem"}, paths, dir)
+	vars, _ := localizeFileEnv([]string{"CA_FILE=/etc/secret/ca.pem"}, paths, dir)
 	if want := "CA_FILE=" + filepath.Join(dir, "etc", "secret", "ca.pem"); vars[0] != want {
 		t.Errorf("repointed to %q, want %q", vars[0], want)
 	}
@@ -173,6 +186,7 @@ func TestFetchWorkloadFilesKeepsEveryMemberInsideTheDirectory(t *testing.T) {
 	tmp := sandboxTemp(t)
 	f := &fakeExec{replies: map[string]string{
 		"files-of api": filesOfReply(t, []string{"/etc/secret"},
+			tarMember{name: "etc/secret/ca.pem", body: "PEM"},
 			tarMember{name: "../escaped", body: "x"},
 			tarMember{name: "/abs/rooted", body: "y"},
 			tarMember{name: "etc/../../climbed", body: "z"}),
@@ -257,5 +271,55 @@ func TestFetchWorkloadFilesRemovesTheDirectoryOnABrokenTar(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(tmp); len(entries) != 0 {
 		t.Errorf("the session directory survived the failed extraction: %v", entries)
+	}
+}
+
+// What did not land is said and left out: the agent's notes (a file it could
+// not read, a mount whose image has no ls), and a mount it announced but sent
+// nothing for, which an agent before the ls/cat reader did when the image's
+// tar failed (a valid, empty archive). Only the mount that landed comes back,
+// so nothing is repointed at, or mounted from, an empty directory; and when
+// none did, no directory is left behind.
+func TestFetchWorkloadFilesReturnsOnlyWhatLanded(t *testing.T) {
+	tmp := sandboxTemp(t)
+	reply := filesOfReply(t, []string{"/etc/tls", "/etc/ca"},
+		tarMember{name: "etc/tls/tls.crt", body: "PEM"})
+	var r map[string]any
+	json.Unmarshal([]byte(reply), &r)
+	r["notes"] = []string{"/etc/key: not read (exec: executable file not found in $PATH)"}
+	b, _ := json.Marshal(r)
+	f := &fakeExec{replies: map[string]string{"files-of api": string(b)}}
+	said := captureStderr(t)
+	dir, paths, err := fetchWorkloadFiles(f, "api")
+	out := said()
+	if err != nil {
+		t.Fatalf("fetchWorkloadFiles: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	if !reflect.DeepEqual(paths, []string{"/etc/tls"}) {
+		t.Errorf("paths = %v, want only the mount that landed", paths)
+	}
+	for _, want := range []string{
+		"api: mounted file /etc/key: not read (exec: executable file not found in $PATH)",
+		"api: the agent sent nothing for /etc/ca",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("not said: %q\nin: %s", want, out)
+		}
+	}
+
+	// The old agent's failed tar: the mount announced, an empty archive.
+	f = &fakeExec{replies: map[string]string{"files-of api": filesOfReply(t, []string{"/etc/ca"})}}
+	said = captureStderr(t)
+	dir, paths, err = fetchWorkloadFiles(f, "api")
+	out = said()
+	if err != nil || dir != "" || paths != nil {
+		t.Fatalf("dir=%q paths=%v err=%v, want nothing", dir, paths, err)
+	}
+	if !strings.Contains(out, "api: the agent sent nothing for /etc/ca") {
+		t.Errorf("the empty mount was not said: %s", out)
+	}
+	if entries, _ := os.ReadDir(tmp); len(entries) != 1 {
+		t.Errorf("a directory was left behind for the empty archive: %v", entries)
 	}
 }

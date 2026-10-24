@@ -2,6 +2,15 @@
 
 ## NEXT RELEASE
 
+### A workload's mounted files reach the plugged process on more images
+
+The Secret and ConfigMap files a workload mounts are now read with the
+image's own `ls` and `cat`, so they come through on images whose `tar` is
+missing or fails, as an amd64 Ubuntu 26.04 image does under Docker
+Desktop's x86 emulation. A file that cannot be read is named when the
+session starts, with the reason, and the variable that names it keeps the
+pod's path rather than pointing at a file that is not there.
+
 ---
 
 ## 2.31.1

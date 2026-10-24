@@ -143,12 +143,14 @@ func dockerArchive(id, path string) ([]byte, int, error) {
 // what the archive API cannot: a tmpfs mount (a Swarm secret lives in one) is
 // not in the container's filesystem layer, so it must be read from INSIDE the
 // running container. The attach stream is multiplexed - 8-byte frame headers,
-// stream 1 stdout - since no TTY is asked (the payload is a binary tar).
+// stream 1 stdout, 2 stderr - since no TTY is asked (the payload is binary). A
+// command that exits non-zero is an error, its stderr the message: what a
+// failed command wrote is not its answer.
 func dockerExec(id string, cmd []string) ([]byte, error) {
 	var created struct {
 		ID string `json:"Id"`
 	}
-	body := map[string]any{"AttachStdout": true, "AttachStderr": false, "Cmd": cmd}
+	body := map[string]any{"AttachStdout": true, "AttachStderr": true, "Cmd": cmd}
 	if code, err := dockerAPI("POST", "/containers/"+id+"/exec", body, &created); err != nil || code != 201 || created.ID == "" {
 		return nil, fmt.Errorf("exec create (code %d): %v", code, err)
 	}
@@ -162,21 +164,36 @@ func dockerExec(id string, cmd []string) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	return demuxDockerStdout(resp.Body)
+	out, stderr, err := demuxDocker(resp.Body)
+	if err != nil {
+		return out, err
+	}
+	// The stream ends when the command does, so its exit code is known now.
+	// An inspect that cannot answer leaves the output as it was read.
+	var st struct {
+		Running  bool `json:"Running"`
+		ExitCode int  `json:"ExitCode"`
+	}
+	if code, err := dockerAPI("GET", "/exec/"+created.ID+"/json", nil, &st); err == nil && code == 200 && !st.Running && st.ExitCode != 0 {
+		if why := stderrLines(stderr); why != "" {
+			return nil, execFailure{why}
+		}
+		return nil, execFailure{fmt.Sprintf("%s exited %d", cmd[0], st.ExitCode)}
+	}
+	return out, nil
 }
 
-// demuxDockerStdout returns the stdout bytes of Docker's multiplexed attach
-// stream: each frame is [stream, 0,0,0, size(4, big-endian)] then size bytes,
-// stream 1 is stdout and 2 is stderr.
-func demuxDockerStdout(r io.Reader) ([]byte, error) {
-	var out []byte
+// demuxDocker splits Docker's multiplexed attach stream: each frame is
+// [stream, 0,0,0, size(4, big-endian)] then size bytes, stream 1 is stdout
+// and 2 is stderr (kept to 4 KiB, it only feeds a message).
+func demuxDocker(r io.Reader) (stdout, stderr []byte, err error) {
 	var h [8]byte
 	for {
 		if _, err := io.ReadFull(r, h[:]); err != nil {
 			if err == io.EOF || err == io.ErrUnexpectedEOF {
-				return out, nil
+				return stdout, stderr, nil
 			}
-			return out, err
+			return stdout, stderr, err
 		}
 		n := binary.BigEndian.Uint32(h[4:])
 		if n == 0 {
@@ -184,10 +201,15 @@ func demuxDockerStdout(r io.Reader) ([]byte, error) {
 		}
 		buf := make([]byte, n)
 		if _, err := io.ReadFull(r, buf); err != nil {
-			return out, err
+			return stdout, stderr, err
 		}
-		if h[0] == 1 { // stdout
-			out = append(out, buf...)
+		switch h[0] {
+		case 1:
+			stdout = append(stdout, buf...)
+		case 2:
+			if len(stderr) < 4096 {
+				stderr = append(stderr, buf...)
+			}
 		}
 	}
 }

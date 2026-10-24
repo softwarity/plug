@@ -46,6 +46,7 @@ type fakeAPIServer struct {
 	log     []string
 	refuse  func(method, path string) (int, string)
 	execOut map[string]string // "cat /proc/1/status" -> what the exec subresource writes on stdout
+	execErr map[string]string // a command that FAILS: what it writes on stderr (execFails)
 }
 
 // newFakeAPIServer starts the fake in namespace ns and points every seam the
@@ -108,9 +109,12 @@ func (fa *fakeAPIServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// pods/<name>/exec and the like: enough to tell a missing pod from one
 		// that exists, which is all the RBAC probes read.
 		out, scripted := fa.execOut[strings.Join(q["command"], " ")]
+		stderr, fails := fa.execErr[strings.Join(q["command"], " ")]
 		switch {
 		case coll[name] == nil:
 			k8sStatus(w, 404, fmt.Sprintf("pods %q not found", name))
+		case sub == "exec" && fails && r.Header.Get("Upgrade") == "websocket":
+			execSession(w, out, stderr, `{"status":"Failure","message":"command terminated with non-zero exit code","reason":"NonZeroExitCode"}`)
 		case sub == "exec" && scripted && r.Header.Get("Upgrade") == "websocket":
 			execReply(w, out)
 		default:
@@ -355,10 +359,30 @@ func (fa *fakeAPIServer) execAnswers(command, stdout string) {
 	fa.execOut[command] = stdout
 }
 
+// execFails scripts a command that writes stdout and stderr and then exits
+// non-zero, as a tar that cannot stat its paths does: an archive on stdout
+// all the same, its reason on stderr, Failure on channel 3.
+func (fa *fakeAPIServer) execFails(command, stdout, stderr string) {
+	fa.mu.Lock()
+	defer fa.mu.Unlock()
+	if fa.execOut == nil {
+		fa.execOut = map[string]string{}
+	}
+	if fa.execErr == nil {
+		fa.execErr = map[string]string{}
+	}
+	fa.execOut[command] = stdout
+	fa.execErr[command] = stderr
+}
+
 // execReply is the exec subresource's session, the smallest one the agent
 // reads (k8sExec): the WebSocket upgrade, stdout on channel 1, the API
 // server's verdict on channel 3, a close frame.
 func execReply(w http.ResponseWriter, stdout string) {
+	execSession(w, stdout, "", `{"status":"Success"}`)
+}
+
+func execSession(w http.ResponseWriter, stdout, stderr, status string) {
 	conn, buf, err := w.(http.Hijacker).Hijack()
 	if err != nil {
 		return
@@ -375,7 +399,10 @@ func execReply(w http.ResponseWriter, stdout string) {
 	}
 	buf.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
 	frame(0x2, append([]byte{1}, stdout...))
-	frame(0x2, append([]byte{3}, `{"status":"Success"}`...))
+	if stderr != "" {
+		frame(0x2, append([]byte{2}, stderr...))
+	}
+	frame(0x2, append([]byte{3}, status...))
 	frame(0x8, nil)
 	_ = buf.Flush()
 }

@@ -180,19 +180,29 @@ func readWorkloadEnv(tr envExecer, name string) (workloadEnvReply, error) {
 // and their kind resolve without writing to the host's real /certificates. A
 // value the app reads by a hard-coded path rather than through a variable is not
 // redirected, and cannot be by this mechanism.
-func localizeFileEnv(vars, mountPaths []string, dir string) []string {
+//
+// A variable is repointed only at a file that is THERE: one that names a file
+// the agent could not read keeps the pod's path, and comes back in missing to
+// be said. A path that exists nowhere locally fails the same as a copy that
+// is not there, but it names what the workload expects.
+func localizeFileEnv(vars, mountPaths []string, dir string) (out, missing []string) {
 	if dir == "" || len(mountPaths) == 0 {
-		return vars
+		return vars, nil
 	}
-	out := make([]string, len(vars))
+	out = make([]string, len(vars))
 	for i, kv := range vars {
-		if k, v, ok := strings.Cut(kv, "="); ok && underAnyPath(v, mountPaths) {
-			out[i] = k + "=" + filepath.Join(dir, v)
+		out[i] = kv
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || !underAnyPath(v, mountPaths) {
+			continue
+		}
+		if local := filepath.Join(dir, v); fileExists(local) {
+			out[i] = k + "=" + local
 		} else {
-			out[i] = kv
+			missing = append(missing, k)
 		}
 	}
-	return out
+	return out, missing
 }
 
 func underAnyPath(v string, paths []string) bool {

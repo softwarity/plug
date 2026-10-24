@@ -678,8 +678,12 @@ func projectWorkloadEnv(tr envExecer, name string, p envPolicy) {
 	if dir, paths, ferr := fetchWorkloadFiles(tr, name); ferr != nil {
 		info("%s: could not read the workload's mounted files (%v); a variable that names one may not resolve locally", name, ferr)
 	} else if dir != "" {
-		vars = localizeFileEnv(vars, paths, dir)
+		var missing []string
+		vars, missing = localizeFileEnv(vars, paths, dir)
 		info("%s: %d mounted file path(s) materialised under %s and repointed", name, len(paths), dir)
+		for _, k := range missing {
+			info("%s: %s keeps the pod's path: the file it names was not brought over", name, k)
+		}
 	}
 	// And its data VOLUMES, mounted live by startMounts before this ran
 	// (option B, the same shape): the variables naming a volume's cluster

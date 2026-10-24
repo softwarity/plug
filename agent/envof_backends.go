@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -289,11 +290,23 @@ func k8sExecEnviron(ns, pod, container string) ([]string, int, error) {
 	return procEnviron(out), 0, nil
 }
 
-// k8sExec runs argv in the container over the exec subresource and returns its
-// stdout bytes (binary-safe: a tar stream comes back through here too). One
-// place, because reading a process's environment and reading its mounted files
-// are the same handshake with a different command.
+// k8sExec runs argv in the container and returns its stdout, which must not
+// be empty: an empty environment or process status is not a thing a running
+// container has, so a command that wrote nothing is said, not swallowed.
 func k8sExec(ns, pod, container string, argv ...string) ([]byte, int, error) {
+	out, code, err := k8sExecOutput(ns, pod, container, argv...)
+	if err == nil && len(out) == 0 {
+		return nil, 0, errors.New("exec opened but stdout carried nothing")
+	}
+	return out, code, err
+}
+
+// k8sExecOutput runs argv in the container over the exec subresource and
+// returns its stdout bytes (binary-safe), empty when the command wrote nothing,
+// as an empty file read with cat does. One place, because reading a process's
+// environment and reading its mounted files are the same handshake with a
+// different command. A command that FAILED is an error whatever it wrote.
+func k8sExecOutput(ns, pod, container string, argv ...string) ([]byte, int, error) {
 	token, err := os.ReadFile(k8sSA + "/token")
 	if err != nil {
 		return nil, 0, err
@@ -340,14 +353,16 @@ func k8sExec(ns, pod, container string, argv ...string) ([]byte, int, error) {
 		return nil, resp.StatusCode, fmt.Errorf("exec handshake: %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 	stdout, err := readChannelFrames(br, 1)
-	if err != nil && len(stdout) == 0 {
+	var failed execFailure
+	if errors.As(err, &failed) {
+		// The command's own failure: what it wrote is not its answer. A tar
+		// that cannot stat a single path still writes a valid, empty archive,
+		// and taking those bytes for the files was a session told its secrets
+		// were materialised over an empty directory.
 		return nil, 0, err
 	}
-	if len(stdout) == 0 {
-		// 101 and then nothing on channel 1: the session opened and the
-		// process wrote nothing we kept. Said, not swallowed - an empty
-		// environment is not a thing a running container has.
-		return nil, 0, fmt.Errorf("exec opened but stdout carried nothing (read error: %v)", err)
+	if err != nil && len(stdout) == 0 {
+		return nil, 0, err
 	}
 	return stdout, 0, nil
 }
@@ -373,16 +388,27 @@ var k8sExecDial = func(addr, serverName string) (net.Conn, error) {
 // which hashicorp/http-echo, a distroless image, does not. An evening was
 // spent on an exec that opened and carried nothing, because this channel was
 // dropped on the floor. It is returned as the error now, so the note names it.
+//
+// Channel 2, the command's stderr, is kept for that error only: it is where
+// the line that says WHY lives ("cat: /etc/tls/ca.crt: Permission denied").
 func readChannelFrames(r *bufio.Reader, channel byte) ([]byte, error) {
-	var out, status []byte
+	var out, stderr, status []byte
+	// A stream that ends without its close frame, after the verdict came, is
+	// still that verdict.
+	ended := func(err error) ([]byte, error) {
+		if len(status) > 0 {
+			return out, execStatusError(status, stderr)
+		}
+		return out, err
+	}
 	for {
 		h0, err := r.ReadByte()
 		if err != nil {
-			return out, err
+			return ended(err)
 		}
 		h1, err := r.ReadByte()
 		if err != nil {
-			return out, err
+			return ended(err)
 		}
 		opcode := h0 & 0x0f
 		masked := h1&0x80 != 0
@@ -391,20 +417,20 @@ func readChannelFrames(r *bufio.Reader, channel byte) ([]byte, error) {
 		case 126:
 			var b [2]byte
 			if _, err := io.ReadFull(r, b[:]); err != nil {
-				return out, err
+				return ended(err)
 			}
 			n = uint64(binary.BigEndian.Uint16(b[:]))
 		case 127:
 			var b [8]byte
 			if _, err := io.ReadFull(r, b[:]); err != nil {
-				return out, err
+				return ended(err)
 			}
 			n = binary.BigEndian.Uint64(b[:])
 		}
 		var mask [4]byte
 		if masked {
 			if _, err := io.ReadFull(r, mask[:]); err != nil {
-				return out, err
+				return ended(err)
 			}
 		}
 		if n > 16<<20 {
@@ -412,7 +438,7 @@ func readChannelFrames(r *bufio.Reader, channel byte) ([]byte, error) {
 		}
 		payload := make([]byte, n)
 		if _, err := io.ReadFull(r, payload); err != nil {
-			return out, err
+			return ended(err)
 		}
 		if masked {
 			for i := range payload {
@@ -421,7 +447,7 @@ func readChannelFrames(r *bufio.Reader, channel byte) ([]byte, error) {
 		}
 		switch opcode {
 		case 0x8: // close
-			return out, execStatusError(status)
+			return out, execStatusError(status, stderr)
 		case 0x1, 0x2: // text, binary
 			if len(payload) == 0 {
 				continue
@@ -429,6 +455,10 @@ func readChannelFrames(r *bufio.Reader, channel byte) ([]byte, error) {
 			switch payload[0] {
 			case channel:
 				out = append(out, payload[1:]...)
+			case 2:
+				if len(stderr) < 4096 {
+					stderr = append(stderr, payload[1:]...)
+				}
 			case 3:
 				status = append(status, payload[1:]...)
 			}
@@ -436,9 +466,18 @@ func readChannelFrames(r *bufio.Reader, channel byte) ([]byte, error) {
 	}
 }
 
-// execStatusError turns the channel-3 Status into an error when it says
-// Failure, and nil when it says Success or said nothing.
-func execStatusError(status []byte) error {
+// execFailure is the command's own failure, as the API server reports it on
+// channel 3 (a non-zero exit, no such executable), told apart from a stream
+// that broke: what a failed command wrote is not an answer.
+type execFailure struct{ msg string }
+
+func (e execFailure) Error() string { return e.msg }
+
+// execStatusError turns the channel-3 Status into an execFailure when it says
+// Failure, and nil when it says Success or said nothing. The command's own
+// stderr names the cause better than the Status ("command terminated with
+// non-zero exit code"), so it is the message when there is one.
+func execStatusError(status, stderr []byte) error {
 	if len(status) == 0 {
 		return nil
 	}
@@ -453,5 +492,24 @@ func execStatusError(status []byte) error {
 	if st.Status == "Success" {
 		return nil
 	}
-	return fmt.Errorf("exec: %s", strings.TrimSpace(st.Message+" "+st.Reason))
+	if why := stderrLines(stderr); why != "" {
+		return execFailure{why}
+	}
+	return execFailure{"exec: " + strings.TrimSpace(st.Message+" "+st.Reason)}
+}
+
+// stderrLines is a command's stderr on one line, for a message: its non-blank
+// lines joined, cut at 300 bytes.
+func stderrLines(stderr []byte) string {
+	var lines []string
+	for _, l := range strings.Split(string(stderr), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			lines = append(lines, l)
+		}
+	}
+	s := strings.Join(lines, "; ")
+	if len(s) > 300 {
+		s = s[:300] + "..."
+	}
+	return s
 }

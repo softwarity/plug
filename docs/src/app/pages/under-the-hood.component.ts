@@ -213,9 +213,11 @@ import { RouterLink } from '@angular/router';
       to keep YOUR value for a key), <code>--env-of &lt;name&gt;</code> to take another
       workload's instead (a <code>-c</code> script with a service's credentials, a <code>-s</code>
       borrowing its neighbour's). Its <strong>mounted secret and config files</strong> come too - a
-      CA in PEM, a keystore - read through the same exec, materialised for the session and the
-      variables that name their path repointed, with no FUSE mount (or mounted at their exact
-      path under <code>--dockerrun</code>). And its <strong>data volumes</strong> - a Docker volume,
+      CA in PEM, a keystore - read through the same exec, with the image's own <code>ls</code>
+      and <code>cat</code>, materialised for the session and the variables that name their path
+      repointed, with no FUSE mount (or mounted at their exact path under
+      <code>--dockerrun</code>). A file that cannot be read (an image with neither command) is
+      named when the session starts, and the variable that names it keeps the pod's path. And its <strong>data volumes</strong> - a Docker volume,
       a bind, a PersistentVolumeClaim - are <strong>mounted on your machine, live and
       read-write</strong>, for the session, by default: the agent starts a helper beside the
       workload (its own image, with the volume mounted, serving it over SMB), plug reaches it

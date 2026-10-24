@@ -19,6 +19,12 @@ import (
 // localizeFileEnv needs to repoint the variables that name them. An agent that
 // predates the verb answers "unknown command"; there are then simply no files,
 // not an error. The directory holds copies of secrets, so it is created 0700.
+//
+// Only a path that actually landed comes back: what the agent could not read
+// it names in a note, said here, and a mount it announced but sent nothing for
+// (an agent before 2.31.2 took a failed tar for an empty one) is said too and
+// left out, so no variable and no --dockerrun volume points at an empty
+// directory.
 func fetchWorkloadFiles(tr envExecer, name string) (dir string, paths []string, err error) {
 	out, err := tr.ExecAll("files-of " + name)
 	if err != nil {
@@ -33,9 +39,16 @@ func fetchWorkloadFiles(tr envExecer, name string) (dir string, paths []string, 
 	var r struct {
 		Paths []string `json:"paths"`
 		Tar   string   `json:"tar"`
+		Notes []string `json:"notes"`
 	}
-	if json.Unmarshal([]byte(out), &r) != nil || len(r.Paths) == 0 || r.Tar == "" {
-		return "", nil, nil // nothing mounted, or an answer we do not recognise
+	if json.Unmarshal([]byte(out), &r) != nil {
+		return "", nil, nil // an answer we do not recognise
+	}
+	for _, n := range r.Notes {
+		info("%s: mounted file %s; a variable that names it keeps the pod's path", name, n)
+	}
+	if len(r.Paths) == 0 || r.Tar == "" {
+		return "", nil, nil // nothing mounted, or nothing that could be read
 	}
 	raw, err := base64.StdEncoding.DecodeString(r.Tar)
 	if err != nil {
@@ -60,7 +73,18 @@ func fetchWorkloadFiles(tr envExecer, name string) (dir string, paths []string, 
 		}
 		return nil
 	})
-	return dir, r.Paths, nil
+	for _, p := range r.Paths {
+		if _, err := os.Stat(filepath.Join(dir, p)); err == nil {
+			paths = append(paths, p)
+		} else {
+			info("%s: the agent sent nothing for %s; a variable that names it keeps the pod's path", name, p)
+		}
+	}
+	if len(paths) == 0 {
+		os.RemoveAll(dir)
+		return "", nil, nil
+	}
+	return dir, paths, nil
 }
 
 // untar writes a tar's regular files under dir, each member forced to an
