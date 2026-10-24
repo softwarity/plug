@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.31.2
+
 ### A workload's mounted files reach the plugged process on more images
 
 The Secret and ConfigMap files a workload mounts are now read with the
