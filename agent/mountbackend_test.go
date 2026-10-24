@@ -193,6 +193,63 @@ func TestDockerSweepMountHelpersRemovesDeadSessionsOnly(t *testing.T) {
 	}
 }
 
+// A helper another LIVE agent made is that agent's to judge: every agent on
+// one engine sees every helper, and a neighbour whose one dial failed took a
+// live session's mount away. A helper whose agent is gone is judged by its
+// session as any other, and each removal is said with the session that did
+// not answer. Would have caught: the e2e's automatic mounts on Compose and
+// Swarm, where ten agents share an engine, losing their helper in startup.
+func TestDockerSweepMountHelpersLeavesAnotherLiveAgentsHelpers(t *testing.T) {
+	fe := newFakeEngine(t)
+	self := composeAgent(fe)
+	agentIs(t, self)
+	liveSessions(t) // no session answers from here
+	fe.addContainer("shop-plug-other-1", true, nil, nil)
+	neighbour := fe.addContainer("plug-mnt-db-nbr00000", true, map[string]string{mountLabel: "1", mountOfLabel: "db",
+		mountOwnerLabel: "shop-plug-other-1", sessionOwnerLabel: "shop-plug-other-1:41020"}, nil)
+	orphan := fe.addContainer("plug-mnt-db-orph0000", true, map[string]string{mountLabel: "1", mountOfLabel: "db",
+		mountOwnerLabel: "shop-plug-gone-1", sessionOwnerLabel: "shop-plug-gone-1:41020"}, nil)
+	own := fe.addContainer("plug-mnt-db-mine0000", true, map[string]string{mountLabel: "1", mountOfLabel: "db",
+		mountOwnerLabel: self.owner(), sessionOwnerLabel: "shop-plug-1:41021"}, nil)
+
+	said := stderrOf(t, dockerSweepMountHelpers)
+	if fe.container(neighbour.ID) == nil {
+		t.Error("a live agent's helper was swept by its neighbour")
+	}
+	if fe.container(orphan.ID) != nil || fe.container(own.ID) != nil {
+		t.Error("a helper whose agent is gone, or this agent's own, stays although its session is dead")
+	}
+	for _, want := range []string{
+		"removed the mount helper plug-mnt-db-orph0000: its session (shop-plug-gone-1:41020) did not answer",
+		"removed the mount helper plug-mnt-db-mine0000: its session (shop-plug-1:41021) did not answer",
+	} {
+		if !strings.Contains(said, want) {
+			t.Errorf("not said: %q\nin: %s", want, said)
+		}
+	}
+	if strings.Contains(said, "nbr00000") {
+		t.Errorf("the neighbour's helper was reported removed: %s", said)
+	}
+
+	// Swarm: the same rule on services, the owner being a service.
+	fe.setSwarm(true)
+	fe.addService("shop_plug-other", nil, 1, nil)
+	nbrSvc := fe.addService("plug-mnt-db-nbr11111", map[string]string{mountLabel: "1",
+		mountOwnerLabel: "shop_plug-other", sessionOwnerLabel: "shop_plug-other.1.t:41020"}, 1, nil)
+	orphSvc := fe.addService("plug-mnt-db-orph1111", map[string]string{mountLabel: "1",
+		mountOwnerLabel: "shop_plug-gone", sessionOwnerLabel: "shop_plug-gone.1.t:41020"}, 1, nil)
+	said = stderrOf(t, dockerSweepMountHelpers)
+	if fe.service(nbrSvc.ID) == nil {
+		t.Error("a live agent's helper service was swept by its neighbour")
+	}
+	if fe.service(orphSvc.ID) != nil {
+		t.Error("a helper service whose agent is gone stays although its session is dead")
+	}
+	if !strings.Contains(said, "removed the mount helper plug-mnt-db-orph1111") {
+		t.Errorf("the service's removal was not said: %s", said)
+	}
+}
+
 // A Swarm helper: the password rides a secret (the service's environment names
 // its file, never the value), the service is pinned to the node the workload's
 // task runs on (a local volume lives on one node), joins one overlay under its

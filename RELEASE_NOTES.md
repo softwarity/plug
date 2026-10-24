@@ -11,6 +11,14 @@ Desktop's x86 emulation. A file that cannot be read is named when the
 session starts, with the reason, and the variable that names it keeps the
 pod's path rather than pointing at a file that is not there.
 
+### A live mount holds beside other plug agents
+
+A mounted volume stays mounted when several plug agents share the same
+Docker engine or Swarm: an agent now leaves the mounts of another live agent
+to that agent. A session that reconnects while a mount is starting gets its
+mount all the same, and the agent's log names every mount it removes, with
+the session that no longer answered.
+
 ---
 
 ## 2.31.1

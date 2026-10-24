@@ -452,6 +452,9 @@ type liveMount struct {
 	fw      *mountForward
 	unmark  func()
 	mounted bool
+	// agentPort is the liveness port the helper was provisioned under: the
+	// sweep keeps the helper while THAT port answers.
+	agentPort string
 }
 
 // startMounts provisions every --mount before the command runs and returns
@@ -609,17 +612,32 @@ func (s *mountSession) mountOne(spec mountSpec) error {
 	s.mounts = append(s.mounts, m)
 	p := startProgress("mounting " + spec.volume + " of " + spec.name)
 	p.step("asking the agent for a helper")
-	reply, err := provisionMount(s.tr, m, s.live.AgentPort())
-	if err != nil {
-		p.done("failed")
-		return err
-	}
-	pinMountName(s.cfg, reply.host)
-	target := net.JoinHostPort(reply.host, reply.port)
-	p.step("helper " + reply.host + " starting")
-	if err := mountHelperReady(s.tr, target, mountHelperBudget, func() string { return helperStatus(s.tr, m, s.live.AgentPort()) }, p); err != nil {
-		p.done("failed")
-		return err
+	var reply mountReply
+	var target string
+	// A reconnect while the helper starts moves the liveness port, and the
+	// re-provisioner is not armed yet (armRearm, once every mount is up): a
+	// helper left under the old port is a dead session's to the sweep, gone
+	// within the minute. So the port is checked once the helper answers, and
+	// the helper asked for again under the new one.
+	for attempt := 1; ; attempt++ {
+		port := s.live.AgentPort()
+		var err error
+		if reply, err = provisionMount(s.tr, m, port); err != nil {
+			p.done("failed")
+			return err
+		}
+		m.agentPort = port
+		pinMountName(s.cfg, reply.host)
+		target = net.JoinHostPort(reply.host, reply.port)
+		p.step("helper " + reply.host + " starting")
+		if err := mountHelperReady(s.tr, target, mountHelperBudget, func() string { return helperStatus(s.tr, m, port) }, p); err != nil {
+			p.done("failed")
+			return err
+		}
+		if s.live.AgentPort() == port || attempt == 3 {
+			break
+		}
+		p.step("the session reconnected: asking for the helper again")
 	}
 	p.step("mounting")
 	t := mountTarget{mountReply: reply, pass: m.pass}
@@ -664,23 +682,35 @@ func (s *mountSession) mountOne(spec mountSpec) error {
 // work happens on its own.
 func (s *mountSession) armRearm() {
 	kick := make(chan struct{}, 1)
-	s.live.OnRearm(func() {
+	poke := func() {
 		select {
 		case kick <- struct{}{}:
 		default:
 		}
-	})
+	}
+	s.live.OnRearm(poke)
+	// A reconnect between the last helper's start and this hook went unseen:
+	// a mount provisioned under a port that is no longer the session's is
+	// re-provisioned now, as after any reconnect.
+	for _, m := range s.mounts {
+		if m.agentPort != s.live.AgentPort() {
+			poke()
+			break
+		}
+	}
 	go func() {
 		for range kick {
 			if s.done.Load() {
 				return
 			}
 			for _, m := range s.mounts {
-				reply, err := provisionMount(s.tr, m, s.live.AgentPort())
+				port := s.live.AgentPort()
+				reply, err := provisionMount(s.tr, m, port)
 				if err != nil {
 					info("re-provisioning the mount helper for %s after a reconnect: %v", m.spec, err)
 					continue
 				}
+				m.agentPort = port
 				pinMountName(s.cfg, reply.host)
 				if m.fw != nil {
 					m.fw.Retarget(net.JoinHostPort(reply.host, reply.port))

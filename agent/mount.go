@@ -1391,7 +1391,18 @@ func sweepMountHelpers() {
 // dockerSweepMountHelpers reaps the helpers of dead sessions: the containers
 // (Compose, plain), and on a manager the services and the secrets that carry
 // their passwords. A helper parks nothing, so each is only live or gone.
+//
+// A helper another LIVE agent made is that agent's to judge, as a signpost is
+// (the sweep's rule 3): every agent on one engine sees every helper, and one
+// dial that failed from a neighbour (a slow lookup on a loaded overlay) took a
+// live session's mount away seconds after it was made. Each removal is said,
+// with the session that did not answer: a silent one could only be guessed at.
 func dockerSweepMountHelpers() {
+	mine := ""
+	if self, err := dockerSelf(); err == nil {
+		mine = self.owner()
+	}
+	swarm := swarmManager()
 	sweep(func() []sweepItem {
 		list, err := dockerContainersLabelled(mountLabel)
 		if err != nil {
@@ -1399,15 +1410,23 @@ func dockerSweepMountHelpers() {
 		}
 		items := make([]sweepItem, 0, len(list))
 		for _, c := range list {
-			id, session := c.Id, c.Labels[sessionOwnerLabel]
+			id, owner, session := c.Id, c.Labels[mountOwnerLabel], c.Labels[sessionOwnerLabel]
+			name := id[:min(12, len(id))]
+			if len(c.Names) > 0 {
+				name = strings.TrimPrefix(c.Names[0], "/")
+			}
 			items = append(items, sweepItem{
 				live: func() bool { return sessionLive(session) },
-				drop: func() { _, _ = dockerAPI("DELETE", "/containers/"+id+"?force=1", nil, nil) },
+				held: func() bool { return owner != mine && ownerAlive(owner, swarm) },
+				drop: func() {
+					gcNote("removed the mount helper %s: its session (%s) did not answer", name, session)
+					_, _ = dockerAPI("DELETE", "/containers/"+id+"?force=1", nil, nil)
+				},
 			})
 		}
 		return items
 	})
-	if !swarmManager() {
+	if !swarm {
 		return
 	}
 	// The helpers' secrets, by the same filter: one whose service is gone (the
@@ -1415,13 +1434,13 @@ func dockerSweepMountHelpers() {
 	// has nobody left to read it. One still in use refuses to go, and comes
 	// back next pass.
 	for _, kind := range []string{"services", "secrets"} {
-		sweep(swarmMountObjects(kind))
+		sweep(swarmMountObjects(kind, mine))
 	}
 }
 
 // swarmMountObjects is the mount helpers' services, or their secrets, as the
 // sweep sees them.
-func swarmMountObjects(kind string) sweepTarget {
+func swarmMountObjects(kind, mine string) sweepTarget {
 	return func() []sweepItem {
 		list, err := swarmObjectsLabelled(kind, mountLabel)
 		if err != nil {
@@ -1429,18 +1448,23 @@ func swarmMountObjects(kind string) sweepTarget {
 		}
 		items := make([]sweepItem, 0, len(list))
 		for _, s := range list {
-			id, session := s.ID, s.Spec.Labels[sessionOwnerLabel]
+			id, name := s.ID, s.Spec.Name
+			owner, session := s.Spec.Labels[mountOwnerLabel], s.Spec.Labels[sessionOwnerLabel]
 			items = append(items, sweepItem{
 				live: func() bool { return sessionLive(session) },
-				drop: func() { _, _ = dockerAPI("DELETE", "/"+kind+"/"+id, nil, nil) },
+				held: func() bool { return owner != mine && ownerAlive(owner, true) },
+				drop: func() {
+					if kind == "services" {
+						gcNote("removed the mount helper %s: its session (%s) did not answer", name, session)
+					}
+					_, _ = dockerAPI("DELETE", "/"+kind+"/"+id, nil, nil)
+				},
 			})
 		}
 		return items
 	}
 }
 
-// k8sSweepMountHelpers reaps the helper pods of dead sessions, each with the
-// Service in front of it.
 func k8sSweepMountHelpers(ns string) {
 	sweep(func() []sweepItem {
 		var list struct {

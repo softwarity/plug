@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // startMounts is the client side of the live mount: what it asks the agent,
@@ -314,5 +315,68 @@ func TestMountRecordNamesStayDistinctUnderALongSharedPrefix(t *testing.T) {
 	// A short path is still just its hex: what doctor and a person see.
 	if short := recordName(filepath.Join(string(filepath.Separator), "data")); len(short) > 120 || short != recordName(filepath.Join(string(filepath.Separator), "data")) {
 		t.Errorf("a short path's record name is not stable: %s", short)
+	}
+}
+
+// A reconnect while a helper starts moves the session's liveness port, and a
+// helper left under the old one is a dead session's to the agent's sweep. The
+// helper being started is asked for again under the new port before it is
+// mounted; one mounted earlier, under the old port, is caught up as soon as the
+// re-provisioner is armed, which asks for every helper again as after any
+// reconnect. Either way every mount ends under the current port.
+func TestStartMountsReprovisionsAHelperWhoseSessionPortMoved(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		flipAt int // the cluster dial (one per helper answering) during which the session reconnects
+		want   []string
+	}{
+		{"while the first helper starts", 1, []string{"mount-volume geo /data 40001 ", "mount-volume geo /data 40077 ", "mount-volume geo /logs 40077 "}},
+		{"while the second helper starts", 2, []string{"mount-volume geo /data 40001 ", "mount-volume geo /logs 40001 ", "mount-volume geo /logs 40077 ",
+			"mount-volume geo /data 40077 ", "mount-volume geo /logs 40077 "}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sandboxHome(t)
+			sandboxTemp(t)
+			installFakeSMB(t)
+			f := fakeMountSession(mountAgent)
+			dials := 0
+			f.dial = func(string) (net.Conn, error) {
+				f.mu.Lock()
+				dials++
+				if dials == tc.flipAt {
+					e := f.exposed[0]
+					e.mu.Lock()
+					e.port = "40077"
+					e.mu.Unlock()
+				}
+				f.mu.Unlock()
+				a, b := net.Pipe()
+				b.Close()
+				return a, nil
+			}
+			installFakeSession(t, f)
+			stop, err := startMounts(config{host: "agent.example", port: "2222", exposes: exposeSpecs("geo:80:3000")})
+			if err != nil {
+				t.Fatalf("startMounts: %v", err)
+			}
+			defer stop()
+			deadline := time.Now().Add(5 * time.Second)
+			var asked []string
+			for {
+				asked = f.askedPrefixed("mount-volume ")
+				if len(asked) >= len(tc.want) || time.Now().After(deadline) {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if len(asked) != len(tc.want) {
+				t.Fatalf("mount-volume asked as %q, want %q", asked, tc.want)
+			}
+			for i, want := range tc.want {
+				if !strings.HasPrefix(asked[i], want) {
+					t.Errorf("verb %d = %q, want %q...", i, asked[i], want)
+				}
+			}
+		})
 	}
 }

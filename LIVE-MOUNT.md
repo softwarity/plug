@@ -95,7 +95,11 @@ Agent (`agent/mount.go`, `agent/mountserve.go`):
   `plug.mount.helper`, the selector of its Service) and the session owner (`plug.session.owner`, a label on Docker/Swarm, an
   annotation on Kubernetes since a label cannot hold `host:port`).
   `sweepMountHelpers` runs with every sweep (boot gc and every minute) and
-  removes a helper whose session no longer answers.
+  removes a helper whose session no longer answers, and says so in the
+  agent's log. A helper whose `plug.mount.owner` is another agent that still
+  exists is left to that agent, as a signpost is: every agent on one Docker
+  engine or Swarm sees every helper, and one failed dial from a neighbour
+  removed a live session's mount (seen in the e2e, ten agents per engine).
 - `mount-serve` (the helper's process): serves `/mnt/vol` in process, with
   everything from its environment (the credential, or its file when Swarm
   mounts it as a secret; the share; `PLUG_SMB_ALLOW`, the addresses the agent
@@ -118,7 +122,10 @@ Client (`cli/mount.go`, `cli/mount_{darwin,linux,windows}.go`):
   refuses: nothing connects, the agent's sweep only asks whether it answers),
   asks `volumes-of` for the automatic names (`-s` names and `--env-of`), then
   for each mount: `mount-volume`, wait for the helper's port, start the local
-  forward, mount, record. `autoMounts` is what the projection reads
+  forward, mount, record. A reconnect during that wait moves the liveness
+  port: the helper is asked for again under the new one before it is
+  mounted, and `armRearm` re-provisions at once any mount left under an old
+  port. `autoMounts` is what the projection reads
   (`autoMountsFor`, one cluster path → local path per mount) to repoint
   variables with `localizeVolumeEnv`.
 - Each mount is a progress line on stderr (`cli/progress.go`): redrawn in
