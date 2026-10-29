@@ -141,7 +141,9 @@ func cmdUpdate(args []string) {
 		fatal("%v", err)
 	}
 	repairOrphanResolver()
-	reportDatapathLag()
+	if after != before {
+		reportDatapathLag()
+	}
 }
 
 // reportDatapathLag says what the update does NOT change: a running datapath
@@ -150,6 +152,11 @@ func cmdUpdate(args []string) {
 // staying silent is how someone updates, sees no difference, and starts
 // hunting. `plug down` is deliberately not offered here: it would leave those
 // sessions without a datapath, which is worse than waiting.
+//
+// Said only when the agent moved. An update that found everything current
+// brought no new core, so there is no lag it caused; counting the open
+// sessions anyway read as "close them before you can go on" to someone about
+// to plug into another cluster, with a daemon already on that very version.
 func reportDatapathLag() {
 	if m := datapathLagMessage(liveSessions()); m != "" {
 		info("%s", m)

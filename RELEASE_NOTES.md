@@ -2,6 +2,13 @@
 
 ## NEXT RELEASE
 
+### `plug update` speaks of open sessions only when it changed something
+
+When the agent was already current, `plug update` no longer counts your
+open sessions or asks you to close them: nothing new reached the datapath
+they share, so there is nothing to wait for. You can plug into another
+cluster right away.
+
 ---
 
 ## 2.31.2
