@@ -73,9 +73,9 @@ import (
 // and gid (helperIDs, read on the workload's process), the server on smbListenPort.
 // The client is told 445 all the same: mountHelperPort is the ANNOUNCED port,
 // what mountReply carries, because the Windows SMB client wants 445 of a name
-// it resolves. On Kubernetes the helper's Service maps one to the other; on
-// Docker and Swarm, where nothing stands in front, the agent does as it dials
-// (mountDialPort).
+// it resolves. The agent dials the listen port itself (mountDialAddr): on
+// Docker and Swarm nothing stands in front of the helper, and on Kubernetes
+// it goes to the pod, past the Service that maps one port to the other.
 const (
 	mountLabel       = "plug.mount"        // this container/service/pod IS a live-mount helper
 	mountOfLabel     = "plug.mount.of"     // …for this workload name
@@ -103,14 +103,49 @@ func mountHelperName(name, volume, agentPort string) string {
 
 // mountDialPort is the port the agent dials for a destination a client asked
 // for: a mount helper's announced port becomes the one it listens on, anything
-// else is left alone. For the backends with no Service in front of the helper
-// (Docker, Swarm); a helper is known by its name, the prefix every one of
+// else is left alone. A helper is known by its name, the prefix every one of
 // them carries.
 func mountDialPort(host, port string) string {
 	if port == mountHelperPort && strings.HasPrefix(host, mountHelperPfx) {
 		return strconv.Itoa(smbListenPort)
 	}
 	return port
+}
+
+// mountDialAddr is the address the agent dials for a destination a client
+// asked for. A mount helper on Kubernetes is reached at its POD's address,
+// not through its Service: a cluster whose kube-proxy masquerades Service
+// traffic (a pod CIDR it does not know as the cluster's) hands the helper a
+// connection from the NODE's address, which its source filter refuses, and
+// the developer sees an SMB timeout. Pod to pod, the source is the agent's
+// own. The Service stays: it is the name the cluster resolves, the one the
+// client is given, and what the Windows SMB client asks for on 445. A pod
+// that cannot be read is dialled by that name, as before.
+func mountDialAddr(host, port string) string {
+	if p := mountDialPort(host, port); p != port {
+		if k8sAvailable() {
+			if ip := k8sHelperPodIP(k8sNamespace(), host); ip != "" {
+				return net.JoinHostPort(ip, p)
+			}
+			return net.JoinHostPort(host, port) // the Service maps 445 to the listen port
+		}
+		return net.JoinHostPort(host, p)
+	}
+	return net.JoinHostPort(host, port)
+}
+
+// k8sHelperPodIP is a helper pod's address, "" when it has none yet or
+// cannot be read.
+func k8sHelperPodIP(ns, helper string) string {
+	var pod struct {
+		Status struct {
+			PodIP string `json:"podIP"`
+		} `json:"status"`
+	}
+	if code, err := k8sAPI("GET", "/api/v1/namespaces/"+ns+"/pods/"+helper, nil, &pod); err != nil || code != 200 {
+		return ""
+	}
+	return pod.Status.PodIP
 }
 
 // helperIDs is who the helper runs as: the workload's uid and gid, so that
@@ -286,19 +321,52 @@ func doMountStatus(cmd []string) {
 // words - "no suitable node (scheduling constraints not satisfied on 2
 // nodes)", "ImagePullBackOff" - which is what a developer needs to read when
 // a mount is slow or never comes.
+//
+// A running helper is asked, too, whether its source filter turned a
+// connection away: "status refused: <address>, while only <addresses> may
+// connect", the one failure a running helper can have that the orchestrator
+// knows nothing of. A Swarm helper is not asked: its task may run on another
+// node, where this agent has no exec.
 func mountStatus(helper string) string {
 	switch {
 	case k8sAvailable():
-		return statusLine(k8sMountStatus(k8sNamespace(), helper))
+		ns := k8sNamespace()
+		state, msg := k8sMountStatus(ns, helper)
+		if state == "running" {
+			if r := helperRefusal(func(argv ...string) ([]byte, error) {
+				out, _, err := k8sExecOutput(ns, helper, "mount", argv...)
+				return out, err
+			}); r != "" {
+				return statusLine("refused", r)
+			}
+		}
+		return statusLine(state, msg)
 	case dockerAvailable():
 		if swarmManager() {
 			if code, _ := dockerAPI("GET", "/services/"+helper, nil, nil); code == 200 {
 				return statusLine(swarmMountStatus(helper))
 			}
 		}
-		return statusLine(dockerMountStatus(helper))
+		state, msg := dockerMountStatus(helper)
+		if state == "running" {
+			if r := helperRefusal(func(argv ...string) ([]byte, error) { return dockerExec(helper, argv) }); r != "" {
+				return statusLine("refused", r)
+			}
+		}
+		return statusLine(state, msg)
 	}
 	return "status unknown: no orchestrator"
+}
+
+// helperRefusal is what the helper says it refused (printRefusal), worded:
+// "" when it refused nothing or could not be asked.
+func helperRefusal(run execFunc) string {
+	out, err := run("/usr/local/bin/plug-agent", "mount-refused")
+	f := strings.Fields(string(out))
+	if err != nil || len(f) < 2 {
+		return "" // nothing refused, or no filter to refuse with
+	}
+	return f[0] + ", while only " + strings.Join(f[1:], ", ") + " may connect"
 }
 
 func statusLine(state, msg string) string {
@@ -725,10 +793,10 @@ func mountEnv(pass, passFile string, allow []string, note string) []string {
 }
 
 // mountAllowEnv is an operator's word on who may reach the helper, beside what
-// the agent works out for itself: addresses or subnets to ADD (a cluster whose
-// kube-proxy masquerades Service traffic shows the helper a node address, not
-// the agent's), or "any" to set no filter at all. Nothing in the standard
-// manifests sets it.
+// the agent works out for itself: addresses or subnets to ADD (a network
+// between the agent and the helper that rewrites the source address, which a
+// failed mount names: see helperRefusal), or "any" to set no filter at all.
+// Nothing in the standard manifests sets it.
 const mountAllowEnv = "PLUG_MOUNT_ALLOW"
 
 // mountAllow is the list the helper's `hosts allow` is built from: every

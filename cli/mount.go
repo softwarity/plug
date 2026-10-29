@@ -424,6 +424,22 @@ func helperStatus(tr sessionTransport, m *liveMount, agentPort string) string {
 	return strings.TrimSpace(strings.TrimPrefix(out, "status "))
 }
 
+// refusalHint words a helper that turned the agent away (mount-status says
+// "refused: <address>, while only <addresses> may connect"): the SMB client
+// only ever sees a connection that goes nowhere, and says "timed out". The
+// address it names is the one to add, which the agent takes from its
+// environment. "" for any other status.
+func refusalHint(status string) string {
+	r, ok := strings.CutPrefix(status, "refused: ")
+	if !ok {
+		return ""
+	}
+	src, _, _ := strings.Cut(r, ",")
+	return "the helper refused the agent's connection: it came from " + r + ". Something between them " +
+		"rewrites the source address; let it in with PLUG_MOUNT_ALLOW=" + src + " in the agent's environment " +
+		"(this restarts the agent, and the sessions on it reconnect)"
+}
+
 // mountForwardBind is where the local end of a mount's forward listens: the
 // loopback, on a port the OS picks. A var so a test can make the listen fail
 // (an unusable port) and watch what the failure leaves behind. Never
@@ -662,7 +678,11 @@ func (s *mountSession) mountOne(spec mountSpec) error {
 	at, err := mountSMB(t, spec.path)
 	if err != nil {
 		p.done("failed")
-		return fmt.Errorf("mounting %s of %s at %s: %w", spec.volume, spec.name, spec.path, err)
+		err = fmt.Errorf("mounting %s of %s at %s: %w", spec.volume, spec.name, spec.path, err)
+		if why := refusalHint(helperStatus(s.tr, m, m.agentPort)); why != "" {
+			err = fmt.Errorf("%w\n      %s", err, why)
+		}
+		return err
 	}
 	m.spec.path = at
 	m.mounted = true

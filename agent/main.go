@@ -87,6 +87,11 @@ func Main() {
 			// volume at /mnt/vol, serving it over SMB for one session.
 			mountServe()
 			return
+		case "mount-refused":
+			// Exec'd by the agent in a helper whose mount failed: whom its
+			// source filter turned away (mountserve.go, mountRefusedFile).
+			printRefusal()
+			return
 		case "preflight":
 			preflight()
 			return

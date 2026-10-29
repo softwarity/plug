@@ -713,3 +713,58 @@ func TestAllowPrefixes(t *testing.T) {
 		t.Errorf("no entry: got %v, %v", got, err)
 	}
 }
+
+// Where the agent dials a helper. On Kubernetes, the pod's own address on the
+// port the server listens on, never the Service: a kube-proxy that
+// masquerades Service traffic shows the helper the node's address, which its
+// filter refuses. Would have caught: a mount that works on a cluster whose
+// pod CIDR kube-proxy knows and times out on one where it does not.
+func TestMountDialAddrGoesToTheHelperPodOnKubernetes(t *testing.T) {
+	helper := mountHelperName("db", "pgdata", "41020")
+	if got := mountDialAddr(helper, "445"); got != helper+":1445" {
+		t.Errorf("no orchestrator in front: got %s, want the listen port of the name", got)
+	}
+	fa := newFakeAPIServer(t, "ns", "10.0.0.5")
+	if got := mountDialAddr(helper, "445"); got != helper+":445" {
+		t.Errorf("a helper pod that cannot be read: got %s, want its Service, as before", got)
+	}
+	fa.add("pods", map[string]any{"metadata": map[string]any{"name": helper},
+		"status": map[string]any{"phase": "Running", "podIP": "10.244.7.9"}})
+	if got := mountDialAddr(helper, "445"); got != "10.244.7.9:1445" {
+		t.Errorf("got %s, want the helper pod's address on its listen port", got)
+	}
+	for _, c := range [][2]string{{"db", "445"}, {helper, "80"}, {"files.shop.svc", "445"}} {
+		if got := mountDialAddr(c[0], c[1]); got != c[0]+":"+c[1] {
+			t.Errorf("%s:%s is no helper's announced port, got %s", c[0], c[1], got)
+		}
+	}
+}
+
+// A refused source travels from the helper's server to mount-status: noted
+// in the helper's file, printed by the mode the agent execs, worded by the
+// agent. Would have caught: the refusal living only in the log of a pod
+// that is gone by the time anyone looks.
+func TestARefusedSourceReachesMountStatus(t *testing.T) {
+	mountRefusedFile = filepath.Join(t.TempDir(), "refused")
+	t.Cleanup(func() { mountRefusedFile = "/tmp/plug-mount-refused" })
+	noteRefusal("served %s", []any{"x"})
+	if _, err := os.Stat(mountRefusedFile); err == nil {
+		t.Fatal("a line that is no refusal was noted")
+	}
+	noteRefusal("refused connection from %v: source not allowed", []any{&net.TCPAddr{IP: net.ParseIP("10.1.0.8"), Port: 62689}})
+	if b, _ := os.ReadFile(mountRefusedFile); string(b) != "10.1.0.8\n" {
+		t.Fatalf("noted %q, want the source address alone", b)
+	}
+
+	helper := mountHelperName("db", "pgdata", "41020")
+	fa := newFakeAPIServer(t, "ns", "10.0.0.5")
+	fa.add("pods", map[string]any{"metadata": map[string]any{"name": helper},
+		"status": map[string]any{"phase": "Running", "podIP": "10.244.7.9"}})
+	if got := mountStatus(helper); got != "status running" {
+		t.Errorf("a helper that refused nothing: %q", got)
+	}
+	fa.execAnswers("/usr/local/bin/plug-agent mount-refused", "10.1.0.8 10.0.0.5\n")
+	if got, want := mountStatus(helper), "status refused: 10.1.0.8, while only 10.0.0.5 may connect"; got != want {
+		t.Errorf("mount-status = %q, want %q", got, want)
+	}
+}

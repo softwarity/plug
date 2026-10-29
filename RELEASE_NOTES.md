@@ -9,6 +9,15 @@ open sessions or asks you to close them: nothing new reached the datapath
 they share, so there is nothing to wait for. You can plug into another
 cluster right away.
 
+### A live mount works on clusters whose kube-proxy rewrites Service traffic
+
+On Kubernetes the agent now reaches the mount helper at its pod's address.
+A cluster whose kube-proxy masquerades traffic to Services, as one does
+when the pod network is not the CIDR it knows, mounts a workload's volume
+with nothing to set. When a helper does turn the agent away, the error says
+which address it refused and the `PLUG_MOUNT_ALLOW` value that lets it in,
+instead of an SMB timeout.
+
 ---
 
 ## 2.31.2

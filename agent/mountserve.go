@@ -53,8 +53,7 @@ const (
 	smbDefaultShare = "vol"
 	// smbListenPort is the port the server binds, everywhere: above 1024, so
 	// no capability and no sysctl is needed to open it. The client is told 445
-	// (mountHelperPort); a Service maps one to the other on Kubernetes, the
-	// agent does when it dials on Docker and Swarm (mountDialPort).
+	// (mountHelperPort), and the agent dials this one (mountDialAddr).
 	smbListenPort = 1445
 )
 
@@ -162,11 +161,44 @@ func mountServe() {
 		Root: mountVolumePath, Share: share, User: user, NTHash: smbserver.NTHash(pass), Allow: prefixes,
 		Logf: func(format string, args ...any) {
 			fmt.Fprintf(os.Stderr, "plug-agent mount-serve: "+format+"\n", args...)
+			noteRefusal(format, args)
 		},
 	})
 	if err != nil {
 		fatal("plug-agent mount-serve: %v", err)
 	}
+}
+
+// mountRefusedFile is where the helper keeps the last source its filter
+// turned away. Its log says it too, but the log is out of reach where it
+// would matter: the pod is gone with the session, and `pods/log` is no rule
+// the Role grants. The agent reads this file instead (mount-refused, by exec,
+// which it may do), so a refused agent reaches the developer as the address
+// that was refused rather than as an SMB timeout.
+var mountRefusedFile = "/tmp/plug-mount-refused"
+
+// noteRefusal records the source of a refused connection, from the server's
+// own log line: the address is the line's first argument.
+func noteRefusal(format string, args []any) {
+	if !strings.HasPrefix(format, "refused connection from") || len(args) == 0 {
+		return
+	}
+	src := fmt.Sprint(args[0])
+	if host, _, err := net.SplitHostPort(src); err == nil {
+		src = host
+	}
+	_ = os.WriteFile(mountRefusedFile, []byte(src+"\n"), 0o600)
+}
+
+// printRefusal is the argv mode the agent execs in the helper: the refused
+// source and the addresses that may connect, on one line, or nothing when no
+// connection was refused.
+func printRefusal() {
+	b, err := os.ReadFile(mountRefusedFile)
+	if err != nil || strings.TrimSpace(string(b)) == "" {
+		return
+	}
+	fmt.Println(strings.TrimSpace(string(b)) + " " + strings.Join(strings.Fields(os.Getenv(smbAllowEnv)), " "))
 }
 
 // smbPassword picks the credential: the environment when it carries one, else

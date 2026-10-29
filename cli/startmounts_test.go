@@ -380,3 +380,36 @@ func TestStartMountsReprovisionsAHelperWhoseSessionPortMoved(t *testing.T) {
 		})
 	}
 }
+
+// A helper that refused the agent: the SMB client says "timed out", and the
+// error says what the helper saw instead, with the address to let in. Would
+// have caught: a refused mount reported as an opaque SMB timeout, its cause
+// in the log of a pod deleted with the session.
+func TestAMountRefusedByTheHelperSaysWhatToAllow(t *testing.T) {
+	sandboxHome(t)
+	sandboxTemp(t)
+	smb := installFakeSMB(t)
+	smb.err = errStr("server connection failed: Operation timed out")
+	f := fakeMountSession(func(cmd string) (string, error) {
+		switch {
+		case cmd == "volumes-of geo":
+			return "volumes /data", nil
+		case strings.HasPrefix(cmd, "mount-status "):
+			return "status refused: 10.1.0.8, while only 10.0.0.5 may connect", nil
+		}
+		return mountAgent(cmd)
+	})
+	installFakeSession(t, f)
+	_, err := startMounts(config{host: "agent.example", port: "2222", exposes: exposeSpecs("geo:80:3000")})
+	if err == nil {
+		t.Fatal("the mount succeeded")
+	}
+	for _, want := range []string{"Operation timed out", "came from 10.1.0.8", "PLUG_MOUNT_ALLOW=10.1.0.8"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %v, want %q in it", err, want)
+		}
+	}
+	if refusalHint("running") != "" || refusalHint("pending: Unschedulable") != "" {
+		t.Error("a hint for a helper that refused nothing")
+	}
+}

@@ -79,8 +79,11 @@ Agent (`agent/mount.go`, `agent/mountserve.go`):
 - `mount-volume <name> <volume-or-path> <agent-port> <password>` - starts the
   helper, answers `mounted host=<name> port=445 share=vol user=plug`. The
   client is told 445; the helper listens on 1445, which needs no privilege:
-  a Service maps one to the other on Kubernetes, the agent does when it dials
-  on Docker and Swarm (`mountDialPort`). The
+  the agent dials 1445 itself (`mountDialAddr`). On Kubernetes it dials the
+  helper POD's address, past the Service: a kube-proxy that masquerades
+  Service traffic (a pod CIDR it does not take for the cluster's) shows the
+  helper the node's address, which its filter refuses. The Service stays, as
+  the name the cluster resolves and the client is given. The
   helper's name carries (workload, volume, session port): one per session,
   so two developers may mount one volume, and a re-provision is a new helper
   beside the old one.
@@ -205,6 +208,11 @@ version to upgrade to.
 - The mount dies a few seconds after a reconnect, on macOS: the nsmb.conf
   section is missing (`~/Library/Preferences/nsmb.conf`, `[127.0.0.1]`,
   `mc_on=no`); the kernel log says `smb2_mc_update_main_channel`.
+- The mount times out while the helper answered: the helper refused the
+  agent's source address. mount-status reads the last refusal from the
+  helper (`plug-agent mount-refused`, by exec: the pod's log is gone with it,
+  and `pods/log` is no rule the Role grants), and the client's error names
+  the address and `PLUG_MOUNT_ALLOW=<address>` to let it in.
 - The helper never answers: its log (it listens on 1445). A Swarm helper Pending: the
   volume is on another node than the one it was placed on (best-effort from
   the last task's node). A Kubernetes helper Pending: the claim is
