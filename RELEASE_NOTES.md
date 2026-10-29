@@ -18,6 +18,13 @@ with nothing to set. When a helper does turn the agent away, the error says
 which address it refused and the `PLUG_MOUNT_ALLOW` value that lets it in,
 instead of an SMB timeout.
 
+### `plug doctor` checks the rules the live mount needs
+
+`plug doctor` now tells you when the Role an agent runs with cannot create
+the live mount's helper pod or read the workload's claim, with the rules to
+add. A test holds every rule of the shipped Role to a check, so the next
+one added cannot be missed by the doctor.
+
 ---
 
 ## 2.31.2

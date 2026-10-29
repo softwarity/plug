@@ -416,23 +416,14 @@ func doInfo(cmd []string) {
 	// old to know rather than a grant in place.
 	grant := ""
 	if backend == "kubernetes" {
-		if k8sEndpointsGranted(k8sNamespace()) {
-			grant = " endpoints=granted"
-		} else {
-			grant = " endpoints=missing"
-		}
-		if k8sExecGranted(k8sNamespace()) {
-			grant += " exec=granted"
-		} else {
-			grant += " exec=missing"
-		}
-		// Whether a takeover can remove the slice Kubernetes built for the
-		// deployed pod (else half the traffic still reaches it), and the
-		// parked names where that is the case right now.
-		if k8sEndpointSlicesGranted(k8sNamespace()) {
-			grant += " endpointslices=granted"
-		} else {
-			grant += " endpointslices=missing"
+		// One field per probe (k8sGrantProbes), and the parked names a
+		// takeover could not split from the deployed pod's slice right now.
+		for _, p := range k8sGrantProbes {
+			if p.granted(k8sNamespace()) {
+				grant += " " + p.field + "=granted"
+			} else {
+				grant += " " + p.field + "=missing"
+			}
 		}
 		if d := k8sParkedNamesDoubled(k8sNamespace()); len(d) > 0 {
 			grant += " doubled=" + strings.Join(d, ",")

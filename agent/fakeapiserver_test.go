@@ -104,6 +104,15 @@ func (fa *fakeAPIServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	coll := fa.collection(res)
+	if q.Get("dryRun") == "All" {
+		// Answered as the real call would be, and nothing kept: what the RBAC
+		// probes rely on.
+		kept := map[string]map[string]any{}
+		for n, o := range coll {
+			kept[n] = o
+		}
+		defer func() { fa.objects[res] = kept }()
+	}
 	switch {
 	case sub != "":
 		// pods/<name>/exec and the like: enough to tell a missing pod from one

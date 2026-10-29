@@ -51,7 +51,7 @@ import { FileComponent } from '../file/file.component';
         <tr><td><code>apps/deployments</code> get, list, patch</td><td><code>plug update</code> rolls the agent's own Deployment so the node re-pulls the tag.</td><td>2.9</td><td>update by hand</td></tr>
         <tr><td><code>pods</code> get, list · <code>pods/exec</code> get, create</td><td>a plugged process inherits the parked pod's environment (<code>exec cat /proc/1/environ</code>) and its mounted secret files.</td><td>2.16.0</td><td>"exec grant"</td></tr>
         <tr><td><code>secrets</code> get, patch, on <code>plug-members</code> only</td><td>an agent deployed with <code>PLUG_ADMISSION=invite</code> keeps its members in that Secret, which the manifest creates empty (<a routerLink="/security" fragment="admission">admission by approval</a>). Unused otherwise.</td><td>2.26.0</td><td>an invite agent refuses to start</td></tr>
-        <tr><td><code>pods</code> create, delete · <code>persistentvolumeclaims</code> get</td><td>the live mount: a helper pod beside the workload serves its PersistentVolumeClaim over SMB for the session; the claim is read to refuse a ReadWriteOncePod one with the reason.</td><td>2.20.0</td><td>the mount answers "cannot create pods"</td></tr>
+        <tr><td><code>pods</code> create, delete · <code>persistentvolumeclaims</code> get</td><td>the live mount: a helper pod beside the workload serves its PersistentVolumeClaim over SMB for the session; the claim is read to refuse a ReadWriteOncePod one with the reason.</td><td>2.20.0</td><td>"mount grant"</td></tr>
       </tbody>
     </table>
 

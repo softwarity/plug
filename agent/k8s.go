@@ -736,6 +736,74 @@ func k8sEndpointsGranted(ns string) bool {
 	return code != 403
 }
 
+// k8sGrantProbe is one field of the RBAC report `info` gives `plug doctor`:
+// the rules of deploy/plug-k8s.yaml it vouches for, as "resource:verb"
+// (group-qualified outside the core group), and how it tells them granted.
+// A probe tries one call that creates nothing, and a 403 is the answer.
+//
+// It vouches for every verb the Role grants with the one it tries: a Role is
+// applied whole, so the gap a probe exists to catch is a Role older than the
+// agent, where a rule, or the verbs a later version added to it, are absent
+// together. The test beside it reads the Role and fails on any rule no probe
+// vouches for, which is how the live mount's rules went unchecked from
+// 2.20.0 on: they were added without a probe, and nothing said so.
+type k8sGrantProbe struct {
+	field   string
+	vouches []string
+	granted func(ns string) bool
+}
+
+var k8sGrantProbes = []k8sGrantProbe{
+	{field: "endpoints", granted: k8sEndpointsGranted,
+		vouches: []string{"endpoints:get", "endpoints:create", "endpoints:update", "endpoints:delete"}},
+	{field: "exec", granted: k8sExecGranted,
+		vouches: []string{"pods:get", "pods:list", "pods/exec:get", "pods/exec:create"}},
+	// Whether a takeover can remove the slice Kubernetes built for the
+	// deployed pod, else half the traffic still reaches it.
+	{field: "endpointslices", granted: k8sEndpointSlicesGranted,
+		vouches: []string{"discovery.k8s.io/endpointslices:list", "discovery.k8s.io/endpointslices:deletecollection"}},
+	{field: "mount", granted: k8sMountGranted,
+		vouches: []string{"pods:create", "pods:delete", "persistentvolumeclaims:get"}},
+}
+
+// k8sUnprobed are the rules whose absence is already said where it bites,
+// so a probe would add nothing: without services the agent refuses to start,
+// as an agent that admits by approval does without its roster's Secret, and
+// without deployments `plug update` says to update by hand.
+var k8sUnprobed = []string{
+	"services:get", "services:list", "services:create", "services:delete", "services:update", "services:patch",
+	"apps/deployments:get", "apps/deployments:list", "apps/deployments:patch",
+	"secrets:get", "secrets:patch",
+}
+
+// k8sMountGranted covers what the live mount needs: creating and deleting
+// its helper pod, and reading the workload's claim. The create is a dry run
+// of a pod with no containers: authorised, the server refuses it as invalid
+// (422) and stores nothing; not, it answers 403 before looking at it. The
+// delete runs dry too, so a pod that happened to carry the probe's name stays.
+//
+// Only the RBAC's own 403 counts: an admission plugin that runs before the
+// validation, OpenShift's SCC among them, may refuse that pod with a 403 of
+// its own ("unable to validate against any security context constraint"),
+// which says nothing of the Role.
+func k8sMountGranted(ns string) bool {
+	probe := "plug-mount-grant-probe"
+	pod := map[string]any{"apiVersion": "v1", "kind": "Pod", "metadata": map[string]any{"name": probe}}
+	if rbacDenied(k8sAPI("POST", "/api/v1/namespaces/"+ns+"/pods?dryRun=All", pod, nil)) {
+		return false
+	}
+	if rbacDenied(k8sAPI("DELETE", "/api/v1/namespaces/"+ns+"/pods/"+probe+"?dryRun=All", nil, nil)) {
+		return false
+	}
+	return !rbacDenied(k8sAPI("GET", "/api/v1/namespaces/"+ns+"/persistentvolumeclaims/"+probe, nil, nil))
+}
+
+// rbacDenied is a refusal by the authorizer, whose message always reads
+// `<user> cannot <verb> resource "<resource>"`.
+func rbacDenied(code int, err error) bool {
+	return code == 403 && err != nil && strings.Contains(err.Error(), "cannot ")
+}
+
 // k8sExecGranted is the same probe for pods/exec: a POST on the exec subresource
 // of a pod that does not exist answers 404 when the right is there and 403 when
 // it is not, and creates nothing either way. (SubjectAccessReview would be the

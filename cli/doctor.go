@@ -354,126 +354,157 @@ func doctorProfile(name string, add func(check)) {
 	probe = tr
 
 	if out, err := tr.Exec("info"); err == nil && strings.HasPrefix(out, "version=") {
-		backend, grant, execGrant, sliceGrant, doubled := "none", "", "", "", ""
-		for _, f := range strings.Fields(out) {
-			if v, ok := strings.CutPrefix(f, "backend="); ok {
-				backend = v
-			}
-			if v, ok := strings.CutPrefix(f, "endpoints="); ok {
-				grant = v
-			}
-			if v, ok := strings.CutPrefix(f, "exec="); ok {
-				execGrant = v
-			}
-			if v, ok := strings.CutPrefix(f, "endpointslices="); ok {
-				sliceGrant = v
-			}
-			if v, ok := strings.CutPrefix(f, "doubled="); ok {
-				doubled = v
-			}
-		}
-		if backend == "none" {
-			add(check{area: name, name: "-s names", status: stFail,
-				detail: "the agent cannot create cluster names",
-				remedy: "mount /var/run/docker.sock (on Swarm, on a manager node), or apply plug-k8s.yaml"})
-		} else {
-			add(check{area: name, name: "-s names", status: stOK, detail: backend})
-		}
-		// The one line to read first on Kubernetes: is the RBAC the agent was
-		// deployed with as new as the agent? `plug update` moves the image and
-		// never the manifest, so every grant a newer agent needs is missing until
-		// someone re-applies it - and "no problems, 1 warning" is not what half
-		// the traffic going to the wrong pod should read as. A FAIL, naming each
-		// missing rule with the version that needs it, and the two ways to fix it.
-		if backend == "kubernetes" {
-			var missing []string
-			if grant == "missing" {
-				missing = append(missing, "endpoints (2.12.0: a served name points at the one agent pod holding the session)")
-			}
-			if execGrant == "missing" {
-				missing = append(missing, "pods + pods/exec (2.16.0: the parked workload's environment and secrets)")
-			}
-			if sliceGrant == "missing" {
-				missing = append(missing, "discovery.k8s.io/endpointslices (2.20.1: a taken-over name answers from your process ALONE, not half the time)")
-			}
-			if len(missing) > 0 {
-				add(check{area: name, name: "kubernetes RBAC", status: stFail,
-					detail: fmt.Sprintf("the Role the agent runs with is OLDER than the agent (v%s): %d rule(s) missing - %s",
-						shortVersion(agentVersionOf(out)), len(missing), strings.Join(missing, "; ")),
-					remedy: "re-apply deploy/plug-k8s.yaml for this version, or update the chart that deploys the agent " +
-						"(plug update moves the image, never the manifest); each rule alone is given below"})
-			} else if grant == "granted" {
-				add(check{area: name, name: "kubernetes RBAC", status: stOK, detail: "every rule this agent's version needs is granted"})
-			}
-		}
-		// The RBAC a Kubernetes agent was DEPLOYED with, which `plug update` never
-		// touches: it moves the image and never the manifest. Without the
-		// endpoints grant a served name still works, by the old shape - the agent
-		// adds `app: plug` to the Service's SELECTOR instead of writing Endpoints
-		// - and that is a field a GitOps controller may also own. When the two
-		// disagree the takeover's receipt can be dropped, and the Service is then
-		// left selecting a pod that is gone: no endpoints, no traffic. Recent
-		// agents repair that on their own at boot, which is a net and not a fix.
-		if grant == "missing" {
-			add(check{area: name, name: "endpoints grant", status: stWarn,
-				detail: "this cluster's RBAC predates it — served names go through the Service selector",
-				remedy: "re-apply deploy/plug-k8s.yaml, or grant it alone: kubectl -n <ns> patch role " +
-					"plug-serve-names --type=json -p '[{\"op\":\"add\",\"path\":\"/rules/-\"," +
-					"\"value\":{\"apiGroups\":[\"\"],\"resources\":[\"endpoints\"]," +
-					"\"verbs\":[\"get\",\"create\",\"update\",\"delete\"]}}]'"})
-		} else if grant == "granted" {
-			add(check{area: name, name: "endpoints grant", status: stOK,
-				detail: "served names carry their own Endpoints"})
-		}
-		// The environment a plugged process inherits from the workload it
-		// replaces is read with `exec` in the parked pod. Without that right the
-		// agent reads the pod SPEC instead, and every variable that comes from a
-		// Secret or ConfigMap arrives empty - the service starts and cannot log
-		// in anywhere, which looks like anything but a missing RBAC rule.
-		if execGrant == "missing" {
-			add(check{area: name, name: "exec grant", status: stWarn,
-				detail: "the agent may not exec into pods: a plugged service gets its variables from the pod spec, " +
-					"and those that come from a Secret or ConfigMap arrive empty",
-				remedy: "re-apply deploy/plug-k8s.yaml, or grant it alone: kubectl -n <ns> patch role " +
-					"plug-serve-names --type=json -p '[{\"op\":\"add\",\"path\":\"/rules/-\"," +
-					"\"value\":{\"apiGroups\":[\"\"],\"resources\":[\"pods\"],\"verbs\":[\"get\",\"list\"]}}," +
-					"{\"op\":\"add\",\"path\":\"/rules/-\",\"value\":{\"apiGroups\":[\"\"],\"resources\":[\"pods/exec\"]," +
-					"\"verbs\":[\"get\",\"create\"]}}]'"})
-		} else if execGrant == "granted" {
-			add(check{area: name, name: "exec grant", status: stOK,
-				detail: "a plugged service inherits the parked pod's environment, secrets included"})
-		}
-		// A TAKEN-OVER Service keeps the slice Kubernetes built for its pod
-		// unless the agent may delete it: kube-proxy then routes over both,
-		// and half the requests still reach the deployed workload - a bug that
-		// looks like "my change is there one time in two". The agent removes
-		// that slice at park, and repairs a parked name it finds doubled at
-		// every sweep, when it has the right.
-		if sliceGrant == "missing" {
-			add(check{area: name, name: "endpointslices grant", status: stFail,
-				detail: "the agent may not delete the EndpointSlice Kubernetes built for a taken-over Service's pod: " +
-					"half of that name's requests still reach the deployed workload",
-				remedy: "re-apply deploy/plug-k8s.yaml, or grant it alone: kubectl -n <ns> patch role " +
-					"plug-serve-names --type=json -p '[{\"op\":\"add\",\"path\":\"/rules/-\"," +
-					"\"value\":{\"apiGroups\":[\"discovery.k8s.io\"],\"resources\":[\"endpointslices\"]," +
-					"\"verbs\":[\"list\",\"deletecollection\"]}}]'"})
-		} else if sliceGrant == "granted" {
-			add(check{area: name, name: "endpointslices grant", status: stOK,
-				detail: "a taken-over name answers from your process alone"})
-		}
-		if doubled != "" {
-			add(check{area: name, name: "taken-over names", status: stFail,
-				detail: "still routed to the deployed pod for half their requests: " + doubled,
-				remedy: "re-apply deploy/plug-k8s.yaml (the agent then repairs it within a minute), or by hand: " +
-					"kubectl -n <ns> delete endpointslice -l kubernetes.io/service-name=<name>," +
-					"endpointslice.kubernetes.io/managed-by=endpointslice-controller.k8s.io"})
-		}
+		doctorInfo(name, out, add)
 		add(check{area: name, name: "agent features", status: stOK,
 			detail: "≥ 2.2 (honest NXDOMAIN, -c, takeover)"})
 	} else {
 		add(check{area: name, name: "agent features", status: stWarn,
 			detail: "pre-2.2 agent (no NXDOMAIN check, no -c)",
 			remedy: "redeploy the softwarity/plug image, sessions pick it up on restart"})
+	}
+}
+
+// doctorInfo reads what the agent says of its deployment in `info`: the
+// backend that serves -s names and, on Kubernetes, the RBAC report, one
+// field per probe (k8sGrantProbes on the agent side). A field an older agent
+// does not send is "too old to know", never a missing rule.
+func doctorInfo(name, out string, add func(check)) {
+	backend, grant, execGrant, sliceGrant, doubled := "none", "", "", "", ""
+	mountGrant := ""
+	for _, f := range strings.Fields(out) {
+		if v, ok := strings.CutPrefix(f, "backend="); ok {
+			backend = v
+		}
+		if v, ok := strings.CutPrefix(f, "endpoints="); ok {
+			grant = v
+		}
+		if v, ok := strings.CutPrefix(f, "exec="); ok {
+			execGrant = v
+		}
+		if v, ok := strings.CutPrefix(f, "endpointslices="); ok {
+			sliceGrant = v
+		}
+		if v, ok := strings.CutPrefix(f, "mount="); ok {
+			mountGrant = v
+		}
+		if v, ok := strings.CutPrefix(f, "doubled="); ok {
+			doubled = v
+		}
+	}
+	if backend == "none" {
+		add(check{area: name, name: "-s names", status: stFail,
+			detail: "the agent cannot create cluster names",
+			remedy: "mount /var/run/docker.sock (on Swarm, on a manager node), or apply plug-k8s.yaml"})
+	} else {
+		add(check{area: name, name: "-s names", status: stOK, detail: backend})
+	}
+	// The one line to read first on Kubernetes: is the RBAC the agent was
+	// deployed with as new as the agent? `plug update` moves the image and
+	// never the manifest, so every grant a newer agent needs is missing until
+	// someone re-applies it - and "no problems, 1 warning" is not what half
+	// the traffic going to the wrong pod should read as. A FAIL, naming each
+	// missing rule with the version that needs it, and the two ways to fix it.
+	if backend == "kubernetes" {
+		var missing []string
+		if grant == "missing" {
+			missing = append(missing, "endpoints (2.12.0: a served name points at the one agent pod holding the session)")
+		}
+		if execGrant == "missing" {
+			missing = append(missing, "pods + pods/exec (2.16.0: the parked workload's environment and secrets)")
+		}
+		if sliceGrant == "missing" {
+			missing = append(missing, "discovery.k8s.io/endpointslices (2.20.1: a taken-over name answers from your process ALONE, not half the time)")
+		}
+		if mountGrant == "missing" {
+			missing = append(missing, "pods create/delete + persistentvolumeclaims (2.20.0: the live mount's helper pod beside the workload)")
+		}
+		if len(missing) > 0 {
+			add(check{area: name, name: "kubernetes RBAC", status: stFail,
+				detail: fmt.Sprintf("the Role the agent runs with is OLDER than the agent (v%s): %d rule(s) missing - %s",
+					shortVersion(agentVersionOf(out)), len(missing), strings.Join(missing, "; ")),
+				remedy: "re-apply deploy/plug-k8s.yaml for this version, or update the chart that deploys the agent " +
+					"(plug update moves the image, never the manifest); each rule alone is given below"})
+		} else if grant == "granted" {
+			add(check{area: name, name: "kubernetes RBAC", status: stOK, detail: "every rule this agent's version needs is granted"})
+		}
+	}
+	// The RBAC a Kubernetes agent was DEPLOYED with, which `plug update` never
+	// touches: it moves the image and never the manifest. Without the
+	// endpoints grant a served name still works, by the old shape - the agent
+	// adds `app: plug` to the Service's SELECTOR instead of writing Endpoints
+	// - and that is a field a GitOps controller may also own. When the two
+	// disagree the takeover's receipt can be dropped, and the Service is then
+	// left selecting a pod that is gone: no endpoints, no traffic. Recent
+	// agents repair that on their own at boot, which is a net and not a fix.
+	if grant == "missing" {
+		add(check{area: name, name: "endpoints grant", status: stWarn,
+			detail: "this cluster's RBAC predates it: served names go through the Service selector",
+			remedy: "re-apply deploy/plug-k8s.yaml, or grant it alone: kubectl -n <ns> patch role " +
+				"plug-serve-names --type=json -p '[{\"op\":\"add\",\"path\":\"/rules/-\"," +
+				"\"value\":{\"apiGroups\":[\"\"],\"resources\":[\"endpoints\"]," +
+				"\"verbs\":[\"get\",\"create\",\"update\",\"delete\"]}}]'"})
+	} else if grant == "granted" {
+		add(check{area: name, name: "endpoints grant", status: stOK,
+			detail: "served names carry their own Endpoints"})
+	}
+	// The environment a plugged process inherits from the workload it
+	// replaces is read with `exec` in the parked pod. Without that right the
+	// agent reads the pod SPEC instead, and every variable that comes from a
+	// Secret or ConfigMap arrives empty - the service starts and cannot log
+	// in anywhere, which looks like anything but a missing RBAC rule.
+	if execGrant == "missing" {
+		add(check{area: name, name: "exec grant", status: stWarn,
+			detail: "the agent may not exec into pods: a plugged service gets its variables from the pod spec, " +
+				"and those that come from a Secret or ConfigMap arrive empty",
+			remedy: "re-apply deploy/plug-k8s.yaml, or grant it alone: kubectl -n <ns> patch role " +
+				"plug-serve-names --type=json -p '[{\"op\":\"add\",\"path\":\"/rules/-\"," +
+				"\"value\":{\"apiGroups\":[\"\"],\"resources\":[\"pods\"],\"verbs\":[\"get\",\"list\"]}}," +
+				"{\"op\":\"add\",\"path\":\"/rules/-\",\"value\":{\"apiGroups\":[\"\"],\"resources\":[\"pods/exec\"]," +
+				"\"verbs\":[\"get\",\"create\"]}}]'"})
+	} else if execGrant == "granted" {
+		add(check{area: name, name: "exec grant", status: stOK,
+			detail: "a plugged service inherits the parked pod's environment, secrets included"})
+	}
+	// A TAKEN-OVER Service keeps the slice Kubernetes built for its pod
+	// unless the agent may delete it: kube-proxy then routes over both,
+	// and half the requests still reach the deployed workload - a bug that
+	// looks like "my change is there one time in two". The agent removes
+	// that slice at park, and repairs a parked name it finds doubled at
+	// every sweep, when it has the right.
+	if sliceGrant == "missing" {
+		add(check{area: name, name: "endpointslices grant", status: stFail,
+			detail: "the agent may not delete the EndpointSlice Kubernetes built for a taken-over Service's pod: " +
+				"half of that name's requests still reach the deployed workload",
+			remedy: "re-apply deploy/plug-k8s.yaml, or grant it alone: kubectl -n <ns> patch role " +
+				"plug-serve-names --type=json -p '[{\"op\":\"add\",\"path\":\"/rules/-\"," +
+				"\"value\":{\"apiGroups\":[\"discovery.k8s.io\"],\"resources\":[\"endpointslices\"]," +
+				"\"verbs\":[\"list\",\"deletecollection\"]}}]'"})
+	} else if sliceGrant == "granted" {
+		add(check{area: name, name: "endpointslices grant", status: stOK,
+			detail: "a taken-over name answers from your process alone"})
+	}
+	// The live mount starts a helper pod beside the workload, on the
+	// workload's claim. A Role from before it lets every session start and
+	// fails each mount, the automatic ones of -s included, at its first step.
+	if mountGrant == "missing" {
+		add(check{area: name, name: "mount grant", status: stWarn,
+			detail: "the agent may not create the helper pod a live mount is: every --mount, and the volumes " +
+				"-s mounts on its own, fails at session start",
+			remedy: "re-apply deploy/plug-k8s.yaml, or grant it alone: kubectl -n <ns> patch role " +
+				"plug-serve-names --type=json -p '[{\"op\":\"add\",\"path\":\"/rules/-\"," +
+				"\"value\":{\"apiGroups\":[\"\"],\"resources\":[\"pods\"],\"verbs\":[\"create\",\"delete\"]}}," +
+				"{\"op\":\"add\",\"path\":\"/rules/-\",\"value\":{\"apiGroups\":[\"\"],\"resources\":[\"persistentvolumeclaims\"]," +
+				"\"verbs\":[\"get\"]}}]'"})
+	} else if mountGrant == "granted" {
+		add(check{area: name, name: "mount grant", status: stOK,
+			detail: "a workload's volumes can be mounted on this machine"})
+	}
+	if doubled != "" {
+		add(check{area: name, name: "taken-over names", status: stFail,
+			detail: "still routed to the deployed pod for half their requests: " + doubled,
+			remedy: "re-apply deploy/plug-k8s.yaml (the agent then repairs it within a minute), or by hand: " +
+				"kubectl -n <ns> delete endpointslice -l kubernetes.io/service-name=<name>," +
+				"endpointslice.kubernetes.io/managed-by=endpointslice-controller.k8s.io"})
 	}
 }
 

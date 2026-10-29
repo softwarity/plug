@@ -189,3 +189,37 @@ func TestResolutionVerdict(t *testing.T) {
 		})
 	}
 }
+
+// The live mount's rules reach the RBAC verdict: a Role from before it was
+// once reported "every rule this agent's version needs is granted" while no
+// helper pod could be created. An agent that does not send the field says
+// nothing about it, as for every other grant.
+func TestDoctorInfoReportsTheMountGrant(t *testing.T) {
+	collect := func(out string) map[string]check {
+		got := map[string]check{}
+		doctorInfo("p", out, func(c check) { got[c.name] = c })
+		return got
+	}
+	base := "version=2.31.2 backend=kubernetes endpoints=granted exec=granted endpointslices=granted"
+
+	got := collect(base + " mount=missing")
+	if c := got["kubernetes RBAC"]; c.status != stFail || !strings.Contains(c.detail, "2.20.0") {
+		t.Errorf("RBAC verdict with the mount rules missing = %+v, want a FAIL naming 2.20.0", c)
+	}
+	if c := got["mount grant"]; c.status != stWarn || !strings.Contains(c.remedy, "persistentvolumeclaims") {
+		t.Errorf("mount grant = %+v, want a WARN whose remedy grants the claims too", c)
+	}
+
+	got = collect(base + " mount=granted")
+	if c := got["kubernetes RBAC"]; c.status != stOK {
+		t.Errorf("RBAC verdict with every rule = %+v, want OK", c)
+	}
+
+	got = collect(base) // an agent from before the probe
+	if c := got["kubernetes RBAC"]; c.status != stOK {
+		t.Errorf("RBAC verdict without the field = %+v, want OK: absent is too old to know", c)
+	}
+	if _, said := got["mount grant"]; said {
+		t.Error("a mount grant line for an agent that did not report one")
+	}
+}
