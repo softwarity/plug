@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.31.3
+
 ### `plug update` speaks of open sessions only when it changed something
 
 When the agent was already current, `plug update` no longer counts your
