@@ -106,7 +106,9 @@ dockerrun_killed() {
   kill_served() { plug curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://$kname:8080/hostname" 2>/dev/null | tr -d '\r'; }
   kill_gone() { if [ "$(kill_served)" = 200 ]; then echo served; else echo gone; fi; }
   kill_sidecar_up() { if [ "$(docker inspect -f '{{.State.Running}}' "$sc" 2>/dev/null)" = true ]; then echo true; else echo false; fi; }
-  kill_cleanup() { docker rm -f "$kname" ${sc:+"$sc"} >/dev/null 2>&1; pkill -9 -f "$kname:8080:8080 --dockerrun" 2>/dev/null; }
+  # Leftovers only, so its own status is nobody's verdict: a pkill that finds
+  # nothing left to kill is the case that passed.
+  kill_cleanup() { docker rm -f "$kname" ${sc:+"$sc"} >/dev/null 2>&1; pkill -9 -f "$kname:8080:8080 --dockerrun" 2>/dev/null || true; }
 
   if ! retry_until 30 2 200 kill_served; then
     echo "--- container FAIL - the container never served $kname (got '${ru_out:-nothing}')"
@@ -127,4 +129,5 @@ dockerrun_killed() {
   fi
   echo "container OK - plug killed with -9: its sidecar ended on its own and $kname was withdrawn"
   kill_cleanup
+  return 0
 }
