@@ -173,6 +173,11 @@ type upstreamDNS struct {
 	mu      sync.RWMutex
 	addrs   []string      // "host:port", port defaulted on the way in
 	timeout time.Duration // how long relay waits; tests shorten it
+	// networkNames: the upstream is docker's embedded resolver, which a
+	// container has on a network docker was asked to make (a --dockerrun
+	// whose line names --network), and which alone knows the names of that
+	// network's containers. See answerDNS's single-label case.
+	networkNames bool
 	// scoped are the resolvers that answer ONLY for a domain and its
 	// subdomains: what a corporate VPN pushes for its internal names while the
 	// rest of the world keeps going to the machine's ordinary servers. macOS
@@ -268,6 +273,10 @@ func (u *upstreamDNS) set(servers []string) {
 	addrs := dialable(servers)
 	u.mu.Lock()
 	u.addrs = addrs
+	u.networkNames = false
+	for _, a := range addrs {
+		u.networkNames = u.networkNames || a == dockerEmbeddedDNS
+	}
 	u.mu.Unlock()
 	publishUpstreams(addrs) // so `plug doctor` can say where lookups actually go
 }
@@ -550,6 +559,17 @@ func answerDNS(q []byte, tab *faketab, upstream *upstreamDNS, check nameChecker)
 		}
 	case !strings.Contains(name, "."): // single-label cluster name → fake
 		answerIP, rcode = mintAnswer(name, tab, check)
+		// The cluster first, then the docker network: a --dockerrun container
+		// on a network of the user's (--network on its line) reaches the other
+		// containers of that network by name, as any container there does,
+		// and only docker's embedded resolver knows those names. Anywhere else
+		// a single-label name stays the cluster's: the machine's resolvers
+		// would only be leaked an internal name to say they do not have it.
+		if rcode == 3 && upstream.knowsNetworkNames() {
+			if reply := upstream.relay(name, q); reply != nil {
+				return capReply(reply, q, qend)
+			}
+		}
 	case isClusterLongName(name):
 		// A Service under its Kubernetes long name: ours, like the bare name,
 		// and handled the same way, only the name stays whole so the connect
@@ -736,6 +756,20 @@ func relayable(name string, tab *faketab) bool {
 	base := tab.base
 	return !strings.HasSuffix(n, fmt.Sprintf(".%d.%d.%d.in-addr.arpa",
 		(base>>8)&0xff, (base>>16)&0xff, (base>>24)&0xff))
+}
+
+// dockerEmbeddedDNS is the resolver docker puts in a container's resolv.conf on
+// a network of its own making, answered inside the container's namespace.
+const dockerEmbeddedDNS = "127.0.0.11:53"
+
+// knowsNetworkNames reports whether the upstream is docker's embedded resolver.
+func (u *upstreamDNS) knowsNetworkNames() bool {
+	if u == nil {
+		return false
+	}
+	u.mu.RLock()
+	defer u.mu.RUnlock()
+	return u.networkNames
 }
 
 // maxRelayReply is the largest reply we hand back over the TUN. 1232 is the EDNS0

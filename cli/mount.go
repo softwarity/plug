@@ -523,6 +523,10 @@ func startMounts(cfg config) (func(), error) {
 				if cfg.mountPolicy.drop[p] {
 					continue
 				}
+				if cfg.dockerRun && mountedByUser(p, cfg.dockerTargets) {
+					info("%s: %s is mounted by your `docker run` line, which the container gets instead of the workload's volume", name, p)
+					continue
+				}
 				at := autoMountPath(dir, p)
 				if cfg.dockerRun {
 					at = p // the container's, at the cluster path

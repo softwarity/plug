@@ -79,7 +79,7 @@ func TestARunSaysWhatItDoes(t *testing.T) {
 	if s := newRunSession(coreConfigFromEnv()); s.Serves || !s.Docker {
 		t.Errorf("a -c in a sidecar said %+v", s)
 	}
-	args := strings.Join(sidecarArgs(config{host: "h", port: "2222"}, "", []string{"-c"}, "amd64", "n", "img", testOwner), " ")
+	args := strings.Join(sidecarArgs(config{host: "h", port: "2222"}, nil, []string{"-c"}, "amd64", "n", "img", testOwner), " ")
 	if !strings.Contains(args, "-e PLUG_CORE_SIDECAR=1") {
 		t.Errorf("the sidecar's core is not told it holds a container: %s", args)
 	}

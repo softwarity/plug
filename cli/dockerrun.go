@@ -36,13 +36,11 @@ import (
 // container is a Linux environment on macOS and Windows too, so the Linux
 // datapath is what runs in all three cases, VM or no VM.
 //
-// NO PARSING OF DOCKER'S GRAMMAR, deliberately. docker accepts its options in any
-// order before the image name, so the two flags go in right after `run` and the
-// user's line is passed through untouched. Working out where their options end
-// and the image begins would mean knowing which of docker's sixty-odd flags take
-// a value, a table that would rot. When the user's line conflicts with ours,
-// docker refuses it and says so; explainDockerRefusal turns that into plug's
-// terms rather than pre-empting it.
+// THE LINE IS READ, with the table docker itself gives (dockerline.go): the
+// options of the network the container shares (-p, --network, -h, --add-host…)
+// go to the sidecar, which owns that network, and everything else goes through
+// as written, after plug's own two flags. A mount on the line takes its path
+// from the workload's: the user's wins.
 //
 // The host needs no privilege here. Nothing creates a TUN on this machine: the
 // capabilities are granted by docker, inside the sidecar.
@@ -77,30 +75,59 @@ func dockerSidecarImage() string {
 	return "softwarity/plug:" + version
 }
 
-// dockerRunCmd splices plug's two flags into the user's command line.
+// readDockerRun checks the command is `docker run` and reads its line with
+// the options docker listed (dockerRunOptionsOf). Without them the line goes
+// through as written: nothing is moved, and docker refuses what conflicts.
 //
-// Separated from everything that runs a process so the shape can be tested
-// against a table instead of against a docker daemon. It refuses anything but
-// `docker run`: --dockerrun is scoped to that one form on purpose, and a refusal
-// naming what it accepts beats silently doing nothing to `docker compose up`.
-func dockerRunCmd(cmdArgs []string, sidecar, resolv string, projected []string) ([]string, error) {
+// It refuses anything but `docker run`: --dockerrun is scoped to that one form
+// on purpose, and a refusal naming what it accepts beats silently doing nothing
+// to `docker compose up`.
+func readDockerRun(cmdArgs []string, opts *dockerRunOptions) (dockerRunLine, error) {
 	if len(cmdArgs) < 2 || cmdArgs[0] != "docker" || cmdArgs[1] != "run" {
-		return nil, fmt.Errorf("--dockerrun runs `docker run`, and got %q.\n"+
+		return dockerRunLine{}, fmt.Errorf("--dockerrun runs `docker run`, and got %q.\n"+
 			"      It is scoped to that one form: `docker compose up`, `docker create` and\n"+
 			"      podman build their containers differently, and guessing at them would put\n"+
 			"      a container in a cluster it was never asked to join",
 			strings.Join(cmdArgs, " "))
 	}
+	if opts == nil {
+		return dockerRunLine{user: cmdArgs[2:]}, nil
+	}
+	return readDockerRunLine(cmdArgs[2:], opts)
+}
+
+// dockerRunOptionsOf asks the docker CLI for its `docker run` options. nil,
+// said once, when its help cannot be read.
+func dockerRunOptionsOf() *dockerRunOptions {
+	out, err := dockerCommand("run", "--help").Output()
+	opts := parseDockerRunHelp(string(out))
+	if err != nil || opts == nil {
+		info("could not read the options of `docker run` from its help; your line goes to docker as written,\n" +
+			"      and -p, --network or -h on it are refused there instead of given to the sidecar")
+		return nil
+	}
+	return opts
+}
+
+// dockerRunCmd is the user's container: plug's two flags right after `run`,
+// where docker accepts options in any order, then the workload's projection,
+// then the user's own line, minus what went to the sidecar.
+//
+// Separated from everything that runs a process so the shape can be tested
+// against a table instead of against a docker daemon.
+func dockerRunCmd(line dockerRunLine, sidecar, resolv string, projected []string) []string {
 	out := []string{"docker", "run",
 		"--network", "container:" + sidecar,
 		"-v", resolv + ":/etc/resolv.conf:ro",
 	}
 	// The workload's environment and mounted files, as -e and -v. They go BEFORE
-	// the user's own args so that a -e or -v the user writes wins - docker takes
-	// the last of a repeated flag, the same "caller wins" the -s/-c projection
-	// gives by skipping keys the shell already set.
+	// the user's own args so that a -e the user writes wins - docker takes the
+	// last of a repeated flag, the same "caller wins" the -s/-c projection gives
+	// by skipping keys the shell already set. A -v at the same path is not
+	// repeated: docker refuses that, so the projection leaves it out
+	// (mountedByUser).
 	out = append(out, projected...)
-	return append(out, cmdArgs[2:]...), nil
+	return append(out, line.user...)
 }
 
 // dockerProjectionFlags turns a workload's projected environment and mounted
@@ -200,6 +227,7 @@ func dockerProjection(cfg config, exposes []string, sessionDir string) (flags, e
 	if ferr != nil {
 		info("%s: could not read the workload's mounted files (%v); the container starts without them", src, ferr)
 	}
+	paths = leaveUserMounts(src, paths, cfg.dockerTargets)
 	envFile := filepath.Join(sessionDir, dockerRunEnvName)
 	cleanup = func() {
 		_ = os.Remove(envFile)
@@ -217,6 +245,20 @@ func dockerProjection(cfg config, exposes []string, sessionDir string) (flags, e
 		info("%s: projected %d variable(s) and %d mounted path(s) into the container", src, len(set), len(paths))
 	}
 	return flags, env, cleanup
+}
+
+// leaveUserMounts drops the workload's paths that the user's own mounts take,
+// saying which: the container gets the user's, as it asked.
+func leaveUserMounts(src string, paths, targets []string) []string {
+	kept := paths[:0:0]
+	for _, p := range paths {
+		if mountedByUser(p, targets) {
+			info("%s: %s is mounted by your `docker run` line, which the container gets instead of the workload's", src, p)
+			continue
+		}
+		kept = append(kept, p)
+	}
+	return kept
 }
 
 // dockerEnvSource is the workload whose environment --dockerrun projects: the
@@ -238,20 +280,18 @@ func dockerEnvSource(cfg config, exposes []string) string {
 }
 
 // explainDockerRefusal turns docker's own complaint into the sentence plug owes
-// the user. Docker validates our injection against their line, which is why this
-// exists instead of a parser: the two flags that can collide are the two docker
-// itself names.
+// the user, for what the reading of the line let through: a line read without
+// docker's options (dockerRunOptionsOf), or an option of the network docker
+// added after this was written.
 func explainDockerRefusal(stderr string) string {
 	switch {
 	case strings.Contains(stderr, "conflicting options: dns"):
 		return "your `docker run` sets --dns, and the container takes its resolver from the cluster instead.\n" +
 			"      Drop --dns: names resolve through plug, and anything else through the resolver it captured."
 	case strings.Contains(stderr, "conflicting options") && strings.Contains(stderr, "network"):
-		return "your `docker run` sets its own --network or publishes a port with -p, and the container\n" +
-			"      shares the network of the sidecar that holds the tunnel, so neither can be set on it.\n" +
-			"      The container is a member of the cluster: serve it with -s <name>:<port>:<port> and the\n" +
-			"      cluster reaches it by that name, a browser through the cluster's gateway, with the\n" +
-			"      identity and roles it sets. A port published on this machine would bypass it."
+		return "your `docker run` sets an option of the container's network, and the container shares\n" +
+			"      the network of the sidecar that holds the tunnel. plug gives -p, --network, -h and\n" +
+			"      --add-host to the sidecar; this one it did not know to move. Drop it from the line."
 	}
 	return ""
 }
@@ -355,7 +395,7 @@ const sidecarHoldStdinEnv = "PLUG_HOLD_STDIN"
 // container's to answer first, and the sidecar must outlive it to withdraw
 // the names cleanly, so the terminal's signals never reach it (and
 // --sig-proxy=false, so none would be passed on if they did).
-func startDockerSidecar(cfg config, network string, plugFlags []string) (string, func(), error) {
+func startDockerSidecar(cfg config, netFlags []string, plugFlags []string) (string, func(), error) {
 	arch, err := dockerServerArch()
 	if err != nil {
 		return "", nil, err
@@ -386,7 +426,7 @@ func startDockerSidecar(cfg config, network string, plugFlags []string) (string,
 		return "", nil, refused(out, err)
 	}
 
-	cmd := dockerCommand(sidecarArgs(cfg, network, plugFlags, arch, name, image, owner)...)
+	cmd := dockerCommand(sidecarArgs(cfg, netFlags, plugFlags, arch, name, image, owner)...)
 	ownProcessGroup(cmd)
 	hold, err := cmd.StdinPipe()
 	if err != nil {
@@ -421,7 +461,7 @@ func startDockerSidecar(cfg config, network string, plugFlags []string) (string,
 		break
 	}
 	// No container by that name: docker refused to create it (a network that
-	// does not exist, a value of PLUG_DOCKER_NETWORK it rejects), which is not
+	// does not exist, a port already taken on this machine), which is not
 	// a tunnel that failed. Asked before stop, which removes it either way.
 	created := dockerCommand("inspect", "-f", "{{.Id}}", name).Run() == nil
 	stop()
@@ -606,7 +646,7 @@ func staleSidecars(listing string, self int, alive func(int) bool) []string {
 // holds one throwaway key and NOT the key built into plug. The built-in key is
 // refused there, so a tunnel that comes up could only have been carried by the
 // file mounted below, and the same profile with its key line removed is refused.
-func sidecarArgs(cfg config, network string, plugFlags []string, arch, name, image string, owner sidecarOwner) []string {
+func sidecarArgs(cfg config, netFlags []string, plugFlags []string, arch, name, image string, owner sidecarOwner) []string {
 	// Attached, stdin open, nothing passed on: see startDockerSidecar for why
 	// the sidecar lives exactly as long as the pipe it reads.
 	args := []string{"run", "-i", "--sig-proxy=false", "--name", name}
@@ -629,9 +669,10 @@ func sidecarArgs(cfg config, network string, plugFlags []string, arch, name, ima
 		// host-gateway gives it the same address there.
 		args = append(args, "--add-host", dockerHostGateway+":host-gateway")
 	}
-	if network != "" {
-		args = append(args, "--network", network)
-	}
+	// The options of the network the user's container shares, from its line:
+	// the network the sidecar joins (where the agent is reachable from, when
+	// the agent is itself a container), the ports it publishes, its name.
+	args = append(args, netFlags...)
 	// The profile's private key, read-only and by path. It is the ONE piece of
 	// the caller's identity that crosses into the container, and it has to: the
 	// core in there opens the tunnel, and a key that stops on this side is a key
@@ -681,12 +722,27 @@ func sidecarHold() {
 // runDockerRun is the whole mode: hold the datapath in a sidecar, run the user's
 // container in its network namespace, tear the sidecar down after.
 //
-// The sidecar's life is tied to this command's, which is the honest behaviour for
-// a foreground run and a trap for `docker run -d`: a detached container would
-// outlive the network it was given. Named rather than silently handled, because
-// the two-container recipe is there for anyone who needs the container to
-// survive, and half-supporting it would be worse than saying so.
+// The sidecar's life is tied to this command's, so the container runs in the
+// foreground: a detached one would outlive the network it was given, and the
+// -d a line asks for is left out (readDockerRunLine).
 func runDockerRun(cfg config, cmdArgs []string, exposes []string, client bool) int {
+	if os.Getenv("PLUG_DOCKER_NETWORK") != "" {
+		info("PLUG_DOCKER_NETWORK is now --network on your `docker run` line: plug gives it to the\n" +
+			"      sidecar, which joins that network and reaches the agent from there")
+		return 1
+	}
+	// Read first, so that a line plug cannot honour is refused before
+	// anything is started.
+	line, err := readDockerRun(cmdArgs, dockerRunOptionsOf())
+	if err != nil {
+		info("%v", err)
+		return 1
+	}
+	cfg.dockerTargets = line.targets
+	if line.detach {
+		info("-d left out: your container runs in the foreground, beside plug, and the session ends with it")
+	}
+
 	dir, err := os.MkdirTemp("", "plug-docker")
 	if err != nil {
 		info("cannot write the resolver the container will read: %v", err)
@@ -714,8 +770,7 @@ func runDockerRun(cfg config, cmdArgs []string, exposes []string, client bool) i
 		plugFlags = append(plugFlags, "-c")
 	}
 
-	network := os.Getenv("PLUG_DOCKER_NETWORK")
-	name, stop, err := startDockerSidecar(cfg, network, plugFlags)
+	name, stop, err := startDockerSidecar(cfg, line.sidecar, plugFlags)
 	if err != nil {
 		info("%v", err)
 		return 1
@@ -742,12 +797,8 @@ func runDockerRun(cfg config, cmdArgs []string, exposes []string, client bool) i
 	defer volCleanup()
 	projected = append(projected, volFlags...)
 
-	full, err := dockerRunCmd(cmdArgs, name, resolv, projected)
-	if err != nil {
-		info("%v", err)
-		return 1
-	}
-	// full[0] is "docker": dockerRunCmd refused anything else above. The user's
+	full := dockerRunCmd(line, name, resolv, projected)
+	// full[0] is "docker": readDockerRun refused anything else above. The user's
 	// container is started by the CLI running as the user, with the user's
 	// $PATH and ~/.docker, like every other docker call here (dockerCommand).
 	cmd := dockerCommand(full[1:]...)

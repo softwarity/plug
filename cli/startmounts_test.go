@@ -413,3 +413,27 @@ func TestAMountRefusedByTheHelperSaysWhatToAllow(t *testing.T) {
 		t.Error("a hint for a helper that refused nothing")
 	}
 }
+
+// Under --dockerrun, a volume the user's own line mounts (-v ./data:/data) is
+// the user's: no helper is asked for it, and docker is not handed two mounts
+// at one path, which it refuses. The others are mounted as ever.
+func TestADockerRunLeavesTheVolumesItsLineMounts(t *testing.T) {
+	sandboxHome(t)
+	sandboxTemp(t)
+	installFakeSMB(t)
+	f := fakeMountSession(mountAgent)
+	installFakeSession(t, f)
+	saved := dockerMounts
+	t.Cleanup(func() { dockerMounts = saved })
+	cfg := config{host: "agent.example", port: "2222", exposes: exposeSpecs("geo:80:3000"),
+		dockerRun: true, dockerTargets: []string{"/data"}}
+
+	stop, err := startMounts(cfg)
+	if err != nil {
+		t.Fatalf("startMounts: %v", err)
+	}
+	defer stop()
+	if got := f.askedPrefixed("mount-volume "); len(got) != 1 || !strings.HasPrefix(got[0], "mount-volume geo /logs ") {
+		t.Errorf("asked %v, want /logs alone: /data is mounted by the line", got)
+	}
+}

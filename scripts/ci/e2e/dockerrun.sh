@@ -102,7 +102,7 @@ do_dockerrun() {
 dockerrun_killed() {
   local kname="dr-kill-$leg-$$" kerr=/tmp/dockerrun-kill.err sc=""
   PLUG_DOCKER_IMAGE="$AGENT_IMAGE" "$PLUG" --host "$ip" --port "$port" -s "$kname:8080:8080" --dockerrun \
-    docker run --rm --name "$kname" busybox:1.37 httpd -f -p 8080 -h /etc >/dev/null 2>"$kerr" &
+    docker run --rm --name "$kname" -p 127.0.0.1:18089:8080 busybox:1.37 httpd -f -p 8080 -h /etc >/dev/null 2>"$kerr" &
   kill_served() { plug curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://$kname:8080/hostname" 2>/dev/null | tr -d '\r'; }
   kill_gone() { if [ "$(kill_served)" = 200 ]; then echo served; else echo gone; fi; }
   kill_sidecar_up() { if [ "$(docker inspect -f '{{.State.Running}}' "$sc" 2>/dev/null)" = true ]; then echo true; else echo false; fi; }
@@ -116,6 +116,16 @@ dockerrun_killed() {
     kill_cleanup; return 1
   fi
   sc="$(docker inspect -f '{{.HostConfig.NetworkMode}}' "$kname" 2>/dev/null)"; sc="${sc#container:}"
+  # -p on the line: given to the sidecar, which owns the network, so the port
+  # is published on this machine as for any container, the cluster name served
+  # beside it. On the container, docker refuses it.
+  local pcode
+  pcode="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:18089/hostname 2>/dev/null)"
+  if [ "$pcode" != 200 ]; then
+    echo "--- container FAIL - -p 127.0.0.1:18089:8080 on the line did not publish the container's port (got '${pcode:-nothing}')"
+    kill_cleanup; return 1
+  fi
+  echo "container OK - -p on the line published the container's port on this machine, through the sidecar"
   # plug carries --dockerrun on its line, the docker CLIs it started do not:
   # this kills plug and leaves docker running.
   pkill -9 -f "$kname:8080:8080 --dockerrun"

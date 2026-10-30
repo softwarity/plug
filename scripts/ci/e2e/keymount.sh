@@ -81,10 +81,10 @@ do_keymount() {
   printf 'host = plug-keymount-agent\nport = 22\nkey = %s\n' "$km_dir/id" > "$km_dir/home/.plug/keyed.conf"
   printf 'host = plug-keymount-agent\nport = 22\n' > "$km_dir/home/.plug/bare.conf"
 
-  km_code="$(HOME="$km_dir/home" PLUG_DOCKER_IMAGE="$AGENT_IMAGE" PLUG_DOCKER_NETWORK="$km_net" \
+  km_code="$(HOME="$km_dir/home" PLUG_DOCKER_IMAGE="$AGENT_IMAGE" \
     perl -e 'alarm 180; exec @ARGV or exit 127' \
     "$PLUG" -p keyed -c --dockerrun \
-    docker run --rm curlimages/curl:8.11.1 \
+    docker run --rm --network "$km_net" curlimages/curl:8.11.1 \
       -sS --max-time 20 -o /dev/null -w '%{http_code}' http://httpbin:8080/get \
     2>"$km_dir/err" | tr -d '\r' | tail -1)"
   if [ "$km_code" != "200" ]; then
@@ -97,10 +97,10 @@ do_keymount() {
   # The control, and the reason this cell is not circular: take the key line out
   # and the very same command must be REFUSED. Without it, an agent that accepted
   # anything would answer 200 just the same and this cell would assert nothing.
-  HOME="$km_dir/home" PLUG_DOCKER_IMAGE="$AGENT_IMAGE" PLUG_DOCKER_NETWORK="$km_net" \
+  HOME="$km_dir/home" PLUG_DOCKER_IMAGE="$AGENT_IMAGE" \
     perl -e 'alarm 180; exec @ARGV or exit 127' \
     "$PLUG" -p bare -c --dockerrun \
-    docker run --rm curlimages/curl:8.11.1 -sS --max-time 20 -o /dev/null http://httpbin:8080/get \
+    docker run --rm --network "$km_net" curlimages/curl:8.11.1 -sS --max-time 20 -o /dev/null http://httpbin:8080/get \
     >/dev/null 2>"$km_dir/bare.err"
   if grep -q "refused every key" "$km_dir/bare.err"; then
     echo "control OK - the same profile without its key line is refused, so the 200 above came from the mount"

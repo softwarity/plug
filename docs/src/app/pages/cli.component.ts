@@ -255,10 +255,19 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
           run the <strong>container</strong> as the cluster member instead of the process:
           <code>plug -c --dockerrun docker run --rm my-image</code>. Your image is not modified and
           nothing is rebuilt; <code>-s</code> and <code>-c</code> mean what they always mean. plug
-          holds the data path in a sidecar container and runs yours in its network namespace, so
-          <code>--network</code>, <code>-p</code> and <code>--dns</code> belong to the sidecar and
-          are refused on your line. <code>docker run</code> only, in the foreground - a detached
-          container would outlive the network it was given. The sidecar lives exactly as long as
+          holds the data path in a sidecar container and runs yours in its network namespace.
+          Your line means what it means on any container: <code>-p 3000:3000</code> publishes the
+          port on this machine, <code>--network my-net</code> joins a docker network whose
+          containers answer by name (after the cluster's), <code>-h</code> and
+          <code>--add-host</code> name the container and its hosts. plug gives those to the
+          sidecar, which owns the network, and passes the rest as written; it reads the line with
+          the options your docker CLI lists, so a new docker option needs nothing from plug. A
+          <code>-v</code>, <code>--mount</code> or <code>--tmpfs</code> on the line takes its path
+          from the workload's: the container gets yours. <code>docker run</code> only, in the
+          foreground: a <code>-d</code> on the line is left out, since a detached container would
+          outlive the network it was given. Refused before anything starts: <code>-P</code> (name
+          the ports with <code>-p</code>), <code>--dns</code> (names resolve through plug) and
+          <code>--network host</code> or <code>none</code>. The sidecar lives exactly as long as
           plug: a Ctrl-C, a closed terminal or a plug killed outright all end the session, and what
           it took over on the cluster is given back at once. This machine needs no privilege: docker
           grants them inside the sidecar
@@ -279,7 +288,6 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
       <li><code>plug install-service</code> / <code>plug remove-service</code> - Windows only: create/remove the datapath service (one elevated run; the <a routerLink="/getting-started">installer</a> already does it).</li>
       <li><code>plug init</code> - run the profile wizard explicitly (it runs by itself when no profile exists).</li>
       <li><code>PLUG_DOCKER_IMAGE</code> - the image <code>--dockerrun</code> takes its Linux plug binary from. Defaults to the published <code>softwarity/plug</code> matching your CLI; set it when running a plug built from source, whose version was never published.</li>
-      <li><code>PLUG_DOCKER_NETWORK</code> - the docker network from which your agent is reachable, when the agent is itself a container rather than a host on your network.</li>
     </ul>
   `,
 })

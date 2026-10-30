@@ -185,12 +185,16 @@ ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null get&#64;
 plug -c --dockerrun docker run --rm my-image
 
 # and can answer to one, exactly like a process would
-plug -s my-api:8080:8080 --dockerrun docker run --rm my-image</app-code>
+plug -s my-api:8080:8080 --dockerrun docker run --rm my-image
+
+# your docker run line means what it always means: the port published here,
+# a docker network of yours, a volume of your own
+plug -s my-api:8080:8080 --dockerrun docker run --rm -p 8080:8080 --network my-net -v ./data:/data my-image</app-code>
     <p>
       Same on all three systems, because a container is a Linux environment on every one of them.
       <code>docker run</code> only, and in the foreground: see the
-      <a routerLink="/cli">CLI reference</a> for the limits and the two environment variables that
-      go with it.
+      <a routerLink="/cli">CLI reference</a> for what your line can carry and the environment
+      variable that goes with it.
     </p>
 
     <h3>6. Let plug pick the local port</h3>

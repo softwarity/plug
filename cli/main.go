@@ -32,7 +32,10 @@ type config struct {
 	mounts      []mountSpec
 	mountPolicy mountPolicy
 	// dockerRun: the mounts go to a container (cifs volumes), not to this host.
-	dockerRun bool
+	// dockerTargets are the container paths the user's own -v, --mount and
+	// --tmpfs take, which the workload's mounts and files leave alone.
+	dockerRun     bool
+	dockerTargets []string
 	// updateMode is the cluster's update policy (none|notify|auto). It belongs
 	// to the profile because `auto` updates the AGENT, which is shared: you may
 	// govern your own cluster and have no say over the shared one.

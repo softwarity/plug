@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"syscall"
@@ -86,6 +87,8 @@ func fakeDocker(log string, args []string) int {
 		fmt.Println("PID USER CMD\n1 root /opt/plug/bin/plug-linux-arm64 " + sidecarHoldVerb)
 	case verb == "inspect":
 		fmt.Println("true")
+	case verb == "run" && len(args) == 2 && args[1] == "--help":
+		fmt.Print(dockerRunHelpFixture)
 	case verb == "run" && len(args) > 1 && args[1] == "-i":
 		// The sidecar, attached: it lives until its stdin closes, which is the
 		// whole of its tie to the plug that started it.
@@ -263,6 +266,8 @@ func TestDockerRunDrivesTheDockerCLIOfThisOS(t *testing.T) {
 	var sidecarCall, userCall fakeCall
 	for _, c := range calls {
 		switch {
+		case len(c.Args) == 2 && c.Args[0] == "run" && c.Args[1] == "--help":
+			// The options the line is read with.
 		case len(c.Args) > 1 && c.Args[0] == "run" && c.Args[1] == "-i":
 			sidecar = c.Args
 			sidecarCall = c
@@ -378,5 +383,70 @@ func TestTheContainersVolumeIsReachedAtThisOSsAddressForTheHost(t *testing.T) {
 	}
 	if strings.Join(calls[1].Args, " ") != "volume rm -f "+vol {
 		t.Errorf("the volume was not removed after the run: %q", calls[1].Args)
+	}
+}
+
+// The network's options on the user's line reach the sidecar, which owns that
+// network, and not the container, where docker refuses them or, for
+// --network, lets the last one win and takes the container out of the
+// cluster without a word. The container still joins the sidecar, and gets
+// the rest of its line as written.
+func TestTheNetworksOptionsGoToTheSidecar(t *testing.T) {
+	log := installFakeDocker(t)
+	t.Setenv("PLUG_DOCKER_IMAGE", "softwarity/plug:test")
+	t.Setenv("PLUG_DOCKER_NETWORK", "")
+	saved := dockerMounts
+	dockerMounts = nil
+	t.Cleanup(func() { dockerMounts = saved })
+	cfg := config{host: "h.example", port: "2200"}
+	cfg.envPolicy.off = true
+	cfg.mountPolicy.off = true
+
+	if got := runDockerRun(cfg, []string{"docker", "run", "--rm", "-p", "3000:3000", "--network", "dev-net", "-h", "box",
+		"-v", "/my/data:/var/lib/grafana", "grafana/grafana", "-p", "keep"}, nil, true); got != 0 {
+		t.Fatalf("plug reported %d", got)
+	}
+	var sidecar, user []string
+	for _, c := range readFakeCalls(t, log) {
+		switch {
+		case len(c.Args) > 1 && c.Args[0] == "run" && c.Args[1] == "-i":
+			sidecar = c.Args
+		case len(c.Args) > 1 && c.Args[0] == "run" && c.Args[1] != "--help":
+			user = c.Args
+		}
+	}
+	side := strings.Join(sidecar, " ")
+	for _, want := range []string{"--publish=3000:3000", "--network=dev-net", "--hostname=box"} {
+		if !strings.Contains(side, want) {
+			t.Errorf("the sidecar is missing %q:\n  %s", want, side)
+		}
+	}
+	if strings.Contains(side, "/var/lib/grafana") {
+		t.Errorf("the user's mount went to the sidecar:\n  %s", side)
+	}
+	name := argAfter(sidecar, "--name", func(string) bool { return true })
+	want := []string{"--network", "container:" + name}
+	if len(user) < 4 || !reflect.DeepEqual(user[1:3], want) {
+		t.Errorf("the container does not join the sidecar first: %q", user)
+	}
+	if tail := strings.Join(user[len(user)-6:], " "); tail != "--rm -v /my/data:/var/lib/grafana grafana/grafana -p keep" {
+		t.Errorf("the container's own line is %q, want its options without the network's, then the image and its arguments", tail)
+	}
+	if n := strings.Count(strings.Join(user, " "), "--network"); n != 1 {
+		t.Errorf("the container is given --network %d times: %q", n, user)
+	}
+}
+
+// PLUG_DOCKER_NETWORK was the one way to put the sidecar on a network; the
+// line's --network is now. Set, it is refused with the line to write, rather
+// than read alongside or quietly ignored.
+func TestPLUGDOCKERNETWORKSaysWhereItWent(t *testing.T) {
+	log := installFakeDocker(t)
+	t.Setenv("PLUG_DOCKER_NETWORK", "dev-net")
+	if got := runDockerRun(config{host: "h", port: "22"}, []string{"docker", "run", "img"}, nil, true); got == 0 {
+		t.Fatal("a session started with PLUG_DOCKER_NETWORK set")
+	}
+	if _, err := os.Stat(log); err == nil {
+		t.Errorf("docker was called before the refusal: %v", readFakeCalls(t, log))
 	}
 }

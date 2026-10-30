@@ -11,30 +11,24 @@ import (
 	"testing"
 )
 
-// The splice is the whole of --dockerrun's contract with docker, and it is a
-// contract precisely BECAUSE it does not parse. Our two flags go in right after
-// `run`, where docker accepts options in any order, and everything the user wrote
-// follows untouched. Anything that reordered, dropped or reformatted their line
-// would be plug editing a command it does not understand.
+// The user's container: plug's two flags right after `run`, then the
+// projection, then what the user wrote. Without docker's options to read the
+// line by, it goes through as written, word for word.
 func TestDockerRunCmdSplicesWithoutTouchingTheUsersLine(t *testing.T) {
 	user := []string{"docker", "run", "--rm", "-e", "A=1", "my-image", "sh", "-c", "echo run --network hi"}
-	got, err := dockerRunCmd(user, "plug-net-abc", "/tmp/x/resolv.conf", nil)
+	line, err := readDockerRun(user, nil)
 	if err != nil {
 		t.Fatalf("a plain `docker run` was refused: %v", err)
 	}
+	got := dockerRunCmd(line, "plug-net-abc", "/tmp/x/resolv.conf", nil)
 	want := []string{
 		"docker", "run",
 		"--network", "container:plug-net-abc",
 		"-v", "/tmp/x/resolv.conf:/etc/resolv.conf:ro",
 		"--rm", "-e", "A=1", "my-image", "sh", "-c", "echo run --network hi",
 	}
-	if len(got) != len(want) {
-		t.Fatalf("got %d args, want %d:\n got %q\nwant %q", len(got), len(want), got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("arg %d is %q, want %q (whole line: %q)", i, got[i], want[i], got)
-		}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %q\nwant %q", got, want)
 	}
 }
 
@@ -54,7 +48,7 @@ func TestDockerRunCmdRefusesEverythingItCannotHonour(t *testing.T) {
 		{"nothing at all", nil},
 		{"a bare command, which is what plug runs WITHOUT this flag", []string{"npm", "run", "dev"}},
 	} {
-		if _, err := dockerRunCmd(c.args, "side", "/tmp/r", nil); err == nil {
+		if _, err := readDockerRun(c.args, testDockerRunOptions(t)); err == nil {
 			t.Errorf("%q was accepted; it must be refused: %s", c.args, c.why)
 		} else if !strings.Contains(err.Error(), "docker run") {
 			t.Errorf("the refusal for %q does not say what IS accepted: %v", c.args, err)
@@ -62,9 +56,8 @@ func TestDockerRunCmdRefusesEverythingItCannotHonour(t *testing.T) {
 	}
 }
 
-// docker validates the user's line against ours, which is why plug does not
-// pre-empt it with a parser. The price is that the refusal arrives in docker's
-// words, about flags the user never typed. These translate it; a message that no
+// What the reading of the line let through reaches docker, which refuses it in
+// its words, about flags plug added. These translate it; a message that no
 // longer matches means the translation silently stops happening, and the user is
 // left with "conflicting options" and no idea which options.
 func TestDockerRefusalsAreTranslated(t *testing.T) {
@@ -75,9 +68,9 @@ func TestDockerRefusalsAreTranslated(t *testing.T) {
 		{"a --network of their own",
 			"docker: Error response from daemon: conflicting options: container type network can't be used with links. This would result in undefined behavior",
 			"--network"},
-		{"a published port",
+		{"a published port, on a line read without docker's options",
 			"docker: Error response from daemon: conflicting options: port publishing and the container type network mode",
-			"-s <name>:<port>:<port>"},
+			"Drop it"},
 	} {
 		if got := explainDockerRefusal(c.stderr); !strings.Contains(got, c.mustSay) {
 			t.Errorf("%s: plug added nothing useful to docker's %q, said %q", c.what, c.stderr, got)
@@ -138,7 +131,7 @@ func TestTheSidecarFollowsTheLauncherFlavour(t *testing.T) {
 // is more honest than a green tick that would not have covered it.
 func TestTheProfileKeyReachesTheSidecar(t *testing.T) {
 	withKey := sidecarArgs(config{host: "h", port: "2222", key: "/home/dev/.plug/prod.key"},
-		"", []string{"-c"}, "amd64", "plug-net-abc", "img", testOwner)
+		nil, []string{"-c"}, "amd64", "plug-net-abc", "img", testOwner)
 	joined := strings.Join(withKey, " ")
 
 	if !strings.Contains(joined, "-v /home/dev/.plug/prod.key:/plug/key:ro") {
@@ -153,7 +146,7 @@ func TestTheProfileKeyReachesTheSidecar(t *testing.T) {
 
 	// And no phantom mount when the profile has none: every cluster without a
 	// gateway is in this case, and an empty -v would fail the run outright.
-	none := strings.Join(sidecarArgs(config{host: "h", port: "2222"}, "", []string{"-c"}, "amd64", "n", "img", testOwner), " ")
+	none := strings.Join(sidecarArgs(config{host: "h", port: "2222"}, nil, []string{"-c"}, "amd64", "n", "img", testOwner), " ")
 	if strings.Contains(none, "/plug/key") || strings.Contains(none, "PLUG_CORE_KEY") {
 		t.Errorf("a profile with no key still produced a mount: %q", none)
 	}
@@ -180,10 +173,7 @@ func TestSidecarNamesAreUniquePerSession(t *testing.T) {
 	}
 	// And the user's container joins THAT name, so the two are spliced from the
 	// same value: a mismatch here is a container in the wrong network.
-	full, err := dockerRunCmd([]string{"docker", "run", "img"}, a.name(), "/r", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	full := dockerRunCmd(dockerRunLine{user: []string{"img"}}, a.name(), "/r", nil)
 	if !strings.Contains(strings.Join(full, " "), "--network container:"+a.name()) {
 		t.Errorf("the user's container does not join the sidecar by its name: %q", full)
 	}
@@ -193,7 +183,7 @@ func TestSidecarNamesAreUniquePerSession(t *testing.T) {
 // a live session. Without them the decision falls back to the name, and the
 // name was the whole problem.
 func TestSidecarCarriesItsOwnerAsLabels(t *testing.T) {
-	got := strings.Join(sidecarArgs(config{host: "h", port: "2222"}, "", nil, "amd64", testOwner.name(), "img", testOwner), " ")
+	got := strings.Join(sidecarArgs(config{host: "h", port: "2222"}, nil, nil, "amd64", testOwner.name(), "img", testOwner), " ")
 	for _, want := range []string{
 		"--label plug.cluster=0123456789abcdef",
 		"--label plug.owner.pid=4242",
@@ -238,7 +228,7 @@ func TestOnlyTheSidecarsOfDeadOwnersAreStale(t *testing.T) {
 // that never comes up rather than as a missing flag.
 func TestTheSidecarCarriesWhatTheDatapathNeeds(t *testing.T) {
 	got := strings.Join(sidecarArgs(config{host: "h.example", port: "2200"},
-		"plug-e2e_edge", []string{"-s", "api:8080:8080"}, "arm64", "plug-net-1", "softwarity/plug:x", testOwner), " ")
+		[]string{"--network=plug-e2e_edge", "--publish=3000:3000"}, []string{"-s", "api:8080:8080"}, "arm64", "plug-net-1", "softwarity/plug:x", testOwner), " ")
 
 	for _, want := range []string{
 		"--cap-add NET_ADMIN",                // the TUN device and its routes
@@ -248,7 +238,8 @@ func TestTheSidecarCarriesWhatTheDatapathNeeds(t *testing.T) {
 		"-e PLUG_CORE=1",                     // run the core directly: no profile to read in there
 		"-e PLUG_CORE_HOST=h.example",
 		"-e PLUG_CORE_PORT=2200",
-		"--network plug-e2e_edge",        // where the agent is reachable from
+		"--network=plug-e2e_edge",        // where the agent is reachable from
+		"--publish=3000:3000",            // what the user's line published
 		"/opt/plug/bin/plug-linux-arm64", // the daemon's architecture, not this machine's
 		"-s api:8080:8080",               // the stance travels to the sidecar
 	} {
@@ -264,7 +255,7 @@ func TestTheSidecarCarriesWhatTheDatapathNeeds(t *testing.T) {
 // at the docker host.
 func TestALoopbackProfileIsDialledThroughTheDockerHost(t *testing.T) {
 	for _, host := range []string{"localhost", "127.0.0.1", "127.0.1.1", "::1"} {
-		got := strings.Join(sidecarArgs(config{host: host, port: "22222"}, "", []string{"-c"}, "amd64", "n", "img", testOwner), " ")
+		got := strings.Join(sidecarArgs(config{host: host, port: "22222"}, nil, []string{"-c"}, "amd64", "n", "img", testOwner), " ")
 		for _, want := range []string{
 			"-e PLUG_CORE_HOST=host.docker.internal",
 			"--add-host host.docker.internal:host-gateway",
@@ -275,7 +266,7 @@ func TestALoopbackProfileIsDialledThroughTheDockerHost(t *testing.T) {
 			}
 		}
 	}
-	got := strings.Join(sidecarArgs(config{host: "h.example", port: "2222"}, "", []string{"-c"}, "amd64", "n", "img", testOwner), " ")
+	got := strings.Join(sidecarArgs(config{host: "h.example", port: "2222"}, nil, []string{"-c"}, "amd64", "n", "img", testOwner), " ")
 	if !strings.Contains(got, "-e PLUG_CORE_HOST=h.example") || strings.Contains(got, "--add-host") {
 		t.Errorf("a remote host must reach the sidecar as the profile has it, and nothing added:\n  %s", got)
 	}
@@ -340,10 +331,7 @@ func TestDockerProjectionFlagsAndPlacement(t *testing.T) {
 			t.Errorf("the env file is %v, want 0600: it holds the workload's secrets", fi.Mode().Perm())
 		}
 	}
-	full, err := dockerRunCmd([]string{"docker", "run", "-e", "PGPASSWORD=mine", "img"}, "side", "/r", flags)
-	if err != nil {
-		t.Fatal(err)
-	}
+	full := dockerRunCmd(dockerRunLine{user: []string{"-e", "PGPASSWORD=mine", "img"}}, "side", "/r", flags)
 	joined := strings.Join(full, " ")
 	if strings.Contains(joined, "s3cret") {
 		t.Fatalf("the workload's secret is on docker's command line: %s", joined)
@@ -422,10 +410,7 @@ func TestDockerIsResolvedInTheHumansPathNotTheNarrowedOne(t *testing.T) {
 
 	// The user's own `docker run` takes the same road: the line dockerRunCmd
 	// splices is handed over whole, "docker" at its head.
-	full, err := dockerRunCmd([]string{"docker", "run", "--rm", "img"}, "side", "/r", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	full := dockerRunCmd(dockerRunLine{user: []string{"--rm", "img"}}, "side", "/r", nil)
 	if got := dockerCommand(full[1:]...).Args; !reflect.DeepEqual(got, full) {
 		t.Fatalf("the user's line reached docker as %q, want %q", got, full)
 	}

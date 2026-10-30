@@ -221,3 +221,54 @@ func TestRelayWithEveryServerSilentIsStillServfail(t *testing.T) {
 		t.Errorf("rcode = %d, want 2 (SERVFAIL)", rcode)
 	}
 }
+
+// In a --dockerrun sidecar on a network of the user's, the upstream is docker's
+// embedded resolver, and the containers of that network are single-label
+// names only it knows. The cluster is asked first and keeps its names; one it
+// does not hold goes to docker, which answers for the network.
+func TestASingleLabelNameTheClusterLacksIsTheDockerNetworks(t *testing.T) {
+	up := newFakeUpstream(t, func(q []byte) []byte {
+		r := append([]byte(nil), q...)
+		r[2], r[3] = 0x81, 0x80 // a reply, RCODE 0: docker knows it
+		return r
+	})
+	d := up.dns()
+	d.networkNames = true
+	held := func(name string) bool { return name == "api" }
+
+	if resp := answerDNS(query("db", 1), newFaketab(fakeBase), d, held); resp == nil || resp[3]&0x0f != 0 {
+		t.Fatalf("a container of the docker network was not resolved through docker's resolver: %v", resp)
+	}
+	if !up.wasAsked() {
+		t.Error("docker's resolver was never asked about a name the cluster does not hold")
+	}
+	if ip, ok := answerIPv4(answerDNS(query("api", 1), newFaketab(fakeBase), d, held)); !ok || ip&mask24 != fakeBase {
+		t.Errorf("a cluster name went to docker instead of the tunnel: %s", ipStr(ip))
+	}
+	if up.wasAsked() {
+		t.Error("docker's resolver was asked about a name the cluster holds")
+	}
+
+	// Anywhere else, the single-label name stays the cluster's, NXDOMAIN when
+	// it holds none, and goes to no resolver.
+	d.networkNames = false
+	if resp := answerDNS(query("db", 1), newFaketab(fakeBase), d, held); resp == nil || resp[3]&0x0f != 3 {
+		t.Errorf("outside a docker network, a name the cluster lacks was not NXDOMAIN: %v", resp)
+	}
+	if up.wasAsked() {
+		t.Error("a single-label name left the machine outside a docker network")
+	}
+}
+
+// Docker's embedded resolver is recognised by its address, and only by it.
+func TestDockersEmbeddedResolverIsRecognised(t *testing.T) {
+	for servers, want := range map[string]bool{"127.0.0.11": true, "127.0.0.11:53": true, "192.168.65.7": false, "127.0.0.53": false} {
+		if got := newUpstream([]string{servers}).knowsNetworkNames(); got != want {
+			t.Errorf("%s read as docker's embedded resolver: %v, want %v", servers, got, want)
+		}
+	}
+	var none *upstreamDNS
+	if none.knowsNetworkNames() {
+		t.Error("no upstream at all knows a docker network's names")
+	}
+}

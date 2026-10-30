@@ -2,6 +2,20 @@
 
 ## NEXT RELEASE
 
+### `--dockerrun` takes your `docker run` line as it is
+
+`-p 3000:3000` publishes the port on your machine, `--network my-net` puts
+the container on your docker network, where its other containers answer by
+name after the cluster's, and `-h` and `--add-host` name the container and its
+hosts. A `-v` on your line gets its path even where the workload has a volume
+there. plug reads the line with the options your docker CLI lists, so a new
+docker option needs nothing from plug. A `-d` is left out: the container runs
+in the foreground and ends with the session. What cannot work beside the
+cluster (`-P`, `--dns`, `--network host`) is refused before anything starts,
+with what to write instead.
+
+`PLUG_DOCKER_NETWORK` is now `--network` on the line.
+
 ---
 
 ## 2.31.4

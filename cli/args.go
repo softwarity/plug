@@ -105,8 +105,8 @@ Options:
                          child of plug, so nothing of it goes through the
                          tunnel. This holds the datapath in a sidecar container
                          and runs yours in its network namespace, unmodified.
-                         docker run only, and foreground only: a detached
-                         container would outlive the network it was given.
+                         docker run only, in the foreground: a -d on the
+                         line is left out, the session ends with plug.
   -h, --help             show this help
 
   Options may be written in ANY ORDER, and a long one takes its value either way
