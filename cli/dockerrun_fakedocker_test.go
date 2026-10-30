@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/softwarity/plug/cli/internal/tun"
 )
@@ -39,6 +42,11 @@ const fakeDockerEnv = "PLUG_TEST_FAKE_DOCKER_LOG"
 // fakeDockerExitEnv is the status the fake gives the user's container.
 const fakeDockerExitEnv = "PLUG_TEST_FAKE_DOCKER_EXIT"
 
+// fakeDockerHoldEnv names a file: the user's container writes <file>.started
+// once running, then runs until <file> exists or a SIGTERM reaches it, so a
+// test can signal plug while a container is up.
+const fakeDockerHoldEnv = "PLUG_TEST_FAKE_DOCKER_HOLD"
+
 func init() {
 	if log := os.Getenv(fakeDockerEnv); log != "" {
 		os.Exit(fakeDocker(log, os.Args[1:]))
@@ -52,6 +60,13 @@ type fakeCall struct {
 	Args   []string `json:"args"`
 	Resolv string   `json:"resolv,omitempty"`
 	Read   string   `json:"read,omitempty"` // why the resolver could not be read
+	// For the containers: the process group the fake ran in (0 where the OS
+	// has none to compare), and for the sidecar, that its stdin reached EOF.
+	Pgrp    int  `json:"pgrp,omitempty"`
+	HoldEOF bool `json:"holdEOF,omitempty"`
+	// For the user's container held by fakeDockerHoldEnv: the signal that
+	// ended it, empty when it was released.
+	Signalled string `json:"signalled,omitempty"`
 }
 
 // fakeDocker answers each verb the way the CLI does, as much as --dockerrun
@@ -71,9 +86,14 @@ func fakeDocker(log string, args []string) int {
 		fmt.Println("PID USER CMD\n1 root /opt/plug/bin/plug-linux-arm64 " + sidecarHoldVerb)
 	case verb == "inspect":
 		fmt.Println("true")
-	case verb == "run" && len(args) > 1 && args[1] == "-d":
-		fmt.Println("0123456789ab") // the sidecar, detached: docker prints its id
+	case verb == "run" && len(args) > 1 && args[1] == "-i":
+		// The sidecar, attached: it lives until its stdin closes, which is the
+		// whole of its tie to the plug that started it.
+		call.Pgrp = processGroup()
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		call.HoldEOF = true
 	case verb == "run":
+		call.Pgrp = processGroup()
 		// The user's container. Read the resolver through the host side of its
 		// -v, which is what the daemon does with it.
 		for i := 0; i+1 < len(args); i++ {
@@ -86,6 +106,11 @@ func fakeDocker(log string, args []string) int {
 			}
 		}
 		fmt.Sscan(os.Getenv(fakeDockerExitEnv), &code)
+		if hold := os.Getenv(fakeDockerHoldEnv); hold != "" {
+			if sig := fakeContainerRuns(hold); sig != "" {
+				call.Signalled, code = sig, 143
+			}
+		}
 	}
 	f, err := os.OpenFile(log, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
@@ -96,6 +121,27 @@ func fakeDocker(log string, args []string) int {
 	b, _ := json.Marshal(call)
 	_, _ = f.Write(append(b, '\n'))
 	return code
+}
+
+// fakeContainerRuns is the user's container running: until the test releases
+// it, or a SIGTERM ends it, which it reports.
+func fakeContainerRuns(hold string) string {
+	term := make(chan os.Signal, 1)
+	signal.Notify(term, syscall.SIGTERM)
+	_ = os.WriteFile(hold+".started", nil, 0o600)
+	deadline := time.After(20 * time.Second)
+	for {
+		select {
+		case s := <-term:
+			return s.String()
+		case <-deadline:
+			return "never released"
+		case <-time.After(20 * time.Millisecond):
+			if _, err := os.Stat(hold); err == nil {
+				return ""
+			}
+		}
+	}
 }
 
 // installFakeDocker puts the fake first in $PATH, under the name the OS looks
@@ -214,12 +260,15 @@ func TestDockerRunDrivesTheDockerCLIOfThisOS(t *testing.T) {
 
 	calls := readFakeCalls(t, log)
 	var sidecar, user, removed []string
+	var sidecarCall, userCall fakeCall
 	for _, c := range calls {
 		switch {
-		case len(c.Args) > 1 && c.Args[0] == "run" && c.Args[1] == "-d":
+		case len(c.Args) > 1 && c.Args[0] == "run" && c.Args[1] == "-i":
 			sidecar = c.Args
+			sidecarCall = c
 		case len(c.Args) > 0 && c.Args[0] == "run":
 			user = c.Args
+			userCall = c
 			if c.Read != "" {
 				t.Errorf("the resolver handed to the container could not be read from this host: %s", c.Read)
 			}
@@ -260,6 +309,22 @@ func TestDockerRunDrivesTheDockerCLIOfThisOS(t *testing.T) {
 	resolvSpec := argAfter(user, "-v", func(v string) bool { return strings.HasSuffix(v, ":/etc/resolv.conf:ro") })
 	resolv := strings.TrimSuffix(resolvSpec, ":/etc/resolv.conf:ro")
 	assertHostPath(t, "the resolver", resolv, filepath.Join(filepath.Dir(resolv), dockerRunResolvName))
+
+	// The sidecar's tie to this process: its stdin, closed by the teardown
+	// before the removal, and a process group of its own, so that the Ctrl-C
+	// the user's container answers first does not take the sidecar down
+	// before it has withdrawn its names. The user's container stays in ours.
+	if !sidecarCall.HoldEOF {
+		t.Error("the sidecar's stdin was never closed: it holds the session until something removes it")
+	}
+	if g := processGroup(); g != 0 {
+		if sidecarCall.Pgrp == g {
+			t.Error("the sidecar runs in plug's process group: the terminal's Ctrl-C and SIGHUP reach it")
+		}
+		if userCall.Pgrp != g {
+			t.Errorf("the user's container left plug's process group (%d, want %d): a Ctrl-C would no longer reach it", userCall.Pgrp, g)
+		}
+	}
 
 	// Teardown: the sidecar removed by its name, the session directory gone.
 	if strings.Join(removed, " ") != "rm -f "+name {

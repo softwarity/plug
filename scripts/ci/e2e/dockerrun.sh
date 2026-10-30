@@ -60,8 +60,12 @@ do_dockerrun() {
     retry_until 6 2 "$vtag" vol_served; vgot="$ru_out"
     if echo "$vout" | grep -q "seed-from-vol-linux" && echo "$vout" | grep -q WROTE && [ "$vgot" = "$vtag" ]; then
       echo "container OK - the workload's volume was at /data in the container, read and written, served back by the workload"
-      sum "**container member (--dockerrun)** ✅"
-      return 0
+      if dockerrun_killed; then
+        sum "**container member (--dockerrun)** ✅"
+        return 0
+      fi
+      sum "**container member (--dockerrun)** ❌"
+      return 1
     fi
     echo "--- container FAIL - the volume did not reach the container (container said: ${vout:-nothing}; workload serves '${vgot:-nothing}')"
     echo "    plug said: $(tr -d '\r' < "$dr_err" | tail -8 | tr '\n' ' ')"
@@ -84,4 +88,43 @@ do_dockerrun() {
   esac
   sum "**container member (--dockerrun)** ❌"
   return 1
+}
+
+# The sidecar dies with the plug that started it, however that plug dies. It
+# used to be removed only by plug's own teardown, which a closed terminal, a
+# kill -9 or a crash never run: the sidecar carried the session on alone,
+# re-arming its names after every network change, and what it had taken over
+# stayed taken over on the cluster for as long as the laptop was up. Here plug
+# is killed with -9 and nothing else: the two docker CLIs it started outlive
+# it, as they do when it crashes. The sidecar must end on its
+# own and the name it served must be withdrawn, which the agent does at once on
+# the goodbye the sidecar's core says on its way out.
+dockerrun_killed() {
+  local kname="dr-kill-$leg-$$" kerr=/tmp/dockerrun-kill.err sc=""
+  PLUG_DOCKER_IMAGE="$AGENT_IMAGE" "$PLUG" --host "$ip" --port "$port" -s "$kname:8080:8080" --dockerrun \
+    docker run --rm --name "$kname" busybox:1.37 httpd -f -p 8080 -h /etc >/dev/null 2>"$kerr" &
+  kill_served() { plug curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://$kname:8080/hostname" 2>/dev/null | tr -d '\r'; }
+  kill_gone() { if [ "$(kill_served)" = 200 ]; then echo served; else echo gone; fi; }
+  kill_sidecar_up() { if [ "$(docker inspect -f '{{.State.Running}}' "$sc" 2>/dev/null)" = true ]; then echo true; else echo false; fi; }
+  kill_cleanup() { docker rm -f "$kname" ${sc:+"$sc"} >/dev/null 2>&1; pkill -9 -f "$kname:8080:8080 --dockerrun" 2>/dev/null; }
+
+  if ! retry_until 30 2 200 kill_served; then
+    echo "--- container FAIL - the container never served $kname (got '${ru_out:-nothing}')"
+    echo "    plug said: $(tr -d '\r' < "$kerr" | tail -6 | tr '\n' ' ')"
+    kill_cleanup; return 1
+  fi
+  sc="$(docker inspect -f '{{.HostConfig.NetworkMode}}' "$kname" 2>/dev/null)"; sc="${sc#container:}"
+  # plug carries --dockerrun on its line, the docker CLIs it started do not:
+  # this kills plug and leaves docker running.
+  pkill -9 -f "$kname:8080:8080 --dockerrun"
+  if ! retry_until 15 2 false kill_sidecar_up; then
+    echo "--- container FAIL - plug was killed and its sidecar $sc is still running: the session outlives it"
+    kill_cleanup; return 1
+  fi
+  if ! retry_until 15 2 gone kill_gone; then
+    echo "--- container FAIL - the sidecar ended but $kname is still served"
+    kill_cleanup; return 1
+  fi
+  echo "container OK - plug killed with -9: its sidecar ended on its own and $kname was withdrawn"
+  kill_cleanup
 }

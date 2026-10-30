@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -10,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -305,9 +308,20 @@ func dockerServerArch() (string, error) {
 }
 
 // sidecarReadyWait bounds the wait for the sidecar's tunnel to come up: the
-// image is local by then (the pull is checked first), so this is one dial to
-// the agent plus the container's start.
+// image is local by then (pullSidecarImage), so this is one dial to the agent
+// plus the container's start.
 const sidecarReadyWait = 30 * time.Second
+
+// sidecarStopWait bounds the sidecar's own teardown once its stdin is closed:
+// the goodbye to the agent, the names withdrawn, a parked workload put back.
+// Past it the container is removed regardless, as it always was.
+const sidecarStopWait = 15 * time.Second
+
+// sidecarHoldStdinEnv tells the hold to end on its stdin closing, not only on
+// a signal (sidecarHold). Set by the CLI that holds the other end, so a sidecar
+// started by an older CLI, whose stdin is /dev/null from the first instant,
+// keeps the hold it had instead of ending as it starts.
+const sidecarHoldStdinEnv = "PLUG_HOLD_STDIN"
 
 // startDockerSidecar brings up the container that holds the datapath and returns
 // its name plus a teardown.
@@ -323,6 +337,24 @@ const sidecarReadyWait = 30 * time.Second
 // `docker top` is plug's own definition of ready. Read from the daemon, not by
 // an exec in the container: the image is distroless, there is no shell, no
 // `test`, no `sleep` in it, and nothing here needs one.
+//
+// The sidecar's life is this process's, whatever ends it. It used to be
+// detached (-d) and removed by the teardown this process runs on its way out,
+// which a closed terminal (SIGHUP), a kill -9 or a crash never reach: the
+// sidecar carried the tunnel on alone, re-arming its names after every network
+// change, and the workload it had taken over stayed parked on a session the
+// agent had every reason to think alive, since it was. So the sidecar runs
+// attached, its stdin a pipe whose other end only this process holds, and the
+// hold ends when that closes: on a clean exit because the teardown closes it,
+// on any other because the kernel does. The core then ends the session as it
+// ends any, goodbye included, and the agent puts back what it parked at once.
+// The docker CLI in between dying too changes nothing: an attached `docker
+// run -i` makes the container's stdin close with its client (StdinOnce).
+//
+// The attached CLI runs in a process group of its own: a Ctrl-C is the user's
+// container's to answer first, and the sidecar must outlive it to withdraw
+// the names cleanly, so the terminal's signals never reach it (and
+// --sig-proxy=false, so none would be passed on if they did).
 func startDockerSidecar(cfg config, network string, plugFlags []string) (string, func(), error) {
 	arch, err := dockerServerArch()
 	if err != nil {
@@ -340,29 +372,62 @@ func startDockerSidecar(cfg config, network string, plugFlags []string) (string,
 	// whose it is; only a sidecar whose owner is gone is a leftover.
 	removeStaleSidecars(owner)
 
-	args := sidecarArgs(cfg, network, plugFlags, arch, name, dockerSidecarImage(), owner)
-
-	out, err := dockerCommand(args...).CombinedOutput()
-	if err != nil {
-		return "", nil, fmt.Errorf("starting the sidecar that holds the tunnel: %v: %s\n"+
+	image := dockerSidecarImage()
+	refused := func(out string, err error) error {
+		return fmt.Errorf("starting the sidecar that holds the tunnel: %v: %s\n"+
 			"      Its image is %s; set PLUG_DOCKER_IMAGE to point at one that exists if this\n"+
 			"      build's version was never published",
-			err, strings.TrimSpace(string(out)), dockerSidecarImage())
+			err, strings.TrimSpace(out), image)
 	}
-	stop := func() { _ = dockerCommand("rm", "-f", name).Run() }
+	// Pulled first, and waited for without a bound, as the detached run used
+	// to: the attached one below starts at once, and a first pull counted
+	// against sidecarReadyWait would fail on a slow link.
+	if out, err := pullSidecarImage(image); err != nil {
+		return "", nil, refused(out, err)
+	}
+
+	cmd := dockerCommand(sidecarArgs(cfg, network, plugFlags, arch, name, image, owner)...)
+	ownProcessGroup(cmd)
+	hold, err := cmd.StdinPipe()
+	if err != nil {
+		return "", nil, refused("", err)
+	}
+	out := &outputTail{}
+	cmd.Stdout, cmd.Stderr = out, out
+	if err := cmd.Start(); err != nil {
+		return "", nil, refused("", err)
+	}
+	exited := make(chan struct{})
+	go func() { _ = cmd.Wait(); close(exited) }()
+	stop := func() {
+		_ = hold.Close()
+		select {
+		case <-exited:
+		case <-time.After(sidecarStopWait):
+		}
+		_ = dockerCommand("rm", "-f", name).Run()
+	}
 
 	deadline := time.Now().Add(sidecarReadyWait)
 	for time.Now().Before(deadline) {
 		if top, err := dockerCommand("top", name).Output(); err == nil && strings.Contains(string(top), sidecarHoldVerb) {
 			return name, stop, nil
 		}
-		if dockerCommand("inspect", "-f", "{{.State.Running}}", name).Run() != nil {
-			break
+		select {
+		case <-exited:
+		case <-time.After(200 * time.Millisecond):
+			continue
 		}
-		time.Sleep(200 * time.Millisecond)
+		break
 	}
-	logs, _ := dockerCommand("logs", "--tail", "20", name).CombinedOutput()
+	// No container by that name: docker refused to create it (a network that
+	// does not exist, a value of PLUG_DOCKER_NETWORK it rejects), which is not
+	// a tunnel that failed. Asked before stop, which removes it either way.
+	created := dockerCommand("inspect", "-f", "{{.Id}}", name).Run() == nil
 	stop()
+	if !created {
+		return "", nil, refused(out.last(20), errors.New("docker did not create it"))
+	}
 	target, hint := cfg.host, ""
 	if h := sidecarAgentHost(cfg.host); h != cfg.host {
 		target = fmt.Sprintf("%s (%s from inside the container)", cfg.host, h)
@@ -371,7 +436,47 @@ func startDockerSidecar(cfg config, network string, plugFlags []string) (string,
 			"      containers reach, not on 127.0.0.1 alone", cfg.port)
 	}
 	return "", nil, fmt.Errorf("the sidecar never reported a tunnel to %s:%s. It said:\n%s%s",
-		target, cfg.port, strings.TrimSpace(string(logs)), hint)
+		target, cfg.port, strings.TrimSpace(out.last(20)), hint)
+}
+
+// pullSidecarImage makes the image local, pulling it only when it is not.
+func pullSidecarImage(image string) (string, error) {
+	if dockerCommand("image", "inspect", "-f", "{{.Id}}", image).Run() == nil {
+		return "", nil
+	}
+	out, err := dockerCommand("pull", "-q", image).CombinedOutput()
+	return string(out), err
+}
+
+// outputTail keeps the end of what the attached sidecar prints, for the one
+// moment it is read: a sidecar that never came up, whose last lines say why.
+// Bounded, since the session can last for days and print all along.
+type outputTail struct {
+	mu  sync.Mutex
+	buf []byte
+}
+
+const outputTailMax = 16 << 10
+
+func (t *outputTail) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.buf = append(t.buf, p...)
+	if len(t.buf) > outputTailMax {
+		t.buf = t.buf[len(t.buf)-outputTailMax:]
+	}
+	return len(p), nil
+}
+
+// last is the final n lines.
+func (t *outputTail) last(n int) string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	lines := strings.Split(strings.TrimRight(string(t.buf), "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // dockerHostGateway is the name a container reaches the docker host by. Docker
@@ -502,7 +607,9 @@ func staleSidecars(listing string, self int, alive func(int) bool) []string {
 // refused there, so a tunnel that comes up could only have been carried by the
 // file mounted below, and the same profile with its key line removed is refused.
 func sidecarArgs(cfg config, network string, plugFlags []string, arch, name, image string, owner sidecarOwner) []string {
-	args := []string{"run", "-d", "--name", name}
+	// Attached, stdin open, nothing passed on: see startDockerSidecar for why
+	// the sidecar lives exactly as long as the pipe it reads.
+	args := []string{"run", "-i", "--sig-proxy=false", "--name", name}
 	args = append(args, owner.labels()...) // whose it is, for the next session's cleanup to read
 	args = append(args,
 		"--cap-add", "NET_ADMIN", // the TUN device and its routes
@@ -515,6 +622,7 @@ func sidecarArgs(cfg config, network string, plugFlags []string, arch, name, ima
 		"-e", "PLUG_CORE_SIDECAR=1", // the session says it holds a container
 		"-e", "PLUG_CORE_HOST="+sidecarAgentHost(cfg.host),
 		"-e", "PLUG_CORE_PORT="+cfg.port,
+		"-e", sidecarHoldStdinEnv+"=1",
 	)
 	if isLoopback(cfg.host) {
 		// One shape on every OS: Docker Desktop already has the name, and
@@ -550,11 +658,24 @@ func sidecarArgs(cfg config, network string, plugFlags []string, arch, name, ima
 // and waits.
 const sidecarHoldVerb = "__plug-hold"
 
-// sidecarHold waits for the INT or TERM the core forwards when the session ends.
+// sidecarHold waits for the INT or TERM the core forwards when the session
+// ends, or, when the CLI holds its stdin (sidecarHoldStdinEnv), for that stdin
+// to close: the CLI gone, however it went. The core runs it with its own
+// stdin, which is the container's.
 func sidecarHold() {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-	<-sig
+	gone := make(chan struct{})
+	if os.Getenv(sidecarHoldStdinEnv) == "1" {
+		go func() {
+			_, _ = io.Copy(io.Discard, os.Stdin)
+			close(gone)
+		}()
+	}
+	select {
+	case <-sig:
+	case <-gone:
+	}
 }
 
 // runDockerRun is the whole mode: hold the datapath in a sidecar, run the user's
@@ -644,7 +765,27 @@ func runDockerRun(cfg config, cmdArgs []string, exposes []string, client bool) i
 	}
 	var errBuf strings.Builder
 	cmd.Stderr = &teeWriter{to: os.Stderr, into: &errBuf}
-	err = cmd.Run()
+	// The contract runChildEnv keeps for a process, kept here for the docker
+	// CLI: a Ctrl-C reaches the whole foreground group, the CLI included, which
+	// passes it to the container; plug survives it and waits, so the teardown
+	// above runs once the container has answered it. Without a handler a
+	// Ctrl-C ended plug on the spot and every deferred step was skipped: the
+	// sidecar went on holding the session, the environment file stayed on
+	// disk, the cifs volumes in the daemon. A targeted SIGTERM at plug alone is
+	// not group-delivered, so that one is passed on.
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigs)
+	if err = cmd.Start(); err == nil {
+		go func() {
+			for s := range sigs {
+				if s == syscall.SIGTERM {
+					_ = cmd.Process.Signal(s)
+				}
+			}
+		}()
+		err = cmd.Wait()
+	}
 	if err != nil {
 		if why := explainDockerRefusal(errBuf.String()); why != "" {
 			info("%s", why)

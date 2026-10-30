@@ -2,6 +2,15 @@
 
 ## NEXT RELEASE
 
+### `--dockerrun` gives the cluster back however plug ends
+
+The sidecar that holds a `--dockerrun` session now lives exactly as long as
+plug. Ctrl-C waits for your container to stop and then cleans up everything
+the session made: the sidecar, the environment file, the volumes. A closed
+terminal, a `kill -9` or a crash ends the sidecar too, and the workload it took
+over on the cluster answers again within seconds, its live mount helper gone
+with it.
+
 ---
 
 ## 2.31.3

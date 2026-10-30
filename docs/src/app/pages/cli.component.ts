@@ -258,7 +258,9 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
           holds the data path in a sidecar container and runs yours in its network namespace, so
           <code>--network</code>, <code>-p</code> and <code>--dns</code> belong to the sidecar and
           are refused on your line. <code>docker run</code> only, in the foreground - a detached
-          container would outlive the network it was given. This machine needs no privilege: docker
+          container would outlive the network it was given. The sidecar lives exactly as long as
+          plug: a Ctrl-C, a closed terminal or a plug killed outright all end the session, and what
+          it took over on the cluster is given back at once. This machine needs no privilege: docker
           grants them inside the sidecar
         </td>
         <td><a routerLink="/getting-started">Getting started</a></td>
