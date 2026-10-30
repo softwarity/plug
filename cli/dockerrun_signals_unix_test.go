@@ -30,8 +30,11 @@ func signalDuringRun(t *testing.T, sig syscall.Signal) (int, []fakeCall) {
 	cfg.envPolicy.off = true
 	cfg.mountPolicy.off = true
 
+	// Up to the fake container's own deadline: under -race on a CI runner,
+	// the docker calls before it (each one this test binary started again)
+	// take seconds, and a signal never sent fails the test as a lost one.
 	go func() {
-		for i := 0; i < 500; i++ {
+		for i := 0; i < 2000; i++ {
 			if _, err := os.Stat(hold + ".started"); err == nil {
 				_ = syscall.Kill(os.Getpid(), sig)
 				// What the kernel's copy does to a container that answers
