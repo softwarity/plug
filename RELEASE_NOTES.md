@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.32.0
+
 ### `--dockerrun` takes your `docker run` line as it is
 
 `-p 3000:3000` publishes the port on your machine, `--network my-net` puts
