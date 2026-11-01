@@ -5,10 +5,10 @@
   <title>plug - A local process as a member of your cluster</title>
   <base href="/">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <!-- Only the site's own scripts run: none is inline, none comes from another
-       origin. Written here rather than generated (Angular's autoCsp), which the
+  <!-- Only the site's own scripts run, and the projects menu from unpkg: none is
+       inline. Written here rather than generated (Angular's autoCsp), which the
        build cannot combine with rendering the pages ahead of time. -->
-  <meta http-equiv="Content-Security-Policy" content="script-src 'self'; object-src 'none'; base-uri 'self';">
+  <meta http-equiv="Content-Security-Policy" content="script-src 'self' https://unpkg.com; object-src 'none'; base-uri 'self';">
   <meta name="description" content="plug runs a local process as a member of your cluster: it resolves the cluster's service names, reaches its services, and is reachable under a name of its own, with no change to the application.">
 
   <!-- Open Graph / Facebook / LinkedIn. The image is the static card every
@@ -36,6 +36,11 @@
   <meta name="twitter:title" content="plug - your local process, inside the cluster">
   <meta name="twitter:description" content="plug npm run start:dev - and your local service talks to the cluster like any container.">
   <meta name="twitter:image" content="https://plug.softwarity.dev/media/about-diagram-og.png">
+
+  <!-- The <softwarity-projects> menu in the header, the web component every
+       Softwarity site loads: its latest version, so the list of projects is the
+       same everywhere without a release of this site. -->
+  <script type="module" src="https://unpkg.com/@softwarity/projects"></script>
 
   <link rel="icon" type="image/svg+xml" href="https://www.softwarity.io/img/softwarity.svg">
   <!-- The only web font is the icon set, and only the glyphs the site draws:
