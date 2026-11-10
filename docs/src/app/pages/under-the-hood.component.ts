@@ -216,7 +216,13 @@ import { RouterLink } from '@angular/router';
       CA in PEM, a keystore - read through the same exec, with the image's own <code>ls</code>
       and <code>cat</code>, materialised for the session and the variables that name their path
       repointed, with no FUSE mount (or mounted at their exact path under
-      <code>--dockerrun</code>). A file that cannot be read (an image with neither command) is
+      <code>--dockerrun</code>). The command's <strong>arguments</strong> are repointed by the same
+      rule: an argument that is such a path, or the value after the first <code>=</code> of a
+      <code>--opt=</code> or <code>-Dkey=</code>, names the copy, so
+      <code>--ssl-cert=/etc/tls/tls.crt</code> works as written; never a piece of a longer argument
+      nor a <code>sh -c</code> line, and <code>--no-repoint</code> leaves them all as written. The
+      files are copied when the session starts: a Secret renewed afterwards is seen by the next
+      session. A file that cannot be read (an image with neither command) is
       named when the session starts, and the variable that names it keeps the pod's path. And its <strong>data volumes</strong> - a Docker volume,
       a bind, a PersistentVolumeClaim - are <strong>mounted on your machine, live and
       read-write</strong>, for the session, by default: the agent starts a helper beside the

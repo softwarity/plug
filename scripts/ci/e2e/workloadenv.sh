@@ -5,7 +5,8 @@
 # default. tko-<os> carries two canaries nothing else has. Three assertions,
 # one takeover each: the workload's variable reaches the command; a variable
 # the caller set with the same key loses to the cluster; --no-env hands over
-# nothing. Then --no-env=KEY (one key held back) and -c --env-of (a running
+# nothing. The 5th field is the same mounted file named by an ARGUMENT at its
+# cluster path, which plug repoints at the copy it brought over. Then --no-env=KEY (one key held back) and -c --env-of (a running
 # workload read without parking it). Each session is bounded and ends by
 # itself. Sourced by scripts/ci/e2e-matrix.sh after lib.sh.
 do_workloadenv() {
@@ -28,13 +29,23 @@ do_workloadenv() {
     echo "--- workload env: $tname was not restored between sessions (prober said '${ru_out:-nothing}')"
     return 1
   }
+  # The child's line: the four canaries from the environment, then the file
+  # an argument names at its CLUSTER path ($1 inside bash -c), which only
+  # resolves here once plug has repointed it. MSYS: Git Bash would otherwise
+  # turn the cluster path into a Windows path before plug ever saw it.
+  local probe='echo "${E2E_DEPLOYED:-unset}/${SHARED_KEY:-unset}/${FROM_SECRET:-unset}/$(cat "${CERT_FILE:-/none}" 2>/dev/null || echo unset)/$(cat "$1" 2>/dev/null || echo unset)"'
+  # Where the canary file is mounted: docker's secret path on compose, a
+  # chosen target on swarm and k8s (e2e/*.cluster.y*ml, CERT_FILE beside it).
+  local certarg=/run/plug-test/ca
+  [ "$family" = compose ] && certarg=/run/secrets/tkofile
+  local noconv="MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL=/run/"
   wenv() { # $1 = extra plug flags, $2 = a caller variable or "", prints DEPLOYED/SHARED as the child saw them
     restored || true
     # plug's own lines (took over, the agent's notes, N variable(s) given) go
     # to a file, printed only when the cell fails: three k8s legs answered
     # "unset" for every variable and the log held nothing to say why.
-    env $2 perl -e 'alarm 60; exec @ARGV or exit 127' "$PLUG" --host "$ip" --port "$port" $1 -s "$tname:$tfwd:$tfwd" \
-      bash -c 'echo "${E2E_DEPLOYED:-unset}/${SHARED_KEY:-unset}/${FROM_SECRET:-unset}/$(cat "${CERT_FILE:-/none}" 2>/dev/null || echo unset)"' 2>>/tmp/wenv.err | tr -d '\r' | tail -1
+    env $2 $noconv perl -e 'alarm 60; exec @ARGV or exit 127' "$PLUG" --host "$ip" --port "$port" $1 -s "$tname:$tfwd:$tfwd" \
+      bash -c "$probe" _ "$certarg" 2>>/tmp/wenv.err | tr -d '\r' | tail -1
   }
   : > /tmp/wenv.err
   local r1 r2 r3 r4 r5
@@ -49,17 +60,17 @@ do_workloadenv() {
   # a workload that is RUNNING, found by its name rather than by a receipt.
   # The same three canaries, from the same service, with nothing taken over.
   restored || true
-  r4="$(plug_bounded 60 --host "$ip" --port "$port" -c --env-of "$tname" \
-    bash -c 'echo "${E2E_DEPLOYED:-unset}/${SHARED_KEY:-unset}/${FROM_SECRET:-unset}/$(cat "${CERT_FILE:-/none}" 2>/dev/null || echo unset)"' 2>>/tmp/wenv.err | tr -d '\r' | tail -1)"
+  r4="$(env $noconv perl -e 'alarm 60; exec @ARGV or exit 127' "$PLUG" --host "$ip" --port "$port" -c --env-of "$tname" \
+    bash -c "$probe" _ "$certarg" 2>>/tmp/wenv.err | tr -d '\r' | tail -1)"
   # FROM_SECRET is the one that proves the read is of the RUNNING process: on
   # Kubernetes it is a secretKeyRef, which the pod spec cannot answer, so a
   # collector that fell back to the spec (no pods/exec, or a handshake the API
   # server maps to the wrong verb) hands it over empty and this cell goes red.
-  if [ "$r1" = "from-the-cluster/cluster-value/from-a-secret/from-a-file" ] && [ "$r2" = "from-the-cluster/cluster-value/from-a-secret/from-a-file" ] && [ "$r3" = "unset/unset/unset/unset" ] && [ "$r4" = "from-the-cluster/cluster-value/from-a-secret/from-a-file" ] && [ "$r5" = "from-the-cluster/from-the-caller/from-a-secret/from-a-file" ]; then
-    echo "workload env OK: projected ($r1), the CLUSTER wins over the caller ($r2), --no-env hands over nothing ($r3), -c --env-of reads a running one ($r4), --no-env=SHARED_KEY keeps the caller value ($r5); the 4th field is a MOUNTED FILE, projected and read at its path"
+  if [ "$r1" = "from-the-cluster/cluster-value/from-a-secret/from-a-file/from-a-file" ] && [ "$r2" = "from-the-cluster/cluster-value/from-a-secret/from-a-file/from-a-file" ] && [ "$r3" = "unset/unset/unset/unset/unset" ] && [ "$r4" = "from-the-cluster/cluster-value/from-a-secret/from-a-file/from-a-file" ] && [ "$r5" = "from-the-cluster/from-the-caller/from-a-secret/from-a-file/from-a-file" ]; then
+    echo "workload env OK: projected ($r1), the CLUSTER wins over the caller ($r2), --no-env hands over nothing ($r3), -c --env-of reads a running one ($r4), --no-env=SHARED_KEY keeps the caller value ($r5); the 4th field is a MOUNTED FILE, projected and read at its path, the 5th the same file named by an argument at its cluster path"
     sum "**workload env (projected+file, cluster wins, --no-env, --no-env=KEY, -c --env-of)** ✅"
   else
-    echo "--- workload env FAIL: projected='$r1' (want from-the-cluster/cluster-value/from-a-secret/from-a-file) cluster-wins='$r2' (want from-the-cluster/cluster-value/from-a-secret/from-a-file) no-env='$r3' (want unset/unset/unset/unset) env-of='$r4' (want from-the-cluster/cluster-value/from-a-secret/from-a-file) no-env-key='$r5' (want from-the-cluster/from-the-caller/from-a-secret/from-a-file)"
+    echo "--- workload env FAIL: projected='$r1' (want from-the-cluster/cluster-value/from-a-secret/from-a-file/from-a-file) cluster-wins='$r2' (want from-the-cluster/cluster-value/from-a-secret/from-a-file/from-a-file) no-env='$r3' (want unset/unset/unset/unset/unset) env-of='$r4' (want from-the-cluster/cluster-value/from-a-secret/from-a-file/from-a-file) no-env-key='$r5' (want from-the-cluster/from-the-caller/from-a-secret/from-a-file/from-a-file)"
     echo "    --- what plug said across the four sessions ---"; grep -E "^\[plug\]" /tmp/wenv.err | grep -vE "using cluster version|serving |path verified|proving the path" | head -24 | sed "s/^/    /"
     sum "**workload env (projected+file, caller wins, --no-env, -c --env-of)** ❌: \`$r1\` · \`$r2\` · \`$r3\` · \`$r4\`"; return 1
   fi

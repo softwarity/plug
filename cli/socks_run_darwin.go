@@ -68,7 +68,8 @@ func coreRun(cfg config, cmdArgs []string) int {
 		return 1
 	}
 	defer stopExposes()
-	return runChildEnv(cmdArgs, goResolverEnv())
+	// After the projections, which brought the files the arguments may name.
+	return runChildEnv(repointSessionArgs(cfg, cmdArgs), goResolverEnv())
 }
 
 // goResolverEnv is the child environment with GODEBUG=netdns=go appended. macOS

@@ -95,6 +95,12 @@ import { CodeComponent } from '../code/code.component';
       <li>its <strong>data</strong>: the volumes it mounts, live.</li>
     </ul>
     <p>
+      A path of the pod means the same file here, whether a variable names it or your command
+      does. The service mounts its certificate at <code>/etc/tls</code>, so your dev server is
+      started with the pod's paths and finds the certificate plug brought over:
+    </p>
+    <pre><code>plug -s ui:443:PORT ng serve --port=&#123;PORT&#125; --ssl-cert=/etc/tls/tls.crt --ssl-key=/etc/tls/tls.key</code></pre>
+    <p>
       Each of the three can be declined or borrowed from another service: see
       <code>--no-env</code>, <code>--env-of</code> and <code>--no-mount</code> in the
       <a routerLink="/cli">CLI reference</a>.

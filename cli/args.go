@@ -98,6 +98,22 @@ Options:
                          form, at the exact path, for a process that hard-codes one.
       --no-mount [/a,/b] do NOT mount the workload's volumes; --no-mount /a,/b
                          leaves out those cluster paths and mounts the rest.
+      --no-repoint       leave your command's ARGUMENTS as written. The secret
+                         and config files the workload mounts are copied into
+                         the session's temp dir when it starts (a Secret
+                         renewed afterwards, by cert-manager say, is seen by
+                         the next session, not this one), and by default an
+                         argument naming one names that copy instead, as the
+                         variables do; one under a volume names the mount:
+                           plug -s ui:443:PORT polyglot --port={PORT} \
+                             --ssl-cert=/etc/tls/tls.crt
+                         runs with the certificate brought from the pod's
+                         /etc/tls. The whole argument or the value after the
+                         first = of a -option, never a piece of a longer one,
+                         never inside sh -c '…' (use the variables there),
+                         never a path your process reads from its own config
+                         file. --dockerrun needs none of it: the container has
+                         the files at their cluster path.
       --dockerrun        put a CONTAINER in the cluster, not a process:
                            plug -p prod -c --dockerrun docker run my-image
                          Prefixing docker with plug alone cannot work: the
@@ -161,6 +177,8 @@ type options struct {
 	mounts      []string
 	noMount     bool
 	noMountList string
+	// noRepoint: --no-repoint, the command's arguments left as written.
+	noRepoint bool
 }
 
 // policy is the environment policy the three flags add up to. The one
@@ -253,6 +271,8 @@ func parseArgs(args []string) (options, []string) {
 			}
 		case "--env-of":
 			o.envOf = value()
+		case "--no-repoint":
+			o.noRepoint = true
 		case "--mount":
 			o.mounts = append(o.mounts, value())
 		case "--no-mount":
@@ -415,6 +435,7 @@ type leadingFlags struct {
 	mounts      []string // raw --mount values, resolved by attachMounts once exposes are known
 	noMount     bool
 	noMountList string
+	noRepoint   bool
 }
 
 // stripLeadingAll pops what a launcher left at the head of the core's argv
@@ -438,6 +459,9 @@ func stripLeadingAll(args []string) (leadingFlags, []string, error) {
 				lead.noMountList = args[0]
 				args = args[1:]
 			}
+		case len(args) >= 1 && args[0] == "--no-repoint":
+			lead.noRepoint = true
+			args = args[1:]
 		case len(args) >= 1 && args[0] == "--no-env":
 			args = args[1:]
 			from := policy.from // --env-of may have come first; keep it

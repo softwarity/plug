@@ -641,7 +641,8 @@ func runCoreInProcess(cfg config, cmdArgs []string) int {
 	defer stopExposes()
 
 	info("tunnel ready - running your command")
-	code, rerr := tun.Run(tr, cmdArgs, info)
+	// After the projections, which brought the files the arguments may name.
+	code, rerr := tun.Run(tr, repointSessionArgs(cfg, cmdArgs), info)
 	if rerr != nil {
 		info("%v", rerr)
 	}
@@ -680,6 +681,9 @@ func projectWorkloadEnv(tr envExecer, name string, p envPolicy) {
 	} else if dir != "" {
 		var missing []string
 		vars, missing = localizeFileEnv(vars, paths, dir)
+		// The command's arguments follow the same files, once every
+		// projection of the session has run (repointSessionArgs).
+		recordProjectedFiles(name, dir, paths)
 		info("%s: %d mounted file path(s) materialised under %s and repointed", name, len(paths), dir)
 		for _, k := range missing {
 			info("%s: %s keeps the pod's path: the file it names was not brought over", name, k)

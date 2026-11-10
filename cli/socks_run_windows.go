@@ -75,7 +75,8 @@ func coreRunViaService(cfg config, cmdArgs []string) int {
 		return 1
 	}
 	defer stopExposes()
-	return runChildEnv(cmdArgs, nil)
+	// After the projections, which brought the files the arguments may name.
+	return runChildEnv(repointSessionArgs(cfg, cmdArgs), nil)
 }
 
 // serviceInstalled reports whether the SCM service exists, regardless of run state.

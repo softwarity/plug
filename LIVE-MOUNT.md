@@ -65,7 +65,11 @@ process ─ OS's own SMB client ─ 127.0.0.1:<port> (plug's forward) ─ tunnel
 - **Option B for the automatic mounts** (temp dir + repointed variables),
   the same shape the mounted secret files take, for the same reason: the
   exact path is not always creatable here (macOS seals its root, plug on
-  Linux is not root). `--mount` gives the exact path when it is.
+  Linux is not root). `--mount` gives the exact path when it is. The
+  command's arguments follow the same rule as the variables: one that is a
+  path under a volume, or the value after the first `=` of a `-option`,
+  names the mount (`cli/workloadargs.go`; `--no-repoint` leaves them as
+  written).
 
 ## The pieces
 

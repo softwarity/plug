@@ -31,6 +31,9 @@ type config struct {
 	// about the AUTOMATIC ones; the zero value mounts every data volume.
 	mounts      []mountSpec
 	mountPolicy mountPolicy
+	// noRepoint: --no-repoint, the command's arguments are left as written
+	// even where they name a path the workload mounts (workloadargs.go).
+	noRepoint bool
 	// dockerRun: the mounts go to a container (cifs volumes), not to this host.
 	// dockerTargets are the container paths the user's own -v, --mount and
 	// --tmpfs take, which the workload's mounts and files leave alone.
@@ -352,6 +355,7 @@ func coreMain() {
 	cfg.envPolicy = lead.policy
 	attachMounts(&cfg, lead.mounts)
 	attachMountPolicy(&cfg, lead.noMount, lead.noMountList)
+	cfg.noRepoint = lead.noRepoint
 	if len(cmdArgs) == 0 {
 		fatal("core: no command")
 	}

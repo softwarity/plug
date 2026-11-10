@@ -250,6 +250,22 @@ plug [-p profile] -c psql -h postgres                     # a pure client: DB to
         </td>
       </tr>
       <tr>
+        <td><code>--no-repoint</code></td>
+        <td>
+          leave your command's <strong>arguments</strong> as written. By default an argument that names
+          a path the workload mounts names the copy plug brought over (a secret or config file) or
+          the live mount (a volume), as the variables do:
+          <code>plug -s ui:443:PORT ng serve --port=&#123;PORT&#125; --ssl-cert=/etc/tls/tls.crt</code>
+          serves with the pod's certificate. The whole argument, or the value after the first
+          <code>=</code> of a <code>-option</code>; never a piece of a longer argument, never inside
+          <code>sh -c '…'</code> (use the variables there), never a path your process reads from its
+          own configuration file. The session says how many it repointed, and which keep the pod's
+          path because the file was not brought over. Files are copied when the session starts: a
+          Secret renewed afterwards (cert-manager) is seen by the next session.
+          <code>--dockerrun</code> needs none of it, the container has the files at their cluster path.
+        </td>
+      </tr>
+      <tr>
         <td><code>--dockerrun</code></td>
         <td>
           run the <strong>container</strong> as the cluster member instead of the process:

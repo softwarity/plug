@@ -206,6 +206,7 @@ func finalizeInProcess(cfg config, opts options) config {
 	cfg.envPolicy = opts.policy()
 	attachMounts(&cfg, opts.mounts)
 	attachMountPolicy(&cfg, opts.noMount, opts.noMountList)
+	cfg.noRepoint = opts.noRepoint
 	return cfg
 }
 
@@ -231,6 +232,12 @@ func checkAgentCompat(remote string, opts options) {
 	if len(opts.mounts) > 0 && versionBefore(remote, 2, 20) {
 		fatal("the cluster agent reports v%s, which predates --mount (needs plug ≥ 2.20).\n"+
 			"Upgrade the agent (redeploy the softwarity/plug image), then run again.", remote)
+	}
+	// --no-repoint is a 2.33 flag: the arguments are repointed by that core
+	// onwards, and an older one would exec "--no-repoint" as the command.
+	if opts.noRepoint && versionBefore(remote, 2, 33) {
+		fatal("the cluster agent reports v%s, which predates --no-repoint (needs plug ≥ 2.33).\n"+
+			"Its core leaves your command's arguments as written anyway: run again without the flag.", remote)
 	}
 	// A NAMED local port (-s web:8080:PORT) is a 2.4 feature. The mapping crosses
 	// the exec raw, so an older core would parse that third field as a port and
@@ -292,6 +299,9 @@ func encodeCoreArgv(opts options, cmdArgs []string) []string {
 		} else {
 			cmdArgs = append([]string{"--no-mount"}, cmdArgs...)
 		}
+	}
+	if opts.noRepoint {
+		cmdArgs = append([]string{"--no-repoint"}, cmdArgs...)
 	}
 	return cmdArgs
 }

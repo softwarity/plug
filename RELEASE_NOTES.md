@@ -2,6 +2,20 @@
 
 ## NEXT RELEASE
 
+### Your command's arguments name the workload's files too
+
+A path the pod mounts now means the same file in your command's arguments, as
+it already did in its variables. A dev server taking over an HTTPS service
+starts with the pod's own paths and the certificate plug brought over:
+
+```
+plug -s ui:443:PORT ng serve --port={PORT} --ssl-cert=/etc/tls/tls.crt --ssl-key=/etc/tls/tls.key
+```
+
+The whole argument and the value after the first `=` of `--opt=` or `-Dkey=`
+are repointed, at the copied file or at the live volume; the session says how
+many. `--no-repoint` leaves the arguments as written.
+
 ---
 
 ## 2.32.0

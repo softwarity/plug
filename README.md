@@ -34,7 +34,10 @@ plug -s my-app:8080:3000 npm run start:dev
 - A name of your own in the cluster: workloads call `my-app:8080` and reach your
   process. A deployed service with that name is set aside for the session and
   restored when it ends.
-- On that takeover, the workload's environment and volumes on your machine.
+- On that takeover, the workload's environment, files and volumes on your
+  machine. A path of the pod, in a variable or in your command's arguments,
+  names the local copy: `plug -s ui:443:PORT ng serve --port={PORT}
+  --ssl-cert=/etc/tls/tls.crt` serves with the certificate the pod mounts.
 - Any language or tool, unchanged: plug works at the IP layer, not in your
   process.
 - Linux, macOS and Windows; several clusters at once.
