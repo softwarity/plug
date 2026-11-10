@@ -2,6 +2,10 @@
 
 ## NEXT RELEASE
 
+---
+
+## 2.33.0
+
 ### Your command's arguments name the workload's files too
 
 A path the pod mounts now means the same file in your command's arguments, as
